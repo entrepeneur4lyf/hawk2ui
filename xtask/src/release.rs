@@ -8,11 +8,13 @@ use serde::Deserialize;
 pub(crate) enum ReleaseCheckMode {
     Full,
     VersionOnly,
+    PackagesOnly,
 }
 
 pub(crate) fn run_release_check(mode: ReleaseCheckMode) -> Result<(), String> {
     match mode {
         ReleaseCheckMode::VersionOnly => validate_repository_version_policy(),
+        ReleaseCheckMode::PackagesOnly => validate_repository_package_targets(),
         ReleaseCheckMode::Full => Err("full release check is not wired yet".into()),
     }
 }
@@ -21,6 +23,12 @@ fn validate_repository_version_policy() -> Result<(), String> {
     VersionPolicy::parse(include_str!("../../release/version-policy.toml"))
         .map(|_| ())
         .map_err(|error| format!("version policy validation failed: {error:?}"))
+}
+
+fn validate_repository_package_targets() -> Result<(), String> {
+    PackageTargets::parse(include_str!("../../release/package-targets.toml"))
+        .map(|_| ())
+        .map_err(|error| format!("package target validation failed: {error:?}"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,6 +199,76 @@ enum VersionPolicyError {
     },
 }
 
+#[derive(Debug, Deserialize)]
+struct PackageTargets {
+    targets: Vec<PackageTarget>,
+}
+
+impl PackageTargets {
+    fn parse(input: &str) -> Result<Self, PackageTargetsError> {
+        let targets: Self =
+            toml::from_str(input).map_err(|error| PackageTargetsError::Parse(error.to_string()))?;
+        targets.validate()?;
+        Ok(targets)
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.targets.iter().any(|target| target.id == id)
+    }
+
+    fn release_blockers(&self) -> impl Iterator<Item = &PackageTarget> {
+        self.targets.iter().filter(|target| target.release_gate)
+    }
+
+    fn validate(&self) -> Result<(), PackageTargetsError> {
+        let mut ids = HashSet::new();
+
+        for target in &self.targets {
+            target.require_field("id", &target.id)?;
+            target.require_field("kind", &target.kind)?;
+            target.require_field("platform", &target.platform)?;
+            target.require_field("command", &target.command)?;
+            target.require_field("evidence", &target.evidence)?;
+
+            if !ids.insert(target.id.clone()) {
+                return Err(PackageTargetsError::DuplicateTarget(target.id.clone()));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageTarget {
+    id: String,
+    kind: String,
+    platform: String,
+    command: String,
+    evidence: String,
+    release_gate: bool,
+}
+
+impl PackageTarget {
+    fn require_field(&self, field: &'static str, value: &str) -> Result<(), PackageTargetsError> {
+        if value.trim().is_empty() {
+            Err(PackageTargetsError::MissingRequiredField {
+                id: self.id.clone(),
+                field,
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PackageTargetsError {
+    Parse(String),
+    DuplicateTarget(String),
+    MissingRequiredField { id: String, field: &'static str },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +406,56 @@ compatibility_notes_required = true
                 right: "package_version".into(),
                 right_value: "0.2.0".into(),
             }
+        );
+    }
+
+    #[test]
+    fn repository_package_targets_cover_required_outputs() {
+        let targets = PackageTargets::parse(include_str!("../../release/package-targets.toml"))
+            .expect("repository package targets must parse");
+
+        for id in [
+            "desktop-linux",
+            "desktop-windows",
+            "desktop-macos",
+            "plugin-clap",
+            "plugin-vst3",
+            "plugin-au",
+            "sealed-artifact",
+            "debug-package",
+            "release-package",
+        ] {
+            assert!(targets.contains(id), "missing package target {id}");
+        }
+
+        assert!(targets.release_blockers().all(|target| target.release_gate));
+    }
+
+    #[test]
+    fn rejects_duplicate_package_target_ids() {
+        let input = r#"
+[[targets]]
+id = "desktop-linux"
+kind = "desktop-bundle"
+platform = "linux"
+command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
+evidence = "target/release-evidence/desktop-linux.txt"
+release_gate = true
+
+[[targets]]
+id = "desktop-linux"
+kind = "desktop-bundle"
+platform = "linux"
+command = "rtk cargo test -p hawk2ui-build duplicate"
+evidence = "target/release-evidence/duplicate.txt"
+release_gate = true
+"#;
+
+        let error = PackageTargets::parse(input).expect_err("duplicate target IDs must fail");
+
+        assert_eq!(
+            error,
+            PackageTargetsError::DuplicateTarget("desktop-linux".into())
         );
     }
 }

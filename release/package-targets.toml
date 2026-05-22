@@ -1,0 +1,71 @@
+[[targets]]
+id = "desktop-linux"
+kind = "desktop-bundle"
+platform = "linux"
+command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
+evidence = "target/release-evidence/desktop-linux.txt"
+release_gate = true
+
+[[targets]]
+id = "desktop-windows"
+kind = "desktop-bundle"
+platform = "windows"
+command = "rtk cargo test -p hawk2ui-build package_desktop_windows"
+evidence = "target/release-evidence/desktop-windows.txt"
+release_gate = true
+
+[[targets]]
+id = "desktop-macos"
+kind = "desktop-bundle"
+platform = "macos"
+command = "rtk cargo test -p hawk2ui-build package_desktop_macos"
+evidence = "target/release-evidence/desktop-macos.txt"
+release_gate = true
+
+[[targets]]
+id = "plugin-clap"
+kind = "plugin-bundle"
+platform = "cross-platform"
+command = "rtk cargo test -p hawk2ui-plugin-adapters package_clap"
+evidence = "target/release-evidence/plugin-clap.txt"
+release_gate = true
+
+[[targets]]
+id = "plugin-vst3"
+kind = "plugin-bundle"
+platform = "cross-platform"
+command = "rtk cargo test -p hawk2ui-plugin-adapters package_vst3"
+evidence = "target/release-evidence/plugin-vst3.txt"
+release_gate = true
+
+[[targets]]
+id = "plugin-au"
+kind = "plugin-bundle"
+platform = "macos"
+command = "rtk cargo test -p hawk2ui-plugin-adapters package_au"
+evidence = "target/release-evidence/plugin-au.txt"
+release_gate = true
+
+[[targets]]
+id = "sealed-artifact"
+kind = "sealed-artifact"
+platform = "cross-platform"
+command = "rtk cargo test -p hawk2ui-build sealed_artifact"
+evidence = "target/release-evidence/sealed-artifact.txt"
+release_gate = true
+
+[[targets]]
+id = "debug-package"
+kind = "debug-package"
+platform = "cross-platform"
+command = "rtk cargo test -p hawk2ui-build debug_package"
+evidence = "target/release-evidence/debug-package.txt"
+release_gate = true
+
+[[targets]]
+id = "release-package"
+kind = "release-package"
+platform = "cross-platform"
+command = "rtk cargo test -p hawk2ui-build release_package"
+evidence = "target/release-evidence/release-package.txt"
+release_gate = true
