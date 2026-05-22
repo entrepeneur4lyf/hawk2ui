@@ -1,6 +1,14 @@
 #![forbid(unsafe_code)]
 //! Manifest validation, build pipeline orchestration, sealed artifacts, package metadata, and verification reports for `Hawk2UI`.
 
+pub mod artifact;
+pub mod diagnostic;
+pub mod manifest;
+
+pub use artifact::{ArtifactHash, ArtifactSchemaVersion, SealedArtifact, SealedArtifactError};
+pub use diagnostic::{BuildDiagnostic, BuildDiagnosticSeverity};
+pub use manifest::{HawkManifest, ManifestError, PackageTarget};
+
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-build";
 

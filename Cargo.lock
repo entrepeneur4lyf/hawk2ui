@@ -33,6 +33,10 @@ version = "0.1.0"
 [[package]]
 name = "hawk2ui-build"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
 
 [[package]]
 name = "hawk2ui-cli"
@@ -53,6 +57,9 @@ version = "0.1.0"
 [[package]]
 name = "hawk2ui-core"
 version = "0.1.0"
+dependencies = [
+ "hawk2ui-schema",
+]
 
 [[package]]
 name = "hawk2ui-framework-conformance"
