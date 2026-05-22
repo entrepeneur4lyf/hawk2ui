@@ -412,6 +412,139 @@ fn redact_token(token: &str) -> &str {
     }
 }
 
+/// Package signature verification state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PackageSignatureStatus {
+    /// Package signature is verified.
+    Verified,
+    /// Package signature is missing.
+    Missing,
+    /// Package signature is invalid.
+    Invalid,
+}
+
+/// Package verification report state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VerificationReportStatus {
+    /// Verification report is present.
+    Present,
+    /// Verification report is missing.
+    Missing,
+}
+
+/// Trust record for a package or sealed artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PackageTrustRecord {
+    /// Artifact schema version.
+    pub artifact_schema_version: u32,
+    /// Hash of the manifest snapshot.
+    pub manifest_snapshot_hash: String,
+    /// Hashes for compiled assets.
+    pub compiled_asset_hashes: Vec<String>,
+    /// Hashes for compiled scripts.
+    pub compiled_script_hashes: Vec<String>,
+    /// Target metadata identifier.
+    pub target_metadata: String,
+    /// Package signature status.
+    pub signature_status: PackageSignatureStatus,
+    /// Verification report status.
+    pub verification_report_status: VerificationReportStatus,
+}
+
+/// Package trust validator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PackageTrustValidator {
+    expected_artifact_schema_version: u32,
+}
+
+impl PackageTrustValidator {
+    /// Creates a validator for an expected artifact schema version.
+    #[must_use]
+    pub const fn new(expected_artifact_schema_version: u32) -> Self {
+        Self {
+            expected_artifact_schema_version,
+        }
+    }
+
+    /// Validates a package trust record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageTrustViolation`] when the record is incomplete, tampered,
+    /// unsigned, or missing verification evidence.
+    pub fn validate(&self, record: &PackageTrustRecord) -> Result<(), PackageTrustViolation> {
+        if record.artifact_schema_version != self.expected_artifact_schema_version {
+            return Err(PackageTrustViolation::ArtifactSchemaMismatch {
+                expected: self.expected_artifact_schema_version,
+                actual: record.artifact_schema_version,
+            });
+        }
+
+        require_hash(
+            &record.manifest_snapshot_hash,
+            PackageTrustViolation::MissingManifestSnapshotHash,
+        )?;
+
+        if record.compiled_asset_hashes.is_empty() {
+            return Err(PackageTrustViolation::MissingCompiledAssetHashes);
+        }
+
+        if record.compiled_script_hashes.is_empty() {
+            return Err(PackageTrustViolation::MissingCompiledScriptHashes);
+        }
+
+        if record.target_metadata.trim().is_empty() {
+            return Err(PackageTrustViolation::MissingTargetMetadata);
+        }
+
+        match record.signature_status {
+            PackageSignatureStatus::Verified => {}
+            PackageSignatureStatus::Missing => return Err(PackageTrustViolation::MissingSignature),
+            PackageSignatureStatus::Invalid => return Err(PackageTrustViolation::InvalidSignature),
+        }
+
+        if record.verification_report_status == VerificationReportStatus::Missing {
+            return Err(PackageTrustViolation::MissingVerificationReport);
+        }
+
+        Ok(())
+    }
+}
+
+fn require_hash(hash: &str, violation: PackageTrustViolation) -> Result<(), PackageTrustViolation> {
+    if hash.trim().is_empty() {
+        Err(violation)
+    } else {
+        Ok(())
+    }
+}
+
+/// Package trust validation failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PackageTrustViolation {
+    /// Artifact schema version does not match the expected release schema.
+    ArtifactSchemaMismatch {
+        /// Expected schema version.
+        expected: u32,
+        /// Actual schema version.
+        actual: u32,
+    },
+    /// Manifest snapshot hash is missing.
+    MissingManifestSnapshotHash,
+    /// Compiled asset hashes are missing.
+    MissingCompiledAssetHashes,
+    /// Compiled script hashes are missing.
+    MissingCompiledScriptHashes,
+    /// Target metadata is missing.
+    MissingTargetMetadata,
+    /// Package signature is missing.
+    MissingSignature,
+    /// Package signature is invalid.
+    InvalidSignature,
+    /// Verification report is missing.
+    MissingVerificationReport,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

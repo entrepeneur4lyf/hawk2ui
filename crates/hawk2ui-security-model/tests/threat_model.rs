@@ -1,7 +1,8 @@
 use hawk2ui_security_model::{
     AttackFixtures, AttackFixturesError, CapabilityRejections, CapabilityRejectionsError,
-    CapabilityVerdict, RuntimeAuthorityPolicy, RuntimeOperation, Severity, ThreatModel,
-    ThreatModelError,
+    CapabilityVerdict, PackageSignatureStatus, PackageTrustRecord, PackageTrustValidator,
+    PackageTrustViolation, RuntimeAuthorityPolicy, RuntimeOperation, Severity, ThreatModel,
+    ThreatModelError, VerificationReportStatus,
 };
 
 const THREAT_MODEL: &str = include_str!("../../../security/threat-model.toml");
@@ -9,7 +10,7 @@ const REJECTION_CASES: &str = include_str!("../../../security/rejection-cases.to
 const ATTACK_FIXTURES: &str = include_str!("../../../security/source-asset-fixtures.toml");
 
 #[test]
-fn threat_registry_covers_required_domains() {
+fn security_threat_registry_covers_required_domains() {
     let model = ThreatModel::parse(THREAT_MODEL).expect("threat model parses");
 
     for id in [
@@ -221,4 +222,63 @@ fn runtime_authority_redacts_secret_payloads() {
     assert!(!diagnostic.contains("Function('return secrets')"));
     assert!(diagnostic.contains("[redacted-secret]"));
     assert!(diagnostic.contains("[redacted-source]"));
+}
+
+#[test]
+fn package_trust_accepts_complete_verified_record() {
+    let record = PackageTrustRecord {
+        artifact_schema_version: 1,
+        manifest_snapshot_hash: "blake3:manifest".into(),
+        compiled_asset_hashes: vec!["blake3:asset".into()],
+        compiled_script_hashes: vec!["blake3:script".into()],
+        target_metadata: "linux-wayland-desktop".into(),
+        signature_status: PackageSignatureStatus::Verified,
+        verification_report_status: VerificationReportStatus::Present,
+    };
+
+    assert!(PackageTrustValidator::new(1).validate(&record).is_ok());
+}
+
+#[test]
+fn package_trust_rejects_tampered_artifact() {
+    let record = PackageTrustRecord {
+        artifact_schema_version: 2,
+        manifest_snapshot_hash: "blake3:manifest".into(),
+        compiled_asset_hashes: vec!["blake3:asset".into()],
+        compiled_script_hashes: vec!["blake3:script".into()],
+        target_metadata: "linux-wayland-desktop".into(),
+        signature_status: PackageSignatureStatus::Verified,
+        verification_report_status: VerificationReportStatus::Present,
+    };
+
+    let error = PackageTrustValidator::new(1)
+        .validate(&record)
+        .expect_err("schema mismatch must fail");
+
+    assert_eq!(
+        error,
+        PackageTrustViolation::ArtifactSchemaMismatch {
+            expected: 1,
+            actual: 2
+        }
+    );
+}
+
+#[test]
+fn package_trust_rejects_missing_verification_report() {
+    let record = PackageTrustRecord {
+        artifact_schema_version: 1,
+        manifest_snapshot_hash: "blake3:manifest".into(),
+        compiled_asset_hashes: vec!["blake3:asset".into()],
+        compiled_script_hashes: vec!["blake3:script".into()],
+        target_metadata: "linux-wayland-desktop".into(),
+        signature_status: PackageSignatureStatus::Verified,
+        verification_report_status: VerificationReportStatus::Missing,
+    };
+
+    let error = PackageTrustValidator::new(1)
+        .validate(&record)
+        .expect_err("missing report must fail");
+
+    assert_eq!(error, PackageTrustViolation::MissingVerificationReport);
 }
