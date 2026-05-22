@@ -345,6 +345,73 @@ pub enum AttackFixturesError {
     },
 }
 
+/// Runtime operation checked against sandbox authority.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RuntimeOperation {
+    /// String-to-code execution such as eval or Function constructors.
+    StringToCode,
+    /// Host API use that was not declared by capability.
+    UndeclaredHostApi,
+    /// Direct filesystem access.
+    DirectFilesystem,
+    /// Direct network access.
+    DirectNetwork,
+    /// Process spawning.
+    ProcessSpawn,
+    /// Direct native module loading.
+    NativeModuleLoading,
+}
+
+/// Runtime authority policy for sandbox validation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeAuthorityPolicy {
+    denied: BTreeSet<RuntimeOperation>,
+}
+
+impl RuntimeAuthorityPolicy {
+    /// Creates the default sandbox policy.
+    #[must_use]
+    pub fn sandboxed() -> Self {
+        Self {
+            denied: [
+                RuntimeOperation::StringToCode,
+                RuntimeOperation::UndeclaredHostApi,
+                RuntimeOperation::DirectFilesystem,
+                RuntimeOperation::DirectNetwork,
+                RuntimeOperation::ProcessSpawn,
+                RuntimeOperation::NativeModuleLoading,
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    /// Returns true when an operation is denied.
+    #[must_use]
+    pub fn is_denied(&self, operation: RuntimeOperation) -> bool {
+        self.denied.contains(&operation)
+    }
+
+    /// Redacts secret-looking values and executable source payloads from diagnostics.
+    #[must_use]
+    pub fn redact_diagnostic(&self, diagnostic: &str) -> String {
+        diagnostic
+            .split_whitespace()
+            .map(redact_token)
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace("Function('return secrets')", "[redacted-source]")
+    }
+}
+
+fn redact_token(token: &str) -> &str {
+    if token.starts_with("sk_") {
+        "[redacted-secret]"
+    } else {
+        token
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

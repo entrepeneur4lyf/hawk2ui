@@ -1,6 +1,7 @@
 use hawk2ui_security_model::{
     AttackFixtures, AttackFixturesError, CapabilityRejections, CapabilityRejectionsError,
-    CapabilityVerdict, Severity, ThreatModel, ThreatModelError,
+    CapabilityVerdict, RuntimeAuthorityPolicy, RuntimeOperation, Severity, ThreatModel,
+    ThreatModelError,
 };
 
 const THREAT_MODEL: &str = include_str!("../../../security/threat-model.toml");
@@ -191,4 +192,33 @@ diagnostic_rule = "asset.vector.unsafe"
         error,
         AttackFixturesError::DuplicateFixture("unsafe-vector-content".into())
     );
+}
+
+#[test]
+fn runtime_authority_denies_unsafe_operations() {
+    let policy = RuntimeAuthorityPolicy::sandboxed();
+
+    for operation in [
+        RuntimeOperation::StringToCode,
+        RuntimeOperation::UndeclaredHostApi,
+        RuntimeOperation::DirectFilesystem,
+        RuntimeOperation::DirectNetwork,
+        RuntimeOperation::ProcessSpawn,
+        RuntimeOperation::NativeModuleLoading,
+    ] {
+        assert!(policy.is_denied(operation), "{operation:?} must be denied");
+    }
+}
+
+#[test]
+fn runtime_authority_redacts_secret_payloads() {
+    let policy = RuntimeAuthorityPolicy::sandboxed();
+    let diagnostic = policy.redact_diagnostic(
+        "Denied token sk_live_1234567890 and source payload Function('return secrets')",
+    );
+
+    assert!(!diagnostic.contains("sk_live_1234567890"));
+    assert!(!diagnostic.contains("Function('return secrets')"));
+    assert!(diagnostic.contains("[redacted-secret]"));
+    assert!(diagnostic.contains("[redacted-source]"));
 }
