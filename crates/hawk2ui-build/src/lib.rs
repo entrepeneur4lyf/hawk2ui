@@ -4,10 +4,14 @@
 pub mod artifact;
 pub mod diagnostic;
 pub mod manifest;
+pub mod pipeline;
+pub mod report;
 
 pub use artifact::{ArtifactHash, ArtifactSchemaVersion, SealedArtifact, SealedArtifactError};
 pub use diagnostic::{BuildDiagnostic, BuildDiagnosticSeverity};
 pub use manifest::{HawkManifest, ManifestError, PackageTarget};
+pub use pipeline::{BuildPhase, BuildPipeline, BuildPipelineError};
+pub use report::{PackageTargetRecord, VerificationReport};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-build";

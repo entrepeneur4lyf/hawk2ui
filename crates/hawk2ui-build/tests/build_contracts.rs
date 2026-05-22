@@ -1,6 +1,7 @@
 use hawk2ui_build::{
-    ArtifactHash, ArtifactSchemaVersion, BuildDiagnostic, BuildDiagnosticSeverity, HawkManifest,
-    ManifestError, PackageTarget, SealedArtifact, SealedArtifactError,
+    ArtifactHash, ArtifactSchemaVersion, BuildDiagnostic, BuildDiagnosticSeverity, BuildPhase,
+    BuildPipeline, BuildPipelineError, HawkManifest, ManifestError, PackageTarget,
+    PackageTargetRecord, SealedArtifact, SealedArtifactError, VerificationReport,
 };
 
 const VALID_MANIFEST: &str = r#"
@@ -118,4 +119,65 @@ fn sealed_artifact_reports_incompatible_schema_diagnostic() {
             )
         }
     );
+}
+
+#[test]
+fn build_pipeline_records_required_phase_order() {
+    let pipeline = BuildPipeline::production();
+
+    assert_eq!(
+        pipeline.phase_names(),
+        [
+            "source-discovery",
+            "manifest-validation",
+            "asset-discovery",
+            "source-validation",
+            "style-compilation",
+            "script-compilation",
+            "asset-compilation",
+            "artifact-generation",
+            "packaging",
+            "verification",
+        ]
+    );
+}
+
+#[test]
+fn build_pipeline_propagates_phase_diagnostics() {
+    let pipeline = BuildPipeline::production().with_diagnostic(
+        BuildPhase::ManifestValidation,
+        BuildDiagnostic::new(
+            BuildDiagnosticSeverity::Error,
+            "manifest.identity.missing",
+            "manifest identity is required",
+        ),
+    );
+
+    let error = pipeline
+        .ensure_release_ready()
+        .expect_err("error diagnostic must block release");
+
+    assert_eq!(
+        error,
+        BuildPipelineError::ReleaseBlocked("manifest.identity.missing".into())
+    );
+}
+
+#[test]
+fn verification_report_tracks_package_targets_and_diagnostics() {
+    let report = VerificationReport::new("com.hawk2ui.desktop-basic")
+        .with_package_target(PackageTargetRecord::new(
+            PackageTarget::Desktop,
+            "linux-wayland",
+        ))
+        .with_diagnostic(BuildDiagnostic::new(
+            BuildDiagnosticSeverity::Warning,
+            "style.unsupported.warning",
+            "style warning",
+        ));
+
+    assert_eq!(report.product_id, "com.hawk2ui.desktop-basic");
+    assert_eq!(report.package_targets.len(), 1);
+    assert_eq!(report.diagnostics.len(), 1);
+    assert!(report.is_release_ready());
 }
