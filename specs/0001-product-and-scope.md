@@ -63,7 +63,7 @@ The product must support:
 - dense expert panels,
 - user-editable visual preferences.
 
-Default controls are starter skins and examples. They are not the visual ceiling of the product.
+Default controls are included baseline skins and examples. They are not the visual ceiling of the product.
 
 ## Component Requirement
 
