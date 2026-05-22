@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Capability-scoped platform APIs for filesystem, network, clipboard, secrets, and database access in Hawk2UI.
+//! Capability-scoped platform APIs for filesystem, network, clipboard, secrets, and database access in `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-platform";

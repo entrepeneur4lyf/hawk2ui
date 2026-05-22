@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Command-line interface for Hawk2UI validation, builds, runs, packaging, and diagnostics.
+//! Command-line interface for `Hawk2UI` validation, builds, runs, packaging, and diagnostics.
 
 const CRATE_NAME: &str = "hawk2ui-cli";
 

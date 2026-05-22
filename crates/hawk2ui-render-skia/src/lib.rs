@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Skia-backed production renderer backend for Hawk2UI.
+//! `Skia`-backed production renderer backend for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-render-skia";

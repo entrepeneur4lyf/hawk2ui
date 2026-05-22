@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Production script backend for Hawk2UI JavaScript and TypeScript execution.
+//! Production script backend for `Hawk2UI` `JavaScript` and `TypeScript` execution.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-script";

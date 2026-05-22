@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Script loading, host bindings, event dispatch, scheduling, lifecycle, and runtime safety for Hawk2UI.
+//! Script loading, host bindings, event dispatch, scheduling, lifecycle, and runtime safety for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-runtime";

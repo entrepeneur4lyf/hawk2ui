@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Threat model registry, security rejection cases, and package trust validation for Hawk2UI.
+//! Threat model registry, security rejection cases, and package trust validation for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-security-model";

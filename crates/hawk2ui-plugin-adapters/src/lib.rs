@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Production plugin and package adapters for Hawk2UI CLAP, VST3, AU, standalone, and desktop outputs.
+//! Production plugin and package adapters for `Hawk2UI` `CLAP`, `VST3`, AU, standalone, and desktop outputs.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-plugin-adapters";

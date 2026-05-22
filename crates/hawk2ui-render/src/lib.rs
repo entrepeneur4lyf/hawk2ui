@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Retained scene records, paint layers, renderer backend boundary, text contracts, and custom draw surfaces for Hawk2UI.
+//! Retained scene records, paint layers, renderer backend boundary, text contracts, and custom draw surfaces for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-render";

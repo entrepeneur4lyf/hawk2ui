@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Typed authoring records, component model, event binding, state records, and framework adapter contracts for Hawk2UI.
+//! Typed authoring records, component model, event binding, state records, and framework adapter contracts for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-authoring";

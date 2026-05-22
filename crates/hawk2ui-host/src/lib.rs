@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Common host surface contracts for Hawk2UI desktop windows and embedded plugin surfaces.
+//! Common host surface contracts for `Hawk2UI` desktop windows and embedded plugin surfaces.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-host";

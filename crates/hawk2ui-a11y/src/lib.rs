@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Accessibility tree, semantics, host export, and plugin-safe accessibility support for Hawk2UI.
+//! Accessibility tree, semantics, host export, and plugin-safe accessibility support for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-a11y";

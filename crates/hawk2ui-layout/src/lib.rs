@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Layout tree, text measurement bridge, plugin constraints, and scene geometry attachment for Hawk2UI.
+//! Layout tree, text measurement bridge, plugin constraints, and scene geometry attachment for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-layout";

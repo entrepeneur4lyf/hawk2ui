@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Format-neutral plugin metadata, editor, parameter, automation, state, preset, and realtime visual data records for Hawk2UI.
+//! Format-neutral plugin metadata, editor, parameter, automation, state, preset, and realtime visual data records for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-plugin";

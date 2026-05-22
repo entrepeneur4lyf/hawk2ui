@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Shared framework conformance harness for Hawk2UI native, Svelte, React, Vue, and Solid integrations.
+//! Shared framework conformance harness for `Hawk2UI` native, `Svelte`, `React`, `Vue`, and `Solid` integrations.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-framework-conformance";

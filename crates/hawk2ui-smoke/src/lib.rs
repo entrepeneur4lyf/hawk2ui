@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Smoke application runner and fixtures for Hawk2UI desktop, plugin, visual, and security validation.
+//! Smoke application runner and fixtures for `Hawk2UI` desktop, plugin, visual, and security validation.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-smoke";

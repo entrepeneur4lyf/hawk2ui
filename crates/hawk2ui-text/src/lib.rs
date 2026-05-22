@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Production text backend for Hawk2UI font discovery, shaping, line breaking, bidi, glyph cache, and high-DPI metrics.
+//! Production text backend for `Hawk2UI` font discovery, shaping, line breaking, bidi, glyph cache, and high-DPI metrics.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-text";

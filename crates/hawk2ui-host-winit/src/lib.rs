@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Winit-backed desktop host adapter for Hawk2UI.
+//! `Winit`-backed desktop host adapter for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-host-winit";

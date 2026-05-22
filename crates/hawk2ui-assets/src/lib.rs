@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Production asset decoding, validation, lowering, hashing, and cache invalidation for Hawk2UI.
+//! Production asset decoding, validation, lowering, hashing, and cache invalidation for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-assets";

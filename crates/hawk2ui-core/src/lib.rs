@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Core public facade for Hawk2UI product records and runtime entry points.
+//! Core public facade for `Hawk2UI` product records and runtime entry points.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-core";

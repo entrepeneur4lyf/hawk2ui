@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! React 19 and later integration for emitting Hawk2UI typed records.
+//! `React` 19 and later integration for emitting `Hawk2UI` typed records.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-framework-react";

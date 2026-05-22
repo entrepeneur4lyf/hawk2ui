@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Shared deterministic fixtures, diagnostics assertions, visual helpers, security helpers, and benchmark helpers for Hawk2UI tests.
+//! Shared deterministic fixtures, diagnostics assertions, visual helpers, security helpers, and benchmark helpers for `Hawk2UI` tests.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-testkit";

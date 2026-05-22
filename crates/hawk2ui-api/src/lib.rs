@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Public API contracts shared across Hawk2UI crates, generated artifacts, diagnostics, and tooling.
+//! Public API contracts shared across `Hawk2UI` crates, generated artifacts, diagnostics, and tooling.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-api";

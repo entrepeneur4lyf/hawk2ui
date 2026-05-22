@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Vue 3.5 and later integration for emitting Hawk2UI typed records.
+//! `Vue` 3.5 and later integration for emitting `Hawk2UI` typed records.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-framework-vue";

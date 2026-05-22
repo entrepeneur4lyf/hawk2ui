@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Security policy, source validation, script sandbox, asset policy, and secret redaction for Hawk2UI.
+//! Security policy, source validation, script sandbox, asset policy, and secret redaction for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-security";

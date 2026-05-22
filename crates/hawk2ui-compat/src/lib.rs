@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Machine-readable compatibility matrices and unsupported-target diagnostics for Hawk2UI.
+//! Machine-readable compatibility matrices and unsupported-target diagnostics for `Hawk2UI`.
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-compat";
