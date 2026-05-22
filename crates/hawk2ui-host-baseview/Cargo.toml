@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-host-baseview"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Baseview-backed embedded plugin host adapter for Hawk2UI."
+
+[lib]
+name = "hawk2ui_host_baseview"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

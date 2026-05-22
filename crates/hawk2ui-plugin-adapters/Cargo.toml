@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-plugin-adapters"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Production plugin and package adapters for Hawk2UI CLAP, VST3, AU, standalone, and desktop outputs."
+
+[lib]
+name = "hawk2ui_plugin_adapters"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

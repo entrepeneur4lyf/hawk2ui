@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-plugin"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Format-neutral plugin metadata, editor, parameter, automation, state, preset, and realtime visual data records for Hawk2UI."
+
+[lib]
+name = "hawk2ui_plugin"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

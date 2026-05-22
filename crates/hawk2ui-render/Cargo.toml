@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-render"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Retained scene records, paint layers, renderer backend boundary, text contracts, and custom draw surfaces for Hawk2UI."
+
+[lib]
+name = "hawk2ui_render"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

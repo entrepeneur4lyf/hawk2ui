@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-testkit"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Shared deterministic fixtures, diagnostics assertions, visual helpers, security helpers, and benchmark helpers for Hawk2UI tests."
+
+[lib]
+name = "hawk2ui_testkit"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

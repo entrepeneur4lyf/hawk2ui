@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-layout"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Layout tree, text measurement bridge, plugin constraints, and scene geometry attachment for Hawk2UI."
+
+[lib]
+name = "hawk2ui_layout"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

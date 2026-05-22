@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-text"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Production text backend for Hawk2UI font discovery, shaping, line breaking, bidi, glyph cache, and high-DPI metrics."
+
+[lib]
+name = "hawk2ui_text"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

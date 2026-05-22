@@ -1,0 +1,54 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/hawk2ui-a11y",
+    "crates/hawk2ui-api",
+    "crates/hawk2ui-assets",
+    "crates/hawk2ui-authoring",
+    "crates/hawk2ui-build",
+    "crates/hawk2ui-compat",
+    "crates/hawk2ui-conformance",
+    "crates/hawk2ui-core",
+    "crates/hawk2ui-framework-conformance",
+    "crates/hawk2ui-framework-react",
+    "crates/hawk2ui-framework-solid",
+    "crates/hawk2ui-framework-svelte",
+    "crates/hawk2ui-framework-vue",
+    "crates/hawk2ui-host",
+    "crates/hawk2ui-host-baseview",
+    "crates/hawk2ui-host-winit",
+    "crates/hawk2ui-layout",
+    "crates/hawk2ui-perf",
+    "crates/hawk2ui-platform",
+    "crates/hawk2ui-plugin",
+    "crates/hawk2ui-plugin-adapters",
+    "crates/hawk2ui-render",
+    "crates/hawk2ui-render-skia",
+    "crates/hawk2ui-runtime",
+    "crates/hawk2ui-schema",
+    "crates/hawk2ui-script",
+    "crates/hawk2ui-security",
+    "crates/hawk2ui-security-model",
+    "crates/hawk2ui-smoke",
+    "crates/hawk2ui-style",
+    "crates/hawk2ui-testkit",
+    "crates/hawk2ui-text",
+    "crates/hawk2ui-cli",
+    "xtask",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+authors = ["Hawk2UI contributors"]
+homepage = "https://github.com/shawn/hawk2ui"
+repository = "https://github.com/shawn/hawk2ui"
+description = "Production native UI framework for desktop applications and embeddable plugin editors."
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

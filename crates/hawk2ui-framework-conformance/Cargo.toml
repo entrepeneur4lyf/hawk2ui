@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-framework-conformance"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Shared framework conformance harness for Hawk2UI native, Svelte, React, Vue, and Solid integrations."
+
+[lib]
+name = "hawk2ui_framework_conformance"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

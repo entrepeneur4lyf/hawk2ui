@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Core public facade for Hawk2UI product records and runtime entry points."
+
+[lib]
+name = "hawk2ui_core"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

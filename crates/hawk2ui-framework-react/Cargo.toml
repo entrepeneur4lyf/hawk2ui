@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-framework-react"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "React 19 and later integration for emitting Hawk2UI typed records."
+
+[lib]
+name = "hawk2ui_framework_react"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

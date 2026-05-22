@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-smoke"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Smoke application runner and fixtures for Hawk2UI desktop, plugin, visual, and security validation."
+
+[lib]
+name = "hawk2ui_smoke"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

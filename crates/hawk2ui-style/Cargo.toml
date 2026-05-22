@@ -1,0 +1,17 @@
+[package]
+name = "hawk2ui-style"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Typed style property registry, selector subset, design tokens, compiler, and runtime style tables for Hawk2UI."
+
+[lib]
+name = "hawk2ui_style"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
