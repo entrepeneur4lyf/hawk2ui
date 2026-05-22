@@ -1,0 +1,39 @@
+[[targets]]
+name = "windows-desktop"
+family = "windows"
+surface = "desktop"
+architecture = "x86_64"
+windowing = "hwnd"
+accessibility = "native"
+packaging = "desktop-bundle"
+release = "supported"
+
+[[targets]]
+name = "macos-desktop"
+family = "macos"
+surface = "desktop"
+architecture = "aarch64"
+windowing = "nswindow"
+accessibility = "native"
+packaging = "app-bundle"
+release = "supported"
+
+[[targets]]
+name = "linux-wayland-desktop"
+family = "linux"
+surface = "desktop"
+architecture = "x86_64"
+windowing = "wayland"
+accessibility = "native"
+packaging = "desktop-bundle"
+release = "supported"
+
+[[targets]]
+name = "linux-x11-plugin"
+family = "linux"
+surface = "plugin"
+architecture = "x86_64"
+windowing = "x11-xcb"
+accessibility = "host-dependent"
+packaging = "clap-bundle"
+release = "supported"
