@@ -19,3 +19,23 @@ workspace = true
 [dependencies]
 serde.workspace = true
 toml.workspace = true
+
+[[bench]]
+name = "startup"
+harness = false
+
+[[bench]]
+name = "layout"
+harness = false
+
+[[bench]]
+name = "render"
+harness = false
+
+[[bench]]
+name = "runtime"
+harness = false
+
+[[bench]]
+name = "plugin_realtime"
+harness = false

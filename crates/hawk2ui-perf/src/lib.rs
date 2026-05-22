@@ -2,10 +2,16 @@
 //! Performance budgets, benchmark helpers, and stability gates for `Hawk2UI`.
 
 pub mod budgets;
+pub mod harness;
+pub mod realtime;
+pub mod stability;
 
 pub use budgets::{
     BudgetUnit, PerformanceBudget, PerformanceBudgets, PerformanceCategory, PerformanceError,
 };
+pub use harness::{BenchmarkCase, BenchmarkError, BenchmarkKind, BenchmarkSuite};
+pub use realtime::{RealtimeContext, RealtimeGuard, RealtimeGuardError, RealtimeOperation};
+pub use stability::{RuntimeStabilityFixture, StabilityError};
 
 #[cfg(test)]
 mod tests {
@@ -20,6 +26,27 @@ mod tests {
         assert!(budgets.contains("cold-start"));
         assert!(budgets.contains("layout-pass"));
         assert!(budgets.release_gates().all(|budget| budget.release_gate));
+    }
+
+    #[test]
+    fn performance_budget_file_covers_required_production_domains() {
+        let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+
+        for name in [
+            "cold-start",
+            "artifact-load",
+            "first-frame",
+            "layout-pass",
+            "scene-export",
+            "frame-render",
+            "text-measurement",
+            "runtime-event-dispatch",
+            "memory-working-set",
+            "package-size",
+            "plugin-audio-allocation",
+        ] {
+            assert!(budgets.contains(name), "missing budget {name}");
+        }
     }
 
     #[test]
@@ -69,5 +96,58 @@ mod tests {
             error,
             PerformanceError::TargetExceedsMaximum("layout-pass".to_owned())
         );
+    }
+
+    #[test]
+    fn benchmark_suite_rejects_cases_without_matching_budget() {
+        let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+        let suite = BenchmarkSuite::new("startup").with_case(BenchmarkCase::new(
+            "missing-budget",
+            "examples/desktop-basic",
+            BenchmarkKind::Startup,
+        ));
+
+        let error = suite
+            .validate_against(&budgets)
+            .expect_err("case without budget must fail");
+
+        assert_eq!(
+            error,
+            BenchmarkError::MissingBudget("missing-budget".to_owned())
+        );
+    }
+
+    #[test]
+    fn runtime_stability_fixture_detects_failure_rate_above_limit() {
+        let fixture = RuntimeStabilityFixture::new("event-dispatch", 100)
+            .with_failures(3)
+            .with_allowed_failures(2);
+
+        let error = fixture
+            .validate()
+            .expect_err("failure count above limit must fail");
+
+        assert_eq!(
+            error,
+            StabilityError::FailureLimitExceeded {
+                name: "event-dispatch".to_owned(),
+                failures: 3,
+                allowed: 2
+            }
+        );
+    }
+
+    #[test]
+    fn realtime_guard_denies_audio_thread_unsafe_operations() {
+        let guard = RealtimeGuard::audio_thread();
+
+        assert_eq!(
+            guard.check(RealtimeOperation::Allocation),
+            Err(RealtimeGuardError::Denied {
+                context: RealtimeContext::AudioThread,
+                operation: RealtimeOperation::Allocation
+            })
+        );
+        assert!(guard.check(RealtimeOperation::PreallocatedWrite).is_ok());
     }
 }

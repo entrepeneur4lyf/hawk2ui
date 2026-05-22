@@ -30,6 +30,10 @@ pub enum PerformanceCategory {
     Rendering,
     /// Runtime scheduling and event budgets.
     Runtime,
+    /// Memory usage budgets.
+    Memory,
+    /// Package size budgets.
+    Package,
     /// Realtime audio safety budgets.
     Realtime,
 }

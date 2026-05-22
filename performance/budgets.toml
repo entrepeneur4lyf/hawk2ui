@@ -17,8 +17,26 @@ release_gate = true
 fixture = "examples/desktop-basic"
 
 [[budgets]]
+name = "first-frame"
+category = "startup"
+unit = "milliseconds"
+target = 300
+maximum = 600
+release_gate = true
+fixture = "examples/desktop-basic"
+
+[[budgets]]
 name = "layout-pass"
 category = "layout"
+unit = "milliseconds"
+target = 4
+maximum = 8
+release_gate = true
+fixture = "examples/desktop-dashboard"
+
+[[budgets]]
+name = "scene-export"
+category = "rendering"
 unit = "milliseconds"
 target = 4
 maximum = 8
@@ -35,6 +53,15 @@ release_gate = true
 fixture = "examples/style-gallery"
 
 [[budgets]]
+name = "text-measurement"
+category = "layout"
+unit = "microseconds"
+target = 500
+maximum = 1000
+release_gate = true
+fixture = "examples/desktop-dashboard"
+
+[[budgets]]
 name = "runtime-event-dispatch"
 category = "runtime"
 unit = "microseconds"
@@ -42,6 +69,24 @@ target = 250
 maximum = 500
 release_gate = true
 fixture = "examples/desktop-basic"
+
+[[budgets]]
+name = "memory-working-set"
+category = "memory"
+unit = "bytes"
+target = 67108864
+maximum = 134217728
+release_gate = true
+fixture = "examples/desktop-dashboard"
+
+[[budgets]]
+name = "package-size"
+category = "package"
+unit = "bytes"
+target = 52428800
+maximum = 104857600
+release_gate = true
+fixture = "examples/release-package"
 
 [[budgets]]
 name = "plugin-audio-allocation"
