@@ -4,6 +4,25 @@ use std::collections::HashSet;
 
 use serde::Deserialize;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReleaseCheckMode {
+    Full,
+    VersionOnly,
+}
+
+pub(crate) fn run_release_check(mode: ReleaseCheckMode) -> Result<(), String> {
+    match mode {
+        ReleaseCheckMode::VersionOnly => validate_repository_version_policy(),
+        ReleaseCheckMode::Full => Err("full release check is not wired yet".into()),
+    }
+}
+
+fn validate_repository_version_policy() -> Result<(), String> {
+    VersionPolicy::parse(include_str!("../../release/version-policy.toml"))
+        .map(|_| ())
+        .map_err(|error| format!("version policy validation failed: {error:?}"))
+}
+
 #[derive(Debug, Deserialize)]
 struct ReleaseCriteria {
     criteria: Vec<ReleaseCriterion>,
@@ -83,6 +102,93 @@ enum ReleaseCriteriaError {
     Parse(String),
     DuplicateCriterion(String),
     MissingRequiredField { id: String, field: &'static str },
+}
+
+#[derive(Debug, Deserialize)]
+struct VersionPolicy {
+    crate_version: String,
+    artifact_schema_version: u32,
+    package_version: String,
+    manual_version: String,
+    compatibility_notes_required: bool,
+}
+
+impl VersionPolicy {
+    fn parse(input: &str) -> Result<Self, VersionPolicyError> {
+        let policy: Self =
+            toml::from_str(input).map_err(|error| VersionPolicyError::Parse(error.to_string()))?;
+        policy.validate()?;
+        Ok(policy)
+    }
+
+    fn validate(&self) -> Result<(), VersionPolicyError> {
+        require_policy_field("crate_version", &self.crate_version)?;
+        require_policy_field("package_version", &self.package_version)?;
+        require_policy_field("manual_version", &self.manual_version)?;
+
+        if self.artifact_schema_version == 0 {
+            return Err(VersionPolicyError::InvalidArtifactSchemaVersion(0));
+        }
+
+        require_matching_version(
+            "crate_version",
+            &self.crate_version,
+            "package_version",
+            &self.package_version,
+        )?;
+        require_matching_version(
+            "crate_version",
+            &self.crate_version,
+            "manual_version",
+            &self.manual_version,
+        )?;
+
+        if !self.compatibility_notes_required {
+            return Err(VersionPolicyError::CompatibilityNotesNotRequired);
+        }
+
+        Ok(())
+    }
+}
+
+fn require_policy_field(field: &'static str, value: &str) -> Result<(), VersionPolicyError> {
+    if value.trim().is_empty() {
+        Err(VersionPolicyError::MissingRequiredField(field))
+    } else {
+        Ok(())
+    }
+}
+
+fn require_matching_version(
+    left: &'static str,
+    left_value: &str,
+    right: &'static str,
+    right_value: &str,
+) -> Result<(), VersionPolicyError> {
+    if left_value == right_value {
+        Ok(())
+    } else {
+        Err(VersionPolicyError::MismatchedVersion {
+            left: left.into(),
+            left_value: left_value.into(),
+            right: right.into(),
+            right_value: right_value.into(),
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum VersionPolicyError {
+    Parse(String),
+    MissingRequiredField(&'static str),
+    InvalidArtifactSchemaVersion(u32),
+    CompatibilityNotesNotRequired,
+    MismatchedVersion {
+        left: String,
+        left_value: String,
+        right: String,
+        right_value: String,
+    },
 }
 
 #[cfg(test)]
@@ -187,6 +293,41 @@ evidence = "target/release-evidence/duplicate.txt"
         assert_eq!(
             error,
             ReleaseCriteriaError::DuplicateCriterion("api-stability".into())
+        );
+    }
+
+    #[test]
+    fn repository_version_policy_declares_all_version_domains() {
+        let policy = VersionPolicy::parse(include_str!("../../release/version-policy.toml"))
+            .expect("repository version policy must parse");
+
+        assert_eq!(policy.crate_version, "0.1.0");
+        assert_eq!(policy.artifact_schema_version, 1);
+        assert_eq!(policy.package_version, "0.1.0");
+        assert_eq!(policy.manual_version, "0.1.0");
+        assert!(policy.compatibility_notes_required);
+    }
+
+    #[test]
+    fn rejects_version_policy_with_mismatched_crate_and_package_versions() {
+        let input = r#"
+crate_version = "0.1.0"
+artifact_schema_version = 1
+package_version = "0.2.0"
+manual_version = "0.1.0"
+compatibility_notes_required = true
+"#;
+
+        let error = VersionPolicy::parse(input).expect_err("version mismatch must fail");
+
+        assert_eq!(
+            error,
+            VersionPolicyError::MismatchedVersion {
+                left: "crate_version".into(),
+                left_value: "0.1.0".into(),
+                right: "package_version".into(),
+                right_value: "0.2.0".into(),
+            }
         );
     }
 }

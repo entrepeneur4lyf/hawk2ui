@@ -11,6 +11,7 @@ const CRATE_NAME: &str = "xtask";
 enum Command {
     CheckFast,
     Check,
+    ReleaseCheck(release::ReleaseCheckMode),
 }
 
 fn main() {
@@ -34,25 +35,39 @@ where
         return Err(format!("missing command\n{}", usage()));
     };
 
-    if args.next().is_some() {
-        return Err(format!("too many arguments\n{}", usage()));
-    }
+    let rest = args.map(|arg| arg.as_ref().to_owned()).collect::<Vec<_>>();
 
     match command.as_ref() {
-        "check-fast" => Ok(Command::CheckFast),
-        "check" => Ok(Command::Check),
+        "check-fast" if rest.is_empty() => Ok(Command::CheckFast),
+        "check" if rest.is_empty() => Ok(Command::Check),
+        "release-check" => parse_release_check(&rest),
+        "check-fast" | "check" => Err(format!("too many arguments\n{}", usage())),
         unknown => Err(format!("unknown command '{unknown}'\n{}", usage())),
     }
 }
 
+fn parse_release_check(args: &[String]) -> Result<Command, String> {
+    match args {
+        [] => Ok(Command::ReleaseCheck(release::ReleaseCheckMode::Full)),
+        [flag] if flag == "--version-only" => Ok(Command::ReleaseCheck(
+            release::ReleaseCheckMode::VersionOnly,
+        )),
+        [_] => Err(format!("unknown release-check flag\n{}", usage())),
+        _ => Err(format!("too many arguments\n{}", usage())),
+    }
+}
+
 fn usage() -> String {
-    format!("Usage: {CRATE_NAME} <check-fast|check>")
+    format!("Usage: {CRATE_NAME} <check-fast|check|release-check [--version-only]>")
 }
 
 fn run_command(command: Command) -> Result<(), String> {
-    let script = match command {
-        Command::CheckFast => "scripts/check-fast.sh",
-        Command::Check => "scripts/check.sh",
+    let Some(script) = (match command {
+        Command::CheckFast => Some("scripts/check-fast.sh"),
+        Command::Check => Some("scripts/check.sh"),
+        Command::ReleaseCheck(mode) => return release::run_release_check(mode),
+    }) else {
+        return Ok(());
     };
 
     let status = ProcessCommand::new("bash")
@@ -84,24 +99,35 @@ mod tests {
     }
 
     #[test]
+    fn parses_version_only_release_check_command() {
+        let command = parse_command(["xtask", "release-check", "--version-only"]);
+        assert_eq!(
+            command,
+            Ok(Command::ReleaseCheck(
+                release::ReleaseCheckMode::VersionOnly
+            ))
+        );
+    }
+
+    #[test]
     fn rejects_unknown_command_with_usage() {
         let error = parse_command(["xtask", "wat"]).expect_err("unknown command must fail");
         assert!(error.contains("unknown command 'wat'"));
-        assert!(error.contains("Usage: xtask <check-fast|check>"));
+        assert!(error.contains("Usage: xtask <check-fast|check|release-check [--version-only]>"));
     }
 
     #[test]
     fn rejects_missing_command_with_usage() {
         let error = parse_command(["xtask"]).expect_err("missing command must fail");
         assert!(error.contains("missing command"));
-        assert!(error.contains("Usage: xtask <check-fast|check>"));
+        assert!(error.contains("Usage: xtask <check-fast|check|release-check [--version-only]>"));
     }
 
     #[test]
     fn rejects_extra_arguments_with_usage() {
         let error = parse_command(["xtask", "check", "again"]).expect_err("extra args must fail");
         assert!(error.contains("too many arguments"));
-        assert!(error.contains("Usage: xtask <check-fast|check>"));
+        assert!(error.contains("Usage: xtask <check-fast|check|release-check [--version-only]>"));
     }
 
     #[test]
