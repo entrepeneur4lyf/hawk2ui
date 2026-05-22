@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 //! Shared typed schema records for `Hawk2UI` products, manifests, artifacts, capabilities, and diagnostics.
 
+pub mod product;
+
+pub use product::{HostTarget, ProductCapability, ProductModel, ProductModelError, SurfaceKind};
+
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-schema";
 
