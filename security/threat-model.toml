@@ -1,0 +1,55 @@
+[[threats]]
+id = "malicious-source"
+severity = "critical"
+affected_domain = "source-validation"
+mitigation = "Reject unsupported source syntax, undeclared capabilities, malformed manifests, and invalid metadata before runtime."
+required_test = "source_asset_fixtures_reject_unsupported_style"
+
+[[threats]]
+id = "malformed-artifact"
+severity = "critical"
+affected_domain = "artifact-verification"
+mitigation = "Reject artifacts with incompatible schema versions, invalid hashes, or missing verification reports."
+required_test = "package_trust_rejects_tampered_artifact"
+
+[[threats]]
+id = "unsafe-asset"
+severity = "high"
+affected_domain = "asset-validation"
+mitigation = "Reject unsafe vector content, oversized assets, unsupported formats, hash mismatches, and missing assets."
+required_test = "source_asset_fixtures_map_each_attack_to_diagnostic"
+
+[[threats]]
+id = "hostile-package-input"
+severity = "high"
+affected_domain = "packaging"
+mitigation = "Validate package targets, signatures, manifests, and artifact metadata before package output."
+required_test = "package_trust_rejects_missing_verification_report"
+
+[[threats]]
+id = "malicious-plugin-host-data"
+severity = "critical"
+affected_domain = "plugin-host"
+mitigation = "Treat plugin host metadata, parent handles, parameter input, state chunks, and realtime visual data as untrusted."
+required_test = "capability_rejections_cover_plugin_metadata"
+
+[[threats]]
+id = "untrusted-user-data"
+severity = "high"
+affected_domain = "runtime-input"
+mitigation = "Validate and sanitize user-provided data before it enters scripts, layout, rendering, platform APIs, or diagnostics."
+required_test = "runtime_authority_denies_undeclared_host_api"
+
+[[threats]]
+id = "secret-exposure"
+severity = "critical"
+affected_domain = "secrets"
+mitigation = "Require manifest declarations, redact diagnostic output, and reject plaintext secret leakage in artifacts."
+required_test = "runtime_authority_redacts_secret_payloads"
+
+[[threats]]
+id = "denied-platform-authority"
+severity = "critical"
+affected_domain = "platform-apis"
+mitigation = "Deny filesystem, network, clipboard, secrets, database, process, and native module access unless explicitly capability-scoped."
+required_test = "capability_rejections_cover_all_capabilities"

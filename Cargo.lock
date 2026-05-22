@@ -137,6 +137,10 @@ version = "0.1.0"
 [[package]]
 name = "hawk2ui-security-model"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
 
 [[package]]
 name = "hawk2ui-smoke"
