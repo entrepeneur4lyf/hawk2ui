@@ -1,0 +1,21 @@
+# Hawk2UI Release Checklist
+
+Run these commands from the repository root before tagging or publishing a release candidate.
+
+## Required Commands
+
+- `rtk bash scripts/release-check.sh --version-only`
+- `rtk bash scripts/release-check.sh --packages-only`
+- `rtk bash scripts/release-check.sh --changelog-only`
+- `rtk bash scripts/release-check.sh`
+
+## Required Evidence
+
+- Confirm release criteria evidence files are written under `target/release-evidence/`.
+- Confirm package target evidence covers desktop bundles, plugin bundles, sealed artifacts, debug packages, and release packages.
+- Confirm changelog verification evidence is linked before tagging.
+- Confirm `CHANGELOG.md` includes Added, Changed, Fixed, Security, Compatibility, Migration, and Known Limitations sections.
+
+## Blocking Rule
+
+Any failing release criterion, version policy mismatch, package target validation failure, changelog validation failure, CI-equivalent check failure, dependency policy failure, documentation build failure, or security gate failure blocks release.

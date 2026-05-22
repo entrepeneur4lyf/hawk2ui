@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashSet;
+use std::process::Command;
 
 use serde::Deserialize;
 
@@ -17,8 +18,22 @@ pub(crate) fn run_release_check(mode: ReleaseCheckMode) -> Result<(), String> {
         ReleaseCheckMode::VersionOnly => validate_repository_version_policy(),
         ReleaseCheckMode::PackagesOnly => validate_repository_package_targets(),
         ReleaseCheckMode::ChangelogOnly => validate_repository_changelog(),
-        ReleaseCheckMode::Full => Err("full release check is not wired yet".into()),
+        ReleaseCheckMode::Full => run_full_release_check(),
     }
+}
+
+fn run_full_release_check() -> Result<(), String> {
+    validate_repository_release_criteria()?;
+    validate_repository_version_policy()?;
+    validate_repository_package_targets()?;
+    validate_repository_changelog()?;
+    run_script("scripts/check.sh")
+}
+
+fn validate_repository_release_criteria() -> Result<(), String> {
+    ReleaseCriteria::parse(include_str!("../../release/release-criteria.toml"))
+        .map(|_| ())
+        .map_err(|error| format!("release criteria validation failed: {error:?}"))
 }
 
 fn validate_repository_version_policy() -> Result<(), String> {
@@ -37,6 +52,19 @@ fn validate_repository_changelog() -> Result<(), String> {
     Changelog::parse(include_str!("../../CHANGELOG.md"))
         .map(|_| ())
         .map_err(|error| format!("changelog validation failed: {error:?}"))
+}
+
+fn run_script(script: &str) -> Result<(), String> {
+    let status = Command::new("bash")
+        .arg(script)
+        .status()
+        .map_err(|error| format!("failed to run {script}: {error}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{script} failed with {status}"))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -546,5 +574,21 @@ release_gate = true
         let error = Changelog::parse(input).expect_err("missing evidence must fail");
 
         assert_eq!(error, ChangelogError::MissingVerificationEvidence);
+    }
+
+    #[test]
+    fn release_documentation_lists_required_commands() {
+        let checklist = include_str!("../../release/checklist.md");
+        let manual = include_str!("../../docs/development/releasing.md");
+
+        for command in [
+            "rtk bash scripts/release-check.sh",
+            "rtk bash scripts/release-check.sh --version-only",
+            "rtk bash scripts/release-check.sh --packages-only",
+            "rtk bash scripts/release-check.sh --changelog-only",
+        ] {
+            assert!(checklist.contains(command), "checklist missing {command}");
+            assert!(manual.contains(command), "manual missing {command}");
+        }
     }
 }
