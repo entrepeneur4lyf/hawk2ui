@@ -1,0 +1,34 @@
+[[fixtures]]
+id = "unsupported-style-syntax"
+path = "fixtures/security/unsupported-style.css"
+diagnostic_rule = "style.syntax.unsupported"
+
+[[fixtures]]
+id = "unsupported-script-syntax"
+path = "fixtures/security/unsupported-script.ts"
+diagnostic_rule = "script.syntax.unsupported"
+
+[[fixtures]]
+id = "unsafe-vector-content"
+path = "fixtures/security/unsafe-vector.svg"
+diagnostic_rule = "asset.vector.unsafe"
+
+[[fixtures]]
+id = "oversized-asset"
+path = "fixtures/security/oversized-asset.manifest"
+diagnostic_rule = "asset.size.exceeded"
+
+[[fixtures]]
+id = "hash-mismatch"
+path = "fixtures/security/hash-mismatch.manifest"
+diagnostic_rule = "asset.hash.mismatch"
+
+[[fixtures]]
+id = "missing-asset"
+path = "fixtures/security/missing-asset.manifest"
+diagnostic_rule = "asset.missing"
+
+[[fixtures]]
+id = "malformed-manifest"
+path = "fixtures/security/malformed-manifest.toml"
+diagnostic_rule = "manifest.malformed"

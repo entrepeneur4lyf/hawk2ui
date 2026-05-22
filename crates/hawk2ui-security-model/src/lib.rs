@@ -255,6 +255,96 @@ pub enum CapabilityRejectionsError {
     },
 }
 
+/// One malicious or denied source/asset fixture.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct AttackFixture {
+    /// Stable fixture ID.
+    pub id: String,
+    /// Fixture path.
+    pub path: String,
+    /// Diagnostic rule expected for this fixture.
+    pub diagnostic_rule: String,
+}
+
+impl AttackFixture {
+    fn require_field(&self, field: &'static str, value: &str) -> Result<(), AttackFixturesError> {
+        if value.trim().is_empty() {
+            Err(AttackFixturesError::MissingRequiredField {
+                id: self.id.clone(),
+                field,
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Registry of source and asset attack fixtures.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttackFixtures {
+    /// Fixture rows.
+    pub fixtures: Vec<AttackFixture>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawAttackFixtures {
+    fixtures: Vec<AttackFixture>,
+}
+
+impl AttackFixtures {
+    /// Parses and validates source/asset attack fixtures from TOML.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AttackFixturesError`] when parsing fails, IDs are duplicated,
+    /// or required fields are empty.
+    pub fn parse(input: &str) -> Result<Self, AttackFixturesError> {
+        let raw: RawAttackFixtures =
+            toml::from_str(input).map_err(|error| AttackFixturesError::Parse(error.to_string()))?;
+        let fixtures = Self {
+            fixtures: raw.fixtures,
+        };
+        fixtures.validate()?;
+        Ok(fixtures)
+    }
+
+    /// Returns a fixture by ID.
+    #[must_use]
+    pub fn get(&self, id: &str) -> Option<&AttackFixture> {
+        self.fixtures.iter().find(|fixture| fixture.id == id)
+    }
+
+    fn validate(&self) -> Result<(), AttackFixturesError> {
+        let mut ids = BTreeSet::new();
+        for fixture in &self.fixtures {
+            fixture.require_field("id", &fixture.id)?;
+            fixture.require_field("path", &fixture.path)?;
+            fixture.require_field("diagnostic_rule", &fixture.diagnostic_rule)?;
+
+            if !ids.insert(fixture.id.clone()) {
+                return Err(AttackFixturesError::DuplicateFixture(fixture.id.clone()));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Source and asset attack fixture validation error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AttackFixturesError {
+    /// TOML parsing failed.
+    Parse(String),
+    /// Two or more fixtures share the same ID.
+    DuplicateFixture(String),
+    /// Required field is empty.
+    MissingRequiredField {
+        /// Fixture ID.
+        id: String,
+        /// Missing field.
+        field: &'static str,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

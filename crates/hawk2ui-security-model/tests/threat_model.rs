@@ -1,10 +1,11 @@
 use hawk2ui_security_model::{
-    CapabilityRejections, CapabilityRejectionsError, CapabilityVerdict, Severity, ThreatModel,
-    ThreatModelError,
+    AttackFixtures, AttackFixturesError, CapabilityRejections, CapabilityRejectionsError,
+    CapabilityVerdict, Severity, ThreatModel, ThreatModelError,
 };
 
 const THREAT_MODEL: &str = include_str!("../../../security/threat-model.toml");
 const REJECTION_CASES: &str = include_str!("../../../security/rejection-cases.toml");
+const ATTACK_FIXTURES: &str = include_str!("../../../security/source-asset-fixtures.toml");
 
 #[test]
 fn threat_registry_covers_required_domains() {
@@ -146,5 +147,48 @@ fixture = "fixtures/security/filesystem-deny.toml"
     assert_eq!(
         error,
         CapabilityRejectionsError::DuplicateCase("filesystem-deny".into())
+    );
+}
+
+#[test]
+fn source_asset_fixtures_map_each_attack_to_diagnostic() {
+    let fixtures = AttackFixtures::parse(ATTACK_FIXTURES).expect("attack fixtures parse");
+
+    for id in [
+        "unsupported-style-syntax",
+        "unsupported-script-syntax",
+        "unsafe-vector-content",
+        "oversized-asset",
+        "hash-mismatch",
+        "missing-asset",
+        "malformed-manifest",
+    ] {
+        let fixture = fixtures
+            .get(id)
+            .unwrap_or_else(|| panic!("missing fixture {id}"));
+        assert!(!fixture.path.is_empty());
+        assert!(!fixture.diagnostic_rule.is_empty());
+    }
+}
+
+#[test]
+fn source_asset_fixtures_reject_duplicate_ids() {
+    let input = r#"
+[[fixtures]]
+id = "unsafe-vector-content"
+path = "fixtures/security/unsafe-vector.svg"
+diagnostic_rule = "asset.vector.unsafe"
+
+[[fixtures]]
+id = "unsafe-vector-content"
+path = "fixtures/security/unsafe-vector.svg"
+diagnostic_rule = "asset.vector.unsafe"
+"#;
+
+    let error = AttackFixtures::parse(input).expect_err("duplicate fixture IDs must fail");
+
+    assert_eq!(
+        error,
+        AttackFixturesError::DuplicateFixture("unsafe-vector-content".into())
     );
 }

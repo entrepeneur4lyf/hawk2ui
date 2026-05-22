@@ -1,0 +1,3 @@
+asset = "logo.png"
+expected_hash = "blake3:bad"
+actual_hash = "blake3:good"
