@@ -1,0 +1,125 @@
+[[cases]]
+id = "filesystem-allow"
+capability = "filesystem"
+verdict = "allow"
+diagnostic_rule = "capability.filesystem.allow"
+fixture = "fixtures/security/filesystem-allow.toml"
+
+[[cases]]
+id = "filesystem-deny"
+capability = "filesystem"
+verdict = "deny"
+diagnostic_rule = "capability.filesystem.deny"
+fixture = "fixtures/security/filesystem-deny.toml"
+
+[[cases]]
+id = "network-allow"
+capability = "network"
+verdict = "allow"
+diagnostic_rule = "capability.network.allow"
+fixture = "fixtures/security/network-allow.toml"
+
+[[cases]]
+id = "network-deny"
+capability = "network"
+verdict = "deny"
+diagnostic_rule = "capability.network.deny"
+fixture = "fixtures/security/network-deny.toml"
+
+[[cases]]
+id = "clipboard-allow"
+capability = "clipboard"
+verdict = "allow"
+diagnostic_rule = "capability.clipboard.allow"
+fixture = "fixtures/security/clipboard-allow.toml"
+
+[[cases]]
+id = "clipboard-deny"
+capability = "clipboard"
+verdict = "deny"
+diagnostic_rule = "capability.clipboard.deny"
+fixture = "fixtures/security/clipboard-deny.toml"
+
+[[cases]]
+id = "secrets-allow"
+capability = "secrets"
+verdict = "allow"
+diagnostic_rule = "capability.secrets.allow"
+fixture = "fixtures/security/secrets-allow.toml"
+
+[[cases]]
+id = "secrets-deny"
+capability = "secrets"
+verdict = "deny"
+diagnostic_rule = "capability.secrets.deny"
+fixture = "fixtures/security/secrets-deny.toml"
+
+[[cases]]
+id = "database-allow"
+capability = "database"
+verdict = "allow"
+diagnostic_rule = "capability.database.allow"
+fixture = "fixtures/security/database-allow.toml"
+
+[[cases]]
+id = "database-deny"
+capability = "database"
+verdict = "deny"
+diagnostic_rule = "capability.database.deny"
+fixture = "fixtures/security/database-deny.toml"
+
+[[cases]]
+id = "package-targets-allow"
+capability = "package-targets"
+verdict = "allow"
+diagnostic_rule = "capability.package-targets.allow"
+fixture = "fixtures/security/package-targets-allow.toml"
+
+[[cases]]
+id = "package-targets-deny"
+capability = "package-targets"
+verdict = "deny"
+diagnostic_rule = "capability.package-targets.deny"
+fixture = "fixtures/security/package-targets-deny.toml"
+
+[[cases]]
+id = "plugin-metadata-allow"
+capability = "plugin-metadata"
+verdict = "allow"
+diagnostic_rule = "capability.plugin-metadata.allow"
+fixture = "fixtures/security/plugin-metadata-allow.toml"
+
+[[cases]]
+id = "plugin-metadata-deny"
+capability = "plugin-metadata"
+verdict = "deny"
+diagnostic_rule = "capability.plugin-metadata.deny"
+fixture = "fixtures/security/plugin-metadata-deny.toml"
+
+[[cases]]
+id = "host-apis-allow"
+capability = "host-apis"
+verdict = "allow"
+diagnostic_rule = "capability.host-apis.allow"
+fixture = "fixtures/security/host-apis-allow.toml"
+
+[[cases]]
+id = "host-apis-deny"
+capability = "host-apis"
+verdict = "deny"
+diagnostic_rule = "capability.host-apis.deny"
+fixture = "fixtures/security/host-apis-deny.toml"
+
+[[cases]]
+id = "runtime-bindings-allow"
+capability = "runtime-bindings"
+verdict = "allow"
+diagnostic_rule = "capability.runtime-bindings.allow"
+fixture = "fixtures/security/runtime-bindings-allow.toml"
+
+[[cases]]
+id = "runtime-bindings-deny"
+capability = "runtime-bindings"
+verdict = "deny"
+diagnostic_rule = "capability.runtime-bindings.deny"
+fixture = "fixtures/security/runtime-bindings-deny.toml"

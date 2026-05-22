@@ -1,6 +1,10 @@
-use hawk2ui_security_model::{Severity, ThreatModel, ThreatModelError};
+use hawk2ui_security_model::{
+    CapabilityRejections, CapabilityRejectionsError, CapabilityVerdict, Severity, ThreatModel,
+    ThreatModelError,
+};
 
 const THREAT_MODEL: &str = include_str!("../../../security/threat-model.toml");
+const REJECTION_CASES: &str = include_str!("../../../security/rejection-cases.toml");
 
 #[test]
 fn threat_registry_covers_required_domains() {
@@ -72,5 +76,75 @@ required_test = ""
             id: "malicious-source".into(),
             field: "required_test"
         }
+    );
+}
+
+#[test]
+fn capability_rejections_cover_all_capabilities() {
+    let cases = CapabilityRejections::parse(REJECTION_CASES).expect("rejection cases parse");
+
+    for capability in [
+        "filesystem",
+        "network",
+        "clipboard",
+        "secrets",
+        "database",
+        "package-targets",
+        "plugin-metadata",
+        "host-apis",
+        "runtime-bindings",
+    ] {
+        assert!(
+            cases.has_allow_and_deny(capability),
+            "missing allow and deny coverage for {capability}"
+        );
+    }
+}
+
+#[test]
+fn capability_rejections_reject_missing_deny_case() {
+    let input = r#"
+[[cases]]
+id = "filesystem-allow"
+capability = "filesystem"
+verdict = "allow"
+diagnostic_rule = "capability.filesystem.allow"
+fixture = "fixtures/security/filesystem-allow.toml"
+"#;
+
+    let error = CapabilityRejections::parse(input).expect_err("missing deny must fail");
+
+    assert_eq!(
+        error,
+        CapabilityRejectionsError::MissingVerdict {
+            capability: "filesystem".into(),
+            verdict: CapabilityVerdict::Deny
+        }
+    );
+}
+
+#[test]
+fn capability_rejections_reject_duplicate_case_ids() {
+    let input = r#"
+[[cases]]
+id = "filesystem-deny"
+capability = "filesystem"
+verdict = "deny"
+diagnostic_rule = "capability.filesystem.deny"
+fixture = "fixtures/security/filesystem-deny.toml"
+
+[[cases]]
+id = "filesystem-deny"
+capability = "filesystem"
+verdict = "deny"
+diagnostic_rule = "capability.filesystem.deny"
+fixture = "fixtures/security/filesystem-deny.toml"
+"#;
+
+    let error = CapabilityRejections::parse(input).expect_err("duplicate case IDs must fail");
+
+    assert_eq!(
+        error,
+        CapabilityRejectionsError::DuplicateCase("filesystem-deny".into())
     );
 }
