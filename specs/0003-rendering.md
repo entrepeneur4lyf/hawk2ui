@@ -6,13 +6,11 @@ Final baseline.
 
 ## Purpose
 
-This spec defines Hawk2UI's rendering architecture for desktop applications and embeddable plugin editors. The renderer must support premium, brand-heavy, high-DPI interfaces with dynamic creative surfaces while remaining independent from any single host backend or JavaScript framework.
+This spec defines rendering requirements for Hawk2UI desktop surfaces and embedded plugin editor surfaces.
 
-## Scene Model
+## Scene Requirements
 
-Hawk2UI uses a retained scene graph as the source of frame rendering.
-
-The scene graph owns:
+Rendering must use a retained scene model that contains:
 
 - node identity,
 - parent and child hierarchy,
@@ -25,13 +23,13 @@ The scene graph owns:
 - hit-test geometry,
 - invalidation state,
 - accessibility geometry references,
-- export into backend draw commands.
+- backend draw export.
 
 The renderer consumes prepared scene data. It does not parse raw app source.
 
-## Rendering Layers
+## Layer Requirements
 
-A frame may combine:
+A rendered frame must support:
 
 - solid fills,
 - strokes,
@@ -53,9 +51,11 @@ A frame may combine:
 
 Layer composition must be deterministic for visual regression testing.
 
-## Skia Boundary
+## Renderer Boundary Requirements
 
-Skia is wrapped by Hawk2UI renderer traits. The renderer abstraction exposes:
+The rendering API must hide backend-specific types from public author-facing APIs.
+
+The internal renderer boundary must expose:
 
 - surface creation and teardown,
 - resize and DPI changes,
@@ -70,11 +70,9 @@ Skia is wrapped by Hawk2UI renderer traits. The renderer abstraction exposes:
 - backend capability reporting,
 - diagnostics capture.
 
-The first implementation is Skia CPU raster. GPU support follows after CPU rendering, host surface lifecycle, and visual regression flow are stable.
+## Text Rendering Requirements
 
-## Text Rendering
-
-The text system supports:
+The text system must support:
 
 - font discovery,
 - app-provided fonts,
@@ -86,11 +84,11 @@ The text system supports:
 - text measurement for layout,
 - high-DPI output.
 
-## Assets
+## Asset Rendering Requirements
 
-Images, vector assets, fonts, and design tokens are compiled into explicit asset manifests before runtime.
+Images, vector assets, fonts, and design tokens must render through compiled asset records.
 
-The asset pipeline records:
+Asset records must include:
 
 - stable asset IDs,
 - source path metadata,
@@ -101,66 +99,28 @@ The asset pipeline records:
 - packaging metadata,
 - cache invalidation metadata.
 
-SVG and other vector inputs must pass through sanitization or compilation before runtime use.
+## Custom Draw Surface Requirements
 
-## Controls And Custom Draw Surfaces
-
-Controls are behavior-first. Visuals for controls come from styles, themes, assets, vector primitives, scene nodes, and custom draw hooks.
-
-The rendering model must support:
+Custom draw surfaces must support:
 
 - knobs,
 - sliders,
 - meters,
-- switches,
-- envelopes,
 - scopes,
 - analyzers,
 - EQ curves,
 - modulation displays,
 - timelines,
-- pads,
-- keyboards,
 - graph editors,
 - inspector panels.
 
-Custom draw surfaces integrate with hit testing, layout, invalidation, frame scheduling, and renderer capability reporting.
-
-## Animation And Scheduling
-
-Frame scheduling supports:
-
-- explicit repaint requests,
-- animation ticks,
-- host-driven resize and DPI repaint,
-- reduced-rate meter and analyzer updates,
-- frame-rate caps,
-- headless deterministic rendering,
-- plugin-safe scheduling where the audio thread never blocks on the UI.
-
-Animation state lives above the renderer. The renderer receives scene state for a frame and renders it deterministically.
-
-## Paint And Export Boundary
-
-Paint lists are generated from the retained scene for:
-
-- visual regression tests,
-- diagnostics,
-- headless rendering,
-- debugging scene output,
-- fallback rendering paths,
-- backend parity tests.
-
-Paint lists are not the primary state model.
+Custom draw surfaces must integrate with hit testing, layout, invalidation, frame scheduling, and renderer capability reporting.
 
 ## Acceptance Criteria
 
-- Public rendering APIs do not expose `skia-safe` types.
-- A retained scene graph is the source of frame rendering.
-- Paint lists can be generated for tests and diagnostics.
-- Skia CPU raster can render styled scene output.
+- A retained scene model is the source of frame rendering.
+- Paint/export records can be generated for tests and diagnostics.
 - Text measurement participates in layout.
 - Image and vector assets render through compiled asset records.
 - Custom draw surfaces support graph and plugin visual regions.
 - Rendering works for owned desktop windows and embedded plugin surfaces.
-- Rendering failure handling is safe for plugin hosts.

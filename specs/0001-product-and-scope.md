@@ -4,48 +4,54 @@
 
 Final baseline.
 
+## Purpose
+
+This spec defines the product scope and externally visible product requirements for Hawk2UI.
+
 ## Product Definition
 
-Hawk2UI is a native UI framework for building desktop applications and embeddable audio-plugin editors from familiar web-era authoring primitives without shipping Chromium, embedding a WebView, requiring JUCE, or requiring application authors to write Rust.
+Hawk2UI is a native UI framework for building desktop applications and embeddable audio-plugin editors from familiar web-era authoring primitives without requiring application authors to write Rust.
 
 The product has two first-class host targets:
 
 - desktop applications with owned native windows,
 - audio-plugin editors embedded in DAW-owned plugin surfaces.
 
-The plugin target is not a separate product. It is a hard engineering proof point for the same rendering, style, component, asset, and runtime model used by desktop applications.
+Both host targets use one coherent UI model for structure, styling, rendering, assets, runtime state, and developer tooling.
 
-## Non-Negotiables
+## Product Requirements
 
-- No Chromium dependency.
-- No WebView dependency as the primary runtime.
-- No Electron or Tauri architecture.
-- No JUCE dependency.
-- No Rust requirement for app or plugin UI authors.
-- No hidden browser compatibility promise.
-- No audio-thread blocking in plugin use cases.
-- No ambient runtime authority; host APIs are capability-scoped.
-- No architecture that only works for top-level app windows.
+Hawk2UI must provide:
 
-## Authoring Model
-
-Hawk2UI uses a web-familiar authoring model without promising browser parity.
-
-Author input consists of:
-
+- native desktop application surfaces,
+- embeddable audio-plugin editor surfaces,
 - declarative UI structure,
-- a documented native style subset,
-- JavaScript or TypeScript logic,
-- design assets,
-- manifest-declared capabilities and package metadata.
+- typed style and layout processing,
+- JavaScript or TypeScript application logic,
+- asset compilation,
+- package manifests,
+- capability-scoped runtime APIs,
+- visual regression tooling,
+- developer diagnostics,
+- user-facing manual documentation.
 
-Framework compatibility is valuable, but no third-party framework owns the product model. The first authoring target is Hawk2UI's native element/custom renderer model. Svelte 5 is the first named framework proof target after that. React, Vue, and Solid follow after the native model is stable.
+## Product Constraints
+
+Hawk2UI must not require:
+
+- Chromium,
+- a WebView as the primary runtime,
+- Electron or Tauri architecture,
+- JUCE,
+- Rust UI code from application authors,
+- browser API parity,
+- ambient runtime access to host resources.
 
 ## Visual Quality Requirement
 
-Visual quality is a core product requirement. Hawk2UI must support premium, distinctive interfaces for creative tools, audio plugins, dashboards, internal tools, and desktop applications.
+Hawk2UI must support premium, distinctive interfaces for creative tools, audio plugins, dashboards, internal tools, and desktop applications.
 
-The system must support:
+The product must support:
 
 - custom controls,
 - graph surfaces,
@@ -57,27 +63,26 @@ The system must support:
 - dense expert panels,
 - user-editable visual preferences.
 
-Default controls may exist, but they are starter skins and examples, not the visual ceiling.
+Default controls are starter skins and examples. They are not the visual ceiling of the product.
 
-## Built-In Components
+## Component Requirement
 
-Rust-provided components are headless by default. They provide behavior, input semantics, accessibility hooks, layout contracts, state machines, and efficient render hooks. Their visual form comes from styles, themes, assets, and custom draw surfaces.
+Built-in components must be headless by default.
 
-## Required Product Surfaces
+Headless components provide:
 
-Hawk2UI must eventually provide:
+- behavior,
+- input semantics,
+- accessibility hooks,
+- layout contracts,
+- state machines,
+- efficient render hooks.
 
-- desktop app scaffolding,
-- plugin editor scaffolding,
-- manifest validation,
-- asset compilation,
-- style compilation,
-- native package/sealed artifact output,
-- plugin bundle output,
-- visual regression tooling,
-- developer diagnostics,
-- user-facing manual documentation.
+Visual form comes from styles, themes, assets, and custom draw surfaces.
 
-## Out Of Scope For The Baseline
+## Acceptance Criteria
 
-The baseline does not include browser API parity, general web content rendering, arbitrary remote document rendering, or a WebView fallback path as a primary product feature.
+- Desktop applications and plugin editors are both represented in the product model.
+- Product requirements do not depend on browser rendering.
+- Product requirements do not require Rust UI code from app authors.
+- Visual quality requirements include custom controls, assets, vector drawing, graph surfaces, and animation.
