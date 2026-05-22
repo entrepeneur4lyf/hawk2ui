@@ -1,0 +1,79 @@
+[[criteria]]
+id = "api-stability"
+title = "API stability"
+owner = "release"
+command = "rtk cargo test -p hawk2ui-api"
+blocking = "release"
+evidence = "target/release-evidence/api-stability.txt"
+
+[[criteria]]
+id = "artifact-compatibility"
+title = "Artifact compatibility"
+owner = "build"
+command = "rtk cargo test -p hawk2ui-build artifact_compatibility"
+blocking = "release"
+evidence = "target/release-evidence/artifact-compatibility.txt"
+
+[[criteria]]
+id = "ci-pass"
+title = "CI pass"
+owner = "release"
+command = "rtk bash scripts/check.sh"
+blocking = "release"
+evidence = "target/release-evidence/ci-pass.txt"
+
+[[criteria]]
+id = "dependency-health"
+title = "Dependency health"
+owner = "release"
+command = "rtk cargo deny check"
+blocking = "release"
+evidence = "target/release-evidence/dependency-health.txt"
+
+[[criteria]]
+id = "compatibility-matrix"
+title = "Compatibility matrix coverage"
+owner = "compatibility"
+command = "rtk cargo test -p hawk2ui-compat"
+blocking = "release"
+evidence = "target/release-evidence/compatibility-matrix.txt"
+
+[[criteria]]
+id = "performance-budgets"
+title = "Performance budgets"
+owner = "performance"
+command = "rtk cargo test -p hawk2ui-perf"
+blocking = "release"
+evidence = "target/release-evidence/performance-budgets.txt"
+
+[[criteria]]
+id = "security-gates"
+title = "Security gates"
+owner = "security"
+command = "rtk cargo test --workspace security"
+blocking = "release"
+evidence = "target/release-evidence/security-gates.txt"
+
+[[criteria]]
+id = "smoke-apps"
+title = "Smoke apps and fixtures"
+owner = "smoke"
+command = "rtk cargo test -p hawk2ui-smoke"
+blocking = "release"
+evidence = "target/release-evidence/smoke-apps.txt"
+
+[[criteria]]
+id = "manuals"
+title = "Manual completion"
+owner = "docs"
+command = "rtk cargo test --workspace manual"
+blocking = "release"
+evidence = "target/release-evidence/manuals.txt"
+
+[[criteria]]
+id = "packaging"
+title = "Package verification"
+owner = "release"
+command = "rtk bash scripts/release-check.sh --packages-only"
+blocking = "release"
+evidence = "target/release-evidence/packaging.txt"

@@ -3,6 +3,8 @@
 
 use std::process::Command as ProcessCommand;
 
+mod release;
+
 const CRATE_NAME: &str = "xtask";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
