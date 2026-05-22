@@ -9,12 +9,14 @@ pub(crate) enum ReleaseCheckMode {
     Full,
     VersionOnly,
     PackagesOnly,
+    ChangelogOnly,
 }
 
 pub(crate) fn run_release_check(mode: ReleaseCheckMode) -> Result<(), String> {
     match mode {
         ReleaseCheckMode::VersionOnly => validate_repository_version_policy(),
         ReleaseCheckMode::PackagesOnly => validate_repository_package_targets(),
+        ReleaseCheckMode::ChangelogOnly => validate_repository_changelog(),
         ReleaseCheckMode::Full => Err("full release check is not wired yet".into()),
     }
 }
@@ -29,6 +31,12 @@ fn validate_repository_package_targets() -> Result<(), String> {
     PackageTargets::parse(include_str!("../../release/package-targets.toml"))
         .map(|_| ())
         .map_err(|error| format!("package target validation failed: {error:?}"))
+}
+
+fn validate_repository_changelog() -> Result<(), String> {
+    Changelog::parse(include_str!("../../CHANGELOG.md"))
+        .map(|_| ())
+        .map_err(|error| format!("changelog validation failed: {error:?}"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,6 +277,47 @@ enum PackageTargetsError {
     MissingRequiredField { id: String, field: &'static str },
 }
 
+#[derive(Debug)]
+struct Changelog<'a> {
+    text: &'a str,
+}
+
+impl<'a> Changelog<'a> {
+    fn parse(input: &'a str) -> Result<Self, ChangelogError> {
+        let changelog = Self { text: input };
+
+        if !changelog
+            .text
+            .lines()
+            .any(|line| line.trim() == "# Changelog")
+        {
+            return Err(ChangelogError::MissingTitle);
+        }
+
+        if !changelog.has_verification_evidence() {
+            return Err(ChangelogError::MissingVerificationEvidence);
+        }
+
+        Ok(changelog)
+    }
+
+    fn has_section(&self, section: &str) -> bool {
+        let heading = format!("### {section}");
+        self.text.lines().any(|line| line.trim() == heading)
+    }
+
+    fn has_verification_evidence(&self) -> bool {
+        self.text.contains("Verification Evidence:")
+            && self.text.contains("target/release-evidence/")
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ChangelogError {
+    MissingTitle,
+    MissingVerificationEvidence,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,5 +506,45 @@ release_gate = true
             error,
             PackageTargetsError::DuplicateTarget("desktop-linux".into())
         );
+    }
+
+    #[test]
+    fn repository_changelog_has_required_release_sections() {
+        let changelog = Changelog::parse(include_str!("../../CHANGELOG.md"))
+            .expect("repository changelog must parse");
+
+        for section in [
+            "Added",
+            "Changed",
+            "Fixed",
+            "Security",
+            "Compatibility",
+            "Migration",
+            "Known Limitations",
+        ] {
+            assert!(
+                changelog.has_section(section),
+                "missing changelog section {section}"
+            );
+        }
+
+        assert!(changelog.has_verification_evidence());
+    }
+
+    #[test]
+    fn rejects_changelog_without_verification_evidence() {
+        let input = r#"
+# Changelog
+
+## 0.1.0 - 2026-05-22
+
+### Added
+
+- Initial release.
+"#;
+
+        let error = Changelog::parse(input).expect_err("missing evidence must fail");
+
+        assert_eq!(error, ChangelogError::MissingVerificationEvidence);
     }
 }

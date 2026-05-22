@@ -55,13 +55,18 @@ fn parse_release_check(args: &[String]) -> Result<Command, String> {
         [flag] if flag == "--packages-only" => Ok(Command::ReleaseCheck(
             release::ReleaseCheckMode::PackagesOnly,
         )),
+        [flag] if flag == "--changelog-only" => Ok(Command::ReleaseCheck(
+            release::ReleaseCheckMode::ChangelogOnly,
+        )),
         [_] => Err(format!("unknown release-check flag\n{}", usage())),
         _ => Err(format!("too many arguments\n{}", usage())),
     }
 }
 
 fn usage() -> String {
-    format!("Usage: {CRATE_NAME} <check-fast|check|release-check [--version-only|--packages-only]>")
+    format!(
+        "Usage: {CRATE_NAME} <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]>"
+    )
 }
 
 fn run_command(command: Command) -> Result<(), String> {
@@ -124,11 +129,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_changelog_only_release_check_command() {
+        let command = parse_command(["xtask", "release-check", "--changelog-only"]);
+        assert_eq!(
+            command,
+            Ok(Command::ReleaseCheck(
+                release::ReleaseCheckMode::ChangelogOnly
+            ))
+        );
+    }
+
+    #[test]
     fn rejects_unknown_command_with_usage() {
         let error = parse_command(["xtask", "wat"]).expect_err("unknown command must fail");
         assert!(error.contains("unknown command 'wat'"));
         assert!(error.contains(
-            "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only]>"
+            "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]>"
         ));
     }
 
@@ -137,7 +153,7 @@ mod tests {
         let error = parse_command(["xtask"]).expect_err("missing command must fail");
         assert!(error.contains("missing command"));
         assert!(error.contains(
-            "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only]>"
+            "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]>"
         ));
     }
 
@@ -146,7 +162,7 @@ mod tests {
         let error = parse_command(["xtask", "check", "again"]).expect_err("extra args must fail");
         assert!(error.contains("too many arguments"));
         assert!(error.contains(
-            "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only]>"
+            "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]>"
         ));
     }
 

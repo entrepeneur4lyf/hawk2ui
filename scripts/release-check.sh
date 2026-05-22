@@ -8,11 +8,14 @@ case "${1:-}" in
   --packages-only)
     cargo run -p xtask -- release-check --packages-only
     ;;
+  --changelog-only)
+    cargo run -p xtask -- release-check --changelog-only
+    ;;
   "")
     cargo run -p xtask -- release-check
     ;;
   *)
-    echo "Usage: scripts/release-check.sh [--version-only|--packages-only]" >&2
+    echo "Usage: scripts/release-check.sh [--version-only|--packages-only|--changelog-only]" >&2
     exit 2
     ;;
 esac
