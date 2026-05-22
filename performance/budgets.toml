@@ -1,0 +1,53 @@
+[[budgets]]
+name = "cold-start"
+category = "startup"
+unit = "milliseconds"
+target = 250
+maximum = 500
+release_gate = true
+fixture = "examples/desktop-basic"
+
+[[budgets]]
+name = "artifact-load"
+category = "startup"
+unit = "milliseconds"
+target = 50
+maximum = 100
+release_gate = true
+fixture = "examples/desktop-basic"
+
+[[budgets]]
+name = "layout-pass"
+category = "layout"
+unit = "milliseconds"
+target = 4
+maximum = 8
+release_gate = true
+fixture = "examples/desktop-dashboard"
+
+[[budgets]]
+name = "frame-render"
+category = "rendering"
+unit = "milliseconds"
+target = 8
+maximum = 16
+release_gate = true
+fixture = "examples/style-gallery"
+
+[[budgets]]
+name = "runtime-event-dispatch"
+category = "runtime"
+unit = "microseconds"
+target = 250
+maximum = 500
+release_gate = true
+fixture = "examples/desktop-basic"
+
+[[budgets]]
+name = "plugin-audio-allocation"
+category = "realtime"
+unit = "count"
+target = 0
+maximum = 0
+release_gate = true
+fixture = "examples/plugin-meter-analyzer"
