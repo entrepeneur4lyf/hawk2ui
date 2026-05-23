@@ -1,8 +1,12 @@
 #![forbid(unsafe_code)]
 //! Typed authoring records, component model, event binding, state records, and framework adapter contracts for `Hawk2UI`.
 
+pub mod component;
 pub mod element;
 
+pub use component::{
+    ComponentId, ComponentInstance, CustomSurfaceDeclaration, SurfaceId, SurfacePurpose,
+};
 pub use element::{
     ChildList, DuplicateChildKeyError, ElementId, ElementKind, ElementNode, KeyedChild, PropValue,
 };
