@@ -155,6 +155,15 @@ pub struct StyleGallerySmokeResult {
     pub deterministic: bool,
 }
 
+/// Smoke result for security denial fixtures.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SecurityDenialSmokeResult {
+    /// Denial codes observed before launch.
+    pub denials: Vec<String>,
+    /// Whether a runtime surface was launched.
+    pub runtime_surface_launched: bool,
+}
+
 /// Smoke runner.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SmokeRunner;
@@ -393,6 +402,43 @@ impl SmokeRunner {
             sections: sections.into_iter().map(str::to_string).collect(),
             snapshot_count: 13,
             deterministic: true,
+        })
+    }
+
+    /// Runs the security denial smoke fixtures.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when denial evidence is missing.
+    pub fn run_security_denials(
+        &self,
+        fixture: &SmokeFixture,
+    ) -> Result<SecurityDenialSmokeResult, String> {
+        let root = fixture.absolute_path();
+        require_file(&root.join("manifest.hawk.toml"))?;
+        require_file(&root.join("fixtures/denied.ts"))?;
+        let evidence = fs::read_to_string(root.join("fixtures/denials.txt"))
+            .map_err(|error| error.to_string())?;
+        let denials = vec![
+            "filesystem.undeclared",
+            "network.denied",
+            "clipboard.denied",
+            "secret.redacted",
+            "asset.unsafe",
+            "style.unsupported",
+            "manifest.invalid",
+        ];
+        for denial in &denials {
+            if !evidence.lines().any(|line| line == *denial) {
+                return Err(format!("security denial evidence missing: {denial}"));
+            }
+        }
+        if !evidence.contains("runtime_surface_launched=false") {
+            return Err("security denial fixture did not block runtime surface launch".into());
+        }
+        Ok(SecurityDenialSmokeResult {
+            denials: denials.into_iter().map(str::to_string).collect(),
+            runtime_surface_launched: false,
         })
     }
 }

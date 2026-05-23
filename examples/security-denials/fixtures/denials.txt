@@ -1,0 +1,8 @@
+filesystem.undeclared
+network.denied
+clipboard.denied
+secret.redacted
+asset.unsafe
+style.unsupported
+manifest.invalid
+runtime_surface_launched=false

@@ -128,3 +128,28 @@ fn style_gallery_exports_deterministic_snapshots_for_all_sections() {
     assert_eq!(result.snapshot_count, 13);
     assert!(result.deterministic);
 }
+
+#[test]
+fn security_denials_fail_before_runtime_surface_launch() {
+    let fixture =
+        SmokeFixture::from_workspace("examples/security-denials", SmokeTargetKind::Desktop);
+    let runner = SmokeRunner::default();
+
+    let result = runner
+        .run_security_denials(&fixture)
+        .expect("security denials should be evaluated");
+
+    assert_eq!(
+        result.denials,
+        vec![
+            "filesystem.undeclared",
+            "network.denied",
+            "clipboard.denied",
+            "secret.redacted",
+            "asset.unsafe",
+            "style.unsupported",
+            "manifest.invalid",
+        ]
+    );
+    assert!(!result.runtime_surface_launched);
+}
