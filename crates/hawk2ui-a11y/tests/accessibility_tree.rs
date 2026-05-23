@@ -44,3 +44,27 @@ fn tree_records_are_serializable_contracts() {
     assert_serde::<A11yAction>();
     assert_serde::<A11yRole>();
 }
+
+use hawk2ui_a11y::{ComponentKind, ComponentSemantics, VisualStyleSemantics};
+
+#[test]
+fn component_semantics_exist_independently_of_visual_styles() {
+    let styled = VisualStyleSemantics::new("primary", "#ffcc00");
+    let button = ComponentSemantics::button("bypass", "Bypass").with_style(styled.clone());
+    let slider = ComponentSemantics::slider("gain", "Gain", "-6 dB");
+    let input = ComponentSemantics::text_input("name", "Preset Name", "Init");
+    let checkbox = ComponentSemantics::checkbox("enabled", "Enabled", true);
+    let list = ComponentSemantics::list("presets", "Presets", 4);
+    let panel = ComponentSemantics::panel("main", "Main Panel");
+    let custom = ComponentSemantics::custom("scope", "Oscilloscope", A11yRole::Custom);
+
+    assert_eq!(button.kind, ComponentKind::Button);
+    assert_eq!(button.accessible.role, A11yRole::Button);
+    assert_eq!(button.style, Some(styled));
+    assert_eq!(slider.accessible.value.as_deref(), Some("-6 dB"));
+    assert_eq!(input.accessible.role, A11yRole::TextInput);
+    assert_eq!(checkbox.accessible.checked, Some(CheckedState::Checked));
+    assert_eq!(list.item_count, Some(4));
+    assert_eq!(panel.accessible.role, A11yRole::Panel);
+    assert_eq!(custom.accessible.role, A11yRole::Custom);
+}
