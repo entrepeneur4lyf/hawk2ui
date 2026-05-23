@@ -1,6 +1,7 @@
 use hawk2ui_layout::{
     BoxEdges, FlexDirection, LayoutNode, LayoutNodeId, LayoutSizing, LayoutStyle, LayoutTree,
-    LayoutValue, Viewport,
+    LayoutValue, TestTextMeasurer, TextMeasureInput, TextMeasureKey, TextMeasureMode,
+    TextMeasureResult, Viewport,
 };
 
 #[test]
@@ -156,4 +157,43 @@ fn flex_scroll_layout_tracks_scroll_clip_and_absolute_regions() {
             .unwrap()
             .absolute
     );
+}
+
+#[test]
+fn text_measurement_reports_intrinsic_wrapped_and_truncated_sizes() {
+    let measurer = TestTextMeasurer::new().with_average_glyph_width(8.0);
+    let intrinsic = measurer.measure(&TextMeasureInput::new(
+        "Hello Hawk",
+        "Atkinson",
+        16.0,
+        TextMeasureMode::Intrinsic,
+    ));
+    let wrapped = measurer.measure(&TextMeasureInput::new(
+        "Hello Hawk",
+        "Atkinson",
+        16.0,
+        TextMeasureMode::Wrap { max_width: 40.0 },
+    ));
+    let truncated = measurer.measure(&TextMeasureInput::new(
+        "Hello Hawk",
+        "Atkinson",
+        16.0,
+        TextMeasureMode::Truncate { max_width: 32.0 },
+    ));
+
+    assert_eq!(intrinsic, TextMeasureResult::new(80.0, 19.2, 1, false));
+    assert_eq!(wrapped, TextMeasureResult::new(40.0, 38.4, 2, false));
+    assert_eq!(truncated, TextMeasureResult::new(32.0, 19.2, 1, true));
+}
+
+#[test]
+fn text_measurement_keys_invalidate_by_text_and_font_metrics() {
+    let base = TextMeasureKey::new("Gain", "Atkinson", 16.0, TextMeasureMode::Intrinsic);
+    let text_changed = TextMeasureKey::new("Mix", "Atkinson", 16.0, TextMeasureMode::Intrinsic);
+    let font_changed = TextMeasureKey::new("Gain", "Commit Mono", 16.0, TextMeasureMode::Intrinsic);
+    let size_changed = TextMeasureKey::new("Gain", "Atkinson", 18.0, TextMeasureMode::Intrinsic);
+
+    assert_ne!(base, text_changed);
+    assert_ne!(base, font_changed);
+    assert_ne!(base, size_changed);
 }
