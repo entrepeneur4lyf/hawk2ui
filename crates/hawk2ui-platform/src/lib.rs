@@ -1,6 +1,13 @@
 #![forbid(unsafe_code)]
 //! Capability-scoped platform APIs for filesystem, network, clipboard, secrets, and database access in `Hawk2UI`.
 
+pub mod capability;
+
+pub use capability::{
+    CapabilityDenied, CapabilityRecord, CapabilitySchema, CapabilityTable, PlatformContext,
+    PlatformDiagnostic, PlatformOperation, RuntimeAvailability,
+};
+
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-platform";
 
