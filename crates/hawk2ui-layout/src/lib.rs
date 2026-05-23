@@ -3,6 +3,7 @@
 
 pub mod compute;
 pub mod plugin;
+pub mod scene;
 pub mod text;
 pub mod tree;
 
@@ -11,6 +12,7 @@ pub use plugin::{
     AnalyzerRegion, GeneratedParameterLayout, GraphRegion, PluginEditorConstraints,
     PluginEditorSize,
 };
+pub use scene::{SceneGeometry, SceneGeometryAttachment};
 pub use text::{
     TestTextMeasurer, TextMeasureInput, TextMeasureKey, TextMeasureMode, TextMeasureResult,
 };

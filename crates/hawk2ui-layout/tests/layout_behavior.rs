@@ -1,8 +1,8 @@
 use hawk2ui_layout::{
     AnalyzerRegion, BoxEdges, FlexDirection, GeneratedParameterLayout, GraphRegion, LayoutNode,
     LayoutNodeId, LayoutSizing, LayoutStyle, LayoutTree, LayoutValue, PluginEditorConstraints,
-    PluginEditorSize, TestTextMeasurer, TextMeasureInput, TextMeasureKey, TextMeasureMode,
-    TextMeasureResult, Viewport,
+    PluginEditorSize, SceneGeometryAttachment, TestTextMeasurer, TextMeasureInput, TextMeasureKey,
+    TextMeasureMode, TextMeasureResult, Viewport,
 };
 
 #[test]
@@ -250,5 +250,67 @@ fn plugin_constraints_preserve_graph_regions_and_generate_dense_panels() {
             .unwrap()
             .rows(),
         2
+    );
+}
+
+#[test]
+fn scene_geometry_attaches_render_hit_accessibility_clip_and_surface_records() {
+    let tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::scroll_container().with_size(LayoutSizing::fixed(200.0, 120.0)),
+    ))
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new("surface"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(100.0, 80.0)),
+        ),
+    )
+    .expect("surface child insertion should succeed");
+
+    let output = tree.compute_layout(Viewport::new(200.0, 120.0));
+    let scene = SceneGeometryAttachment::from_layout(&output)
+        .with_accessibility_node("surface", "Oscilloscope")
+        .with_custom_surface("surface");
+
+    let geometry = scene.geometry("surface").unwrap();
+
+    assert_eq!(geometry.render.width, 100.0);
+    assert_eq!(geometry.hit_test.height, 80.0);
+    assert_eq!(
+        geometry.accessibility_label.as_deref(),
+        Some("Oscilloscope")
+    );
+    assert!(geometry.custom_surface);
+    assert_eq!(scene.clip("root").unwrap().height, 120.0);
+}
+
+#[test]
+fn scene_geometry_updates_after_layout_recomputation() {
+    let tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Row)
+            .with_size(LayoutSizing::percent(100.0, 100.0)),
+    ))
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new("child"),
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_size(LayoutSizing::percent(50.0, 100.0)),
+        ),
+    )
+    .expect("child insertion should succeed");
+
+    let first =
+        SceneGeometryAttachment::from_layout(&tree.compute_layout(Viewport::new(200.0, 100.0)));
+    let second =
+        SceneGeometryAttachment::from_layout(&tree.compute_layout(Viewport::new(400.0, 100.0)));
+
+    assert_eq!(first.geometry("child").unwrap().render.width, 100.0);
+    assert_eq!(second.geometry("child").unwrap().render.width, 200.0);
+    assert_ne!(
+        first.geometry("child").unwrap(),
+        second.geometry("child").unwrap()
     );
 }

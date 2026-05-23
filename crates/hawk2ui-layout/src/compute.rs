@@ -82,6 +82,14 @@ impl LayoutOutput {
             .find(|(id, _)| id.as_str() == node_id.as_str())
             .map(|(_, clip)| clip)
     }
+
+    pub(crate) fn geometry_entries_internal(&self) -> &[(LayoutNodeId, ComputedGeometry)] {
+        &self.geometry
+    }
+
+    pub(crate) fn clip_entries_internal(&self) -> &[(LayoutNodeId, ComputedGeometry)] {
+        &self.clips
+    }
 }
 
 impl LayoutTree {
@@ -91,12 +99,22 @@ impl LayoutTree {
         let Some(root) = self.root_id() else {
             return LayoutOutput::new(Vec::new(), Vec::new());
         };
-        let mut output = ComputedBuilder::default();
-        self.compute_node(
-            root,
+        let root_geometry = self.node(root).map_or(
             ComputedGeometry::new(0.0, 0.0, viewport.width, viewport.height, false),
-            &mut output,
+            |root_node| {
+                let style = root_node.style();
+                ComputedGeometry::new(
+                    0.0,
+                    0.0,
+                    resolve_value(style.size().width(), viewport.width).unwrap_or(viewport.width),
+                    resolve_value(style.size().height(), viewport.height)
+                        .unwrap_or(viewport.height),
+                    style.absolute(),
+                )
+            },
         );
+        let mut output = ComputedBuilder::default();
+        self.compute_node(root, root_geometry, &mut output);
         LayoutOutput::new(output.geometry, output.clips)
     }
 
@@ -110,16 +128,8 @@ impl LayoutTree {
             return;
         };
         let style = node.style();
-        let width = resolve_value(style.size().width(), parent_geometry.width);
-        let height = resolve_value(style.size().height(), parent_geometry.height);
-        let geometry = ComputedGeometry::new(
-            parent_geometry.x,
-            parent_geometry.y,
-            width.unwrap_or(parent_geometry.width),
-            height.unwrap_or(parent_geometry.height),
-            style.absolute(),
-        );
-        output.geometry.push((node_id.clone(), geometry));
+        let geometry = parent_geometry;
+        output.geometry.push((node_id.clone(), parent_geometry));
         if style.is_scroll_container() {
             output.clips.push((node_id.clone(), geometry));
         }
