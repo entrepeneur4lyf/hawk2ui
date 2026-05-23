@@ -1,6 +1,13 @@
 #![forbid(unsafe_code)]
 //! Retained scene records, paint layers, renderer backend boundary, text contracts, and custom draw surfaces for `Hawk2UI`.
 
+pub mod scene;
+
+pub use scene::{
+    AccessibilityRef, Geometry, HitTestGeometry, InvalidationReason, SceneGraph, SceneGraphError,
+    SceneNode, SceneNodeId, Transform,
+};
+
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-render";
 
