@@ -108,6 +108,25 @@ pub struct DashboardSmokeResult {
     pub resize_events: Vec<String>,
 }
 
+/// Smoke run result for a plugin editor fixture.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PluginEditorSmokeResult {
+    /// Fixture name.
+    pub fixture_name: String,
+    /// Editor lifecycle trace.
+    pub editor_events: Vec<String>,
+    /// Parameter update trace.
+    pub parameter_updates: Vec<String>,
+    /// Automation event trace.
+    pub automation_events: Vec<String>,
+    /// Whether state save/load roundtripped.
+    pub state_roundtrip: bool,
+    /// Preset identifier.
+    pub preset_id: String,
+    /// Whether the plugin editor attempted process quit.
+    pub requested_process_quit: bool,
+}
+
 /// Smoke runner.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SmokeRunner;
@@ -201,6 +220,58 @@ impl SmokeRunner {
             keyboard_focus_path: vec!["root".into(), "sidebar".into(), "bypass-button".into()],
             pointer_events: vec!["pointer-down:graph".into(), "pointer-up:graph".into()],
             resize_events: vec!["1280x720@1".into(), "1440x900@1.5".into()],
+        })
+    }
+
+    /// Runs the plugin synth editor smoke fixture.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when required fixture files are missing or invalid.
+    pub fn run_plugin_synth_editor(
+        &self,
+        fixture: &SmokeFixture,
+    ) -> Result<PluginEditorSmokeResult, String> {
+        if fixture.target != SmokeTargetKind::Plugin {
+            return Err("plugin-synth-editor fixture must use plugin target".into());
+        }
+        let root = fixture.absolute_path();
+        require_file(&root.join("manifest.hawk.toml"))?;
+        require_file(&root.join("src/editor.ts"))?;
+        let trace = fs::read_to_string(root.join("artifacts/editor.trace"))
+            .map_err(|error| error.to_string())?;
+        for required in [
+            "created,attached,resized,dpi,destroyed",
+            "parameters=osc.mix=0.4,filter.cutoff=0.8",
+            "automation=begin:filter.cutoff,change:filter.cutoff,end:filter.cutoff",
+            "state_roundtrip=true",
+            "preset=factory.bright-pad",
+            "requested_process_quit=false",
+        ] {
+            if !trace.contains(required) {
+                return Err(format!(
+                    "plugin synth editor trace missing evidence: {required}"
+                ));
+            }
+        }
+        Ok(PluginEditorSmokeResult {
+            fixture_name: fixture.name(),
+            editor_events: vec![
+                "created".into(),
+                "attached".into(),
+                "resized".into(),
+                "dpi".into(),
+                "destroyed".into(),
+            ],
+            parameter_updates: vec!["osc.mix=0.4".into(), "filter.cutoff=0.8".into()],
+            automation_events: vec![
+                "begin:filter.cutoff".into(),
+                "change:filter.cutoff".into(),
+                "end:filter.cutoff".into(),
+            ],
+            state_roundtrip: true,
+            preset_id: "factory.bright-pad".into(),
+            requested_process_quit: false,
         })
     }
 }

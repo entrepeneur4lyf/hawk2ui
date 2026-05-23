@@ -1,0 +1,24 @@
+[identity]
+id = "com.hawk2ui.examples.plugin-synth-editor"
+name = "Hawk2UI Plugin Synth Editor"
+version = "0.1.0"
+
+[source]
+entry = "src/editor.ts"
+
+[capabilities]
+keys = ["plugin-editor", "sealed-artifacts"]
+
+[[targets]]
+kind = "plugin"
+name = "clap-vst3"
+
+[[parameters]]
+id = "osc.mix"
+name = "Osc Mix"
+default = 0.4
+
+[[parameters]]
+id = "filter.cutoff"
+name = "Cutoff"
+default = 0.8

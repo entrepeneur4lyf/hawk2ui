@@ -1,0 +1,6 @@
+created,attached,resized,dpi,destroyed
+parameters=osc.mix=0.4,filter.cutoff=0.8
+automation=begin:filter.cutoff,change:filter.cutoff,end:filter.cutoff
+state_roundtrip=true
+preset=factory.bright-pad
+requested_process_quit=false

@@ -44,3 +44,35 @@ fn desktop_dashboard_exercises_layout_style_snapshot_focus_pointer_and_resize() 
     );
     assert_eq!(result.resize_events, vec!["1280x720@1", "1440x900@1.5"]);
 }
+
+#[test]
+fn plugin_synth_editor_exercises_editor_parameters_automation_state_and_destroy() {
+    let fixture =
+        SmokeFixture::from_workspace("examples/plugin-synth-editor", SmokeTargetKind::Plugin);
+    let runner = SmokeRunner::default();
+
+    let result = runner
+        .run_plugin_synth_editor(&fixture)
+        .expect("plugin synth editor smoke fixture should run");
+
+    assert_eq!(result.fixture_name, "plugin-synth-editor");
+    assert_eq!(
+        result.editor_events,
+        vec!["created", "attached", "resized", "dpi", "destroyed"]
+    );
+    assert_eq!(
+        result.parameter_updates,
+        vec!["osc.mix=0.4", "filter.cutoff=0.8"]
+    );
+    assert_eq!(
+        result.automation_events,
+        vec![
+            "begin:filter.cutoff",
+            "change:filter.cutoff",
+            "end:filter.cutoff"
+        ]
+    );
+    assert!(result.state_roundtrip);
+    assert_eq!(result.preset_id, "factory.bright-pad");
+    assert!(!result.requested_process_quit);
+}
