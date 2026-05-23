@@ -26,11 +26,11 @@ impl AssetKind {
             "design-token" => Ok(Self::DesignToken),
             other => Err(AssetCompilationError::UnsupportedAssetKind {
                 kind: other.into(),
-                diagnostic: BuildDiagnostic::new(
+                diagnostic: Box::new(BuildDiagnostic::new(
                     BuildDiagnosticSeverity::Error,
                     "asset.kind.unsupported",
                     "declared asset kind is unsupported",
-                ),
+                )),
             }),
         }
     }
@@ -188,22 +188,22 @@ impl AssetCompilationPlan {
                     AssetCompilationError::MissingAsset {
                         id: asset.id.clone(),
                         path: asset.path.clone(),
-                        diagnostic: BuildDiagnostic::new(
+                        diagnostic: Box::new(BuildDiagnostic::new(
                             BuildDiagnosticSeverity::Error,
                             "asset.missing",
                             "declared asset source is missing",
-                        ),
+                        )),
                     }
                 })?;
                 if !source.safe {
                     return Err(AssetCompilationError::UnsafeAsset {
                         id: asset.id.clone(),
                         path: asset.path.clone(),
-                        diagnostic: BuildDiagnostic::new(
+                        diagnostic: Box::new(BuildDiagnostic::new(
                             BuildDiagnosticSeverity::Error,
                             "asset.unsafe",
                             "declared asset failed safety validation",
-                        ),
+                        )),
                     });
                 }
                 let source_hash = ArtifactHash::from_bytes(&source.bytes);
@@ -236,7 +236,7 @@ pub enum AssetCompilationError {
         /// Declared source path.
         path: String,
         /// Structured diagnostic.
-        diagnostic: BuildDiagnostic,
+        diagnostic: Box<BuildDiagnostic>,
     },
     /// Declared asset failed safety validation.
     UnsafeAsset {
@@ -245,14 +245,14 @@ pub enum AssetCompilationError {
         /// Declared source path.
         path: String,
         /// Structured diagnostic.
-        diagnostic: BuildDiagnostic,
+        diagnostic: Box<BuildDiagnostic>,
     },
     /// Declared asset kind is unsupported.
     UnsupportedAssetKind {
         /// Unsupported kind string.
         kind: String,
         /// Structured diagnostic.
-        diagnostic: BuildDiagnostic,
+        diagnostic: Box<BuildDiagnostic>,
     },
 }
 

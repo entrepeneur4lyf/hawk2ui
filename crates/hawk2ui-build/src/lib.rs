@@ -17,7 +17,7 @@ pub use assets::{
     AssetCompilationError, AssetCompilationPlan, AssetCompilationRecord, AssetDimensions,
     AssetKind, AssetPackageMetadata, AssetSanitizationStatus, AssetSource, AssetSourceIndex,
 };
-pub use diagnostic::{BuildDiagnostic, BuildDiagnosticSeverity};
+pub use diagnostic::{BuildDiagnostic, BuildDiagnosticSeverity, DiagnosticLocation, SourceSpan};
 pub use manifest::{HawkManifest, ManifestError, PackageTarget};
 pub use pipeline::{BuildPhase, BuildPhaseDiagnostic, BuildPipeline, BuildPipelineError};
 pub use report::{PackageTargetRecord, VerificationReport};

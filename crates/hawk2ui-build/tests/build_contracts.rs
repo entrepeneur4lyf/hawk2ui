@@ -4,7 +4,7 @@ use hawk2ui_build::{
     AssetSourceIndex, BuildDiagnostic, BuildDiagnosticSeverity, BuildPhase, BuildPipeline,
     BuildPipelineError, CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord,
     HawkManifest, ManifestError, PackageTarget, PackageTargetRecord, SealedArtifact,
-    SealedArtifactError, VerificationReport,
+    SealedArtifactError, SourceSpan, VerificationReport,
 };
 
 const VALID_MANIFEST: &str = r#"
@@ -442,11 +442,11 @@ path = "assets/hero.png"
         AssetCompilationError::MissingAsset {
             id: "hero".into(),
             path: "assets/hero.png".into(),
-            diagnostic: BuildDiagnostic::new(
+            diagnostic: Box::new(BuildDiagnostic::new(
                 BuildDiagnosticSeverity::Error,
                 "asset.missing",
                 "declared asset source is missing"
-            )
+            ))
         }
     );
 }
@@ -479,11 +479,11 @@ path = "assets/hero.png"
         AssetCompilationError::UnsafeAsset {
             id: "hero".into(),
             path: "assets/hero.png".into(),
-            diagnostic: BuildDiagnostic::new(
+            diagnostic: Box::new(BuildDiagnostic::new(
                 BuildDiagnosticSeverity::Error,
                 "asset.unsafe",
                 "declared asset failed safety validation"
-            )
+            ))
         }
     );
 }
@@ -536,4 +536,42 @@ fn verification_report_tracks_package_targets_and_diagnostics() {
     assert_eq!(report.package_targets.len(), 1);
     assert_eq!(report.diagnostics.len(), 1);
     assert!(report.is_release_ready());
+}
+
+#[test]
+fn verification_report_snapshots_diagnostics_with_locations() {
+    let report = VerificationReport::new("com.hawk2ui.report")
+        .with_package_target(PackageTargetRecord::new(
+            PackageTarget::Desktop,
+            "linux-wayland",
+        ))
+        .with_invalid_manifest(
+            "Hawk.toml",
+            SourceSpan::new(0, 12),
+            "manifest identity is invalid",
+        )
+        .with_unsupported_style("src/app.css", SourceSpan::new(13, 21))
+        .with_unsupported_script("src/app.ts", SourceSpan::new(22, 34))
+        .with_unsafe_asset("assets/hero.svg", SourceSpan::new(35, 46))
+        .with_missing_asset("assets/missing.png", SourceSpan::new(47, 58))
+        .with_undeclared_capability("native-windowing", SourceSpan::new(59, 74))
+        .with_target_incompatibility("linux-wayland", SourceSpan::new(75, 88));
+
+    assert_eq!(
+        report.render_text(),
+        "\
+product: com.hawk2ui.report
+targets:
+- desktop linux-wayland
+diagnostics:
+- error manifest.invalid Hawk.toml:0..12 manifest identity is invalid
+- error style.unsupported src/app.css:13..21 style entrypoint is unsupported
+- error script.unsupported src/app.ts:22..34 script entrypoint is unsupported
+- error asset.unsafe assets/hero.svg:35..46 asset failed safety validation
+- error asset.missing assets/missing.png:47..58 asset source is missing
+- error capability.undeclared <manifest>:59..74 capability is not declared: native-windowing
+- error target.incompatible <manifest>:75..88 target is incompatible: linux-wayland
+"
+    );
+    assert!(!report.is_release_ready());
 }

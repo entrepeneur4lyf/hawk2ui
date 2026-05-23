@@ -18,6 +18,8 @@ pub struct BuildDiagnostic {
     pub rule: String,
     /// Human-readable message.
     pub message: String,
+    /// Optional source location.
+    pub location: Option<DiagnosticLocation>,
 }
 
 impl BuildDiagnostic {
@@ -32,6 +34,43 @@ impl BuildDiagnostic {
             severity,
             rule: rule.into(),
             message: message.into(),
+            location: None,
         }
     }
+
+    /// Adds a source location.
+    #[must_use]
+    pub fn with_location(mut self, file_path: impl Into<String>, span: SourceSpan) -> Self {
+        self.location = Some(DiagnosticLocation {
+            file_path: file_path.into(),
+            span,
+        });
+        self
+    }
+}
+
+/// Half-open source span.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceSpan {
+    /// Start byte offset.
+    pub start: usize,
+    /// End byte offset.
+    pub end: usize,
+}
+
+impl SourceSpan {
+    /// Creates a source span.
+    #[must_use]
+    pub const fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+}
+
+/// Diagnostic source location.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiagnosticLocation {
+    /// Source file path.
+    pub file_path: String,
+    /// Source span.
+    pub span: SourceSpan,
 }
