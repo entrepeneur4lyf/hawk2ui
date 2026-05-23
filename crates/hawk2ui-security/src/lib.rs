@@ -1,8 +1,12 @@
 #![forbid(unsafe_code)]
 //! Security policy, source validation, script sandbox, asset policy, and secret redaction for `Hawk2UI`.
 
+pub mod diagnostic;
+pub mod source;
 pub mod trust;
 
+pub use diagnostic::{SecurityDiagnostic, SecuritySeverity};
+pub use source::{SourceValidationPolicy, SourceValidationRecord, SourceValidationRule};
 pub use trust::{TrustBoundary, TrustRecord};
 
 /// The canonical Cargo package name for this crate.

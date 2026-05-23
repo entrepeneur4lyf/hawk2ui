@@ -1,4 +1,4 @@
-use hawk2ui_security::{TrustBoundary, TrustRecord};
+use hawk2ui_security::{SourceValidationPolicy, SourceValidationRule, TrustBoundary, TrustRecord};
 
 #[test]
 fn trust_boundaries_classify_all_security_domains() {
@@ -26,4 +26,61 @@ fn trust_boundaries_emit_stable_diagnostic_labels() {
 
     assert_eq!(secret.diagnostic_label(), "trust.secret:api-key@manifest");
     assert_eq!(host.diagnostic_label(), "trust.host-data:clipboard@host");
+}
+
+#[test]
+fn source_validation_rejects_all_build_time_security_rules() {
+    let cases = [
+        (
+            SourceValidationRule::UnsupportedStyleSyntax,
+            "style.unsupported",
+            "style syntax is unsupported",
+        ),
+        (
+            SourceValidationRule::UnsupportedScriptSyntax,
+            "script.unsupported",
+            "script syntax is unsupported",
+        ),
+        (
+            SourceValidationRule::UnsafeVectorContent,
+            "asset.vector.unsafe",
+            "vector content is unsafe",
+        ),
+        (
+            SourceValidationRule::MissingAsset,
+            "asset.missing",
+            "declared asset is missing",
+        ),
+        (
+            SourceValidationRule::UndeclaredCapability,
+            "capability.undeclared",
+            "capability is not declared",
+        ),
+        (
+            SourceValidationRule::MalformedManifest,
+            "manifest.malformed",
+            "manifest is malformed",
+        ),
+        (
+            SourceValidationRule::InvalidPluginMetadata,
+            "plugin.metadata.invalid",
+            "plugin metadata is invalid",
+        ),
+        (
+            SourceValidationRule::InvalidPackageTarget,
+            "target.invalid",
+            "package target is invalid",
+        ),
+    ];
+
+    for (rule, expected_rule, expected_message) in cases {
+        let record = SourceValidationPolicy::reject(rule, "Hawk.toml");
+
+        assert_eq!(record.diagnostic.rule, expected_rule);
+        assert_eq!(record.diagnostic.message, expected_message);
+        assert_eq!(
+            record.diagnostic_label(),
+            format!("source.{expected_rule}:Hawk.toml")
+        );
+    }
 }
