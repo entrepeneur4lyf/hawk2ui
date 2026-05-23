@@ -27,7 +27,10 @@ fn assert_required_sections(input: &str, sections: &[&str]) {
 fn product_scope_desktop_manifest_declares_native_window_target() {
     let input = read_workspace_file("examples/desktop-basic/manifest.hawk.toml");
 
-    assert_required_sections(&input, &["[identity]", "[source]", "[capabilities]", "[[targets]]"]);
+    assert_required_sections(
+        &input,
+        &["[identity]", "[source]", "[capabilities]", "[[targets]]"],
+    );
 
     let manifest = HawkManifest::parse(&input).expect("desktop manifest must parse");
 
