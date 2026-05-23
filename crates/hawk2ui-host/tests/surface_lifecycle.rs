@@ -1,8 +1,9 @@
 use hawk2ui_host::{
     ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig, FramePresenter,
-    HostCapabilities, HostSurface, KeyboardInput, PointerInput, RecordingDesktopAdapter,
-    RecordingFramePresenter, RecordingHostSurface, RepaintRequest, SurfaceEvent, SurfaceMetrics,
-    WindowMode,
+    HostCapabilities, HostSurface, KeyboardInput, PluginEditorConfig, PluginHostAdapter,
+    PluginHostEvent, PluginParentHandle, PointerInput, RecordingDesktopAdapter,
+    RecordingFramePresenter, RecordingHostSurface, RecordingPluginAdapter, RepaintRequest,
+    SurfaceEvent, SurfaceMetrics, WindowMode,
 };
 
 #[test]
@@ -108,6 +109,58 @@ fn desktop_lifecycle_records_focus_keyboard_pointer_clipboard_and_dpi() {
             DesktopHostEvent::ClipboardCapabilityChanged(ClipboardCapability::ReadWrite),
             DesktopHostEvent::DpiChanged(2.0),
             DesktopHostEvent::RendererTargetRecreateRequested,
+        ]
+    );
+}
+
+#[test]
+fn plugin_lifecycle_records_attachment_resize_dpi_repaint_and_input_routing() {
+    let mut adapter = RecordingPluginAdapter::attach(PluginEditorConfig::new(
+        "editor",
+        PluginParentHandle::opaque("vst3-parent"),
+        SurfaceMetrics::new(640.0, 360.0, 1.0),
+    ));
+
+    adapter.host_resize(SurfaceMetrics::new(800.0, 500.0, 1.0));
+    adapter.dpi_changed(1.5);
+    adapter.schedule_repaint("parameter changed");
+    adapter.route_focus(true);
+    adapter.route_keyboard(KeyboardInput::new("Space", true));
+    adapter.route_pointer(PointerInput::new(8.0, 16.0, "primary"));
+
+    assert_eq!(adapter.metrics().physical_size(), (1200, 750));
+    assert_eq!(
+        adapter.drain_events(),
+        vec![
+            PluginHostEvent::ParentAttached(PluginParentHandle::opaque("vst3-parent")),
+            PluginHostEvent::EditorCreated("editor".into()),
+            PluginHostEvent::HostResize(SurfaceMetrics::new(800.0, 500.0, 1.0)),
+            PluginHostEvent::DpiChanged(1.5),
+            PluginHostEvent::RepaintScheduled("parameter changed".into()),
+            PluginHostEvent::FocusRouted(true),
+            PluginHostEvent::KeyboardRouted(KeyboardInput::new("Space", true)),
+            PluginHostEvent::PointerRouted(PointerInput::new(8.0, 16.0, "primary")),
+        ]
+    );
+}
+
+#[test]
+fn plugin_lifecycle_teardown_never_requests_process_quit() {
+    let mut adapter = RecordingPluginAdapter::attach(PluginEditorConfig::new(
+        "editor",
+        PluginParentHandle::opaque("clap-parent"),
+        SurfaceMetrics::new(320.0, 240.0, 1.0),
+    ));
+    adapter.drain_events();
+
+    adapter.destroy_editor("host destroyed editor");
+
+    assert!(!adapter.requested_process_quit());
+    assert_eq!(
+        adapter.drain_events(),
+        vec![
+            PluginHostEvent::EditorDestroyed("host destroyed editor".into()),
+            PluginHostEvent::SafeTeardownComplete,
         ]
     );
 }

@@ -2,11 +2,16 @@
 //! Common host surface contracts for `Hawk2UI` desktop windows and embedded plugin surfaces.
 
 pub mod desktop;
+pub mod plugin;
 pub mod surface;
 
 pub use desktop::{
     ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig, KeyboardInput,
     PointerInput, RecordingDesktopAdapter, WindowMode,
+};
+pub use plugin::{
+    PluginEditorConfig, PluginHostAdapter, PluginHostEvent, PluginParentHandle,
+    RecordingPluginAdapter,
 };
 pub use surface::{
     FramePresenter, HostCapabilities, HostSurface, PresentedFrame, RecordingFramePresenter,
