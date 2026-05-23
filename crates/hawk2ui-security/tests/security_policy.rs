@@ -1,6 +1,7 @@
 use hawk2ui_security::{
+    AssetHashVerification, AssetImageMetadataStatus, AssetSecurityPolicy, AssetSecurityRule,
     ScriptSandboxOperation, ScriptSandboxPolicy, SourceValidationPolicy, SourceValidationRule,
-    TrustBoundary, TrustRecord,
+    TrustBoundary, TrustRecord, VectorSafetyStatus,
 };
 
 #[test]
@@ -131,6 +132,80 @@ fn script_sandbox_denies_all_direct_privileged_operations() {
         assert_eq!(
             denial.diagnostic_label(),
             format!("sandbox.{expected_rule}:src/app.ts")
+        );
+    }
+}
+
+#[test]
+fn asset_security_records_image_vector_and_hash_status() {
+    let image = AssetSecurityPolicy::image_record(
+        "assets/hero.png",
+        AssetImageMetadataStatus::Stripped,
+        AssetHashVerification::verified("hash-a"),
+    );
+    let vector = AssetSecurityPolicy::vector_record(
+        "assets/logo.svg",
+        VectorSafetyStatus::Safe,
+        AssetHashVerification::verified("hash-b"),
+    );
+
+    assert_eq!(
+        image.metadata_status,
+        Some(AssetImageMetadataStatus::Stripped)
+    );
+    assert_eq!(image.hash, AssetHashVerification::verified("hash-a"));
+    assert_eq!(vector.vector_status, Some(VectorSafetyStatus::Safe));
+    assert_eq!(vector.hash, AssetHashVerification::verified("hash-b"));
+}
+
+#[test]
+fn asset_security_rejects_oversized_unsupported_unsafe_and_hash_mismatch() {
+    let cases = [
+        (
+            AssetSecurityPolicy::reject(
+                AssetSecurityRule::Oversized {
+                    actual_bytes: 2_048,
+                    max_bytes: 1_024,
+                },
+                "assets/hero.png",
+            ),
+            "asset.size.exceeded",
+            "asset exceeds declared size limit",
+        ),
+        (
+            AssetSecurityPolicy::reject(
+                AssetSecurityRule::UnsupportedFormat {
+                    format: "bmp".into(),
+                },
+                "assets/hero.bmp",
+            ),
+            "asset.format.unsupported",
+            "asset format is unsupported",
+        ),
+        (
+            AssetSecurityPolicy::reject(AssetSecurityRule::UnsafeVector, "assets/logo.svg"),
+            "asset.vector.unsafe",
+            "vector asset failed safety validation",
+        ),
+        (
+            AssetSecurityPolicy::reject(
+                AssetSecurityRule::HashMismatch {
+                    expected: "hash-a".into(),
+                    actual: "hash-b".into(),
+                },
+                "assets/hero.png",
+            ),
+            "asset.hash.mismatch",
+            "asset hash does not match declared hash",
+        ),
+    ];
+
+    for (rejection, expected_rule, expected_message) in cases {
+        assert_eq!(rejection.diagnostic.rule, expected_rule);
+        assert_eq!(rejection.diagnostic.message, expected_message);
+        assert_eq!(
+            rejection.diagnostic_label(),
+            format!("asset.{expected_rule}:{}", rejection.path)
         );
     }
 }
