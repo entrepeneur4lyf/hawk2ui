@@ -1,0 +1,5 @@
+.app {
+  background: token(color.background);
+  color: token(color.text);
+  padding: token(space.page);
+}

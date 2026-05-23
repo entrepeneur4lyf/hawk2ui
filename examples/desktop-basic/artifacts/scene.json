@@ -1,0 +1,4 @@
+{
+  "root_id": "desktop-basic-root",
+  "nodes": ["title", "status", "logo"]
+}

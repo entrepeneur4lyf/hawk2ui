@@ -164,6 +164,9 @@ dependencies = [
 [[package]]
 name = "hawk2ui-smoke"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "hawk2ui-style"
