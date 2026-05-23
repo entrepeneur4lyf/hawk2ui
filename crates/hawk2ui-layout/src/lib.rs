@@ -1,6 +1,13 @@
 #![forbid(unsafe_code)]
 //! Layout tree, text measurement bridge, plugin constraints, and scene geometry attachment for `Hawk2UI`.
 
+pub mod tree;
+
+pub use tree::{
+    BoxEdges, FlexDirection, LayoutNode, LayoutNodeId, LayoutSizing, LayoutStyle, LayoutTree,
+    LayoutTreeError, LayoutValue,
+};
+
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-layout";
 
