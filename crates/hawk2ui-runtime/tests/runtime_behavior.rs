@@ -1,9 +1,10 @@
 use hawk2ui_runtime::{
     BindingExecution, BindingLifecycleAvailability, BindingSchema, HostBindingRecord,
     HostBindingRegistry, HostCallRecord, LifecycleHook, LifecyclePhase, LifecycleRegistry,
-    RuntimeCapability, RuntimeError, RuntimeEvent, RuntimeEventDispatcher, RuntimeEventKind,
-    RuntimeEventPayload, RuntimeEventPropagation, RuntimeScheduler, ScriptModuleKind,
-    ScriptModuleRecord, StructuredValue, TimerJob,
+    PromiseId, RecordingScriptEngine, RuntimeCapability, RuntimeError, RuntimeEvent,
+    RuntimeEventDispatcher, RuntimeEventKind, RuntimeEventPayload, RuntimeEventPropagation,
+    RuntimeScheduler, ScriptEngine, ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord,
+    StructuredValue, TimerJob,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -276,4 +277,70 @@ fn scheduler_cancels_pending_work_during_shutdown() {
 
     assert_eq!(error.code, "scheduler.shutdown-cancelled");
     assert!(scheduler.is_empty());
+}
+
+#[test]
+fn script_adapter_records_module_calls_promises_timers_and_host_calls() {
+    let mut engine = RecordingScriptEngine::default();
+    let module = ScriptModuleRecord::new(
+        "main",
+        "artifact://main.js",
+        ScriptModuleKind::TypeScriptOutput,
+    );
+    let host_call = HostCallRecord::new(
+        "main",
+        "platform.clipboard.write",
+        StructuredValue::object([("text", StructuredValue::string("hello"))]),
+    );
+
+    engine.load_module(module.clone()).expect("module loads");
+    engine
+        .call_export("main", "mount", StructuredValue::Null)
+        .expect("export call records");
+    engine
+        .resolve_promise(PromiseId::new("promise-1"), StructuredValue::string("ok"))
+        .expect("promise resolution records");
+    engine
+        .set_timer(TimerJob::new("timeout-1", 50))
+        .expect("timer records");
+    engine
+        .call_host(host_call.clone())
+        .expect("host call records");
+
+    assert_eq!(
+        engine.operations(),
+        &[
+            ScriptEngineOperation::LoadModule(module),
+            ScriptEngineOperation::CallExport {
+                module_id: "main".into(),
+                export_name: "mount".into(),
+                argument: StructuredValue::Null,
+            },
+            ScriptEngineOperation::ResolvePromise {
+                promise_id: PromiseId::new("promise-1"),
+                value: StructuredValue::string("ok"),
+            },
+            ScriptEngineOperation::SetTimer(TimerJob::new("timeout-1", 50)),
+            ScriptEngineOperation::HostCall(host_call),
+        ]
+    );
+}
+
+#[test]
+fn script_adapter_interrupt_and_teardown_block_future_work() {
+    let mut engine = RecordingScriptEngine::default();
+    engine
+        .interrupt("deadline exceeded")
+        .expect("interrupt records");
+    engine.teardown().expect("teardown records");
+
+    let error = engine
+        .call_export("main", "update", StructuredValue::Null)
+        .expect_err("teardown should reject future script work");
+
+    assert_eq!(error.code, "script-engine.teardown-complete");
+    assert_eq!(
+        engine.operations().last(),
+        Some(&ScriptEngineOperation::Teardown)
+    );
 }

@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::TimerJob;
+
 /// Runtime capability required by a module, host call, or scheduler operation.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum RuntimeCapability {
@@ -214,5 +216,219 @@ impl RuntimeError {
             message: format!("host call denied for {binding_name}: {}", reason.into()),
             capability: Some(capability),
         }
+    }
+}
+
+/// Stable promise identifier used by script-engine adapters.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PromiseId {
+    /// Promise identifier.
+    pub id: String,
+}
+
+impl PromiseId {
+    /// Creates a promise identifier.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self { id: id.into() }
+    }
+}
+
+/// Script engine operation recorded by adapters and test engines.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub enum ScriptEngineOperation {
+    /// Load a script module.
+    LoadModule(ScriptModuleRecord),
+    /// Call an exported function.
+    CallExport {
+        /// Module identifier.
+        module_id: String,
+        /// Exported function name.
+        export_name: String,
+        /// Structured argument.
+        argument: StructuredValue,
+    },
+    /// Resolve a promise.
+    ResolvePromise {
+        /// Promise identifier.
+        promise_id: PromiseId,
+        /// Resolution value.
+        value: StructuredValue,
+    },
+    /// Set a timer.
+    SetTimer(TimerJob),
+    /// Perform a host call.
+    HostCall(HostCallRecord),
+    /// Interrupt the script engine.
+    Interrupt {
+        /// Interrupt reason.
+        reason: String,
+    },
+    /// Tear down the script engine.
+    Teardown,
+}
+
+/// Script engine adapter error.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ScriptEngineError {
+    /// Stable script-engine error code.
+    pub code: String,
+    /// Human-readable message.
+    pub message: String,
+}
+
+impl ScriptEngineError {
+    fn teardown_complete() -> Self {
+        Self {
+            code: "script-engine.teardown-complete".into(),
+            message: "script engine teardown is complete".into(),
+        }
+    }
+}
+
+/// Script engine boundary for JavaScript-compatible module runtimes.
+pub trait ScriptEngine {
+    /// Loads a JavaScript or compiled TypeScript module.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptEngineError`] when the engine cannot accept more work.
+    fn load_module(&mut self, module: ScriptModuleRecord) -> Result<(), ScriptEngineError>;
+
+    /// Calls an exported module function.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptEngineError`] when the engine cannot accept more work.
+    fn call_export(
+        &mut self,
+        module_id: &str,
+        export_name: &str,
+        argument: StructuredValue,
+    ) -> Result<(), ScriptEngineError>;
+
+    /// Resolves a pending promise.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptEngineError`] when the engine cannot accept more work.
+    fn resolve_promise(
+        &mut self,
+        promise_id: PromiseId,
+        value: StructuredValue,
+    ) -> Result<(), ScriptEngineError>;
+
+    /// Sets a script timer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptEngineError`] when the engine cannot accept more work.
+    fn set_timer(&mut self, timer: TimerJob) -> Result<(), ScriptEngineError>;
+
+    /// Calls a host binding from script.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptEngineError`] when the engine cannot accept more work.
+    fn call_host(&mut self, call: HostCallRecord) -> Result<(), ScriptEngineError>;
+
+    /// Interrupts script execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptEngineError`] when the engine cannot accept more work.
+    fn interrupt(&mut self, reason: &str) -> Result<(), ScriptEngineError>;
+
+    /// Tears down the script engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptEngineError`] when teardown cannot complete.
+    fn teardown(&mut self) -> Result<(), ScriptEngineError>;
+}
+
+/// Recording script engine used by runtime tests and conformance fixtures.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct RecordingScriptEngine {
+    operations: Vec<ScriptEngineOperation>,
+    torn_down: bool,
+}
+
+impl RecordingScriptEngine {
+    /// Returns recorded script engine operations in order.
+    #[must_use]
+    pub fn operations(&self) -> &[ScriptEngineOperation] {
+        &self.operations
+    }
+
+    fn ensure_active(&self) -> Result<(), ScriptEngineError> {
+        if self.torn_down {
+            Err(ScriptEngineError::teardown_complete())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl ScriptEngine for RecordingScriptEngine {
+    fn load_module(&mut self, module: ScriptModuleRecord) -> Result<(), ScriptEngineError> {
+        self.ensure_active()?;
+        self.operations
+            .push(ScriptEngineOperation::LoadModule(module));
+        Ok(())
+    }
+
+    fn call_export(
+        &mut self,
+        module_id: &str,
+        export_name: &str,
+        argument: StructuredValue,
+    ) -> Result<(), ScriptEngineError> {
+        self.ensure_active()?;
+        self.operations.push(ScriptEngineOperation::CallExport {
+            module_id: module_id.into(),
+            export_name: export_name.into(),
+            argument,
+        });
+        Ok(())
+    }
+
+    fn resolve_promise(
+        &mut self,
+        promise_id: PromiseId,
+        value: StructuredValue,
+    ) -> Result<(), ScriptEngineError> {
+        self.ensure_active()?;
+        self.operations
+            .push(ScriptEngineOperation::ResolvePromise { promise_id, value });
+        Ok(())
+    }
+
+    fn set_timer(&mut self, timer: TimerJob) -> Result<(), ScriptEngineError> {
+        self.ensure_active()?;
+        self.operations.push(ScriptEngineOperation::SetTimer(timer));
+        Ok(())
+    }
+
+    fn call_host(&mut self, call: HostCallRecord) -> Result<(), ScriptEngineError> {
+        self.ensure_active()?;
+        self.operations.push(ScriptEngineOperation::HostCall(call));
+        Ok(())
+    }
+
+    fn interrupt(&mut self, reason: &str) -> Result<(), ScriptEngineError> {
+        self.ensure_active()?;
+        self.operations.push(ScriptEngineOperation::Interrupt {
+            reason: reason.into(),
+        });
+        Ok(())
+    }
+
+    fn teardown(&mut self) -> Result<(), ScriptEngineError> {
+        if !self.torn_down {
+            self.operations.push(ScriptEngineOperation::Teardown);
+            self.torn_down = true;
+        }
+        Ok(())
     }
 }

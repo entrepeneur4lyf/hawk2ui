@@ -18,7 +18,8 @@ pub use events::{
 pub use lifecycle::{LifecycleHook, LifecyclePhase, LifecycleRegistry};
 pub use scheduler::{RuntimeScheduleBatch, RuntimeScheduleError, RuntimeScheduler, TimerJob};
 pub use script::{
-    HostCallRecord, RuntimeCapability, RuntimeError, ScriptModuleKind, ScriptModuleRecord,
+    HostCallRecord, PromiseId, RecordingScriptEngine, RuntimeCapability, RuntimeError,
+    ScriptEngine, ScriptEngineError, ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord,
     StructuredValue,
 };
 
