@@ -1,7 +1,7 @@
 use hawk2ui_platform::{
-    CapabilityRecord, CapabilitySchema, CapabilityTable, FilesystemGrant, FilesystemPolicy,
-    FilesystemScope, NetworkManifest, NetworkPolicy, PlatformContext, PlatformDiagnostic,
-    PlatformOperation, RuntimeAvailability,
+    CapabilityRecord, CapabilitySchema, CapabilityTable, ClipboardDataType, ClipboardManifest,
+    ClipboardPolicy, FilesystemGrant, FilesystemPolicy, FilesystemScope, NetworkManifest,
+    NetworkPolicy, PlatformContext, PlatformDiagnostic, PlatformOperation, RuntimeAvailability,
 };
 
 #[test]
@@ -176,4 +176,68 @@ fn network_capabilities_deny_undeclared_host_malformed_url_and_missing_capabilit
     assert_eq!(denied_host.diagnostic.rule, "network.host.denied");
     assert_eq!(malformed.diagnostic.rule, "network.url.malformed");
     assert_eq!(missing_capability.diagnostic.rule, "capability.missing");
+}
+
+#[test]
+fn clipboard_capabilities_allow_text() {
+    let table = CapabilityTable::new([CapabilityRecord::new("clipboard.write")
+        .allow(PlatformOperation::ClipboardWrite)
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)
+        .plugin(true)]);
+    let manifest =
+        ClipboardManifest::new("clipboard.write", [ClipboardDataType::Text]).plugin(true);
+
+    let access = ClipboardPolicy::access(
+        &table,
+        &manifest,
+        ClipboardDataType::Text,
+        PlatformOperation::ClipboardWrite,
+        PlatformContext::Desktop,
+    )
+    .expect("text clipboard write must be allowed");
+
+    assert_eq!(access.data_type, ClipboardDataType::Text);
+}
+
+#[test]
+fn clipboard_capabilities_deny_unsupported_image_missing_capability_and_plugin_context() {
+    let table = CapabilityTable::new([CapabilityRecord::new("clipboard.write")
+        .allow(PlatformOperation::ClipboardWrite)
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)
+        .plugin(true)]);
+    let manifest = ClipboardManifest::new("clipboard.write", [ClipboardDataType::Text]);
+
+    let unsupported_image = ClipboardPolicy::access(
+        &table,
+        &manifest,
+        ClipboardDataType::Image,
+        PlatformOperation::ClipboardWrite,
+        PlatformContext::Desktop,
+    )
+    .expect_err("unsupported image clipboard type must be denied");
+    let missing_capability = ClipboardPolicy::access(
+        &CapabilityTable::new([]),
+        &manifest,
+        ClipboardDataType::Text,
+        PlatformOperation::ClipboardWrite,
+        PlatformContext::Desktop,
+    )
+    .expect_err("missing clipboard capability must be denied");
+    let plugin_denied = ClipboardPolicy::access(
+        &table,
+        &manifest,
+        ClipboardDataType::Text,
+        PlatformOperation::ClipboardWrite,
+        PlatformContext::Plugin,
+    )
+    .expect_err("plugin clipboard access must require manifest opt-in");
+
+    assert_eq!(
+        unsupported_image.diagnostic.rule,
+        "clipboard.type.unsupported"
+    );
+    assert_eq!(missing_capability.diagnostic.rule, "capability.missing");
+    assert_eq!(plugin_denied.diagnostic.rule, "clipboard.plugin.denied");
 }
