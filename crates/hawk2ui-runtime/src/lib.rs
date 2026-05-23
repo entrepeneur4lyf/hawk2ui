@@ -1,6 +1,15 @@
 #![forbid(unsafe_code)]
 //! Script loading, host bindings, event dispatch, scheduling, lifecycle, and runtime safety for `Hawk2UI`.
 
+pub mod lifecycle;
+pub mod script;
+
+pub use lifecycle::{LifecycleHook, LifecyclePhase, LifecycleRegistry};
+pub use script::{
+    HostCallRecord, RuntimeCapability, RuntimeError, ScriptModuleKind, ScriptModuleRecord,
+    StructuredValue,
+};
+
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-runtime";
 
