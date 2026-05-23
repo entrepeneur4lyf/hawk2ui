@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 //! Layout tree, text measurement bridge, plugin constraints, and scene geometry attachment for `Hawk2UI`.
 
+pub mod compute;
 pub mod tree;
 
+pub use compute::{ComputedGeometry, LayoutOutput, Viewport};
 pub use tree::{
     BoxEdges, FlexDirection, LayoutNode, LayoutNodeId, LayoutSizing, LayoutStyle, LayoutTree,
     LayoutTreeError, LayoutValue,

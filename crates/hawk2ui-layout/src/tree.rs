@@ -411,6 +411,12 @@ impl LayoutTree {
         self.entry(node_id).map(|entry| &entry.node)
     }
 
+    /// Returns the root node ID.
+    #[must_use]
+    pub fn root_id(&self) -> Option<&LayoutNodeId> {
+        self.nodes.first().map(|entry| entry.node.id())
+    }
+
     fn entry(&self, node_id: &LayoutNodeId) -> Option<&TreeEntry> {
         self.nodes
             .iter()
