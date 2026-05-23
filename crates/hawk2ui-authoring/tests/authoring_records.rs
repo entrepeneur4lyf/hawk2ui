@@ -233,3 +233,32 @@ fn compile_basic_fixture_emits_component_text_children_and_click_event() {
     assert_eq!(artifact.events()[0].event().stable_key(), "pointer.press");
     assert_eq!(artifact.events()[0].handler().as_str(), "increment_counter");
 }
+
+#[test]
+fn adapter_contract_records_equivalent_operations_for_framework_labels() {
+    for framework in ["native", "svelte", "react", "vue", "solid"] {
+        let mut adapter = hawk2ui_authoring::RecordingNativeRendererAdapter::new(framework);
+        adapter
+            .apply(hawk2ui_authoring::NodeOperation::MountElement(
+                ElementNode::new(ElementId::new("root"), ElementKind::View),
+            ))
+            .expect("recording adapter accepts mount operation");
+        adapter
+            .apply(hawk2ui_authoring::NodeOperation::BindEvent(
+                hawk2ui_authoring::EventBinding::new(
+                    ElementId::new("root"),
+                    hawk2ui_authoring::EventKind::Pointer(
+                        hawk2ui_authoring::PointerEventKind::Press,
+                    ),
+                    hawk2ui_authoring::HandlerRef::new("handle_press"),
+                ),
+            ))
+            .expect("recording adapter accepts event operation");
+
+        assert_eq!(adapter.framework_label(), framework);
+        assert_eq!(
+            adapter.operation_keys(),
+            ["mount-element:root", "bind-event:root:pointer.press"]
+        );
+    }
+}

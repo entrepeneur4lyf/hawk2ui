@@ -1,12 +1,16 @@
 #![forbid(unsafe_code)]
 //! Typed authoring records, component model, event binding, state records, and framework adapter contracts for `Hawk2UI`.
 
+pub mod adapter;
 pub mod compile;
 pub mod component;
 pub mod element;
 pub mod events;
 pub mod state;
 
+pub use adapter::{
+    AdapterError, NativeRendererAdapter, NodeOperation, RecordingNativeRendererAdapter,
+};
 pub use compile::{
     AuthoringArtifact, AuthoringDiagnostic, AuthoringDiagnosticSeverity, compile_authoring_source,
 };
