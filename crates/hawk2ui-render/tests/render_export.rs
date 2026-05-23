@@ -70,3 +70,66 @@ fn scene_graph_attaches_geometry_and_propagates_invalidation() {
         "child invalidation must propagate to root"
     );
 }
+
+#[test]
+fn layer_records_sort_deterministically_and_serialize_stably() {
+    let stack = hawk2ui_render::LayerStack::new()
+        .with_layer(hawk2ui_render::PaintLayer::new(
+            "text",
+            30,
+            hawk2ui_render::LayerKind::Text(hawk2ui_render::TextLayer::new("Hello")),
+        ))
+        .with_layer(hawk2ui_render::PaintLayer::new(
+            "fill",
+            10,
+            hawk2ui_render::LayerKind::Fill(hawk2ui_render::Color::rgba(20, 30, 40, 255)),
+        ))
+        .with_layer(hawk2ui_render::PaintLayer::new(
+            "custom",
+            20,
+            hawk2ui_render::LayerKind::CustomSurface("scope".to_string()),
+        ));
+
+    assert_eq!(
+        stack.ordered_keys(),
+        [
+            "10:fill:fill(20,30,40,255)",
+            "20:custom:custom-surface(scope)",
+            "30:text:text(Hello)",
+        ]
+    );
+    assert_eq!(
+        stack.serialize_stable(),
+        "10:fill:fill(20,30,40,255)|20:custom:custom-surface(scope)|30:text:text(Hello)"
+    );
+}
+
+#[test]
+fn layer_records_cover_required_layer_families() {
+    let layers = [
+        hawk2ui_render::LayerKind::Stroke(hawk2ui_render::Stroke::new(2.0)),
+        hawk2ui_render::LayerKind::RoundedRect(hawk2ui_render::RoundedRect::new(8.0)),
+        hawk2ui_render::LayerKind::Path(hawk2ui_render::PathLayer::new("M0 0L10 10")),
+        hawk2ui_render::LayerKind::Gradient(hawk2ui_render::GradientLayer::linear()),
+        hawk2ui_render::LayerKind::Shadow(hawk2ui_render::ShadowLayer::new(12.0)),
+        hawk2ui_render::LayerKind::Glow(hawk2ui_render::GlowLayer::new(6.0)),
+        hawk2ui_render::LayerKind::OpacityGroup(0.5),
+        hawk2ui_render::LayerKind::Clip(Geometry::new(0.0, 0.0, 100.0, 100.0)),
+        hawk2ui_render::LayerKind::Transform(Transform::translate(2.0, 4.0)),
+        hawk2ui_render::LayerKind::Image("hero".to_string()),
+        hawk2ui_render::LayerKind::Vector("logo".to_string()),
+        hawk2ui_render::LayerKind::Control("button".to_string()),
+        hawk2ui_render::LayerKind::StaticCache("card-cache".to_string()),
+        hawk2ui_render::LayerKind::LiveLayer("meter".to_string()),
+    ];
+
+    let keys: Vec<_> = layers
+        .iter()
+        .map(hawk2ui_render::LayerKind::stable_key)
+        .collect();
+
+    assert_eq!(keys.len(), 14);
+    assert!(keys.contains(&"gradient(linear)".to_string()));
+    assert!(keys.contains(&"static-cache(card-cache)".to_string()));
+    assert!(keys.contains(&"live-layer(meter)".to_string()));
+}

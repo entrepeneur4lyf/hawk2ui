@@ -1,8 +1,13 @@
 #![forbid(unsafe_code)]
 //! Retained scene records, paint layers, renderer backend boundary, text contracts, and custom draw surfaces for `Hawk2UI`.
 
+pub mod layer;
 pub mod scene;
 
+pub use layer::{
+    Color, GlowLayer, GradientLayer, LayerKind, LayerStack, PaintLayer, PathLayer, RoundedRect,
+    ShadowLayer, Stroke, TextLayer,
+};
 pub use scene::{
     AccessibilityRef, Geometry, HitTestGeometry, InvalidationReason, SceneGraph, SceneGraphError,
     SceneNode, SceneNodeId, Transform,
