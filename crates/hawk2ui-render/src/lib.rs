@@ -5,6 +5,7 @@ pub mod backend;
 pub mod export;
 pub mod layer;
 pub mod scene;
+pub mod text;
 
 pub use backend::{
     BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, RecordingBackend,
@@ -18,6 +19,10 @@ pub use layer::{
 pub use scene::{
     AccessibilityRef, Geometry, HitTestGeometry, InvalidationReason, SceneGraph, SceneGraphError,
     SceneNode, SceneNodeId, Transform,
+};
+pub use text::{
+    DeterministicTextMeasurer, FontRegistry, GlyphCacheKey, LineBreakMode, TextMeasureOutput,
+    TextRenderInput, TextRenderTextError,
 };
 
 /// The canonical Cargo package name for this crate.

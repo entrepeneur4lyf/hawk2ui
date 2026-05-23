@@ -258,3 +258,38 @@ fn render_export_produces_stable_paint_commands() {
         "draw-rounded-rect:shape:12|draw-gradient:gradient:linear|draw-text:text:Amount|draw-image:image:hero|draw-vector:vector:logo|draw-custom-surface:surface:scope"
     );
 }
+
+#[test]
+fn text_contracts_measure_shape_linebreak_bidi_and_baseline() {
+    let registry = hawk2ui_render::FontRegistry::new()
+        .with_system_font("Atkinson")
+        .with_app_font("Display", "assets/fonts/display.ttf");
+    let measurer =
+        hawk2ui_render::DeterministicTextMeasurer::new(registry).with_average_glyph_width(7.0);
+    let input = hawk2ui_render::TextRenderInput::new("Gain שלום", "Display", 18.0)
+        .with_dpi_scale(2.0)
+        .with_line_break(hawk2ui_render::LineBreakMode::Wrap { max_width: 42.0 })
+        .with_bidi(true);
+
+    let output = measurer.measure(&input).expect("text measurement succeeds");
+
+    assert_eq!(output.width, 42.0);
+    assert_eq!(output.line_count, 2);
+    assert_eq!(output.baseline, 28.8);
+    assert!(output.shaped);
+    assert!(output.bidi_resolved);
+}
+
+#[test]
+fn text_contracts_generate_stable_glyph_cache_and_invalidation_keys() {
+    let key = hawk2ui_render::GlyphCacheKey::new("Gain", "Display", 18.0, 2.0, true);
+    let font_changed = hawk2ui_render::GlyphCacheKey::new("Gain", "Atkinson", 18.0, 2.0, true);
+    let dpi_changed = hawk2ui_render::GlyphCacheKey::new("Gain", "Display", 18.0, 1.0, true);
+
+    assert_eq!(
+        key.stable_key(),
+        "text=Gain|font=Display|size=18|dpi=2|bidi=true"
+    );
+    assert_ne!(key, font_changed);
+    assert_ne!(key, dpi_changed);
+}
