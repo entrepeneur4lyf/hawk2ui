@@ -1,6 +1,6 @@
 use hawk2ui_platform::{
-    CapabilityRecord, CapabilitySchema, CapabilityTable, PlatformContext, PlatformDiagnostic,
-    PlatformOperation, RuntimeAvailability,
+    CapabilityRecord, CapabilitySchema, CapabilityTable, FilesystemGrant, FilesystemPolicy,
+    FilesystemScope, PlatformContext, PlatformDiagnostic, PlatformOperation, RuntimeAvailability,
 };
 
 #[test]
@@ -83,4 +83,44 @@ fn capability_table_records_schema_availability_and_operations() {
     assert_eq!(record.runtime_availability, RuntimeAvailability::Runtime);
     assert!(record.desktop_applicable);
     assert!(record.plugin_applicable);
+}
+
+#[test]
+fn filesystem_scope_rejects_path_escaping() {
+    let grant = FilesystemGrant::new(FilesystemScope::ProjectAssets, "/app/assets");
+
+    let error = FilesystemPolicy::resolve(&grant, "../secrets.txt")
+        .expect_err("path escape must be denied");
+
+    assert_eq!(
+        error.diagnostic,
+        PlatformDiagnostic::error(
+            "filesystem.path.escape",
+            "filesystem path escapes its scope"
+        )
+    );
+}
+
+#[test]
+fn filesystem_scope_rejects_forbidden_paths() {
+    let grant = FilesystemGrant::new(FilesystemScope::Forbidden, "/");
+
+    let error = FilesystemPolicy::resolve(&grant, "etc/passwd")
+        .expect_err("forbidden path scope must be denied");
+
+    assert_eq!(
+        error.diagnostic,
+        PlatformDiagnostic::error("filesystem.path.forbidden", "filesystem path is forbidden")
+    );
+}
+
+#[test]
+fn filesystem_scope_allows_user_selected_file_grants() {
+    let grant = FilesystemPolicy::user_selected_file("/home/user/session.hawk");
+
+    let access = FilesystemPolicy::resolve_user_selected(&grant, "/home/user/session.hawk")
+        .expect("exact user-selected file grant must be allowed");
+
+    assert_eq!(access.scope, FilesystemScope::UserSelectedFile);
+    assert_eq!(access.resolved_path, "/home/user/session.hawk");
 }

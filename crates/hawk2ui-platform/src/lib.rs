@@ -2,10 +2,14 @@
 //! Capability-scoped platform APIs for filesystem, network, clipboard, secrets, and database access in `Hawk2UI`.
 
 pub mod capability;
+pub mod filesystem;
 
 pub use capability::{
     CapabilityDenied, CapabilityRecord, CapabilitySchema, CapabilityTable, PlatformContext,
     PlatformDiagnostic, PlatformOperation, RuntimeAvailability,
+};
+pub use filesystem::{
+    FilesystemAccess, FilesystemDenied, FilesystemGrant, FilesystemPolicy, FilesystemScope,
 };
 
 /// The canonical Cargo package name for this crate.
