@@ -2,6 +2,9 @@ use hawk2ui_runtime::{
     HostCallRecord, LifecycleHook, LifecyclePhase, LifecycleRegistry, RuntimeCapability,
     RuntimeError, ScriptModuleKind, ScriptModuleRecord, StructuredValue,
 };
+use serde::{Serialize, de::DeserializeOwned};
+
+fn assert_serde_contract<T: Serialize + DeserializeOwned>() {}
 
 #[test]
 fn runtime_records_module_identity_is_stable() {
@@ -64,4 +67,14 @@ fn runtime_records_register_lifecycle_hooks_in_order() {
         "main"
     );
     assert_eq!(registry.all().len(), 3);
+}
+
+#[test]
+fn runtime_records_are_serializable_contracts() {
+    assert_serde_contract::<ScriptModuleRecord>();
+    assert_serde_contract::<HostCallRecord>();
+    assert_serde_contract::<StructuredValue>();
+    assert_serde_contract::<RuntimeError>();
+    assert_serde_contract::<LifecycleHook>();
+    assert_serde_contract::<LifecycleRegistry>();
 }

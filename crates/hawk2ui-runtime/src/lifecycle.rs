@@ -1,7 +1,9 @@
 //! Runtime lifecycle hook registration.
 
+use serde::{Deserialize, Serialize};
+
 /// Runtime lifecycle phase.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum LifecyclePhase {
     /// Module initialization before first mount.
     Initialize,
@@ -14,7 +16,7 @@ pub enum LifecyclePhase {
 }
 
 /// Lifecycle hook exported by a script module.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LifecycleHook {
     /// Module that owns the hook.
     pub module_id: String,
@@ -41,7 +43,7 @@ impl LifecycleHook {
 }
 
 /// Ordered lifecycle hook registry.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LifecycleRegistry {
     hooks: Vec<LifecycleHook>,
 }

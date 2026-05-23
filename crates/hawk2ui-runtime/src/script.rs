@@ -2,8 +2,10 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 /// Runtime capability required by a module, host call, or scheduler operation.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum RuntimeCapability {
     /// Dispatches or receives user-interface events.
     UiEvents,
@@ -24,7 +26,7 @@ pub enum RuntimeCapability {
 }
 
 /// Supported script module input kinds.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ScriptModuleKind {
     /// JavaScript module.
     JavaScript,
@@ -33,7 +35,7 @@ pub enum ScriptModuleKind {
 }
 
 /// Structured value exchanged between scripts and host bindings.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum StructuredValue {
     /// Null value.
     Null,
@@ -69,7 +71,7 @@ impl StructuredValue {
 }
 
 /// Runtime script module identity and declarations.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ScriptModuleRecord {
     /// Stable module identifier.
     pub id: String,
@@ -128,7 +130,7 @@ impl ScriptModuleRecord {
 }
 
 /// Recorded script-to-host call.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct HostCallRecord {
     /// Calling module identifier.
     pub module_id: String,
@@ -165,7 +167,7 @@ impl HostCallRecord {
 }
 
 /// Structured runtime error.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RuntimeError {
     /// Stable runtime error code.
     pub code: String,

@@ -131,6 +131,9 @@ version = "0.1.0"
 [[package]]
 name = "hawk2ui-runtime"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "hawk2ui-schema"
