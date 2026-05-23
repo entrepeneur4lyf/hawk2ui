@@ -2,10 +2,15 @@
 //! Layout tree, text measurement bridge, plugin constraints, and scene geometry attachment for `Hawk2UI`.
 
 pub mod compute;
+pub mod plugin;
 pub mod text;
 pub mod tree;
 
 pub use compute::{ComputedGeometry, LayoutOutput, Viewport};
+pub use plugin::{
+    AnalyzerRegion, GeneratedParameterLayout, GraphRegion, PluginEditorConstraints,
+    PluginEditorSize,
+};
 pub use text::{
     TestTextMeasurer, TextMeasureInput, TextMeasureKey, TextMeasureMode, TextMeasureResult,
 };

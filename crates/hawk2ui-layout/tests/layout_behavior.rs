@@ -1,6 +1,7 @@
 use hawk2ui_layout::{
-    BoxEdges, FlexDirection, LayoutNode, LayoutNodeId, LayoutSizing, LayoutStyle, LayoutTree,
-    LayoutValue, TestTextMeasurer, TextMeasureInput, TextMeasureKey, TextMeasureMode,
+    AnalyzerRegion, BoxEdges, FlexDirection, GeneratedParameterLayout, GraphRegion, LayoutNode,
+    LayoutNodeId, LayoutSizing, LayoutStyle, LayoutTree, LayoutValue, PluginEditorConstraints,
+    PluginEditorSize, TestTextMeasurer, TextMeasureInput, TextMeasureKey, TextMeasureMode,
     TextMeasureResult, Viewport,
 };
 
@@ -196,4 +197,58 @@ fn text_measurement_keys_invalidate_by_text_and_font_metrics() {
     assert_ne!(base, text_changed);
     assert_ne!(base, font_changed);
     assert_ne!(base, size_changed);
+}
+
+#[test]
+fn plugin_constraints_clamp_host_sizes() {
+    let constraints = PluginEditorConstraints::new(PluginEditorSize::new(960.0, 540.0))
+        .with_min_size(PluginEditorSize::new(640.0, 360.0))
+        .with_max_size(PluginEditorSize::new(1440.0, 900.0));
+
+    assert_eq!(
+        constraints.clamp_host_size(PluginEditorSize::new(320.0, 240.0)),
+        PluginEditorSize::new(640.0, 360.0)
+    );
+    assert_eq!(
+        constraints.clamp_host_size(PluginEditorSize::new(1920.0, 1200.0)),
+        PluginEditorSize::new(1440.0, 900.0)
+    );
+    assert_eq!(
+        constraints.clamp_host_size(PluginEditorSize::new(1000.0, 700.0)),
+        PluginEditorSize::new(1000.0, 700.0)
+    );
+}
+
+#[test]
+fn plugin_constraints_preserve_graph_regions_and_generate_dense_panels() {
+    let constraints = PluginEditorConstraints::new(PluginEditorSize::new(960.0, 540.0))
+        .with_graph_region(GraphRegion::new("spectrum", 24.0, 96.0, 600.0, 240.0))
+        .with_analyzer_region(AnalyzerRegion::new(
+            "gain-reduction",
+            648.0,
+            96.0,
+            288.0,
+            120.0,
+        ))
+        .with_generated_parameters(GeneratedParameterLayout::dense_panel(
+            "parameters",
+            ["gain", "mix", "attack", "release"],
+            2,
+        ));
+
+    assert_eq!(constraints.graph_region("spectrum").unwrap().width, 600.0);
+    assert_eq!(
+        constraints
+            .analyzer_region("gain-reduction")
+            .unwrap()
+            .height,
+        120.0
+    );
+    assert_eq!(
+        constraints
+            .generated_parameters("parameters")
+            .unwrap()
+            .rows(),
+        2
+    );
 }
