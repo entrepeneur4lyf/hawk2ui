@@ -3,8 +3,9 @@ use hawk2ui_runtime::{
     HostBindingRegistry, HostCallRecord, LifecycleHook, LifecyclePhase, LifecycleRegistry,
     PromiseId, RecordingScriptEngine, RuntimeCapability, RuntimeError, RuntimeEvent,
     RuntimeEventDispatcher, RuntimeEventKind, RuntimeEventPayload, RuntimeEventPropagation,
-    RuntimeScheduler, ScriptEngine, ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord,
-    StructuredValue, TimerJob,
+    RuntimeExecutionContext, RuntimeGuardOperation, RuntimeSafetyGuard, RuntimeScheduler,
+    ScriptEngine, ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord, StructuredValue,
+    TimerJob,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -343,4 +344,49 @@ fn script_adapter_interrupt_and_teardown_block_future_work() {
         engine.operations().last(),
         Some(&ScriptEngineOperation::Teardown)
     );
+}
+
+#[test]
+fn plugin_safety_guard_denies_audio_thread_runtime_operations() {
+    let guard = RuntimeSafetyGuard::for_context(RuntimeExecutionContext::AudioThread);
+
+    for operation in [
+        RuntimeGuardOperation::ScriptExecution,
+        RuntimeGuardOperation::Rendering,
+        RuntimeGuardOperation::Filesystem,
+        RuntimeGuardOperation::Network,
+        RuntimeGuardOperation::BlockingSynchronization,
+    ] {
+        let denial = guard
+            .ensure_allowed(operation)
+            .expect_err("audio-thread runtime operation should be denied");
+
+        assert_eq!(denial.code, "runtime.audio-thread-operation-denied");
+        assert_eq!(denial.context, RuntimeExecutionContext::AudioThread);
+        assert_eq!(denial.operation, operation);
+    }
+}
+
+#[test]
+fn plugin_safety_guard_allows_realtime_safe_operations() {
+    let guard = RuntimeSafetyGuard::for_context(RuntimeExecutionContext::AudioThread);
+
+    guard
+        .ensure_allowed(RuntimeGuardOperation::ParameterAutomation)
+        .expect("parameter automation should be realtime-safe");
+    guard
+        .ensure_allowed(RuntimeGuardOperation::RealtimeDataWrite)
+        .expect("lock-free realtime data writes should be allowed");
+}
+
+#[test]
+fn plugin_safety_guard_allows_ui_thread_runtime_operations() {
+    let guard = RuntimeSafetyGuard::for_context(RuntimeExecutionContext::UiThread);
+
+    guard
+        .ensure_allowed(RuntimeGuardOperation::ScriptExecution)
+        .expect("UI thread may run scripts");
+    guard
+        .ensure_allowed(RuntimeGuardOperation::Rendering)
+        .expect("UI thread may render");
 }

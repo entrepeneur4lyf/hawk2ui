@@ -4,6 +4,7 @@
 pub mod bindings;
 pub mod events;
 pub mod lifecycle;
+pub mod safety;
 pub mod scheduler;
 pub mod script;
 
@@ -16,6 +17,9 @@ pub use events::{
     RuntimeEventKind, RuntimeEventPayload, RuntimeEventPropagation,
 };
 pub use lifecycle::{LifecycleHook, LifecyclePhase, LifecycleRegistry};
+pub use safety::{
+    RuntimeExecutionContext, RuntimeGuardDenial, RuntimeGuardOperation, RuntimeSafetyGuard,
+};
 pub use scheduler::{RuntimeScheduleBatch, RuntimeScheduleError, RuntimeScheduler, TimerJob};
 pub use script::{
     HostCallRecord, PromiseId, RecordingScriptEngine, RuntimeCapability, RuntimeError,
