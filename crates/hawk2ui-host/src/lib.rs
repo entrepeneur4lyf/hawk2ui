@@ -4,6 +4,7 @@
 pub mod desktop;
 pub mod platform;
 pub mod plugin;
+pub mod resize_bridge;
 pub mod surface;
 
 pub use desktop::{
@@ -17,6 +18,7 @@ pub use plugin::{
     PluginEditorConfig, PluginHostAdapter, PluginHostEvent, PluginParentHandle,
     RecordingPluginAdapter,
 };
+pub use resize_bridge::{RendererResizeBridge, RendererTargetRequest};
 pub use surface::{
     FramePresenter, HostCapabilities, HostSurface, PresentedFrame, RecordingFramePresenter,
     RecordingHostSurface, RepaintRequest, SurfaceEvent, SurfaceMetrics,

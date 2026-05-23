@@ -222,3 +222,47 @@ fn platform_handles_diagnose_unsupported_surface_combinations() {
         "platform.handle-ownership-mismatch"
     );
 }
+
+#[test]
+fn renderer_resize_bridge_recreates_target_and_forces_redraw_on_maximize() {
+    use hawk2ui_host::{RendererResizeBridge, RendererTargetRequest};
+
+    let bridge = RendererResizeBridge::default();
+    let request = bridge
+        .desktop_event_to_target_request(
+            &DesktopHostEvent::ModeChanged(WindowMode::Maximized),
+            SurfaceMetrics::new(1440.0, 900.0, 2.0),
+        )
+        .expect("maximize should recreate renderer target");
+
+    assert_eq!(
+        request,
+        RendererTargetRequest::recreate(
+            SurfaceMetrics::new(1440.0, 900.0, 2.0),
+            "desktop window mode changed: Maximized",
+        )
+    );
+    assert!(request.force_redraw);
+}
+
+#[test]
+fn renderer_resize_bridge_recreates_target_and_forces_redraw_on_dpi_change() {
+    use hawk2ui_host::{RendererResizeBridge, RendererTargetRequest};
+
+    let bridge = RendererResizeBridge::default();
+    let request = bridge
+        .desktop_event_to_target_request(
+            &DesktopHostEvent::DpiChanged(1.75),
+            SurfaceMetrics::new(800.0, 600.0, 1.75),
+        )
+        .expect("DPI changes should recreate renderer target");
+
+    assert_eq!(
+        request,
+        RendererTargetRequest::recreate(
+            SurfaceMetrics::new(800.0, 600.0, 1.75),
+            "desktop DPI changed to 1.75",
+        )
+    );
+    assert_eq!(request.metrics.physical_size(), (1400, 1050));
+}
