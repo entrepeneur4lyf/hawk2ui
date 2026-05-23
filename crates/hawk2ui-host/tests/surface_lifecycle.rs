@@ -1,6 +1,8 @@
 use hawk2ui_host::{
-    FramePresenter, HostCapabilities, HostSurface, RecordingFramePresenter, RecordingHostSurface,
-    RepaintRequest, SurfaceEvent, SurfaceMetrics,
+    ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig, FramePresenter,
+    HostCapabilities, HostSurface, KeyboardInput, PointerInput, RecordingDesktopAdapter,
+    RecordingFramePresenter, RecordingHostSurface, RepaintRequest, SurfaceEvent, SurfaceMetrics,
+    WindowMode,
 };
 
 #[test]
@@ -55,5 +57,57 @@ fn surface_contract_frame_presenter_records_presented_frames() {
     assert_eq!(
         presenter.presented_frames()[0].metrics.physical_size(),
         (400, 300)
+    );
+}
+
+#[test]
+fn desktop_lifecycle_records_owned_window_creation_and_window_state() {
+    let config = DesktopWindowConfig::new("Hawk2UI", SurfaceMetrics::new(1024.0, 768.0, 1.0))
+        .with_clipboard(ClipboardCapability::ReadWrite);
+    let mut adapter = RecordingDesktopAdapter::create_window(config.clone());
+
+    adapter.request_minimize(true);
+    adapter.request_maximize(true);
+    adapter.request_fullscreen(true);
+    adapter.request_close("user clicked close");
+
+    assert_eq!(adapter.config(), &config);
+    assert_eq!(
+        adapter.drain_events(),
+        vec![
+            DesktopHostEvent::WindowCreated(config),
+            DesktopHostEvent::ModeChanged(WindowMode::Minimized),
+            DesktopHostEvent::ModeChanged(WindowMode::Maximized),
+            DesktopHostEvent::ModeChanged(WindowMode::Fullscreen),
+            DesktopHostEvent::CloseRequested("user clicked close".into()),
+        ]
+    );
+}
+
+#[test]
+fn desktop_lifecycle_records_focus_keyboard_pointer_clipboard_and_dpi() {
+    let mut adapter = RecordingDesktopAdapter::create_window(DesktopWindowConfig::new(
+        "Hawk2UI",
+        SurfaceMetrics::new(800.0, 600.0, 1.0),
+    ));
+    adapter.drain_events();
+
+    adapter.set_focus(true);
+    adapter.keyboard_input(KeyboardInput::new("KeyA", true));
+    adapter.pointer_input(PointerInput::new(40.0, 20.0, "primary"));
+    adapter.clipboard_available(ClipboardCapability::ReadWrite);
+    adapter.dpi_changed(2.0);
+
+    assert_eq!(adapter.metrics().scale_factor, 2.0);
+    assert_eq!(
+        adapter.drain_events(),
+        vec![
+            DesktopHostEvent::FocusChanged(true),
+            DesktopHostEvent::KeyboardInput(KeyboardInput::new("KeyA", true)),
+            DesktopHostEvent::PointerInput(PointerInput::new(40.0, 20.0, "primary")),
+            DesktopHostEvent::ClipboardCapabilityChanged(ClipboardCapability::ReadWrite),
+            DesktopHostEvent::DpiChanged(2.0),
+            DesktopHostEvent::RendererTargetRecreateRequested,
+        ]
     );
 }
