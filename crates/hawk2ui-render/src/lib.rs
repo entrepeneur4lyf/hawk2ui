@@ -2,6 +2,7 @@
 //! Retained scene records, paint layers, renderer backend boundary, text contracts, and custom draw surfaces for `Hawk2UI`.
 
 pub mod backend;
+pub mod export;
 pub mod layer;
 pub mod scene;
 
@@ -9,6 +10,7 @@ pub use backend::{
     BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, RecordingBackend,
     RendererBackend,
 };
+pub use export::{PaintCommand, PaintCommandList, export_paint_commands};
 pub use layer::{
     Color, GlowLayer, GradientLayer, LayerKind, LayerStack, PaintLayer, PathLayer, RoundedRect,
     ShadowLayer, Stroke, TextLayer,

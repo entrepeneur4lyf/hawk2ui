@@ -63,6 +63,12 @@ impl PathLayer {
     pub fn new(path: impl Into<String>) -> Self {
         Self(path.into())
     }
+
+    /// Returns the stable path string.
+    #[must_use]
+    pub fn stable_value(&self) -> &str {
+        &self.0
+    }
 }
 
 /// Gradient layer data.
@@ -119,6 +125,12 @@ impl TextLayer {
     #[must_use]
     pub fn new(text: impl Into<String>) -> Self {
         Self(text.into())
+    }
+
+    /// Returns the stable text string.
+    #[must_use]
+    pub fn stable_value(&self) -> &str {
+        &self.0
     }
 }
 
@@ -217,6 +229,18 @@ impl PaintLayer {
     #[must_use]
     pub fn stable_key(&self) -> String {
         format!("{}:{}:{}", self.order, self.key, self.kind.stable_key())
+    }
+
+    /// Returns the paint layer key.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Returns the paint layer kind.
+    #[must_use]
+    pub const fn kind(&self) -> &LayerKind {
+        &self.kind
     }
 }
 

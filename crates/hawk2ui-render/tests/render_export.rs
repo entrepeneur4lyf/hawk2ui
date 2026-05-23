@@ -216,3 +216,45 @@ fn backend_boundary_reports_diagnostics_for_missing_capabilities() {
 
     assert_eq!(error.diagnostic().rule(), "backend.capability.text.missing");
 }
+
+#[test]
+fn render_export_produces_stable_paint_commands() {
+    let stack = hawk2ui_render::LayerStack::new()
+        .with_layer(hawk2ui_render::PaintLayer::new(
+            "shape",
+            10,
+            hawk2ui_render::LayerKind::RoundedRect(hawk2ui_render::RoundedRect::new(12.0)),
+        ))
+        .with_layer(hawk2ui_render::PaintLayer::new(
+            "gradient",
+            20,
+            hawk2ui_render::LayerKind::Gradient(hawk2ui_render::GradientLayer::linear()),
+        ))
+        .with_layer(hawk2ui_render::PaintLayer::new(
+            "text",
+            30,
+            hawk2ui_render::LayerKind::Text(hawk2ui_render::TextLayer::new("Amount")),
+        ))
+        .with_layer(hawk2ui_render::PaintLayer::new(
+            "image",
+            40,
+            hawk2ui_render::LayerKind::Image("hero".to_string()),
+        ))
+        .with_layer(hawk2ui_render::PaintLayer::new(
+            "vector",
+            50,
+            hawk2ui_render::LayerKind::Vector("logo".to_string()),
+        ))
+        .with_layer(hawk2ui_render::PaintLayer::new(
+            "surface",
+            60,
+            hawk2ui_render::LayerKind::CustomSurface("scope".to_string()),
+        ));
+
+    let commands = hawk2ui_render::export_paint_commands(&stack);
+
+    assert_eq!(
+        commands.serialize_stable(),
+        "draw-rounded-rect:shape:12|draw-gradient:gradient:linear|draw-text:text:Amount|draw-image:image:hero|draw-vector:vector:logo|draw-custom-surface:surface:scope"
+    );
+}
