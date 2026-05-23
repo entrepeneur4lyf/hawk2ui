@@ -4,6 +4,7 @@
 pub mod component;
 pub mod element;
 pub mod events;
+pub mod state;
 
 pub use component::{
     ComponentId, ComponentInstance, CustomSurfaceDeclaration, SurfaceId, SurfacePurpose,
@@ -14,6 +15,10 @@ pub use element::{
 pub use events::{
     EventBinding, EventKind, EventPayloadField, FocusEventKind, HandlerRef, InputEventKind,
     KeyboardEventKind, LifecycleEventKind, PointerEventKind,
+};
+pub use state::{
+    BatchedUpdate, StateId, StateScope, StateScopeKind, StateSubscription, StateUpdate,
+    SubscriptionId, TeardownPlan, TeardownStep,
 };
 
 /// The canonical Cargo package name for this crate.

@@ -135,3 +135,73 @@ fn event_records_do_not_depend_on_browser_event_object_names() {
         ]
     );
 }
+
+#[test]
+fn state_records_group_batched_updates_by_scope() {
+    let batch = hawk2ui_authoring::BatchedUpdate::new("startup")
+        .with_update(hawk2ui_authoring::StateUpdate::new(
+            hawk2ui_authoring::StateId::new("app.theme"),
+            hawk2ui_authoring::StateScope::App,
+            PropValue::String("dark".to_string()),
+        ))
+        .with_update(hawk2ui_authoring::StateUpdate::new(
+            hawk2ui_authoring::StateId::new("component.gain.value"),
+            hawk2ui_authoring::StateScope::Component(ElementId::new("gain-knob")),
+            PropValue::Number(0.5),
+        ))
+        .with_update(hawk2ui_authoring::StateUpdate::new(
+            hawk2ui_authoring::StateId::new("plugin.gain"),
+            hawk2ui_authoring::StateScope::PluginBinding("gain".to_string()),
+            PropValue::Number(0.5),
+        ));
+
+    assert_eq!(batch.name(), "startup");
+    assert_eq!(
+        batch
+            .updates_for_scope(hawk2ui_authoring::StateScopeKind::App)
+            .len(),
+        1
+    );
+    assert_eq!(
+        batch
+            .updates_for_scope(hawk2ui_authoring::StateScopeKind::Component)
+            .len(),
+        1
+    );
+    assert_eq!(
+        batch
+            .updates_for_scope(hawk2ui_authoring::StateScopeKind::PluginBinding)
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn state_records_preserve_deterministic_teardown_ordering() {
+    let subscription = hawk2ui_authoring::StateSubscription::new(
+        hawk2ui_authoring::SubscriptionId::new("gain-subscription"),
+        hawk2ui_authoring::StateId::new("plugin.gain"),
+        hawk2ui_authoring::HandlerRef::new("sync_gain"),
+    );
+
+    let teardown = hawk2ui_authoring::TeardownPlan::new()
+        .with_step(hawk2ui_authoring::TeardownStep::ReleaseSubscription(
+            subscription.id().clone(),
+        ))
+        .with_step(hawk2ui_authoring::TeardownStep::DetachPluginBinding(
+            "gain".to_string(),
+        ))
+        .with_step(hawk2ui_authoring::TeardownStep::ClearComponentState(
+            ElementId::new("gain-knob"),
+        ));
+
+    assert_eq!(subscription.state().as_str(), "plugin.gain");
+    assert_eq!(
+        teardown.step_keys(),
+        [
+            "release-subscription:gain-subscription",
+            "detach-plugin-binding:gain",
+            "clear-component-state:gain-knob",
+        ]
+    );
+}
