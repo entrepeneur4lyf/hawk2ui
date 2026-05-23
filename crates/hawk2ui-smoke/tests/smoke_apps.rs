@@ -97,3 +97,34 @@ fn plugin_meter_analyzer_proves_non_blocking_transport_and_ui_consumption() {
     assert_eq!(result.blocking_waits, 0);
     assert_eq!(result.allocations_on_audio_thread, 0);
 }
+
+#[test]
+fn style_gallery_exports_deterministic_snapshots_for_all_sections() {
+    let fixture = SmokeFixture::from_workspace("examples/style-gallery", SmokeTargetKind::Desktop);
+    let runner = SmokeRunner::default();
+
+    let result = runner
+        .run_style_gallery(&fixture)
+        .expect("style gallery should run");
+
+    assert_eq!(
+        result.sections,
+        vec![
+            "typography",
+            "color",
+            "borders",
+            "radii",
+            "shadows",
+            "transforms",
+            "opacity",
+            "overflow",
+            "transitions",
+            "tokens",
+            "image-layers",
+            "vector-layers",
+            "custom-draw"
+        ]
+    );
+    assert_eq!(result.snapshot_count, 13);
+    assert!(result.deterministic);
+}

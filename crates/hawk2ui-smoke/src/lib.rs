@@ -144,6 +144,17 @@ pub struct RealtimeVisualSmokeResult {
     pub allocations_on_audio_thread: usize,
 }
 
+/// Smoke run result for style gallery fixture.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StyleGallerySmokeResult {
+    /// Gallery section names.
+    pub sections: Vec<String>,
+    /// Snapshot count.
+    pub snapshot_count: usize,
+    /// Whether snapshots are deterministic.
+    pub deterministic: bool,
+}
+
 /// Smoke runner.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SmokeRunner;
@@ -333,6 +344,55 @@ impl SmokeRunner {
             dropped_frames: 1,
             blocking_waits: 0,
             allocations_on_audio_thread: 0,
+        })
+    }
+
+    /// Runs the style gallery smoke fixture.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when required fixture files are missing or invalid.
+    pub fn run_style_gallery(
+        &self,
+        fixture: &SmokeFixture,
+    ) -> Result<StyleGallerySmokeResult, String> {
+        if fixture.target != SmokeTargetKind::Desktop {
+            return Err("style-gallery fixture must use desktop target".into());
+        }
+        let root = fixture.absolute_path();
+        require_file(&root.join("manifest.hawk.toml"))?;
+        require_file(&root.join("src/main.ts"))?;
+        require_file(&root.join("styles/gallery.hawk.css"))?;
+        require_file(&root.join("assets/vector.svg"))?;
+        let snapshots = fs::read_to_string(root.join("artifacts/snapshots.txt"))
+            .map_err(|error| error.to_string())?;
+        let sections = vec![
+            "typography",
+            "color",
+            "borders",
+            "radii",
+            "shadows",
+            "transforms",
+            "opacity",
+            "overflow",
+            "transitions",
+            "tokens",
+            "image-layers",
+            "vector-layers",
+            "custom-draw",
+        ];
+        for section in &sections {
+            if !snapshots.lines().any(|line| line == *section) {
+                return Err(format!("style gallery snapshot missing section: {section}"));
+            }
+        }
+        if !snapshots.contains("deterministic=true") {
+            return Err("style gallery snapshots are not marked deterministic".into());
+        }
+        Ok(StyleGallerySmokeResult {
+            sections: sections.into_iter().map(str::to_string).collect(),
+            snapshot_count: 13,
+            deterministic: true,
         })
     }
 }

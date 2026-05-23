@@ -1,0 +1,11 @@
+[identity]
+id = "com.hawk2ui.examples.style-gallery"
+name = "Hawk2UI Style Gallery"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[[targets]]
+kind = "desktop"
+name = "style-gallery"
