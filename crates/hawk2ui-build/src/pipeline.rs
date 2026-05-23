@@ -53,6 +53,15 @@ pub struct BuildPhaseRecord {
     pub diagnostics: Vec<BuildDiagnostic>,
 }
 
+/// A release-blocking diagnostic annotated with the phase that emitted it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BuildPhaseDiagnostic {
+    /// Build phase that emitted the diagnostic.
+    pub phase: BuildPhase,
+    /// Diagnostic emitted by the phase.
+    pub diagnostic: BuildDiagnostic,
+}
+
 /// Production build pipeline record.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BuildPipeline {
@@ -95,6 +104,12 @@ impl BuildPipeline {
             .collect()
     }
 
+    /// Returns the record for a build phase.
+    #[must_use]
+    pub fn phase(&self, phase: BuildPhase) -> Option<&BuildPhaseRecord> {
+        self.phases.iter().find(|record| record.phase == phase)
+    }
+
     /// Adds a diagnostic to a phase.
     #[must_use]
     pub fn with_diagnostic(mut self, phase: BuildPhase, diagnostic: BuildDiagnostic) -> Self {
@@ -104,16 +119,34 @@ impl BuildPipeline {
         self
     }
 
+    /// Returns all release-blocking diagnostics annotated by phase.
+    #[must_use]
+    pub fn release_blocking_diagnostics(&self) -> Vec<BuildPhaseDiagnostic> {
+        self.phases
+            .iter()
+            .flat_map(|record| {
+                record
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == BuildDiagnosticSeverity::Error)
+                    .map(|diagnostic| BuildPhaseDiagnostic {
+                        phase: record.phase,
+                        diagnostic: diagnostic.clone(),
+                    })
+            })
+            .collect()
+    }
+
     /// Ensures no phase emitted release-blocking diagnostics.
     ///
     /// # Errors
     ///
     /// Returns [`BuildPipelineError`] when an error diagnostic blocks release.
     pub fn ensure_release_ready(&self) -> Result<(), BuildPipelineError> {
-        for diagnostic in self.phases.iter().flat_map(|record| &record.diagnostics) {
-            if diagnostic.severity == BuildDiagnosticSeverity::Error {
-                return Err(BuildPipelineError::ReleaseBlocked(diagnostic.rule.clone()));
-            }
+        if let Some(blocker) = self.release_blocking_diagnostics().first() {
+            return Err(BuildPipelineError::ReleaseBlocked(
+                blocker.diagnostic.rule.clone(),
+            ));
         }
         Ok(())
     }

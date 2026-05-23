@@ -223,6 +223,43 @@ fn build_pipeline_records_required_phase_order() {
 }
 
 #[test]
+fn pipeline_phases_expose_required_phase_records() {
+    let pipeline = BuildPipeline::production();
+
+    assert_eq!(pipeline.phases.len(), 10);
+    assert_eq!(
+        pipeline
+            .phase(BuildPhase::StyleCompilation)
+            .expect("style phase must exist")
+            .phase,
+        BuildPhase::StyleCompilation
+    );
+    assert!(
+        pipeline
+            .phases
+            .iter()
+            .all(|record| record.diagnostics.is_empty())
+    );
+}
+
+#[test]
+fn pipeline_phases_collect_release_blocking_diagnostics_by_phase() {
+    let diagnostic = BuildDiagnostic::new(
+        BuildDiagnosticSeverity::Error,
+        "script.unsupported.syntax",
+        "script syntax is unsupported",
+    );
+    let pipeline = BuildPipeline::production()
+        .with_diagnostic(BuildPhase::ScriptCompilation, diagnostic.clone());
+
+    let blockers = pipeline.release_blocking_diagnostics();
+
+    assert_eq!(blockers.len(), 1);
+    assert_eq!(blockers[0].phase, BuildPhase::ScriptCompilation);
+    assert_eq!(blockers[0].diagnostic, diagnostic);
+}
+
+#[test]
 fn build_pipeline_propagates_phase_diagnostics() {
     let pipeline = BuildPipeline::production().with_diagnostic(
         BuildPhase::ManifestValidation,
