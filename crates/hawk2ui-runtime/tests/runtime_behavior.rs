@@ -2,8 +2,8 @@ use hawk2ui_runtime::{
     BindingExecution, BindingLifecycleAvailability, BindingSchema, HostBindingRecord,
     HostBindingRegistry, HostCallRecord, LifecycleHook, LifecyclePhase, LifecycleRegistry,
     RuntimeCapability, RuntimeError, RuntimeEvent, RuntimeEventDispatcher, RuntimeEventKind,
-    RuntimeEventPayload, RuntimeEventPropagation, ScriptModuleKind, ScriptModuleRecord,
-    StructuredValue,
+    RuntimeEventPayload, RuntimeEventPropagation, RuntimeScheduler, ScriptModuleKind,
+    ScriptModuleRecord, StructuredValue, TimerJob,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -229,4 +229,51 @@ fn event_dispatch_cancels_pending_events_after_teardown() {
 
     assert_eq!(error.code, "event.teardown-cancelled");
     assert!(dispatcher.is_empty());
+}
+
+#[test]
+fn scheduler_batches_runtime_work_in_priority_order() {
+    let mut scheduler = RuntimeScheduler::default();
+    scheduler.schedule_script_job("hydrate");
+    scheduler.schedule_host_callback("host.window.open");
+    scheduler.schedule_ui_event(RuntimeEvent::ui("root", "click"));
+    scheduler.invalidate_render("root");
+    scheduler.schedule_animation_tick(16);
+    scheduler.schedule_timer(TimerJob::new("debounce", 32));
+
+    let batch = scheduler.drain_batch().expect("scheduler should drain");
+
+    assert_eq!(batch.script_jobs, vec!["hydrate"]);
+    assert_eq!(batch.host_callbacks, vec!["host.window.open"]);
+    assert_eq!(batch.ui_events[0].name, "click");
+    assert_eq!(batch.render_invalidations, vec!["root"]);
+    assert_eq!(batch.animation_ticks, vec![16]);
+    assert_eq!(batch.timers[0].id, "debounce");
+}
+
+#[test]
+fn scheduler_coalesces_render_invalidations() {
+    let mut scheduler = RuntimeScheduler::default();
+    scheduler.invalidate_render("root");
+    scheduler.invalidate_render("meter");
+    scheduler.invalidate_render("root");
+
+    let batch = scheduler.drain_batch().expect("scheduler should drain");
+
+    assert_eq!(batch.render_invalidations, vec!["meter", "root"]);
+}
+
+#[test]
+fn scheduler_cancels_pending_work_during_shutdown() {
+    let mut scheduler = RuntimeScheduler::default();
+    scheduler.schedule_script_job("hydrate");
+    scheduler.invalidate_render("root");
+
+    scheduler.begin_shutdown();
+    let error = scheduler
+        .drain_batch()
+        .expect_err("shutdown should cancel pending work");
+
+    assert_eq!(error.code, "scheduler.shutdown-cancelled");
+    assert!(scheduler.is_empty());
 }
