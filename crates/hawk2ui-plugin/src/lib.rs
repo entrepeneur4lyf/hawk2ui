@@ -5,6 +5,7 @@ pub mod automation;
 pub mod editor;
 pub mod format;
 pub mod parameter;
+pub mod state;
 
 pub use automation::{
     AutomationBindingKind, AutomationEvent, AutomationEventError, AutomationEventKind,
@@ -21,6 +22,10 @@ pub use parameter::{
     GeneratedParameterMetadata, ParameterDistribution, ParameterFlags, ParameterGroup,
     ParameterModel, ParameterRange, ParameterRecord, ParameterSmoothing, ParameterValidationError,
     ParameterValue,
+};
+pub use state::{
+    HostStateChunk, PluginPreset, PluginStateEnvelope, PresetKind, PresetMetadata, StateMigration,
+    StateMigrationError, StateValue, UiPreferences,
 };
 
 /// The canonical Cargo package name for this crate.

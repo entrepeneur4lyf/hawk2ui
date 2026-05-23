@@ -243,3 +243,64 @@ fn automation_events_record_generated_and_custom_editor_bindings() {
     assert_eq!(custom.kind, AutomationBindingKind::CustomEditor);
     assert_eq!(generated.parameter_id, "gain");
 }
+
+use hawk2ui_plugin::{
+    HostStateChunk, PluginPreset, PluginStateEnvelope, PresetKind, PresetMetadata, StateMigration,
+    StateValue, UiPreferences,
+};
+
+#[test]
+fn state_presets_separate_parameter_non_parameter_and_ui_state() {
+    let state = PluginStateEnvelope::new(2)
+        .parameter("gain", StateValue::Float(0.5))
+        .non_parameter("oversampling", StateValue::Bool(true))
+        .ui_preferences(
+            UiPreferences::new()
+                .window_size(800.0, 500.0)
+                .theme("graphite"),
+        )
+        .host_chunk(HostStateChunk::new("vst3", vec![1, 2, 3]));
+
+    assert_eq!(state.version, 2);
+    assert_eq!(
+        state.parameter_state.get("gain"),
+        Some(&StateValue::Float(0.5))
+    );
+    assert_eq!(
+        state.non_parameter_state.get("oversampling"),
+        Some(&StateValue::Bool(true))
+    );
+    assert_eq!(state.ui_preferences.theme.as_deref(), Some("graphite"));
+    assert_eq!(state.host_chunks[0].format, "vst3");
+}
+
+#[test]
+fn state_presets_apply_migrations_in_order() {
+    let state = PluginStateEnvelope::new(1).parameter("old_gain", StateValue::Float(0.25));
+    let migrated = state
+        .migrate([StateMigration::rename_parameter(1, 2, "old_gain", "gain")])
+        .expect("migration should apply");
+
+    assert_eq!(migrated.version, 2);
+    assert_eq!(
+        migrated.parameter_state.get("gain"),
+        Some(&StateValue::Float(0.25))
+    );
+    assert!(!migrated.parameter_state.contains_key("old_gain"));
+}
+
+#[test]
+fn state_presets_keep_factory_and_user_presets_separate() {
+    let factory = PluginPreset::factory(
+        PresetMetadata::new("factory.init", "Init", "Hawk2"),
+        PluginStateEnvelope::new(1),
+    );
+    let user = PluginPreset::user(
+        PresetMetadata::new("user.wide", "Wide", "Shawn"),
+        PluginStateEnvelope::new(1),
+    );
+
+    assert_eq!(factory.kind, PresetKind::Factory);
+    assert_eq!(user.kind, PresetKind::User);
+    assert_ne!(factory.metadata.author, user.metadata.author);
+}
