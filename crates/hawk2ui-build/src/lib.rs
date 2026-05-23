@@ -7,7 +7,11 @@ pub mod manifest;
 pub mod pipeline;
 pub mod report;
 
-pub use artifact::{ArtifactHash, ArtifactSchemaVersion, SealedArtifact, SealedArtifactError};
+pub use artifact::{
+    ArtifactHash, ArtifactHashes, ArtifactSchemaVersion, AssetManifestEntry, BuildMetadata,
+    CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord, SealedArtifact,
+    SealedArtifactError, TargetArtifactMetadata,
+};
 pub use diagnostic::{BuildDiagnostic, BuildDiagnosticSeverity};
 pub use manifest::{HawkManifest, ManifestError, PackageTarget};
 pub use pipeline::{BuildPhase, BuildPhaseDiagnostic, BuildPipeline, BuildPipelineError};

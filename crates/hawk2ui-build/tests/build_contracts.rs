@@ -1,6 +1,7 @@
 use hawk2ui_build::{
-    ArtifactHash, ArtifactSchemaVersion, BuildDiagnostic, BuildDiagnosticSeverity, BuildPhase,
-    BuildPipeline, BuildPipelineError, HawkManifest, ManifestError, PackageTarget,
+    ArtifactHash, ArtifactSchemaVersion, AssetManifestEntry, BuildDiagnostic,
+    BuildDiagnosticSeverity, BuildPhase, BuildPipeline, BuildPipelineError, CompiledAssetRecord,
+    CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget,
     PackageTargetRecord, SealedArtifact, SealedArtifactError, VerificationReport,
 };
 
@@ -170,12 +171,88 @@ fn sealed_artifact_hashes_manifest_snapshot_stably() {
     let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest);
 
     assert_eq!(artifact.schema_version, ArtifactSchemaVersion::new(1, 0));
+    assert_eq!(artifact.manifest_snapshot, manifest.snapshot());
     assert_eq!(
         artifact.manifest_snapshot_hash,
         ArtifactHash::from_bytes(manifest.snapshot().as_bytes())
     );
     assert!(artifact.is_compatible_with(ArtifactSchemaVersion::new(1, 2)));
     assert!(!artifact.is_compatible_with(ArtifactSchemaVersion::new(2, 0)));
+}
+
+#[test]
+fn sealed_artifact_carries_compiled_records_and_metadata() {
+    let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
+    let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(CompiledScriptRecord::new(
+            "main",
+            "src/main.ts",
+            "scripts/main.hawk.js",
+            ArtifactHash::from_bytes(b"script"),
+        ))
+        .with_compiled_style(CompiledStyleRecord::new(
+            "main",
+            "src/style.hawk.css",
+            "styles/main.hawk.style",
+            ArtifactHash::from_bytes(b"style"),
+        ))
+        .with_asset_manifest_entry(AssetManifestEntry::new(
+            "hero",
+            "image",
+            "assets/hero.png",
+            ArtifactHash::from_bytes(b"asset"),
+        ))
+        .with_compiled_asset(CompiledAssetRecord::new(
+            "hero",
+            "assets/hero.png",
+            "assets/hero.pack",
+            ArtifactHash::from_bytes(b"asset"),
+        ));
+
+    assert_eq!(artifact.compiled_scripts.len(), 1);
+    assert_eq!(artifact.compiled_styles.len(), 1);
+    assert_eq!(artifact.asset_manifest.len(), 1);
+    assert_eq!(artifact.compiled_assets.len(), 1);
+    assert_eq!(
+        artifact.capabilities,
+        vec![
+            "native-windowing".to_string(),
+            "sealed-artifacts".to_string()
+        ]
+    );
+    assert_eq!(artifact.hashes.manifest, artifact.manifest_snapshot_hash);
+    assert_eq!(artifact.build_metadata.generator, "hawk2ui-build");
+    assert_eq!(artifact.target_metadata[0].kind, PackageTarget::Desktop);
+    assert_eq!(artifact.target_metadata[0].name, "linux-wayland");
+}
+
+#[test]
+fn sealed_artifact_content_hash_changes_when_compiled_payload_changes() {
+    let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
+    let first = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(CompiledScriptRecord::new(
+            "main",
+            "src/main.ts",
+            "scripts/main.hawk.js",
+            ArtifactHash::from_bytes(b"script-a"),
+        ));
+    let second = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(CompiledScriptRecord::new(
+            "main",
+            "src/main.ts",
+            "scripts/main.hawk.js",
+            ArtifactHash::from_bytes(b"script-a"),
+        ));
+    let changed = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(CompiledScriptRecord::new(
+            "main",
+            "src/main.ts",
+            "scripts/main.hawk.js",
+            ArtifactHash::from_bytes(b"script-b"),
+        ));
+
+    assert_eq!(first.content_hash(), second.content_hash());
+    assert_ne!(first.content_hash(), changed.content_hash());
 }
 
 #[test]
