@@ -89,6 +89,25 @@ pub struct DesktopSmokeResult {
     pub window_events: Vec<String>,
 }
 
+/// Smoke run result for the dense dashboard fixture.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DashboardSmokeResult {
+    /// Fixture name.
+    pub fixture_name: String,
+    /// Number of exported layout nodes.
+    pub layout_nodes: usize,
+    /// Number of style rules applied.
+    pub style_rules: usize,
+    /// Visual snapshot identifier.
+    pub visual_snapshot_id: String,
+    /// Keyboard focus path.
+    pub keyboard_focus_path: Vec<String>,
+    /// Pointer event trace.
+    pub pointer_events: Vec<String>,
+    /// Resize event trace.
+    pub resize_events: Vec<String>,
+}
+
 /// Smoke runner.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SmokeRunner;
@@ -141,6 +160,47 @@ impl SmokeRunner {
                 "repainted".into(),
                 "closed".into(),
             ],
+        })
+    }
+
+    /// Runs the dense desktop dashboard smoke fixture.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when required fixture files are missing or invalid.
+    pub fn run_desktop_dashboard(
+        &self,
+        fixture: &SmokeFixture,
+    ) -> Result<DashboardSmokeResult, String> {
+        if fixture.target != SmokeTargetKind::Desktop {
+            return Err("desktop-dashboard fixture must use desktop target".into());
+        }
+        let root = fixture.absolute_path();
+        require_file(&root.join("manifest.hawk.toml"))?;
+        require_file(&root.join("src/main.ts"))?;
+        require_file(&root.join("styles/main.hawk.css"))?;
+        let snapshot = fs::read_to_string(root.join("artifacts/visual.snap"))
+            .map_err(|error| error.to_string())?;
+        for required in [
+            "desktop-dashboard:visual",
+            "layout_nodes=18",
+            "style_rules=12",
+            "focus=root/sidebar/bypass-button",
+            "pointer=pointer-down:graph,pointer-up:graph",
+            "resize=1280x720@1,1440x900@1.5",
+        ] {
+            if !snapshot.contains(required) {
+                return Err(format!("dashboard snapshot missing evidence: {required}"));
+            }
+        }
+        Ok(DashboardSmokeResult {
+            fixture_name: fixture.name(),
+            layout_nodes: 18,
+            style_rules: 12,
+            visual_snapshot_id: "desktop-dashboard:visual".into(),
+            keyboard_focus_path: vec!["root".into(), "sidebar".into(), "bypass-button".into()],
+            pointer_events: vec!["pointer-down:graph".into(), "pointer-up:graph".into()],
+            resize_events: vec!["1280x720@1".into(), "1440x900@1.5".into()],
         })
     }
 }
