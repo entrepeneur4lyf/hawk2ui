@@ -73,3 +73,33 @@ fn property_registry_validates_typed_values() {
             .is_ok()
     );
 }
+
+#[test]
+fn selector_subset_accepts_supported_forms() {
+    let selectors = [
+        ("button", "element(button)"),
+        (".primary", "class(primary)"),
+        ("#submit", "id(submit)"),
+        ("panel > button", "element(panel)>element(button)"),
+        ("panel button", "element(panel) element(button)"),
+        ("button:hawk(active)", "element(button):state(active)"),
+    ];
+
+    for (source, key) in selectors {
+        let selector = hawk2ui_style::Selector::parse(source).expect("selector must parse");
+        assert_eq!(selector.stable_key(), key);
+    }
+}
+
+#[test]
+fn selector_subset_rejects_unsupported_forms_with_diagnostics() {
+    for (source, rule) in [
+        ("button + label", "selector.combinator.unsupported"),
+        ("button:hover", "selector.state.unsupported"),
+        ("[aria-label]", "selector.attribute.unsupported"),
+        ("button, label", "selector.list.unsupported"),
+    ] {
+        let error = hawk2ui_style::Selector::parse(source).expect_err("selector must be rejected");
+        assert_eq!(error.diagnostic().rule(), rule);
+    }
+}

@@ -2,11 +2,13 @@
 //! Typed style property registry, selector subset, design tokens, compiler, and runtime style tables for `Hawk2UI`.
 
 pub mod property;
+pub mod selector;
 
 pub use property::{
     PropertyGroup, PropertyId, PropertyMetadata, PropertyRegistry, PropertyRequirement, StyleValue,
     UnitHandling, ValidationError, ValueType,
 };
+pub use selector::{Selector, SelectorDiagnostic, SelectorParseError, SelectorPart};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-style";
