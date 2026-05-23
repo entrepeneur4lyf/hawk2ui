@@ -1,6 +1,13 @@
 #![forbid(unsafe_code)]
 //! Common host surface contracts for `Hawk2UI` desktop windows and embedded plugin surfaces.
 
+pub mod surface;
+
+pub use surface::{
+    FramePresenter, HostCapabilities, HostSurface, PresentedFrame, RecordingFramePresenter,
+    RecordingHostSurface, RepaintRequest, SurfaceEvent, SurfaceMetrics,
+};
+
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-host";
 
