@@ -1,7 +1,9 @@
 use hawk2ui_runtime::{
     BindingExecution, BindingLifecycleAvailability, BindingSchema, HostBindingRecord,
     HostBindingRegistry, HostCallRecord, LifecycleHook, LifecyclePhase, LifecycleRegistry,
-    RuntimeCapability, RuntimeError, ScriptModuleKind, ScriptModuleRecord, StructuredValue,
+    RuntimeCapability, RuntimeError, RuntimeEvent, RuntimeEventDispatcher, RuntimeEventKind,
+    RuntimeEventPayload, RuntimeEventPropagation, ScriptModuleKind, ScriptModuleRecord,
+    StructuredValue,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -166,4 +168,65 @@ fn host_bindings_reject_unavailable_lifecycle_phase() {
         .expect_err("mounted-only binding should not run during initialize");
 
     assert_eq!(error.code, "binding.lifecycle-unavailable");
+}
+
+#[test]
+fn event_dispatch_preserves_enqueue_order_across_event_kinds() {
+    let mut dispatcher = RuntimeEventDispatcher::default();
+    dispatcher.listen("root", RuntimeEventKind::Ui);
+    dispatcher.listen("meter", RuntimeEventKind::PluginParameter);
+    dispatcher.listen("host", RuntimeEventKind::HostCallback);
+
+    dispatcher.enqueue(RuntimeEvent::ui("root", "click"));
+    dispatcher.enqueue(RuntimeEvent::plugin_parameter("meter", "gain", 0.75));
+    dispatcher.enqueue(RuntimeEvent::host_callback("host", "window.close"));
+
+    let deliveries = dispatcher
+        .dispatch_pending()
+        .expect("dispatch should succeed");
+    let names: Vec<_> = deliveries
+        .iter()
+        .map(|delivery| delivery.event.name.as_str())
+        .collect();
+
+    assert_eq!(names, vec!["click", "gain", "window.close"]);
+}
+
+#[test]
+fn event_dispatch_bubbles_from_target_to_ancestors() {
+    let mut dispatcher = RuntimeEventDispatcher::default();
+    dispatcher.listen("button", RuntimeEventKind::Custom);
+    dispatcher.listen("panel", RuntimeEventKind::Custom);
+    dispatcher.listen("root", RuntimeEventKind::Custom);
+
+    dispatcher.enqueue(
+        RuntimeEvent::custom("button", "armed", RuntimeEventPayload::Null)
+            .with_bubble_path(["panel", "root"])
+            .propagation(RuntimeEventPropagation::Bubble),
+    );
+
+    let deliveries = dispatcher
+        .dispatch_pending()
+        .expect("dispatch should succeed");
+    let targets: Vec<_> = deliveries
+        .iter()
+        .map(|delivery| delivery.listener_target.as_str())
+        .collect();
+
+    assert_eq!(targets, vec!["button", "panel", "root"]);
+}
+
+#[test]
+fn event_dispatch_cancels_pending_events_after_teardown() {
+    let mut dispatcher = RuntimeEventDispatcher::default();
+    dispatcher.listen("root", RuntimeEventKind::Ui);
+    dispatcher.enqueue(RuntimeEvent::ui("root", "click"));
+
+    dispatcher.begin_teardown();
+    let error = dispatcher
+        .dispatch_pending()
+        .expect_err("teardown should cancel pending dispatch");
+
+    assert_eq!(error.code, "event.teardown-cancelled");
+    assert!(dispatcher.is_empty());
 }
