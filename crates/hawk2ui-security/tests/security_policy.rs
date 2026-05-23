@@ -1,7 +1,8 @@
 use hawk2ui_security::{
     AssetHashVerification, AssetImageMetadataStatus, AssetSecurityPolicy, AssetSecurityRule,
-    ScriptSandboxOperation, ScriptSandboxPolicy, SourceValidationPolicy, SourceValidationRule,
-    TrustBoundary, TrustRecord, VectorSafetyStatus,
+    ScriptSandboxOperation, ScriptSandboxPolicy, SecretDiagnostic, SecretScanFinding, SecretValue,
+    SecretVerificationReport, ShippedArtifactSecretCheck, SourceValidationPolicy,
+    SourceValidationRule, TrustBoundary, TrustRecord, VectorSafetyStatus,
 };
 
 #[test]
@@ -208,4 +209,25 @@ fn asset_security_rejects_oversized_unsupported_unsafe_and_hash_mismatch() {
             format!("asset.{expected_rule}:{}", rejection.path)
         );
     }
+}
+
+#[test]
+fn secret_redaction_hides_values_in_debug_diagnostics_and_reports() {
+    let secret = SecretValue::new("api-token", "super-secret-value");
+    let diagnostic = SecretDiagnostic::manifest_secret_declared(&secret);
+    let source_scan = SecretScanFinding::new("src/config.ts", &secret);
+    let artifact_check = ShippedArtifactSecretCheck::new("app.hawk", &secret);
+    let report = SecretVerificationReport::new("com.hawk2ui.secret")
+        .with_diagnostic(diagnostic.clone())
+        .with_source_scan(source_scan)
+        .with_artifact_check(artifact_check);
+
+    let debug = format!("{secret:?} {diagnostic:?}");
+    let serialized = report.serialize_text();
+
+    assert!(!debug.contains("super-secret-value"));
+    assert!(!diagnostic.message.contains("super-secret-value"));
+    assert!(!serialized.contains("super-secret-value"));
+    assert!(debug.contains("[REDACTED:api-token]"));
+    assert!(serialized.contains("[REDACTED:api-token]"));
 }

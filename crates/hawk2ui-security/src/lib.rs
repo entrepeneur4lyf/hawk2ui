@@ -4,6 +4,7 @@
 pub mod assets;
 pub mod diagnostic;
 pub mod sandbox;
+pub mod secrets;
 pub mod source;
 pub mod trust;
 
@@ -13,6 +14,10 @@ pub use assets::{
 };
 pub use diagnostic::{SecurityDiagnostic, SecuritySeverity};
 pub use sandbox::{ScriptSandboxDenial, ScriptSandboxOperation, ScriptSandboxPolicy};
+pub use secrets::{
+    SecretDiagnostic, SecretScanFinding, SecretValue, SecretVerificationReport,
+    ShippedArtifactSecretCheck,
+};
 pub use source::{SourceValidationPolicy, SourceValidationRecord, SourceValidationRule};
 pub use trust::{TrustBoundary, TrustRecord};
 
