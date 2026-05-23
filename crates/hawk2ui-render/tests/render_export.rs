@@ -1,3 +1,4 @@
+use hawk2ui_render::RendererBackend;
 use hawk2ui_render::{
     AccessibilityRef, Geometry, HitTestGeometry, InvalidationReason, SceneGraph, SceneNode,
     SceneNodeId, Transform,
@@ -132,4 +133,86 @@ fn layer_records_cover_required_layer_families() {
     assert!(keys.contains(&"gradient(linear)".to_string()));
     assert!(keys.contains(&"static-cache(card-cache)".to_string()));
     assert!(keys.contains(&"live-layer(meter)".to_string()));
+}
+
+#[test]
+fn backend_boundary_records_surface_lifecycle_and_frame_commands() {
+    let mut backend = hawk2ui_render::RecordingBackend::new(
+        hawk2ui_render::BackendCapabilities::new()
+            .with_gpu(true)
+            .with_text(true)
+            .with_images(true),
+    );
+
+    backend.create_surface("main", 800, 600).unwrap();
+    backend.resize_surface("main", 1024, 768, 2.0).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend
+        .clear(hawk2ui_render::Color::rgba(0, 0, 0, 255))
+        .unwrap();
+    backend
+        .fill(
+            Geometry::new(0.0, 0.0, 100.0, 50.0),
+            hawk2ui_render::Color::rgba(255, 0, 0, 255),
+        )
+        .unwrap();
+    backend
+        .stroke(
+            Geometry::new(0.0, 0.0, 100.0, 50.0),
+            hawk2ui_render::Stroke::new(2.0),
+        )
+        .unwrap();
+    backend.draw_path("M0 0L10 10").unwrap();
+    backend.draw_text("Hello").unwrap();
+    backend.draw_image("hero").unwrap();
+    backend
+        .push_clip(Geometry::new(0.0, 0.0, 80.0, 40.0))
+        .unwrap();
+    backend
+        .push_transform(Transform::translate(4.0, 8.0))
+        .unwrap();
+    backend.apply_layer_effect("shadow").unwrap();
+    let cache = backend.create_cache_handle("card").unwrap();
+    backend
+        .mark_dirty(Geometry::new(0.0, 0.0, 100.0, 50.0))
+        .unwrap();
+    backend.end_frame("main").unwrap();
+    backend.teardown_surface("main").unwrap();
+
+    assert_eq!(cache.as_str(), "card");
+    assert!(backend.capabilities().gpu);
+    assert_eq!(backend.dirty_regions().len(), 1);
+    assert_eq!(
+        backend.command_keys(),
+        [
+            "create-surface:main:800x600",
+            "resize-surface:main:1024x768@2",
+            "begin-frame:main",
+            "clear:0,0,0,255",
+            "fill:0,0,100,50:255,0,0,255",
+            "stroke:0,0,100,50:2",
+            "path:M0 0L10 10",
+            "text:Hello",
+            "image:hero",
+            "clip:0,0,80,40",
+            "transform:4,8",
+            "effect:shadow",
+            "cache:card",
+            "dirty:0,0,100,50",
+            "end-frame:main",
+            "teardown-surface:main",
+        ]
+    );
+}
+
+#[test]
+fn backend_boundary_reports_diagnostics_for_missing_capabilities() {
+    let mut backend =
+        hawk2ui_render::RecordingBackend::new(hawk2ui_render::BackendCapabilities::new());
+
+    let error = backend
+        .draw_text("Hello")
+        .expect_err("missing text capability must fail");
+
+    assert_eq!(error.diagnostic().rule(), "backend.capability.text.missing");
 }
