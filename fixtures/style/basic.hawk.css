@@ -1,0 +1,6 @@
+.primary {
+  display: flex;
+  font-size: 18px;
+  background-color: token(color.surface);
+  opacity: 0.9;
+}

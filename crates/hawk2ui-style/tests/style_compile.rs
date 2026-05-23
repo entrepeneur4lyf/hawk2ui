@@ -159,3 +159,53 @@ fn token_records_report_missing_tokens_and_select_theme_variants() {
         &hawk2ui_style::TokenValue::ColorRgba(245, 243, 238, 255)
     );
 }
+
+#[test]
+fn style_compile_lowers_supported_declarations_to_typed_records() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("fixtures/style/basic.hawk.css"),
+    )
+    .expect("style fixture must be readable");
+
+    let sheet = hawk2ui_style::compile_style_source(&source).expect("style source must compile");
+    let rule = sheet
+        .rule("class(primary)")
+        .expect("compiled class rule must exist");
+
+    assert_eq!(
+        rule.declaration(&PropertyId::new("font-size"))
+            .unwrap()
+            .value(),
+        &StyleValue::LengthPx(18.0)
+    );
+    assert_eq!(
+        rule.declaration(&PropertyId::new("background-color"))
+            .unwrap()
+            .value(),
+        &StyleValue::TokenRef("color.surface".to_string())
+    );
+    assert_eq!(
+        rule.declaration(&PropertyId::new("opacity"))
+            .unwrap()
+            .value(),
+        &StyleValue::Number(0.9)
+    );
+}
+
+#[test]
+fn style_compile_rejects_unsupported_syntax_with_diagnostics() {
+    let error = hawk2ui_style::compile_style_source("button + label { opacity: 0.5; }")
+        .expect_err("unsupported selector must fail");
+
+    assert_eq!(
+        error.diagnostics()[0].rule(),
+        "selector.combinator.unsupported"
+    );
+
+    let error = hawk2ui_style::compile_style_source(".card { unknown-property: 1px; }")
+        .expect_err("unknown property must fail");
+
+    assert_eq!(error.diagnostics()[0].rule(), "style.property.unknown");
+}

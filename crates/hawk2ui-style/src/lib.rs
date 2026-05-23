@@ -1,10 +1,15 @@
 #![forbid(unsafe_code)]
 //! Typed style property registry, selector subset, design tokens, compiler, and runtime style tables for `Hawk2UI`.
 
+pub mod compile;
 pub mod property;
 pub mod selector;
 pub mod token;
 
+pub use compile::{
+    CompiledDeclaration, CompiledStyleRule, CompiledStyleSheet, StyleCompileDiagnostic,
+    StyleCompileError, compile_style_source,
+};
 pub use property::{
     PropertyGroup, PropertyId, PropertyMetadata, PropertyRegistry, PropertyRequirement, StyleValue,
     UnitHandling, ValidationError, ValueType,
