@@ -45,6 +45,86 @@ fn manifest_validation_accepts_complete_manifest() {
 }
 
 #[test]
+fn manifest_validation_accepts_package_assets_entrypoints_and_presets() {
+    let input = r#"
+[identity]
+id = "com.hawk2ui.full"
+name = "Full"
+version = "1.2.3"
+
+[package]
+name = "full"
+bundle_id = "com.hawk2ui.full"
+
+[source]
+entry = "src/main.ts"
+style = "src/style.hawk.css"
+script = "src/main.ts"
+
+[capabilities]
+keys = ["native-windowing", "assets-read"]
+
+[[assets]]
+id = "hero"
+kind = "image"
+path = "assets/hero.png"
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+
+[[presets]]
+id = "default"
+name = "Default"
+"#;
+
+    let manifest = HawkManifest::parse(input).expect("complete production manifest parses");
+
+    assert_eq!(
+        manifest.package.as_ref().unwrap().bundle_id,
+        "com.hawk2ui.full"
+    );
+    assert_eq!(manifest.source.style.as_deref(), Some("src/style.hawk.css"));
+    assert_eq!(manifest.assets[0].id, "hero");
+    assert_eq!(manifest.presets[0].id, "default");
+}
+
+#[test]
+fn manifest_validation_rejects_duplicate_assets_and_presets() {
+    let input = r#"
+[identity]
+id = "com.hawk2ui.duplicates"
+name = "Duplicates"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[assets]]
+id = "hero"
+kind = "image"
+path = "assets/hero.png"
+
+[[assets]]
+id = "hero"
+kind = "image"
+path = "assets/hero-copy.png"
+
+[[presets]]
+id = "default"
+name = "Default"
+
+[[presets]]
+id = "default"
+name = "Default Copy"
+"#;
+
+    let error = HawkManifest::parse(input).expect_err("duplicate assets must fail first");
+
+    assert_eq!(error, ManifestError::DuplicateAsset("hero".into()));
+}
+
+#[test]
 fn manifest_validation_rejects_missing_identity() {
     let input = r#"
 [source]

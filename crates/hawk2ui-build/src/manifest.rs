@@ -19,6 +19,8 @@ pub enum PackageTarget {
 pub struct HawkManifest {
     /// App identity.
     pub identity: ManifestIdentity,
+    /// Optional package metadata.
+    pub package: Option<PackageMetadata>,
     /// Source entrypoint.
     pub source: SourceEntrypoint,
     /// Capability keys.
@@ -31,11 +33,16 @@ pub struct HawkManifest {
     pub editor: Option<EditorMetadata>,
     /// Plugin parameters.
     pub parameters: Vec<PluginParameter>,
+    /// Asset declarations.
+    pub assets: Vec<AssetDeclaration>,
+    /// Preset declarations.
+    pub presets: Vec<PresetDeclaration>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawManifest {
     identity: Option<ManifestIdentity>,
+    package: Option<PackageMetadata>,
     source: Option<SourceEntrypoint>,
     capabilities: Option<CapabilityDeclaration>,
     #[serde(default)]
@@ -44,6 +51,10 @@ struct RawManifest {
     editor: Option<EditorMetadata>,
     #[serde(default)]
     parameters: Vec<PluginParameter>,
+    #[serde(default)]
+    assets: Vec<AssetDeclaration>,
+    #[serde(default)]
+    presets: Vec<PresetDeclaration>,
 }
 
 /// App identity metadata.
@@ -62,6 +73,19 @@ pub struct ManifestIdentity {
 pub struct SourceEntrypoint {
     /// Source entry path.
     pub entry: String,
+    /// Optional style entry path.
+    pub style: Option<String>,
+    /// Optional script entry path.
+    pub script: Option<String>,
+}
+
+/// Package metadata.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PackageMetadata {
+    /// Package name.
+    pub name: String,
+    /// Native bundle identifier.
+    pub bundle_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -107,6 +131,26 @@ pub struct PluginParameter {
     pub default: f64,
 }
 
+/// Asset declaration.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct AssetDeclaration {
+    /// Stable asset ID.
+    pub id: String,
+    /// Asset kind.
+    pub kind: String,
+    /// Asset source path.
+    pub path: String,
+}
+
+/// Preset declaration.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PresetDeclaration {
+    /// Stable preset ID.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+}
+
 impl HawkManifest {
     /// Parses and validates a Hawk manifest from TOML.
     ///
@@ -120,12 +164,15 @@ impl HawkManifest {
             identity: raw
                 .identity
                 .ok_or(ManifestError::MissingSection("identity"))?,
+            package: raw.package,
             source: raw.source.ok_or(ManifestError::MissingSection("source"))?,
             capabilities: raw.capabilities.map_or_else(Vec::new, |cap| cap.keys),
             targets: raw.targets,
             plugin: raw.plugin,
             editor: raw.editor,
             parameters: raw.parameters,
+            assets: raw.assets,
+            presets: raw.presets,
         };
         manifest.validate()?;
         Ok(manifest)
@@ -178,6 +225,30 @@ impl HawkManifest {
             ));
         }
 
+        if let Some(package) = &self.package {
+            require_non_empty("package.name", &package.name)?;
+            require_non_empty("package.bundle_id", &package.bundle_id)?;
+        }
+
+        let mut asset_ids = BTreeSet::new();
+        for asset in &self.assets {
+            require_non_empty("asset.id", &asset.id)?;
+            require_non_empty("asset.kind", &asset.kind)?;
+            require_non_empty("asset.path", &asset.path)?;
+            if !asset_ids.insert(asset.id.clone()) {
+                return Err(ManifestError::DuplicateAsset(asset.id.clone()));
+            }
+        }
+
+        let mut preset_ids = BTreeSet::new();
+        for preset in &self.presets {
+            require_non_empty("preset.id", &preset.id)?;
+            require_non_empty("preset.name", &preset.name)?;
+            if !preset_ids.insert(preset.id.clone()) {
+                return Err(ManifestError::DuplicatePreset(preset.id.clone()));
+            }
+        }
+
         Ok(())
     }
 }
@@ -201,6 +272,10 @@ pub enum ManifestError {
     MissingField(&'static str),
     /// Duplicate target name.
     DuplicateTarget(String),
+    /// Duplicate asset ID.
+    DuplicateAsset(String),
+    /// Duplicate preset ID.
+    DuplicatePreset(String),
     /// Invalid capability key.
     InvalidCapability(String),
     /// Invalid plugin metadata.
