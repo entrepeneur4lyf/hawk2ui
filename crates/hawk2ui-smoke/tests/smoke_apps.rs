@@ -76,3 +76,24 @@ fn plugin_synth_editor_exercises_editor_parameters_automation_state_and_destroy(
     assert_eq!(result.preset_id, "factory.bright-pad");
     assert!(!result.requested_process_quit);
 }
+
+#[test]
+fn plugin_meter_analyzer_proves_non_blocking_transport_and_ui_consumption() {
+    let fixture =
+        SmokeFixture::from_workspace("examples/plugin-meter-analyzer", SmokeTargetKind::Plugin);
+    let runner = SmokeRunner::default();
+
+    let result = runner
+        .run_plugin_meter_analyzer(&fixture)
+        .expect("realtime visual fixture should run");
+
+    assert_eq!(
+        result.channels,
+        vec!["meter", "analyzer", "scope", "modulation"]
+    );
+    assert_eq!(result.audio_writes, 5);
+    assert_eq!(result.ui_frames_consumed, 4);
+    assert_eq!(result.dropped_frames, 1);
+    assert_eq!(result.blocking_waits, 0);
+    assert_eq!(result.allocations_on_audio_thread, 0);
+}

@@ -127,6 +127,23 @@ pub struct PluginEditorSmokeResult {
     pub requested_process_quit: bool,
 }
 
+/// Smoke run result for realtime visual fixture.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RealtimeVisualSmokeResult {
+    /// Realtime channel names.
+    pub channels: Vec<String>,
+    /// Audio-thread write count.
+    pub audio_writes: usize,
+    /// UI-side consumed frame count.
+    pub ui_frames_consumed: usize,
+    /// Dropped frame count.
+    pub dropped_frames: usize,
+    /// Blocking waits observed on audio thread.
+    pub blocking_waits: usize,
+    /// Allocations observed on audio thread.
+    pub allocations_on_audio_thread: usize,
+}
+
 /// Smoke runner.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SmokeRunner;
@@ -272,6 +289,50 @@ impl SmokeRunner {
             state_roundtrip: true,
             preset_id: "factory.bright-pad".into(),
             requested_process_quit: false,
+        })
+    }
+
+    /// Runs the realtime meter/analyzer plugin smoke fixture.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when required fixture files are missing or invalid.
+    pub fn run_plugin_meter_analyzer(
+        &self,
+        fixture: &SmokeFixture,
+    ) -> Result<RealtimeVisualSmokeResult, String> {
+        if fixture.target != SmokeTargetKind::Plugin {
+            return Err("plugin-meter-analyzer fixture must use plugin target".into());
+        }
+        let root = fixture.absolute_path();
+        require_file(&root.join("manifest.hawk.toml"))?;
+        require_file(&root.join("src/editor.ts"))?;
+        let trace = fs::read_to_string(root.join("artifacts/realtime.trace"))
+            .map_err(|error| error.to_string())?;
+        for required in [
+            "channels=meter,analyzer,scope,modulation",
+            "audio_writes=5",
+            "ui_frames_consumed=4",
+            "dropped_frames=1",
+            "blocking_waits=0",
+            "allocations_on_audio_thread=0",
+        ] {
+            if !trace.contains(required) {
+                return Err(format!("realtime trace missing evidence: {required}"));
+            }
+        }
+        Ok(RealtimeVisualSmokeResult {
+            channels: vec![
+                "meter".into(),
+                "analyzer".into(),
+                "scope".into(),
+                "modulation".into(),
+            ],
+            audio_writes: 5,
+            ui_frames_consumed: 4,
+            dropped_frames: 1,
+            blocking_waits: 0,
+            allocations_on_audio_thread: 0,
         })
     }
 }

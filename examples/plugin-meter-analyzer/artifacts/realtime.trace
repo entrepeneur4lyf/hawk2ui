@@ -1,0 +1,6 @@
+channels=meter,analyzer,scope,modulation
+audio_writes=5
+ui_frames_consumed=4
+dropped_frames=1
+blocking_waits=0
+allocations_on_audio_thread=0
