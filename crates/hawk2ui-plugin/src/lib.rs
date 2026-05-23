@@ -1,10 +1,15 @@
 #![forbid(unsafe_code)]
 //! Format-neutral plugin metadata, editor, parameter, automation, state, preset, and realtime visual data records for `Hawk2UI`.
 
+pub mod automation;
 pub mod editor;
 pub mod format;
 pub mod parameter;
 
+pub use automation::{
+    AutomationBindingKind, AutomationEvent, AutomationEventError, AutomationEventKind,
+    AutomationOrigin, AutomationSequence, ParameterBinding,
+};
 pub use editor::{
     EditorEvent, EditorKind, EditorParent, PluginEditor, PluginEditorLifecycle, PluginEditorSize,
 };

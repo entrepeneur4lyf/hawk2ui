@@ -188,3 +188,58 @@ fn parameter_model_supports_stepped_values_and_smoothing_metadata() {
         Some(ParameterSmoothing::linear_ms(10.0))
     );
 }
+
+use hawk2ui_plugin::{
+    AutomationBindingKind, AutomationEvent, AutomationEventKind, AutomationOrigin,
+    AutomationSequence, ParameterBinding,
+};
+
+#[test]
+fn automation_events_accept_correct_gesture_ordering() {
+    let mut sequence = AutomationSequence::default();
+
+    sequence
+        .push(AutomationEvent::begin_gesture("gain", AutomationOrigin::Ui))
+        .unwrap();
+    sequence
+        .push(AutomationEvent::value_change(
+            "gain",
+            AutomationOrigin::Ui,
+            0.75,
+        ))
+        .unwrap();
+    sequence
+        .push(AutomationEvent::end_gesture("gain", AutomationOrigin::Ui))
+        .unwrap();
+    sequence
+        .push(AutomationEvent::host_update("gain", 0.5))
+        .unwrap();
+
+    assert_eq!(sequence.events()[0].kind, AutomationEventKind::BeginGesture);
+    assert_eq!(sequence.events()[1].normalized_value, Some(0.75));
+    assert_eq!(sequence.events()[3].origin, AutomationOrigin::Host);
+}
+
+#[test]
+fn automation_events_reject_duplicate_open_gestures() {
+    let mut sequence = AutomationSequence::default();
+    sequence
+        .push(AutomationEvent::begin_gesture("gain", AutomationOrigin::Ui))
+        .unwrap();
+
+    let error = sequence
+        .push(AutomationEvent::begin_gesture("gain", AutomationOrigin::Ui))
+        .expect_err("duplicate gesture must fail");
+
+    assert_eq!(error.code, "automation.duplicate-gesture");
+}
+
+#[test]
+fn automation_events_record_generated_and_custom_editor_bindings() {
+    let generated = ParameterBinding::generated_editor("gain", "slider:generation");
+    let custom = ParameterBinding::custom_editor("cutoff", "react:CutoffKnob");
+
+    assert_eq!(generated.kind, AutomationBindingKind::GeneratedEditor);
+    assert_eq!(custom.kind, AutomationBindingKind::CustomEditor);
+    assert_eq!(generated.parameter_id, "gain");
+}
