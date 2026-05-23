@@ -13,5 +13,8 @@ description = "Product conformance checks that keep Hawk2UI requirements represe
 name = "hawk2ui_conformance"
 path = "src/lib.rs"
 
+[dev-dependencies]
+hawk2ui-build = { path = "../hawk2ui-build" }
+
 [lints]
 workspace = true
