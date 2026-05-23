@@ -194,6 +194,15 @@ impl A11yNode {
         }
         self.children.iter().find_map(|child| child.find(id))
     }
+
+    pub(crate) fn find_mut(&mut self, id: &str) -> Option<&mut A11yNode> {
+        if self.id == id {
+            return Some(self);
+        }
+        self.children
+            .iter_mut()
+            .find_map(|child| child.find_mut(id))
+    }
 }
 
 /// Accessibility tree.
@@ -214,5 +223,9 @@ impl A11yTree {
     #[must_use]
     pub fn find(&self, id: &str) -> Option<&A11yNode> {
         self.root.find(id)
+    }
+
+    pub(crate) fn find_mut(&mut self, id: &str) -> Option<&mut A11yNode> {
+        self.root.find_mut(id)
     }
 }

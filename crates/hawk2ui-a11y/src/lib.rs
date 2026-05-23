@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 //! Accessibility tree, semantics, host export, and plugin-safe accessibility support for `Hawk2UI`.
 
+pub mod actions;
 pub mod component;
 pub mod tree;
 
+pub use actions::{A11yActionDispatchError, A11yActionDispatcher, A11yActionEvent};
 pub use component::{ComponentKind, ComponentSemantics, VisualStyleSemantics};
 pub use tree::{A11yAction, A11yBounds, A11yNode, A11yRole, A11yTree, CheckedState};
 

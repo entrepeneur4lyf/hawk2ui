@@ -68,3 +68,43 @@ fn component_semantics_exist_independently_of_visual_styles() {
     assert_eq!(panel.accessible.role, A11yRole::Panel);
     assert_eq!(custom.accessible.role, A11yRole::Custom);
 }
+
+use hawk2ui_a11y::{A11yActionDispatcher, A11yActionEvent};
+
+#[test]
+fn actions_values_dispatch_focus_press_increment_decrement_set_value_and_custom() {
+    let tree = A11yTree::new(
+        A11yNode::new("gain", A11yRole::Slider)
+            .name("Gain")
+            .value("0.5")
+            .action(A11yAction::Focus)
+            .action(A11yAction::Press)
+            .action(A11yAction::Increment)
+            .action(A11yAction::Decrement)
+            .action(A11yAction::SetValue("0.75".into()))
+            .action(A11yAction::Custom("reset".into())),
+    );
+    let mut dispatcher = A11yActionDispatcher::new(tree);
+
+    dispatcher.dispatch(A11yActionEvent::focus("gain")).unwrap();
+    dispatcher.dispatch(A11yActionEvent::press("gain")).unwrap();
+    dispatcher
+        .dispatch(A11yActionEvent::increment("gain"))
+        .unwrap();
+    dispatcher
+        .dispatch(A11yActionEvent::decrement("gain"))
+        .unwrap();
+    dispatcher
+        .dispatch(A11yActionEvent::set_value("gain", "0.75"))
+        .unwrap();
+    dispatcher
+        .dispatch(A11yActionEvent::custom("gain", "reset"))
+        .unwrap();
+
+    assert!(dispatcher.tree().find("gain").unwrap().focused);
+    assert_eq!(
+        dispatcher.tree().find("gain").unwrap().value.as_deref(),
+        Some("0.75")
+    );
+    assert_eq!(dispatcher.events().len(), 6);
+}
