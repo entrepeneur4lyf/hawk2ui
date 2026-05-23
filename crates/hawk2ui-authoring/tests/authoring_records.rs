@@ -80,3 +80,58 @@ fn component_records_keep_custom_controls_and_surfaces_distinct() {
     );
     assert_eq!(surface.reference("feed"), Some("oscilloscope"));
 }
+
+#[test]
+fn event_records_cover_native_event_domains() {
+    let events = [
+        hawk2ui_authoring::EventKind::Pointer(hawk2ui_authoring::PointerEventKind::Press),
+        hawk2ui_authoring::EventKind::Keyboard(hawk2ui_authoring::KeyboardEventKind::KeyDown),
+        hawk2ui_authoring::EventKind::Focus(hawk2ui_authoring::FocusEventKind::FocusIn),
+        hawk2ui_authoring::EventKind::Input(hawk2ui_authoring::InputEventKind::ValueChanged),
+        hawk2ui_authoring::EventKind::Resize,
+        hawk2ui_authoring::EventKind::Lifecycle(hawk2ui_authoring::LifecycleEventKind::Mounted),
+        hawk2ui_authoring::EventKind::CustomComponent("knob.drag".to_string()),
+        hawk2ui_authoring::EventKind::PluginParameter("gain".to_string()),
+    ];
+
+    let keys: Vec<_> = events
+        .iter()
+        .map(hawk2ui_authoring::EventKind::stable_key)
+        .collect();
+
+    assert_eq!(
+        keys,
+        [
+            "pointer.press",
+            "keyboard.key-down",
+            "focus.focus-in",
+            "input.value-changed",
+            "resize",
+            "lifecycle.mounted",
+            "component.knob.drag",
+            "plugin-parameter.gain",
+        ]
+    );
+}
+
+#[test]
+fn event_records_do_not_depend_on_browser_event_object_names() {
+    let binding = hawk2ui_authoring::EventBinding::new(
+        ElementId::new("gain-knob"),
+        hawk2ui_authoring::EventKind::Pointer(hawk2ui_authoring::PointerEventKind::Drag),
+        hawk2ui_authoring::HandlerRef::new("update_gain_from_pointer"),
+    )
+    .with_payload(hawk2ui_authoring::EventPayloadField::Position)
+    .with_payload(hawk2ui_authoring::EventPayloadField::Delta);
+
+    assert_eq!(binding.target().as_str(), "gain-knob");
+    assert_eq!(binding.event().stable_key(), "pointer.drag");
+    assert_eq!(binding.handler().as_str(), "update_gain_from_pointer");
+    assert_eq!(
+        binding.payload_fields(),
+        &[
+            hawk2ui_authoring::EventPayloadField::Position,
+            hawk2ui_authoring::EventPayloadField::Delta,
+        ]
+    );
+}

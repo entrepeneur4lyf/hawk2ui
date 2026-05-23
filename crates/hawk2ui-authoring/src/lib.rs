@@ -3,12 +3,17 @@
 
 pub mod component;
 pub mod element;
+pub mod events;
 
 pub use component::{
     ComponentId, ComponentInstance, CustomSurfaceDeclaration, SurfaceId, SurfacePurpose,
 };
 pub use element::{
     ChildList, DuplicateChildKeyError, ElementId, ElementKind, ElementNode, KeyedChild, PropValue,
+};
+pub use events::{
+    EventBinding, EventKind, EventPayloadField, FocusEventKind, HandlerRef, InputEventKind,
+    KeyboardEventKind, LifecycleEventKind, PointerEventKind,
 };
 
 /// The canonical Cargo package name for this crate.
