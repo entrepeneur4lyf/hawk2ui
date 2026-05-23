@@ -164,3 +164,61 @@ fn plugin_lifecycle_teardown_never_requests_process_quit() {
         ]
     );
 }
+
+#[test]
+fn platform_handles_support_windows_macos_wayland_x11_xcb_and_xwayland() {
+    use hawk2ui_host::{HostPlatformHandle, LinuxWindowSystem, SurfaceOwnership};
+
+    let handles = [
+        HostPlatformHandle::windows_hwnd(1),
+        HostPlatformHandle::macos_ns_view(2),
+        HostPlatformHandle::macos_ns_window(3),
+        HostPlatformHandle::linux_wayland(4, 5),
+        HostPlatformHandle::linux_x11(6, 7),
+        HostPlatformHandle::linux_xcb(8, 9),
+        HostPlatformHandle::linux_xwayland(10, 11),
+    ];
+
+    assert_eq!(
+        handles[3].linux_window_system(),
+        Some(LinuxWindowSystem::Wayland)
+    );
+    assert_eq!(
+        handles[4].linux_window_system(),
+        Some(LinuxWindowSystem::X11)
+    );
+    assert_eq!(
+        handles[5].linux_window_system(),
+        Some(LinuxWindowSystem::Xcb)
+    );
+    assert_eq!(
+        handles[6].linux_window_system(),
+        Some(LinuxWindowSystem::XWayland)
+    );
+    assert!(
+        handles[0]
+            .validate_for(SurfaceOwnership::DesktopWindow)
+            .is_ok()
+    );
+}
+
+#[test]
+fn platform_handles_diagnose_unsupported_surface_combinations() {
+    use hawk2ui_host::{HostPlatformHandle, SurfaceOwnership};
+
+    let plugin_window_error = HostPlatformHandle::macos_ns_window(3)
+        .validate_for(SurfaceOwnership::PluginEditor)
+        .expect_err("plugin editors must attach to child views, not top-level windows");
+    assert_eq!(
+        plugin_window_error.code,
+        "platform.handle-ownership-mismatch"
+    );
+
+    let desktop_view_error = HostPlatformHandle::macos_ns_view(2)
+        .validate_for(SurfaceOwnership::DesktopWindow)
+        .expect_err("desktop windows need top-level window handles");
+    assert_eq!(
+        desktop_view_error.code,
+        "platform.handle-ownership-mismatch"
+    );
+}
