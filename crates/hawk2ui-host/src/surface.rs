@@ -1,5 +1,7 @@
 //! Common host surface contract.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 /// Surface metrics shared by desktop and embedded plugin hosts.
@@ -28,54 +30,81 @@ impl SurfaceMetrics {
     #[must_use]
     pub fn physical_size(&self) -> (u32, u32) {
         (
-            (self.logical_width * self.scale_factor).round() as u32,
-            (self.logical_height * self.scale_factor).round() as u32,
+            scaled_physical_dimension(self.logical_width, self.scale_factor),
+            scaled_physical_dimension(self.logical_height, self.scale_factor),
         )
     }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn scaled_physical_dimension(logical: f64, scale_factor: f64) -> u32 {
+    let scaled = (logical.max(0.0) * scale_factor.max(0.0)).round();
+    if !scaled.is_finite() {
+        0
+    } else if scaled >= f64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        scaled as u32
+    }
+}
+
+/// Single host surface capability.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum HostCapability {
+    /// Host owns the native top-level window.
+    OwnsWindow,
+    /// Host can request process/application quit.
+    RequestQuit,
+    /// Host can read from the clipboard.
+    ClipboardRead,
+    /// Host can write to the clipboard.
+    ClipboardWrite,
+    /// Host supports resize requests.
+    Resize,
+    /// Host supports focus requests.
+    Focus,
 }
 
 /// Host surface capabilities.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HostCapabilities {
-    /// Host owns the native top-level window.
-    pub owns_window: bool,
-    /// Host can request process/application quit.
-    pub can_request_quit: bool,
-    /// Host can read from the clipboard.
-    pub clipboard_read: bool,
-    /// Host can write to the clipboard.
-    pub clipboard_write: bool,
-    /// Host supports resize requests.
-    pub resize: bool,
-    /// Host supports focus requests.
-    pub focus: bool,
+    capabilities: BTreeSet<HostCapability>,
 }
 
 impl HostCapabilities {
     /// Desktop host capabilities.
     #[must_use]
-    pub const fn desktop() -> Self {
+    pub fn desktop() -> Self {
         Self {
-            owns_window: true,
-            can_request_quit: true,
-            clipboard_read: true,
-            clipboard_write: true,
-            resize: true,
-            focus: true,
+            capabilities: BTreeSet::from([
+                HostCapability::OwnsWindow,
+                HostCapability::RequestQuit,
+                HostCapability::ClipboardRead,
+                HostCapability::ClipboardWrite,
+                HostCapability::Resize,
+                HostCapability::Focus,
+            ]),
         }
     }
 
     /// Embedded plugin host capabilities.
     #[must_use]
-    pub const fn plugin() -> Self {
+    pub fn plugin() -> Self {
         Self {
-            owns_window: false,
-            can_request_quit: false,
-            clipboard_read: false,
-            clipboard_write: false,
-            resize: false,
-            focus: true,
+            capabilities: BTreeSet::from([HostCapability::Focus]),
         }
+    }
+
+    /// Returns whether the capability is present.
+    #[must_use]
+    pub fn supports(&self, capability: HostCapability) -> bool {
+        self.capabilities.contains(&capability)
+    }
+
+    /// Returns all capabilities in deterministic order.
+    #[must_use]
+    pub fn all(&self) -> &BTreeSet<HostCapability> {
+        &self.capabilities
     }
 }
 

@@ -11,14 +11,14 @@ pub enum LinuxWindowSystem {
     X11,
     /// XCB window.
     Xcb,
-    /// XWayland surface.
+    /// `XWayland` surface.
     XWayland,
 }
 
 /// Surface ownership model.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum SurfaceOwnership {
-    /// Hawk2UI owns the desktop top-level window.
+    /// `Hawk2UI` owns the desktop top-level window.
     DesktopWindow,
     /// Host owns the parent surface for an embedded plugin editor.
     PluginEditor,
@@ -50,12 +50,12 @@ pub enum HostPlatformHandle {
         /// Raw handle value captured as an integer for safe records.
         hwnd: u64,
     },
-    /// macOS NSView.
+    /// macOS `NSView`.
     MacOsNsView {
         /// Raw handle value captured as an integer for safe records.
         ns_view: u64,
     },
-    /// macOS NSWindow.
+    /// macOS `NSWindow`.
     MacOsNsWindow {
         /// Raw handle value captured as an integer for safe records.
         ns_window: u64,
@@ -81,11 +81,11 @@ pub enum HostPlatformHandle {
         /// XCB window handle.
         window: u64,
     },
-    /// Linux XWayland display and window.
+    /// Linux `XWayland` display and window.
     LinuxXWayland {
-        /// XWayland display handle.
+        /// `XWayland` display handle.
         display: u64,
-        /// XWayland window handle.
+        /// `XWayland` window handle.
         window: u64,
     },
 }
@@ -97,13 +97,13 @@ impl HostPlatformHandle {
         Self::WindowsHwnd { hwnd }
     }
 
-    /// Creates a macOS NSView handle record.
+    /// Creates a macOS `NSView` handle record.
     #[must_use]
     pub const fn macos_ns_view(ns_view: u64) -> Self {
         Self::MacOsNsView { ns_view }
     }
 
-    /// Creates a macOS NSWindow handle record.
+    /// Creates a macOS `NSWindow` handle record.
     #[must_use]
     pub const fn macos_ns_window(ns_window: u64) -> Self {
         Self::MacOsNsWindow { ns_window }
@@ -127,7 +127,7 @@ impl HostPlatformHandle {
         Self::LinuxXcb { connection, window }
     }
 
-    /// Creates a Linux XWayland handle record.
+    /// Creates a Linux `XWayland` handle record.
     #[must_use]
     pub const fn linux_xwayland(display: u64, window: u64) -> Self {
         Self::LinuxXWayland { display, window }
