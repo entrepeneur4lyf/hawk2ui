@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 //! Accessibility tree, semantics, host export, and plugin-safe accessibility support for `Hawk2UI`.
 
+pub mod tree;
+
+pub use tree::{A11yAction, A11yBounds, A11yNode, A11yRole, A11yTree, CheckedState};
+
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-a11y";
 
