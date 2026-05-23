@@ -1,7 +1,8 @@
 use hawk2ui_platform::{
     CapabilityRecord, CapabilitySchema, CapabilityTable, ClipboardDataType, ClipboardManifest,
-    ClipboardPolicy, FilesystemGrant, FilesystemPolicy, FilesystemScope, NetworkManifest,
-    NetworkPolicy, PlatformContext, PlatformDiagnostic, PlatformOperation, RuntimeAvailability,
+    ClipboardPolicy, DatabaseMigration, DatabasePolicy, FilesystemGrant, FilesystemPolicy,
+    FilesystemScope, NetworkManifest, NetworkPolicy, PlatformContext, PlatformDiagnostic,
+    PlatformOperation, PlatformSecretManifest, PlatformSecretPolicy, RuntimeAvailability,
 };
 
 #[test]
@@ -240,4 +241,41 @@ fn clipboard_capabilities_deny_unsupported_image_missing_capability_and_plugin_c
     );
     assert_eq!(missing_capability.diagnostic.rule, "capability.missing");
     assert_eq!(plugin_denied.diagnostic.rule, "clipboard.plugin.denied");
+}
+
+#[test]
+fn secrets_database_redacts_secret_values_and_denies_missing_declarations() {
+    let manifest = PlatformSecretManifest::new(["api-token"]);
+
+    let handle = PlatformSecretPolicy::read(&manifest, "api-token", "super-secret-value")
+        .expect("declared secret must produce a redacted handle");
+    let missing = PlatformSecretPolicy::read(&manifest, "missing-token", "unused")
+        .expect_err("undeclared secret must be denied");
+
+    assert!(!format!("{handle:?}").contains("super-secret-value"));
+    assert_eq!(handle.redacted(), "[REDACTED:api-token]");
+    assert_eq!(missing.diagnostic.rule, "secret.declaration.missing");
+}
+
+#[test]
+fn secrets_database_enforces_migration_ordering_and_safe_storage_paths() {
+    DatabasePolicy::validate_migrations(&[
+        DatabaseMigration::new(1, "create_settings"),
+        DatabaseMigration::new(2, "add_presets"),
+    ])
+    .expect("ordered migrations must be valid");
+
+    let ordering_error = DatabasePolicy::validate_migrations(&[
+        DatabaseMigration::new(2, "add_presets"),
+        DatabaseMigration::new(1, "create_settings"),
+    ])
+    .expect_err("out-of-order migrations must fail");
+    let storage_error = DatabasePolicy::validate_storage_path(
+        &FilesystemGrant::new(FilesystemScope::Forbidden, "/"),
+        "state.sqlite",
+    )
+    .expect_err("forbidden storage scope must fail");
+
+    assert_eq!(ordering_error.diagnostic.rule, "database.migration.order");
+    assert_eq!(storage_error.diagnostic.rule, "database.storage.unsafe");
 }

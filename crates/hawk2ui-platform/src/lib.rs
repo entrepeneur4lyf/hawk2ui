@@ -3,8 +3,10 @@
 
 pub mod capability;
 pub mod clipboard;
+pub mod database;
 pub mod filesystem;
 pub mod network;
+pub mod secrets;
 
 pub use capability::{
     CapabilityDenied, CapabilityRecord, CapabilitySchema, CapabilityTable, PlatformContext,
@@ -13,10 +15,14 @@ pub use capability::{
 pub use clipboard::{
     ClipboardAccess, ClipboardDataType, ClipboardDenied, ClipboardManifest, ClipboardPolicy,
 };
+pub use database::{DatabaseDenied, DatabaseMigration, DatabasePolicy};
 pub use filesystem::{
     FilesystemAccess, FilesystemDenied, FilesystemGrant, FilesystemPolicy, FilesystemScope,
 };
 pub use network::{NetworkDenied, NetworkManifest, NetworkPolicy, NetworkRequestRecord};
+pub use secrets::{
+    PlatformSecretDenied, PlatformSecretHandle, PlatformSecretManifest, PlatformSecretPolicy,
+};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-platform";
