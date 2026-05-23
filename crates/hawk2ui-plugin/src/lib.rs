@@ -1,6 +1,13 @@
 #![forbid(unsafe_code)]
 //! Format-neutral plugin metadata, editor, parameter, automation, state, preset, and realtime visual data records for `Hawk2UI`.
 
+pub mod format;
+
+pub use format::{
+    BundleOutput, FormatMetadata, FormatValidationError, PackageTarget, PluginFormat,
+    PluginFormatTarget,
+};
+
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-plugin";
 
