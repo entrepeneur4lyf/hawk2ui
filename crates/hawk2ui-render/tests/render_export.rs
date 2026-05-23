@@ -293,3 +293,36 @@ fn text_contracts_generate_stable_glyph_cache_and_invalidation_keys() {
     assert_ne!(key, font_changed);
     assert_ne!(key, dpi_changed);
 }
+
+#[test]
+fn asset_records_require_compiled_image_vector_and_font_records() {
+    let image =
+        hawk2ui_render::CompiledAsset::image("hero", "assets/hero.png", "sha256:hero", 1024, 512)
+            .with_sanitized(true)
+            .with_backend_requirement(hawk2ui_render::BackendRequirement::Images)
+            .with_package_path("pkg/assets/hero.png")
+            .with_cache_generation(3);
+    let vector =
+        hawk2ui_render::CompiledAsset::vector("logo", "assets/logo.svg", "sha256:logo", 200, 80);
+    let font = hawk2ui_render::CompiledAsset::font("display", "assets/display.ttf", "sha256:font");
+
+    assert_eq!(
+        image.stable_key(),
+        "image:hero:sha256:hero:1024x512:sanitized=true:cache=3"
+    );
+    assert_eq!(vector.kind(), hawk2ui_render::AssetKind::Vector);
+    assert_eq!(font.kind(), hawk2ui_render::AssetKind::Font);
+    assert_eq!(image.package_path(), Some("pkg/assets/hero.png"));
+}
+
+#[test]
+fn asset_records_reject_raw_draw_references() {
+    let error = hawk2ui_render::AssetDrawRecord::from_raw_path("assets/hero.png")
+        .expect_err("raw asset paths must not render directly");
+    let asset =
+        hawk2ui_render::CompiledAsset::image("hero", "assets/hero.png", "sha256:hero", 1024, 512);
+    let draw = hawk2ui_render::AssetDrawRecord::from_compiled(&asset);
+
+    assert_eq!(error.diagnostic().rule(), "asset.raw-reference.rejected");
+    assert_eq!(draw.asset_id(), "hero");
+}
