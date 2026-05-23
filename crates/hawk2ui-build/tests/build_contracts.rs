@@ -1,8 +1,10 @@
 use hawk2ui_build::{
-    ArtifactHash, ArtifactSchemaVersion, AssetManifestEntry, BuildDiagnostic,
-    BuildDiagnosticSeverity, BuildPhase, BuildPipeline, BuildPipelineError, CompiledAssetRecord,
-    CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget,
-    PackageTargetRecord, SealedArtifact, SealedArtifactError, VerificationReport,
+    ArtifactHash, ArtifactSchemaVersion, AssetCompilationError, AssetCompilationPlan,
+    AssetDimensions, AssetKind, AssetManifestEntry, AssetSanitizationStatus, AssetSource,
+    AssetSourceIndex, BuildDiagnostic, BuildDiagnosticSeverity, BuildPhase, BuildPipeline,
+    BuildPipelineError, CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord,
+    HawkManifest, ManifestError, PackageTarget, PackageTargetRecord, SealedArtifact,
+    SealedArtifactError, VerificationReport,
 };
 
 const VALID_MANIFEST: &str = r#"
@@ -354,6 +356,166 @@ fn build_pipeline_propagates_phase_diagnostics() {
     assert_eq!(
         error,
         BuildPipelineError::ReleaseBlocked("manifest.identity.missing".into())
+    );
+}
+
+#[test]
+fn asset_compilation_records_metadata_for_supported_asset_kinds() {
+    let input = r#"
+[identity]
+id = "com.hawk2ui.assets"
+name = "Assets"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[assets]]
+id = "hero"
+kind = "image"
+path = "assets/hero.png"
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+
+[[assets]]
+id = "display"
+kind = "font"
+path = "assets/display.otf"
+
+[[assets]]
+id = "theme"
+kind = "design-token"
+path = "tokens/theme.json"
+"#;
+    let manifest = HawkManifest::parse(input).expect("asset manifest parses");
+    let index = AssetSourceIndex::new([
+        AssetSource::new("assets/hero.png", b"hero")
+            .with_dimensions(AssetDimensions::new(1920, 1080)),
+        AssetSource::new("assets/logo.svg", b"logo"),
+        AssetSource::new("assets/display.otf", b"font"),
+        AssetSource::new("tokens/theme.json", b"theme"),
+    ]);
+
+    let records = AssetCompilationPlan::compile_manifest(&manifest, &index)
+        .expect("all declared assets compile");
+
+    assert_eq!(records.len(), 4);
+    assert_eq!(records[0].kind, AssetKind::Image);
+    assert_eq!(
+        records[0].dimensions,
+        Some(AssetDimensions::new(1920, 1080))
+    );
+    assert_eq!(records[0].sanitization, AssetSanitizationStatus::Clean);
+    assert_eq!(records[0].package.package_path, "assets/hero.pack");
+    assert!(records[0].package.cache_key.starts_with("image:hero:"));
+    assert_eq!(records[1].kind, AssetKind::Vector);
+    assert_eq!(records[2].kind, AssetKind::Font);
+    assert_eq!(records[3].kind, AssetKind::DesignToken);
+}
+
+#[test]
+fn asset_compilation_reports_missing_asset() {
+    let input = r#"
+[identity]
+id = "com.hawk2ui.missing-asset"
+name = "Missing Asset"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[assets]]
+id = "hero"
+kind = "image"
+path = "assets/hero.png"
+"#;
+    let manifest = HawkManifest::parse(input).expect("asset manifest parses");
+
+    let error = AssetCompilationPlan::compile_manifest(&manifest, &AssetSourceIndex::empty())
+        .expect_err("missing assets must fail");
+
+    assert_eq!(
+        error,
+        AssetCompilationError::MissingAsset {
+            id: "hero".into(),
+            path: "assets/hero.png".into(),
+            diagnostic: BuildDiagnostic::new(
+                BuildDiagnosticSeverity::Error,
+                "asset.missing",
+                "declared asset source is missing"
+            )
+        }
+    );
+}
+
+#[test]
+fn asset_compilation_rejects_unsafe_asset() {
+    let input = r#"
+[identity]
+id = "com.hawk2ui.unsafe-asset"
+name = "Unsafe Asset"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[assets]]
+id = "hero"
+kind = "image"
+path = "assets/hero.png"
+"#;
+    let manifest = HawkManifest::parse(input).expect("asset manifest parses");
+    let index =
+        AssetSourceIndex::new([AssetSource::new("assets/hero.png", b"hero").unsafe_asset()]);
+
+    let error = AssetCompilationPlan::compile_manifest(&manifest, &index)
+        .expect_err("unsafe assets must fail");
+
+    assert_eq!(
+        error,
+        AssetCompilationError::UnsafeAsset {
+            id: "hero".into(),
+            path: "assets/hero.png".into(),
+            diagnostic: BuildDiagnostic::new(
+                BuildDiagnosticSeverity::Error,
+                "asset.unsafe",
+                "declared asset failed safety validation"
+            )
+        }
+    );
+}
+
+#[test]
+fn asset_compilation_cache_metadata_changes_when_source_changes() {
+    let input = r#"
+[identity]
+id = "com.hawk2ui.cache-asset"
+name = "Cache Asset"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[assets]]
+id = "hero"
+kind = "image"
+path = "assets/hero.png"
+"#;
+    let manifest = HawkManifest::parse(input).expect("asset manifest parses");
+    let first = AssetSourceIndex::new([AssetSource::new("assets/hero.png", b"first")]);
+    let second = AssetSourceIndex::new([AssetSource::new("assets/hero.png", b"second")]);
+
+    let first_records =
+        AssetCompilationPlan::compile_manifest(&manifest, &first).expect("first asset compiles");
+    let second_records =
+        AssetCompilationPlan::compile_manifest(&manifest, &second).expect("second asset compiles");
+
+    assert_ne!(
+        first_records[0].package.cache_key,
+        second_records[0].package.cache_key
     );
 }
 

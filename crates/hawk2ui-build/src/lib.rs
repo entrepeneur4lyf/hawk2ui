@@ -2,6 +2,7 @@
 //! Manifest validation, build pipeline orchestration, sealed artifacts, package metadata, and verification reports for `Hawk2UI`.
 
 pub mod artifact;
+pub mod assets;
 pub mod diagnostic;
 pub mod manifest;
 pub mod pipeline;
@@ -11,6 +12,10 @@ pub use artifact::{
     ArtifactHash, ArtifactHashes, ArtifactSchemaVersion, AssetManifestEntry, BuildMetadata,
     CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord, SealedArtifact,
     SealedArtifactError, TargetArtifactMetadata,
+};
+pub use assets::{
+    AssetCompilationError, AssetCompilationPlan, AssetCompilationRecord, AssetDimensions,
+    AssetKind, AssetPackageMetadata, AssetSanitizationStatus, AssetSource, AssetSourceIndex,
 };
 pub use diagnostic::{BuildDiagnostic, BuildDiagnosticSeverity};
 pub use manifest::{HawkManifest, ManifestError, PackageTarget};
