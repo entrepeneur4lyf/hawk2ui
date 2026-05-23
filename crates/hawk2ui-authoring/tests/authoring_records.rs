@@ -205,3 +205,31 @@ fn state_records_preserve_deterministic_teardown_ordering() {
         ]
     );
 }
+
+#[test]
+fn compile_basic_fixture_emits_component_text_children_and_click_event() {
+    let input = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("fixtures/authoring/basic_component.hawk"),
+    )
+    .expect("basic authoring fixture must be readable");
+    let mut diagnostics = Vec::new();
+
+    let artifact = hawk2ui_authoring::compile_authoring_source(&input, &mut diagnostics);
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(artifact.components().len(), 1);
+    assert_eq!(artifact.events().len(), 1);
+
+    let component = &artifact.components()[0];
+    assert_eq!(component.id().as_str(), "counter-card");
+    assert_eq!(component.component_name(), "CounterCard");
+    assert_eq!(
+        component.slot("default").unwrap().iter().count(),
+        2,
+        "fixture must compile two text children"
+    );
+    assert_eq!(artifact.events()[0].event().stable_key(), "pointer.press");
+    assert_eq!(artifact.events()[0].handler().as_str(), "increment_counter");
+}

@@ -1,0 +1,6 @@
+component CounterCard id=counter-card
+{
+  text title "Counter"
+  text value "0"
+  on pointer.press increment_counter
+}
