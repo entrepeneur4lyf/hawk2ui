@@ -103,3 +103,59 @@ fn selector_subset_rejects_unsupported_forms_with_diagnostics() {
         assert_eq!(error.diagnostic().rule(), rule);
     }
 }
+
+#[test]
+fn token_records_resolve_supported_token_families() {
+    let tokens = hawk2ui_style::TokenSet::production()
+        .with_color("color.surface", 12, 14, 18, 255)
+        .with_spacing("space.md", 16.0)
+        .with_radius("radius.card", 12.0)
+        .with_typography("type.body", "Atkinson Hyperlegible", 16.0)
+        .with_motion("motion.fast", 120)
+        .with_preference_hook("preference.reduced-motion", "motion.none");
+
+    assert_eq!(
+        tokens.resolve("color.surface").unwrap().value(),
+        &hawk2ui_style::TokenValue::ColorRgba(12, 14, 18, 255)
+    );
+    assert_eq!(
+        tokens.resolve("space.md").unwrap().value(),
+        &hawk2ui_style::TokenValue::LengthPx(16.0)
+    );
+    assert_eq!(
+        tokens.resolve("type.body").unwrap().kind(),
+        hawk2ui_style::TokenKind::Typography
+    );
+    assert_eq!(
+        tokens.resolve("preference.reduced-motion").unwrap().kind(),
+        hawk2ui_style::TokenKind::PreferenceHook
+    );
+}
+
+#[test]
+fn token_records_report_missing_tokens_and_select_theme_variants() {
+    let dark_theme = hawk2ui_style::ThemeVariant::new("dark").with_token(
+        "color.surface",
+        hawk2ui_style::TokenValue::ColorRgba(8, 10, 14, 255),
+    );
+    let light_theme = hawk2ui_style::ThemeVariant::new("light").with_token(
+        "color.surface",
+        hawk2ui_style::TokenValue::ColorRgba(245, 243, 238, 255),
+    );
+    let tokens = hawk2ui_style::TokenSet::production()
+        .with_theme(dark_theme)
+        .with_theme(light_theme);
+
+    let missing = tokens
+        .resolve("color.missing")
+        .expect_err("missing token must fail");
+    assert_eq!(missing.diagnostic().rule(), "token.missing");
+
+    assert_eq!(
+        tokens
+            .resolve_for_theme("color.surface", "light")
+            .unwrap()
+            .value(),
+        &hawk2ui_style::TokenValue::ColorRgba(245, 243, 238, 255)
+    );
+}
