@@ -3,6 +3,7 @@
 
 pub mod editor;
 pub mod format;
+pub mod parameter;
 
 pub use editor::{
     EditorEvent, EditorKind, EditorParent, PluginEditor, PluginEditorLifecycle, PluginEditorSize,
@@ -10,6 +11,11 @@ pub use editor::{
 pub use format::{
     BundleOutput, FormatMetadata, FormatValidationError, PackageTarget, PluginFormat,
     PluginFormatTarget,
+};
+pub use parameter::{
+    GeneratedParameterMetadata, ParameterDistribution, ParameterFlags, ParameterGroup,
+    ParameterModel, ParameterRange, ParameterRecord, ParameterSmoothing, ParameterValidationError,
+    ParameterValue,
 };
 
 /// The canonical Cargo package name for this crate.

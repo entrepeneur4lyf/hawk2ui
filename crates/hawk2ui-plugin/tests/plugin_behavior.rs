@@ -120,3 +120,71 @@ fn editor_embedding_custom_editors_do_not_assume_top_level_window_ownership() {
         Some(&EditorParent::opaque("vst3-parent"))
     );
 }
+
+use hawk2ui_plugin::{
+    ParameterDistribution, ParameterFlags, ParameterGroup, ParameterModel, ParameterRange,
+    ParameterRecord, ParameterSmoothing, ParameterValue,
+};
+
+#[test]
+fn parameter_model_validates_stable_ids_and_group_nesting() {
+    let group = ParameterGroup::new("filter", "Filter")
+        .child(ParameterGroup::new("filter.env", "Envelope"));
+    let model = ParameterModel::new([ParameterRecord::numeric(
+        "filter.cutoff",
+        "Cutoff",
+        "Hz",
+        ParameterRange::new(20.0, 20_000.0, 1_000.0),
+    )
+    .group("filter.env")])
+    .with_group(group);
+
+    assert!(model.validate().is_ok());
+    assert!(model.group_path("filter.env").is_some());
+
+    let invalid = ParameterModel::new([ParameterRecord::boolean("Bad Id", "Enabled", true)]);
+    let errors = invalid.validate().expect_err("invalid id should fail");
+    assert_eq!(errors[0].code, "parameter.id-invalid");
+}
+
+#[test]
+fn parameter_model_converts_normalized_values_and_display_text() {
+    let parameter =
+        ParameterRecord::numeric("gain", "Gain", "dB", ParameterRange::new(-60.0, 12.0, 0.0))
+            .distribution(ParameterDistribution::Linear)
+            .flags(ParameterFlags::automatable());
+
+    let value = parameter
+        .denormalize(0.5)
+        .expect("normalized value should convert");
+
+    assert_eq!(value, ParameterValue::Float(-24.0));
+    assert_eq!(
+        parameter.normalize(&ParameterValue::Float(-24.0)).unwrap(),
+        0.5
+    );
+    assert_eq!(parameter.display_value(&value).unwrap(), "-24 dB");
+    assert!(parameter.flags.automatable);
+}
+
+#[test]
+fn parameter_model_supports_stepped_values_and_smoothing_metadata() {
+    let parameter =
+        ParameterRecord::numeric("mode", "Mode", "", ParameterRange::new(0.0, 3.0, 0.0))
+            .steps(4)
+            .smoothing(ParameterSmoothing::linear_ms(10.0));
+
+    assert_eq!(
+        parameter.denormalize(0.6).unwrap(),
+        ParameterValue::Float(2.0)
+    );
+    assert_eq!(
+        parameter.normalize(&ParameterValue::Float(2.0)).unwrap(),
+        0.6666666666666666
+    );
+    assert_eq!(parameter.generated_metadata().steps, Some(4));
+    assert_eq!(
+        parameter.smoothing,
+        Some(ParameterSmoothing::linear_ms(10.0))
+    );
+}
