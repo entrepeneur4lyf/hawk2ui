@@ -304,3 +304,59 @@ fn state_presets_keep_factory_and_user_presets_separate() {
     assert_eq!(user.kind, PresetKind::User);
     assert_ne!(factory.metadata.author, user.metadata.author);
 }
+
+use hawk2ui_plugin::{
+    FrameDropPolicy, RealtimeChannelKind, RealtimeVisualPacket, RealtimeVisualTransport,
+};
+
+#[test]
+fn realtime_visual_data_records_meters_analyzers_scopes_and_modulation() {
+    let packets = [
+        RealtimeVisualPacket::meter("out", 0.9),
+        RealtimeVisualPacket::analyzer("fft", vec![0.1, 0.2]),
+        RealtimeVisualPacket::scope("osc", vec![-0.5, 0.5]),
+        RealtimeVisualPacket::modulation("lfo", 0.25),
+    ];
+
+    assert_eq!(packets[0].kind, RealtimeChannelKind::Meter);
+    assert_eq!(packets[1].kind, RealtimeChannelKind::Analyzer);
+    assert_eq!(packets[2].kind, RealtimeChannelKind::Scope);
+    assert_eq!(packets[3].kind, RealtimeChannelKind::Modulation);
+}
+
+#[test]
+fn realtime_visual_data_audio_thread_write_is_non_blocking_and_preallocated() {
+    let mut transport = RealtimeVisualTransport::preallocated(2, FrameDropPolicy::DropOldest);
+
+    assert!(
+        transport
+            .audio_thread_push(RealtimeVisualPacket::meter("out", 0.1))
+            .accepted
+    );
+    assert!(
+        transport
+            .audio_thread_push(RealtimeVisualPacket::meter("out", 0.2))
+            .accepted
+    );
+    let third = transport.audio_thread_push(RealtimeVisualPacket::meter("out", 0.3));
+
+    assert!(third.accepted);
+    assert_eq!(third.dropped_frames, 1);
+    assert_eq!(transport.capacity(), 2);
+    assert_eq!(transport.pending_len(), 2);
+    assert_eq!(transport.allocation_count(), 0);
+    assert_eq!(transport.blocking_wait_count(), 0);
+}
+
+#[test]
+fn realtime_visual_data_ui_reads_do_not_block_audio_writes() {
+    let mut transport = RealtimeVisualTransport::preallocated(4, FrameDropPolicy::DropNewest);
+    transport.audio_thread_push(RealtimeVisualPacket::modulation("lfo", 0.5));
+
+    let packets = transport.ui_drain();
+    let write = transport.audio_thread_push(RealtimeVisualPacket::scope("osc", vec![0.0]));
+
+    assert_eq!(packets.len(), 1);
+    assert!(write.accepted);
+    assert_eq!(transport.blocking_wait_count(), 0);
+}

@@ -5,6 +5,7 @@ pub mod automation;
 pub mod editor;
 pub mod format;
 pub mod parameter;
+pub mod realtime;
 pub mod state;
 
 pub use automation::{
@@ -22,6 +23,10 @@ pub use parameter::{
     GeneratedParameterMetadata, ParameterDistribution, ParameterFlags, ParameterGroup,
     ParameterModel, ParameterRange, ParameterRecord, ParameterSmoothing, ParameterValidationError,
     ParameterValue,
+};
+pub use realtime::{
+    FrameDropPolicy, RealtimeChannelKind, RealtimePushResult, RealtimeVisualPacket,
+    RealtimeVisualTransport,
 };
 pub use state::{
     HostStateChunk, PluginPreset, PluginStateEnvelope, PresetKind, PresetMetadata, StateMigration,
