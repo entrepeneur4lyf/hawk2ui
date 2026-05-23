@@ -1,6 +1,7 @@
 use hawk2ui_runtime::{
-    HostCallRecord, LifecycleHook, LifecyclePhase, LifecycleRegistry, RuntimeCapability,
-    RuntimeError, ScriptModuleKind, ScriptModuleRecord, StructuredValue,
+    BindingExecution, BindingLifecycleAvailability, BindingSchema, HostBindingRecord,
+    HostBindingRegistry, HostCallRecord, LifecycleHook, LifecyclePhase, LifecycleRegistry,
+    RuntimeCapability, RuntimeError, ScriptModuleKind, ScriptModuleRecord, StructuredValue,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -77,4 +78,92 @@ fn runtime_records_are_serializable_contracts() {
     assert_serde_contract::<RuntimeError>();
     assert_serde_contract::<LifecycleHook>();
     assert_serde_contract::<LifecycleRegistry>();
+}
+
+#[test]
+fn host_bindings_allow_capability_scoped_calls() {
+    let registry = HostBindingRegistry::new([HostBindingRecord::new(
+        "platform.clipboard.write",
+        BindingSchema::new("object", "null", "ClipboardError"),
+    )
+    .requires(RuntimeCapability::ClipboardWrite)
+    .execution(BindingExecution::Synchronous)
+    .available_during(BindingLifecycleAvailability::AfterMount)]);
+
+    let call = registry
+        .call(
+            "platform.clipboard.write",
+            StructuredValue::object([("text", StructuredValue::string("hello"))]),
+            [RuntimeCapability::ClipboardWrite],
+            LifecyclePhase::Update,
+        )
+        .expect("declared capability should allow the host call");
+
+    assert_eq!(call.binding_name, "platform.clipboard.write");
+    assert_eq!(
+        call.required_capability,
+        Some(RuntimeCapability::ClipboardWrite)
+    );
+    assert_eq!(call.output_schema, "null");
+}
+
+#[test]
+fn host_bindings_deny_missing_capability() {
+    let registry = HostBindingRegistry::new([HostBindingRecord::new(
+        "platform.network.fetch",
+        BindingSchema::new("object", "object", "NetworkError"),
+    )
+    .requires(RuntimeCapability::NetworkRequest)]);
+
+    let error = registry
+        .call(
+            "platform.network.fetch",
+            StructuredValue::object([("url", StructuredValue::string("https://example.test"))]),
+            [],
+            LifecyclePhase::Update,
+        )
+        .expect_err("missing capability should deny the host call");
+
+    assert_eq!(error.code, "binding.capability-denied");
+    assert_eq!(error.capability, Some(RuntimeCapability::NetworkRequest));
+}
+
+#[test]
+fn host_bindings_reject_schema_mismatch() {
+    let registry = HostBindingRegistry::new([HostBindingRecord::new(
+        "platform.clipboard.write",
+        BindingSchema::new("object", "null", "ClipboardError"),
+    )]);
+
+    let error = registry
+        .call(
+            "platform.clipboard.write",
+            StructuredValue::string("not an object"),
+            [],
+            LifecyclePhase::Update,
+        )
+        .expect_err("string payload should not satisfy object schema");
+
+    assert_eq!(error.code, "binding.schema-mismatch");
+    assert!(error.message.contains("expected object"));
+}
+
+#[test]
+fn host_bindings_reject_unavailable_lifecycle_phase() {
+    let registry = HostBindingRegistry::new([HostBindingRecord::new(
+        "host.window.close",
+        BindingSchema::new("null", "null", "WindowError"),
+    )
+    .available_during(BindingLifecycleAvailability::MountedOnly)]);
+
+    let error = registry
+        .call(
+            "host.window.close",
+            StructuredValue::Null,
+            [],
+            LifecyclePhase::Initialize,
+        )
+        .expect_err("mounted-only binding should not run during initialize");
+
+    assert_eq!(error.code, "binding.lifecycle-unavailable");
 }

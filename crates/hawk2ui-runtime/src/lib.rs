@@ -1,9 +1,14 @@
 #![forbid(unsafe_code)]
 //! Script loading, host bindings, event dispatch, scheduling, lifecycle, and runtime safety for `Hawk2UI`.
 
+pub mod bindings;
 pub mod lifecycle;
 pub mod script;
 
+pub use bindings::{
+    BindingExecution, BindingLifecycleAvailability, BindingSchema, HostBindingCall,
+    HostBindingError, HostBindingRecord, HostBindingRegistry,
+};
 pub use lifecycle::{LifecycleHook, LifecyclePhase, LifecycleRegistry};
 pub use script::{
     HostCallRecord, RuntimeCapability, RuntimeError, ScriptModuleKind, ScriptModuleRecord,

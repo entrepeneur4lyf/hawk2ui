@@ -68,6 +68,19 @@ impl StructuredValue {
                 .collect(),
         )
     }
+
+    /// Returns the primitive schema label for this value.
+    #[must_use]
+    pub const fn schema_label(&self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Bool(_) => "bool",
+            Self::Number(_) => "number",
+            Self::String(_) => "string",
+            Self::Array(_) => "array",
+            Self::Object(_) => "object",
+        }
+    }
 }
 
 /// Runtime script module identity and declarations.
