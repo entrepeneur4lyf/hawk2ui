@@ -1,6 +1,7 @@
 use hawk2ui_platform::{
     CapabilityRecord, CapabilitySchema, CapabilityTable, FilesystemGrant, FilesystemPolicy,
-    FilesystemScope, PlatformContext, PlatformDiagnostic, PlatformOperation, RuntimeAvailability,
+    FilesystemScope, NetworkManifest, NetworkPolicy, PlatformContext, PlatformDiagnostic,
+    PlatformOperation, RuntimeAvailability,
 };
 
 #[test]
@@ -123,4 +124,56 @@ fn filesystem_scope_allows_user_selected_file_grants() {
 
     assert_eq!(access.scope, FilesystemScope::UserSelectedFile);
     assert_eq!(access.resolved_path, "/home/user/session.hawk");
+}
+
+#[test]
+fn network_capabilities_allow_declared_host() {
+    let table = CapabilityTable::new([CapabilityRecord::new("network.fetch")
+        .allow(PlatformOperation::NetworkRequest)
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)
+        .plugin(true)]);
+    let manifest = NetworkManifest::new("network.fetch", ["api.hawk2ui.dev"]);
+
+    let request = NetworkPolicy::request(
+        &table,
+        &manifest,
+        "https://api.hawk2ui.dev/v1/status",
+        PlatformContext::Desktop,
+    )
+    .expect("declared host must be allowed");
+
+    assert_eq!(request.host, "api.hawk2ui.dev");
+}
+
+#[test]
+fn network_capabilities_deny_undeclared_host_malformed_url_and_missing_capability() {
+    let table = CapabilityTable::new([CapabilityRecord::new("network.fetch")
+        .allow(PlatformOperation::NetworkRequest)
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)
+        .plugin(true)]);
+    let manifest = NetworkManifest::new("network.fetch", ["api.hawk2ui.dev"]);
+
+    let denied_host = NetworkPolicy::request(
+        &table,
+        &manifest,
+        "https://evil.example/v1/status",
+        PlatformContext::Desktop,
+    )
+    .expect_err("undeclared host must be denied");
+    let malformed =
+        NetworkPolicy::request(&table, &manifest, "not a url", PlatformContext::Desktop)
+            .expect_err("malformed URL must be denied");
+    let missing_capability = NetworkPolicy::request(
+        &CapabilityTable::new([]),
+        &manifest,
+        "https://api.hawk2ui.dev/v1/status",
+        PlatformContext::Desktop,
+    )
+    .expect_err("missing network capability must be denied");
+
+    assert_eq!(denied_host.diagnostic.rule, "network.host.denied");
+    assert_eq!(malformed.diagnostic.rule, "network.url.malformed");
+    assert_eq!(missing_capability.diagnostic.rule, "capability.missing");
 }

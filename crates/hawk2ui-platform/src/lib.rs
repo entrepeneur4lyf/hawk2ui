@@ -3,6 +3,7 @@
 
 pub mod capability;
 pub mod filesystem;
+pub mod network;
 
 pub use capability::{
     CapabilityDenied, CapabilityRecord, CapabilitySchema, CapabilityTable, PlatformContext,
@@ -11,6 +12,7 @@ pub use capability::{
 pub use filesystem::{
     FilesystemAccess, FilesystemDenied, FilesystemGrant, FilesystemPolicy, FilesystemScope,
 };
+pub use network::{NetworkDenied, NetworkManifest, NetworkPolicy, NetworkRequestRecord};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-platform";
