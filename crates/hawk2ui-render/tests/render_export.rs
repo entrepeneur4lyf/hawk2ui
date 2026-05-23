@@ -326,3 +326,43 @@ fn asset_records_reject_raw_draw_references() {
     assert_eq!(error.diagnostic().rule(), "asset.raw-reference.rejected");
     assert_eq!(draw.asset_id(), "hero");
 }
+
+#[test]
+fn custom_surface_records_cover_categories_capabilities_and_frame_scheduling() {
+    let surfaces = [
+        hawk2ui_render::CustomSurfaceCategory::Knob,
+        hawk2ui_render::CustomSurfaceCategory::Slider,
+        hawk2ui_render::CustomSurfaceCategory::Meter,
+        hawk2ui_render::CustomSurfaceCategory::Scope,
+        hawk2ui_render::CustomSurfaceCategory::Analyzer,
+        hawk2ui_render::CustomSurfaceCategory::EqCurve,
+        hawk2ui_render::CustomSurfaceCategory::Modulation,
+        hawk2ui_render::CustomSurfaceCategory::Timeline,
+        hawk2ui_render::CustomSurfaceCategory::GraphEditor,
+        hawk2ui_render::CustomSurfaceCategory::InspectorPanel,
+    ];
+
+    let keys: Vec<_> = surfaces
+        .iter()
+        .map(hawk2ui_render::CustomSurfaceCategory::stable_key)
+        .collect();
+
+    assert_eq!(keys.len(), 10);
+    assert!(keys.contains(&"eq-curve"));
+
+    let surface = hawk2ui_render::CustomDrawSurface::new(
+        "scope",
+        hawk2ui_render::CustomSurfaceCategory::Scope,
+        Geometry::new(20.0, 30.0, 320.0, 180.0),
+    )
+    .with_capability(hawk2ui_render::CustomSurfaceCapability::RealtimeData)
+    .with_capability(hawk2ui_render::CustomSurfaceCapability::GpuPreferred)
+    .invalidate()
+    .schedule_frame(42);
+
+    assert!(surface.hit_test(40.0, 40.0));
+    assert_eq!(surface.reserved_layout().width, 320.0);
+    assert!(surface.invalidated());
+    assert_eq!(surface.next_frame(), Some(42));
+    assert!(surface.reports_capability(hawk2ui_render::CustomSurfaceCapability::RealtimeData));
+}

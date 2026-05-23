@@ -3,6 +3,7 @@
 
 pub mod assets;
 pub mod backend;
+pub mod custom_surface;
 pub mod export;
 pub mod layer;
 pub mod scene;
@@ -12,6 +13,7 @@ pub use backend::{
     BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, RecordingBackend,
     RendererBackend,
 };
+pub use custom_surface::{CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory};
 pub use export::{PaintCommand, PaintCommandList, export_paint_commands};
 pub use layer::{
     Color, GlowLayer, GradientLayer, LayerKind, LayerStack, PaintLayer, PathLayer, RoundedRect,
