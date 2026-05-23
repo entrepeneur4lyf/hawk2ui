@@ -209,3 +209,43 @@ fn style_compile_rejects_unsupported_syntax_with_diagnostics() {
 
     assert_eq!(error.diagnostics()[0].rule(), "style.property.unknown");
 }
+
+#[test]
+fn runtime_style_table_returns_typed_values_by_node_and_property() {
+    let table = hawk2ui_style::RuntimeStyleTable::new()
+        .with_value(
+            "button-1",
+            PropertyId::new("opacity"),
+            StyleValue::Number(0.8),
+        )
+        .with_value(
+            "button-1",
+            PropertyId::new("font-size"),
+            StyleValue::LengthPx(18.0),
+        );
+
+    assert_eq!(
+        table.typed_value("button-1", &PropertyId::new("opacity")),
+        Some(&StyleValue::Number(0.8))
+    );
+    assert_eq!(
+        table.typed_value("button-1", &PropertyId::new("font-size")),
+        Some(&StyleValue::LengthPx(18.0))
+    );
+    assert_eq!(
+        table.typed_value("missing", &PropertyId::new("opacity")),
+        None
+    );
+}
+
+#[test]
+fn runtime_style_table_rejects_raw_string_values() {
+    let error = hawk2ui_style::RuntimeStyleTable::new()
+        .try_with_raw_value("button-1", "opacity", "0.8")
+        .expect_err("raw style values must be rejected");
+
+    assert_eq!(
+        error.diagnostic().rule(),
+        "runtime-style.raw-value.rejected"
+    );
+}
