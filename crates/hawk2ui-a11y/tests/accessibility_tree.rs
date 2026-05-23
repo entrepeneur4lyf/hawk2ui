@@ -108,3 +108,42 @@ fn actions_values_dispatch_focus_press_increment_decrement_set_value_and_custom(
     );
     assert_eq!(dispatcher.events().len(), 6);
 }
+
+use hawk2ui_a11y::{A11yHostExporter, A11yHostSurfaceKind, LayoutGeometryUpdate};
+
+#[test]
+fn host_export_updates_bounds_from_layout_geometry() {
+    let tree = A11yTree::new(A11yNode::new("button", A11yRole::Button).name("Render"));
+    let mut exporter = A11yHostExporter::desktop(tree);
+
+    exporter
+        .apply_geometry(LayoutGeometryUpdate::new(
+            "button",
+            A11yBounds::new(10.0, 12.0, 80.0, 24.0),
+        ))
+        .unwrap();
+
+    assert_eq!(exporter.surface_kind, A11yHostSurfaceKind::Desktop);
+    assert_eq!(
+        exporter
+            .tree()
+            .find("button")
+            .unwrap()
+            .bounds
+            .unwrap()
+            .width,
+        80.0
+    );
+    assert!(exporter.export_snapshot().platform_services_enabled);
+}
+
+#[test]
+fn host_export_records_plugin_editor_accessibility_availability() {
+    let tree = A11yTree::new(A11yNode::new("editor", A11yRole::Panel).name("Plugin Editor"));
+    let exporter = A11yHostExporter::plugin_editor(tree, true);
+
+    let snapshot = exporter.export_snapshot();
+    assert_eq!(snapshot.surface_kind, A11yHostSurfaceKind::PluginEditor);
+    assert!(snapshot.plugin_accessibility_available);
+    assert!(!snapshot.platform_services_enabled);
+}
