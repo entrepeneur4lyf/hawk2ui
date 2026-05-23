@@ -2,10 +2,12 @@
 //! Security policy, source validation, script sandbox, asset policy, and secret redaction for `Hawk2UI`.
 
 pub mod diagnostic;
+pub mod sandbox;
 pub mod source;
 pub mod trust;
 
 pub use diagnostic::{SecurityDiagnostic, SecuritySeverity};
+pub use sandbox::{ScriptSandboxDenial, ScriptSandboxOperation, ScriptSandboxPolicy};
 pub use source::{SourceValidationPolicy, SourceValidationRecord, SourceValidationRule};
 pub use trust::{TrustBoundary, TrustRecord};
 

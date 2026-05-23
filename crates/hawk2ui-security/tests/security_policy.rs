@@ -1,4 +1,7 @@
-use hawk2ui_security::{SourceValidationPolicy, SourceValidationRule, TrustBoundary, TrustRecord};
+use hawk2ui_security::{
+    ScriptSandboxOperation, ScriptSandboxPolicy, SourceValidationPolicy, SourceValidationRule,
+    TrustBoundary, TrustRecord,
+};
 
 #[test]
 fn trust_boundaries_classify_all_security_domains() {
@@ -81,6 +84,53 @@ fn source_validation_rejects_all_build_time_security_rules() {
         assert_eq!(
             record.diagnostic_label(),
             format!("source.{expected_rule}:Hawk.toml")
+        );
+    }
+}
+
+#[test]
+fn script_sandbox_denies_all_direct_privileged_operations() {
+    let cases = [
+        (
+            ScriptSandboxOperation::StringToCode,
+            "script.string-to-code.denied",
+            "string-to-code execution is denied",
+        ),
+        (
+            ScriptSandboxOperation::UndeclaredHostApi,
+            "script.host-api.undeclared",
+            "host API access is undeclared",
+        ),
+        (
+            ScriptSandboxOperation::DirectFilesystem,
+            "script.filesystem.denied",
+            "direct filesystem access is denied",
+        ),
+        (
+            ScriptSandboxOperation::DirectNetwork,
+            "script.network.denied",
+            "direct network access is denied",
+        ),
+        (
+            ScriptSandboxOperation::ProcessSpawning,
+            "script.process.denied",
+            "process spawning is denied",
+        ),
+        (
+            ScriptSandboxOperation::NativeModuleLoading,
+            "script.native-module.denied",
+            "native module loading is denied",
+        ),
+    ];
+
+    for (operation, expected_rule, expected_message) in cases {
+        let denial = ScriptSandboxPolicy::deny(operation, "src/app.ts");
+
+        assert_eq!(denial.diagnostic.rule, expected_rule);
+        assert_eq!(denial.diagnostic.message, expected_message);
+        assert_eq!(
+            denial.diagnostic_label(),
+            format!("sandbox.{expected_rule}:src/app.ts")
         );
     }
 }
