@@ -32,4 +32,9 @@ mod tests {
     fn exposes_crate_identity() {
         assert_eq!(crate_name(), "hawk2ui-a11y");
     }
+
+    #[test]
+    fn a11y_workspace_filter_marker() {
+        assert_eq!(crate_name(), "hawk2ui-a11y");
+    }
 }
