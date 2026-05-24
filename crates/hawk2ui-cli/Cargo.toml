@@ -13,5 +13,12 @@ description = "Command-line interface for Hawk2UI validation, builds, runs, pack
 name = "hawk2ui-cli"
 path = "src/main.rs"
 
+[lib]
+name = "hawk2ui_cli"
+path = "src/lib.rs"
+
 [lints]
 workspace = true
+
+[dependencies]
+serde.workspace = true
