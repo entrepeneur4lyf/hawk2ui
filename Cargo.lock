@@ -73,6 +73,13 @@ dependencies = [
 [[package]]
 name = "hawk2ui-framework-conformance"
 version = "0.1.0"
+dependencies = [
+ "hawk2ui-authoring",
+ "hawk2ui-framework-react",
+ "hawk2ui-framework-solid",
+ "hawk2ui-framework-svelte",
+ "hawk2ui-framework-vue",
+]
 
 [[package]]
 name = "hawk2ui-framework-react"

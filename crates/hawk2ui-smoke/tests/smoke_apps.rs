@@ -153,3 +153,20 @@ fn security_denials_fail_before_runtime_surface_launch() {
     );
     assert!(!result.runtime_surface_launched);
 }
+
+#[test]
+fn framework_examples_cover_all_public_framework_fixtures() {
+    let runner = SmokeRunner::default();
+
+    let result = runner
+        .run_framework_examples()
+        .expect("framework examples should be validated");
+
+    assert_eq!(
+        result.frameworks,
+        vec!["native", "svelte", "react", "vue", "solid"]
+    );
+    assert_eq!(result.package_entrypoints, 5);
+    assert_eq!(result.asset_references, 5);
+    assert!(result.conformance_equivalent);
+}

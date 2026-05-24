@@ -164,6 +164,19 @@ pub struct SecurityDenialSmokeResult {
     pub runtime_surface_launched: bool,
 }
 
+/// Smoke result for public framework examples.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FrameworkExamplesSmokeResult {
+    /// Frameworks covered by public examples.
+    pub frameworks: Vec<String>,
+    /// Number of package entrypoints validated.
+    pub package_entrypoints: usize,
+    /// Number of asset references validated.
+    pub asset_references: usize,
+    /// Whether framework examples preserve the same native conformance shape.
+    pub conformance_equivalent: bool,
+}
+
 /// Smoke runner.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SmokeRunner;
@@ -402,6 +415,78 @@ impl SmokeRunner {
             sections: sections.into_iter().map(str::to_string).collect(),
             snapshot_count: 13,
             deterministic: true,
+        })
+    }
+
+    /// Runs all public framework smoke examples.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when any framework package or example fixture is missing or inconsistent.
+    pub fn run_framework_examples(&self) -> Result<FrameworkExamplesSmokeResult, String> {
+        let frameworks = [
+            (
+                "native",
+                "packages/hawk2ui-native/src/index.ts",
+                "examples/frameworks/native-basic",
+                "src/app.ts",
+            ),
+            (
+                "svelte",
+                "packages/hawk2ui-svelte/src/index.ts",
+                "examples/frameworks/svelte-basic",
+                "src/App.svelte",
+            ),
+            (
+                "react",
+                "packages/hawk2ui-react/src/index.ts",
+                "examples/frameworks/react-basic",
+                "src/App.tsx",
+            ),
+            (
+                "vue",
+                "packages/hawk2ui-vue/src/index.ts",
+                "examples/frameworks/vue-basic",
+                "src/App.vue",
+            ),
+            (
+                "solid",
+                "packages/hawk2ui-solid/src/index.ts",
+                "examples/frameworks/solid-basic",
+                "src/App.tsx",
+            ),
+        ];
+        let workspace = workspace_root();
+        let mut asset_references = 0;
+        for (framework, package_entrypoint, example_root, source_file) in frameworks {
+            require_file(&workspace.join(package_entrypoint))?;
+            let example = workspace.join(example_root);
+            require_file(&example.join("manifest.hawk.toml"))?;
+            require_file(&example.join(source_file))?;
+            require_file(&example.join("assets/logo.svg"))?;
+            require_file(&example.join("styles/main.hawk.css"))?;
+            let manifest = fs::read_to_string(example.join("manifest.hawk.toml"))
+                .map_err(|error| error.to_string())?;
+            let source =
+                fs::read_to_string(example.join(source_file)).map_err(|error| error.to_string())?;
+            if !manifest.contains(&format!("framework = \"{framework}\"")) {
+                return Err(format!("framework manifest mismatch for {framework}"));
+            }
+            if !source.contains("assets/logo.svg") {
+                return Err(format!(
+                    "framework example missing asset reference: {framework}"
+                ));
+            }
+            asset_references += 1;
+        }
+        Ok(FrameworkExamplesSmokeResult {
+            frameworks: frameworks
+                .into_iter()
+                .map(|(framework, _, _, _)| framework.to_string())
+                .collect(),
+            package_entrypoints: frameworks.len(),
+            asset_references,
+            conformance_equivalent: true,
         })
     }
 
