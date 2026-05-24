@@ -15,3 +15,6 @@ path = "src/lib.rs"
 
 [lints]
 workspace = true
+
+[dependencies]
+hawk2ui-authoring = { path = "../hawk2ui-authoring" }

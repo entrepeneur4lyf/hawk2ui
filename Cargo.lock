@@ -84,6 +84,9 @@ dependencies = [
 [[package]]
 name = "hawk2ui-framework-solid"
 version = "0.1.0"
+dependencies = [
+ "hawk2ui-authoring",
+]
 
 [[package]]
 name = "hawk2ui-framework-svelte"
