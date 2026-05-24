@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::CliDiagnostic;
+
 /// CLI command.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CliCommand {
@@ -108,5 +110,81 @@ impl CommandCatalog {
             "  diagnostics      Render structured diagnostics",
         ]
         .join("\n")
+    }
+}
+
+/// Deterministic scenario used by command tests and recording runners.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum BuildCommandScenario {
+    /// Command succeeds.
+    Success,
+    /// Validation fails.
+    ValidationFailure,
+    /// Artifact verification fails.
+    VerificationFailure,
+}
+
+/// Result of a build-family CLI command.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BuildCommandResult {
+    /// Exit code.
+    pub exit_code: CliExitCode,
+    /// Structured diagnostics.
+    pub diagnostics: Vec<CliDiagnostic>,
+}
+
+/// Recording build command runner.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BuildCommandRunner;
+
+impl BuildCommandRunner {
+    /// Runs validation.
+    #[must_use]
+    pub fn validate(&self, scenario: BuildCommandScenario) -> BuildCommandResult {
+        match scenario {
+            BuildCommandScenario::Success => success(),
+            BuildCommandScenario::ValidationFailure => BuildCommandResult {
+                exit_code: CliExitCode::Validation,
+                diagnostics: vec![CliDiagnostic::error(
+                    "manifest.invalid",
+                    "project manifest validation failed",
+                )],
+            },
+            BuildCommandScenario::VerificationFailure => success(),
+        }
+    }
+
+    /// Runs development build.
+    #[must_use]
+    pub fn build_dev(&self, scenario: BuildCommandScenario) -> BuildCommandResult {
+        self.validate(scenario)
+    }
+
+    /// Runs release build.
+    #[must_use]
+    pub fn build_release(&self, scenario: BuildCommandScenario) -> BuildCommandResult {
+        self.validate(scenario)
+    }
+
+    /// Runs artifact verification.
+    #[must_use]
+    pub fn verify_artifact(&self, scenario: BuildCommandScenario) -> BuildCommandResult {
+        match scenario {
+            BuildCommandScenario::Success | BuildCommandScenario::ValidationFailure => success(),
+            BuildCommandScenario::VerificationFailure => BuildCommandResult {
+                exit_code: CliExitCode::Verification,
+                diagnostics: vec![CliDiagnostic::error(
+                    "artifact.verification-failed",
+                    "sealed artifact verification failed",
+                )],
+            },
+        }
+    }
+}
+
+fn success() -> BuildCommandResult {
+    BuildCommandResult {
+        exit_code: CliExitCode::Success,
+        diagnostics: Vec::new(),
     }
 }

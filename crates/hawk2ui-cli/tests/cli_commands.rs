@@ -59,3 +59,47 @@ fn diagnostics_render_warning_error_capability_denial_and_target_incompatibility
     assert!(capability.render().contains("capability=filesystem.read"));
     assert!(target.render().contains("target=plugin:vst3"));
 }
+
+use hawk2ui_cli::{BuildCommandRunner, BuildCommandScenario};
+
+#[test]
+fn build_commands_return_success_validation_failure_and_verification_failure_codes() {
+    let runner = BuildCommandRunner::default();
+
+    assert_eq!(
+        runner.validate(BuildCommandScenario::Success).exit_code,
+        CliExitCode::Success
+    );
+    assert_eq!(
+        runner.build_dev(BuildCommandScenario::Success).exit_code,
+        CliExitCode::Success
+    );
+    assert_eq!(
+        runner
+            .build_release(BuildCommandScenario::Success)
+            .exit_code,
+        CliExitCode::Success
+    );
+    assert_eq!(
+        runner
+            .verify_artifact(BuildCommandScenario::Success)
+            .exit_code,
+        CliExitCode::Success
+    );
+
+    let validation = runner.validate(BuildCommandScenario::ValidationFailure);
+    assert_eq!(validation.exit_code, CliExitCode::Validation);
+    assert!(
+        validation.diagnostics[0]
+            .render()
+            .contains("manifest.invalid")
+    );
+
+    let verification = runner.verify_artifact(BuildCommandScenario::VerificationFailure);
+    assert_eq!(verification.exit_code, CliExitCode::Verification);
+    assert!(
+        verification.diagnostics[0]
+            .render()
+            .contains("artifact.verification-failed")
+    );
+}

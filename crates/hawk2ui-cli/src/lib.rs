@@ -4,7 +4,10 @@
 pub mod commands;
 pub mod diagnostics;
 
-pub use commands::{CliCommand, CliError, CliExitCode, CommandCatalog};
+pub use commands::{
+    BuildCommandResult, BuildCommandRunner, BuildCommandScenario, CliCommand, CliError,
+    CliExitCode, CommandCatalog,
+};
 pub use diagnostics::{CliDiagnostic, DiagnosticSeverity, SourceSpan};
 
 /// The canonical Cargo package name for this crate.
