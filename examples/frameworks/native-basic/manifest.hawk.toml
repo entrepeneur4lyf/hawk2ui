@@ -1,0 +1,3 @@
+name = "native-basic"
+framework = "native"
+entry = "src/app.ts"

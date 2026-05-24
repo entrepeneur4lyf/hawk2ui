@@ -6,6 +6,7 @@ pub mod compile;
 pub mod component;
 pub mod element;
 pub mod events;
+pub mod native;
 pub mod state;
 
 pub use adapter::{
@@ -23,6 +24,10 @@ pub use element::{
 pub use events::{
     EventBinding, EventKind, EventPayloadField, FocusEventKind, HandlerRef, InputEventKind,
     KeyboardEventKind, LifecycleEventKind, PointerEventKind,
+};
+pub use native::{
+    AssetRef, NativeAuthoringArtifact, NativeAuthoringElement, NativeAuthoringError,
+    NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef, StyleRef,
 };
 pub use state::{
     BatchedUpdate, StateId, StateScope, StateScopeKind, StateSubscription, StateUpdate,
