@@ -1054,6 +1054,9 @@ dependencies = [
 [[package]]
 name = "hawk2ui-plugin-adapters"
 version = "0.1.0"
+dependencies = [
+ "hawk2ui-plugin",
+]
 
 [[package]]
 name = "hawk2ui-render"
