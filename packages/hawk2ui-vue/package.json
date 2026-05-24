@@ -1,0 +1,12 @@
+{
+  "name": "@hawk2ui/vue",
+  "version": "0.1.0",
+  "type": "module",
+  "peerDependencies": {
+    "vue": ">=3.5"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "description": "Vue 3.5 renderer integration for Hawk2UI native records."
+}
