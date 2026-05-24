@@ -142,7 +142,7 @@ impl BuildCommandRunner {
     #[must_use]
     pub fn validate(&self, scenario: BuildCommandScenario) -> BuildCommandResult {
         match scenario {
-            BuildCommandScenario::Success => success(),
+            BuildCommandScenario::Success | BuildCommandScenario::VerificationFailure => success(),
             BuildCommandScenario::ValidationFailure => BuildCommandResult {
                 exit_code: CliExitCode::Validation,
                 diagnostics: vec![CliDiagnostic::error(
@@ -150,7 +150,6 @@ impl BuildCommandRunner {
                     "project manifest validation failed",
                 )],
             },
-            BuildCommandScenario::VerificationFailure => success(),
         }
     }
 
