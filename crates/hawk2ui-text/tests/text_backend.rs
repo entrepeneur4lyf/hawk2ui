@@ -1,0 +1,84 @@
+use hawk2ui_text::{FontCatalog, LineBreakMode, TextBackend, TextLayoutInput, TruncationMode};
+
+#[test]
+fn text_backend_discovers_app_fonts_and_chooses_fallbacks() {
+    let catalog = FontCatalog::new()
+        .with_system_family("Atkinson")
+        .with_app_font(
+            "Display",
+            "assets/fonts/display.ttf",
+            b"font-bytes".to_vec(),
+        )
+        .with_fallback_family("EmojiFallback");
+    let backend = TextBackend::new(catalog);
+
+    assert_eq!(backend.resolve_family("Display").unwrap(), "Display");
+    assert_eq!(backend.resolve_family("Missing").unwrap(), "EmojiFallback");
+    assert_eq!(
+        backend.catalog().app_font_sources()[0].source_path,
+        "assets/fonts/display.ttf"
+    );
+    assert!(backend.font_generation() > 0);
+}
+
+#[test]
+fn text_backend_shapes_latin_emoji_combining_and_bidi_text() {
+    let backend = TextBackend::new(
+        FontCatalog::new()
+            .with_system_family("Display")
+            .with_fallback_family("EmojiFallback"),
+    );
+    let input = TextLayoutInput::new("Cafe\u{301} 🚀 שלום", "Display", 18.0)
+        .with_dpi_scale(2.0)
+        .with_bidi(true);
+
+    let layout = backend.layout(&input).expect("layout succeeds");
+
+    assert_eq!(layout.resolved_family(), "Display");
+    assert!(layout.cluster_count() < input.text().chars().count());
+    assert!(layout.contains_emoji());
+    assert!(layout.bidi_resolved());
+    assert!(layout.parley_processed());
+    assert_eq!(layout.line_count(), 1);
+    assert!(layout.baseline_px() > 0.0);
+}
+
+#[test]
+fn text_backend_wraps_truncates_and_scales_high_dpi_metrics() {
+    let backend = TextBackend::new(FontCatalog::new().with_system_family("Display"));
+    let wrapped = TextLayoutInput::new("Gain reduction meter readout", "Display", 16.0)
+        .with_dpi_scale(1.0)
+        .with_line_break(LineBreakMode::Wrap { max_width_px: 96.0 });
+    let high_dpi = wrapped.clone().with_dpi_scale(2.0);
+    let truncated = wrapped
+        .clone()
+        .with_truncation(TruncationMode::EndEllipsis { max_width_px: 72.0 });
+
+    let wrapped_layout = backend.layout(&wrapped).expect("wrapped layout succeeds");
+    let high_dpi_layout = backend.layout(&high_dpi).expect("high dpi layout succeeds");
+    let truncated_layout = backend
+        .layout(&truncated)
+        .expect("truncated layout succeeds");
+
+    assert!(wrapped_layout.line_count() > 1);
+    assert!(high_dpi_layout.width_px() > wrapped_layout.width_px());
+    assert!(high_dpi_layout.baseline_px() > wrapped_layout.baseline_px());
+    assert!(truncated_layout.truncated());
+    assert!(truncated_layout.display_text().ends_with('…'));
+}
+
+#[test]
+fn text_backend_generates_stable_glyph_cache_invalidation_keys() {
+    let backend = TextBackend::new(FontCatalog::new().with_system_family("Display"));
+    let input = TextLayoutInput::new("Amount", "Display", 18.0).with_dpi_scale(2.0);
+    let different_dpi = input.clone().with_dpi_scale(1.0);
+
+    let key = backend.glyph_cache_key(&input).expect("cache key succeeds");
+    let dpi_key = backend
+        .glyph_cache_key(&different_dpi)
+        .expect("dpi cache key succeeds");
+
+    assert!(key.stable_key().contains("font=Display"));
+    assert!(key.stable_key().contains("dpi=2"));
+    assert_ne!(key, dpi_key);
+}
