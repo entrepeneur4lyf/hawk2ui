@@ -149,3 +149,26 @@ fn dev_loop_reports_visible_errors_before_runtime_reload() {
     );
     assert_eq!(report.visible_errors[0].rule, "manifest.invalid");
 }
+
+#[test]
+fn manual_presence_pages_exist_and_contain_required_headings() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pages = [
+        ("manual/user-manual.md", "# Hawk2UI User Manual"),
+        ("manual/developer-guide.md", "# Hawk2UI Developer Guide"),
+        ("manual/style-reference.md", "# Hawk2UI Style Reference"),
+        (
+            "manual/plugin-author-guide.md",
+            "# Hawk2UI Plugin Author Guide",
+        ),
+        ("manual/desktop-app-guide.md", "# Hawk2UI Desktop App Guide"),
+        ("manual/troubleshooting.md", "# Hawk2UI Troubleshooting"),
+        ("manual/api-reference.md", "# Hawk2UI API Reference"),
+        ("manual/examples-index.md", "# Hawk2UI Examples Index"),
+    ];
+
+    for (path, heading) in pages {
+        let content = std::fs::read_to_string(root.join(path)).expect("manual page should exist");
+        assert!(content.contains(heading), "{path} missing {heading}");
+    }
+}
