@@ -13,5 +13,9 @@ description = "Skia-backed production renderer backend for Hawk2UI."
 name = "hawk2ui_render_skia"
 path = "src/lib.rs"
 
+[dependencies]
+hawk2ui-render = { path = "../hawk2ui-render" }
+skia-safe = { version = "0.97.0", default-features = false, features = ["binary-cache"] }
+
 [lints]
 workspace = true
