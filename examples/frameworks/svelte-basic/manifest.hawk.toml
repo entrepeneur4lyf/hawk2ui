@@ -1,0 +1,3 @@
+name = "svelte-basic"
+framework = "svelte"
+entry = "src/App.svelte"

@@ -1,0 +1,12 @@
+{
+  "name": "@hawk2ui/svelte",
+  "version": "0.1.0",
+  "type": "module",
+  "peerDependencies": {
+    "svelte": ">=5"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "description": "Svelte 5 compiler integration for Hawk2UI native records."
+}
