@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Command-line interface for `Hawk2UI` validation, builds, runs, packaging, and diagnostics.
 
-use hawk2ui_cli::{CliExitCode, CommandCatalog};
+use hawk2ui_cli::CommandCatalog;
 
 fn main() {
     let catalog = CommandCatalog;

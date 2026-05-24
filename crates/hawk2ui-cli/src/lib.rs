@@ -2,8 +2,10 @@
 //! Reusable command definitions and orchestration for the `Hawk2UI` CLI.
 
 pub mod commands;
+pub mod diagnostics;
 
 pub use commands::{CliCommand, CliError, CliExitCode, CommandCatalog};
+pub use diagnostics::{CliDiagnostic, DiagnosticSeverity, SourceSpan};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-cli";
