@@ -1,0 +1,12 @@
+{
+  "name": "@hawk2ui/react",
+  "version": "0.1.0",
+  "type": "module",
+  "peerDependencies": {
+    "react": ">=19"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "description": "React 19 custom renderer integration for Hawk2UI native records."
+}
