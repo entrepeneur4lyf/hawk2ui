@@ -2,12 +2,14 @@
 //! Reusable command definitions and orchestration for the `Hawk2UI` CLI.
 
 pub mod commands;
+pub mod dev_loop;
 pub mod diagnostics;
 
 pub use commands::{
     BuildCommandResult, BuildCommandRunner, BuildCommandScenario, CliCommand, CliError,
     CliExitCode, CommandCatalog,
 };
+pub use dev_loop::{DevLoop, DevLoopEvent, DevLoopReport, RecordingReloadTarget, RecordingWatcher};
 pub use diagnostics::{CliDiagnostic, DiagnosticSeverity, SourceSpan};
 
 /// The canonical Cargo package name for this crate.

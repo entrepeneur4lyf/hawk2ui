@@ -103,3 +103,49 @@ fn build_commands_return_success_validation_failure_and_verification_failure_cod
             .contains("artifact.verification-failed")
     );
 }
+
+use hawk2ui_cli::{DevLoop, DevLoopEvent, RecordingReloadTarget, RecordingWatcher};
+
+#[test]
+fn dev_loop_watches_rebuilds_validates_reloads_and_preserves_state() {
+    let watcher = RecordingWatcher::new(["src/main.ts", "styles/main.hawk.css"]);
+    let reload_target = RecordingReloadTarget::default();
+    let mut dev_loop = DevLoop::new(watcher, reload_target).preserve_state(true);
+
+    let report = dev_loop.run_once().expect("dev loop should run");
+
+    assert_eq!(
+        report.events,
+        vec![
+            DevLoopEvent::FileChanged("src/main.ts".into()),
+            DevLoopEvent::FileChanged("styles/main.hawk.css".into()),
+            DevLoopEvent::IncrementalRebuildTriggered,
+            DevLoopEvent::ValidationPassed,
+            DevLoopEvent::NativeSurfaceReloaded {
+                preserve_state: true
+            },
+        ]
+    );
+    assert!(report.visible_errors.is_empty());
+}
+
+#[test]
+fn dev_loop_reports_visible_errors_before_runtime_reload() {
+    let watcher = RecordingWatcher::new(["manifest.hawk.toml"]);
+    let reload_target = RecordingReloadTarget::default();
+    let mut dev_loop = DevLoop::new(watcher, reload_target).validation_fails("manifest.invalid");
+
+    let report = dev_loop
+        .run_once()
+        .expect("dev loop should report validation errors");
+
+    assert_eq!(
+        report.events,
+        vec![
+            DevLoopEvent::FileChanged("manifest.hawk.toml".into()),
+            DevLoopEvent::IncrementalRebuildTriggered,
+            DevLoopEvent::ValidationFailed,
+        ]
+    );
+    assert_eq!(report.visible_errors[0].rule, "manifest.invalid");
+}
