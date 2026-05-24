@@ -147,3 +147,41 @@ fn host_export_records_plugin_editor_accessibility_availability() {
     assert!(snapshot.plugin_accessibility_available);
     assert!(!snapshot.platform_services_enabled);
 }
+
+use hawk2ui_a11y::{A11yPluginGuard, A11yPluginOperation, A11yThreadContext};
+
+#[test]
+fn plugin_accessibility_safety_denies_audio_thread_and_unstable_host_calls() {
+    let guard = A11yPluginGuard::default();
+
+    let audio = guard
+        .ensure_allowed(
+            A11yThreadContext::AudioThread,
+            A11yPluginOperation::TreeUpdate,
+        )
+        .expect_err("audio thread must not update accessibility");
+    let unstable = guard
+        .ensure_allowed(
+            A11yThreadContext::UiThread,
+            A11yPluginOperation::UnstableHostCall,
+        )
+        .expect_err("unstable host calls must be denied");
+
+    assert_eq!(audio.code, "a11y.plugin-audio-thread-denied");
+    assert_eq!(unstable.code, "a11y.plugin-unstable-host-call-denied");
+}
+
+#[test]
+fn plugin_accessibility_safety_allows_safe_editor_updates() {
+    let guard = A11yPluginGuard::default();
+
+    guard
+        .ensure_allowed(A11yThreadContext::UiThread, A11yPluginOperation::TreeUpdate)
+        .expect("UI thread tree updates should be allowed");
+    guard
+        .ensure_allowed(
+            A11yThreadContext::UiThread,
+            A11yPluginOperation::FocusUpdate,
+        )
+        .expect("UI thread focus updates should be allowed");
+}

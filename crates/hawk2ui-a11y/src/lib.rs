@@ -4,6 +4,7 @@
 pub mod actions;
 pub mod component;
 pub mod host;
+pub mod plugin;
 pub mod tree;
 
 pub use actions::{A11yActionDispatchError, A11yActionDispatcher, A11yActionEvent};
@@ -11,6 +12,7 @@ pub use component::{ComponentKind, ComponentSemantics, VisualStyleSemantics};
 pub use host::{
     A11yHostExportSnapshot, A11yHostExporter, A11yHostSurfaceKind, LayoutGeometryUpdate,
 };
+pub use plugin::{A11yPluginDenial, A11yPluginGuard, A11yPluginOperation, A11yThreadContext};
 pub use tree::{A11yAction, A11yBounds, A11yNode, A11yRole, A11yTree, CheckedState};
 
 /// The canonical Cargo package name for this crate.
