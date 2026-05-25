@@ -373,14 +373,13 @@ impl SkiaRendererBackend {
     }
 
     fn surface_mut(&mut self, id: &str) -> Result<&mut SkiaSurface, BackendError> {
-        match self.surfaces.get_mut(id) {
-            Some(surface) => Ok(surface),
-            None => {
-                let message = "surface does not exist";
-                self.diagnostics
-                    .push(BackendDiagnostic::new("skia.surface.missing", message));
-                Err(BackendError::new("skia.surface.missing", message))
-            }
+        if let Some(surface) = self.surfaces.get_mut(id) {
+            Ok(surface)
+        } else {
+            let message = "surface does not exist";
+            self.diagnostics
+                .push(BackendDiagnostic::new("skia.surface.missing", message));
+            Err(BackendError::new("skia.surface.missing", message))
         }
     }
 
@@ -389,14 +388,13 @@ impl SkiaRendererBackend {
         draw: impl FnOnce(&mut SkiaSurface) -> T,
     ) -> Result<T, BackendError> {
         let active_id = self.require_active_frame()?;
-        match self.surfaces.get_mut(&active_id) {
-            Some(surface) => Ok(draw(surface)),
-            None => {
-                let message = "active surface does not exist";
-                self.diagnostics
-                    .push(BackendDiagnostic::new("skia.surface.missing", message));
-                Err(BackendError::new("skia.surface.missing", message))
-            }
+        if let Some(surface) = self.surfaces.get_mut(&active_id) {
+            Ok(draw(surface))
+        } else {
+            let message = "active surface does not exist";
+            self.diagnostics
+                .push(BackendDiagnostic::new("skia.surface.missing", message));
+            Err(BackendError::new("skia.surface.missing", message))
         }
     }
 
