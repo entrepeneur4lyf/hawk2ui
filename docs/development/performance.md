@@ -8,11 +8,16 @@ Budgets live in `performance/budgets.toml`. Every release-gating benchmark must 
 
 ## Benchmarks
 
+Every benchmark case must report an observed value in the same unit as its
+budget. A case without a measurement fails the gate, and a measurement above the
+configured `maximum` fails release readiness.
+
 Run the benchmark gates with:
 
 - `rtk cargo bench -p hawk2ui-perf --bench startup`
 - `rtk cargo bench -p hawk2ui-perf --bench layout`
 - `rtk cargo bench -p hawk2ui-perf --bench render`
+- `rtk cargo bench -p hawk2ui-perf --bench render_baseline -- --quick`
 - `rtk cargo bench -p hawk2ui-perf --bench runtime`
 - `rtk cargo bench -p hawk2ui-perf --bench plugin_realtime`
 

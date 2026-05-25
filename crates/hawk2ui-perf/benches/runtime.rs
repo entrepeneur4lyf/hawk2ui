@@ -1,18 +1,22 @@
 use std::hint::black_box;
 
 use hawk2ui_perf::{
-    BenchmarkCase, BenchmarkKind, BenchmarkSuite, PerformanceBudgets, RuntimeStabilityFixture,
+    BenchmarkCase, BenchmarkKind, BenchmarkMeasurement, BenchmarkSuite, PerformanceBudgets,
+    RuntimeStabilityFixture,
 };
 
 const BUDGETS: &str = include_str!("../../../performance/budgets.toml");
 
 fn main() {
     let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
-    let suite = BenchmarkSuite::new("runtime").with_case(BenchmarkCase::new(
-        "runtime-event-dispatch",
-        "examples/desktop-basic",
-        BenchmarkKind::Runtime,
-    ));
+    let suite = BenchmarkSuite::new("runtime").with_case(
+        BenchmarkCase::new(
+            "runtime-event-dispatch",
+            "examples/desktop-basic",
+            BenchmarkKind::Runtime,
+        )
+        .with_measurement(BenchmarkMeasurement::new(200)),
+    );
     let stability = RuntimeStabilityFixture::new("runtime-event-dispatch", 10_000)
         .with_failures(0)
         .with_allowed_failures(0);

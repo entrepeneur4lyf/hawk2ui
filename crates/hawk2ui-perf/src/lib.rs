@@ -9,7 +9,9 @@ pub mod stability;
 pub use budgets::{
     BudgetUnit, PerformanceBudget, PerformanceBudgets, PerformanceCategory, PerformanceError,
 };
-pub use harness::{BenchmarkCase, BenchmarkError, BenchmarkKind, BenchmarkSuite};
+pub use harness::{
+    BenchmarkCase, BenchmarkError, BenchmarkKind, BenchmarkMeasurement, BenchmarkSuite,
+};
 pub use realtime::{RealtimeContext, RealtimeGuard, RealtimeGuardError, RealtimeOperation};
 pub use stability::{RuntimeStabilityFixture, StabilityError};
 
@@ -114,6 +116,51 @@ mod tests {
         assert_eq!(
             error,
             BenchmarkError::MissingBudget("missing-budget".to_owned())
+        );
+    }
+
+    #[test]
+    fn benchmark_suite_rejects_cases_without_measurements() {
+        let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+        let suite = BenchmarkSuite::new("render").with_case(BenchmarkCase::new(
+            "frame-render",
+            "examples/style-gallery",
+            BenchmarkKind::Rendering,
+        ));
+
+        let error = suite
+            .validate_against(&budgets)
+            .expect_err("case without measurement must fail");
+
+        assert_eq!(
+            error,
+            BenchmarkError::MissingMeasurement("frame-render".to_owned())
+        );
+    }
+
+    #[test]
+    fn benchmark_suite_rejects_measurements_above_budget_maximum() {
+        let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+        let suite = BenchmarkSuite::new("render").with_case(
+            BenchmarkCase::new(
+                "frame-render",
+                "examples/style-gallery",
+                BenchmarkKind::Rendering,
+            )
+            .with_measurement(BenchmarkMeasurement::new(17)),
+        );
+
+        let error = suite
+            .validate_against(&budgets)
+            .expect_err("measurement above maximum must fail");
+
+        assert_eq!(
+            error,
+            BenchmarkError::BudgetExceeded {
+                budget_name: "frame-render".to_owned(),
+                observed: 17,
+                maximum: 16,
+            }
         );
     }
 
