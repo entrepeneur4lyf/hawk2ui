@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use image::GenericImageView;
+use image::{ExtendedColorType, GenericImageView, codecs::webp::WebPEncoder};
 use sha2::{Digest, Sha256};
 
 /// The canonical Cargo package name for this crate.
@@ -104,6 +104,8 @@ pub struct AssetRecord {
     id: String,
     source_path: String,
     hash: String,
+    compiled_hash: String,
+    compiled_bytes: Vec<u8>,
     kind: AssetKind,
     width: Option<u32>,
     height: Option<u32>,
@@ -130,6 +132,18 @@ impl AssetRecord {
     #[must_use]
     pub fn hash(&self) -> &str {
         &self.hash
+    }
+
+    /// Returns the hash of the sanitized compiled payload.
+    #[must_use]
+    pub fn compiled_hash(&self) -> &str {
+        &self.compiled_hash
+    }
+
+    /// Returns the sanitized compiled payload bytes.
+    #[must_use]
+    pub fn compiled_bytes(&self) -> &[u8] {
+        &self.compiled_bytes
     }
 
     /// Returns the asset kind.
@@ -321,15 +335,20 @@ impl AssetBackend {
         })?;
         let (width, height) = image.dimensions();
         self.verify_pixels(width, height)?;
+        let compiled_bytes = encode_lossless_webp(&image)?;
+        let compiled_hash = AssetHash::sha256_bytes(&compiled_bytes);
         let asset = self.record(AssetRecordDraft {
             id: id.into(),
             source_path: source_path.into(),
             expected_hash,
+            compiled_hash: compiled_hash.as_str().to_string(),
+            compiled_bytes,
             kind: AssetKind::Image,
             width: Some(width),
             height: Some(height),
             vector_lowering: None,
             sanitized: true,
+            metadata_stripped: true,
         });
         Ok(asset)
     }
@@ -357,15 +376,20 @@ impl AssetBackend {
             AssetBackendError::new("asset.vector.parse-failed", "SVG parsing failed")
         })?;
         let path_count = svg.matches("<path").count();
+        let compiled_bytes = normalize_svg_payload(svg).into_bytes();
+        let compiled_hash = AssetHash::sha256_bytes(&compiled_bytes);
         let asset = self.record(AssetRecordDraft {
             id: id.into(),
             source_path: source_path.into(),
             expected_hash,
+            compiled_hash: compiled_hash.as_str().to_string(),
+            compiled_bytes,
             kind: AssetKind::Vector,
             width: None,
             height: None,
             vector_lowering: Some(VectorLowering { path_count }),
             sanitized: true,
+            metadata_stripped: false,
         });
         Ok(asset)
     }
@@ -385,15 +409,19 @@ impl AssetBackend {
         self.verify_bytes(bytes)?;
         verify_hash(bytes, expected_hash)?;
         self.font_database.load_font_data(bytes.to_vec());
+        let compiled_hash = AssetHash::sha256_bytes(bytes);
         let asset = self.record(AssetRecordDraft {
             id: id.into(),
             source_path: source_path.into(),
             expected_hash,
+            compiled_hash: compiled_hash.as_str().to_string(),
+            compiled_bytes: bytes.to_vec(),
             kind: AssetKind::Font,
             width: None,
             height: None,
             vector_lowering: None,
             sanitized: true,
+            metadata_stripped: false,
         });
         Ok(asset)
     }
@@ -428,16 +456,18 @@ impl AssetBackend {
     }
 
     fn record(&mut self, draft: AssetRecordDraft<'_>) -> AssetRecord {
-        let cache_generation = self.cache_generation(&draft.id, draft.expected_hash.as_str());
+        let cache_generation = self.cache_generation(&draft.id, &draft.compiled_hash);
         let record = AssetRecord {
             id: draft.id,
             source_path: draft.source_path,
             hash: draft.expected_hash.as_str().to_string(),
+            compiled_hash: draft.compiled_hash,
+            compiled_bytes: draft.compiled_bytes,
             kind: draft.kind,
             width: draft.width,
             height: draft.height,
             sanitized: draft.sanitized,
-            metadata_stripped: true,
+            metadata_stripped: draft.metadata_stripped,
             vector_lowering: draft.vector_lowering,
             cache_generation,
         };
@@ -471,11 +501,14 @@ struct AssetRecordDraft<'hash> {
     id: String,
     source_path: String,
     expected_hash: &'hash AssetHash,
+    compiled_hash: String,
+    compiled_bytes: Vec<u8>,
     kind: AssetKind,
     width: Option<u32>,
     height: Option<u32>,
     vector_lowering: Option<VectorLowering>,
     sanitized: bool,
+    metadata_stripped: bool,
 }
 
 fn verify_hash(bytes: &[u8], expected_hash: &AssetHash) -> Result<(), AssetBackendError> {
@@ -500,21 +533,32 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 fn hex_nibble(value: u8) -> char {
-    match value {
-        0..=9 => char::from(b'0' + value),
-        10..=15 => char::from(b'a' + (value - 10)),
-        _ => unreachable!("nibble values are always 0..=15"),
-    }
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    char::from(HEX[usize::from(value & 0x0f)])
 }
 
 fn validate_vector(svg: &str) -> Result<(), AssetBackendError> {
     let lower = svg.to_ascii_lowercase();
     let unsafe_tokens = [
         "<script",
+        "<iframe",
+        "<object",
+        "<embed",
+        "<audio",
+        "<video",
+        "<image",
+        "<use",
+        "<animate",
         "onload=",
         "onclick=",
+        "onmouseover=",
+        "onerror=",
         "javascript:",
         "data:text/html",
+        "href=",
+        "xlink:href",
+        "@import",
+        "url(",
         "<foreignobject",
     ];
     if unsafe_tokens.iter().any(|token| lower.contains(token)) {
@@ -525,6 +569,29 @@ fn validate_vector(svg: &str) -> Result<(), AssetBackendError> {
     } else {
         Ok(())
     }
+}
+
+fn encode_lossless_webp(image: &image::DynamicImage) -> Result<Vec<u8>, AssetBackendError> {
+    let rgba = image.to_rgba8();
+    let (width, height) = image.dimensions();
+    let mut encoded = Vec::new();
+    WebPEncoder::new_lossless(&mut encoded)
+        .encode(rgba.as_raw(), width, height, ExtendedColorType::Rgba8)
+        .map_err(|_| {
+            AssetBackendError::new(
+                "asset.image.encode-failed",
+                "image sanitization WebP encoding failed",
+            )
+        })?;
+    Ok(encoded)
+}
+
+fn normalize_svg_payload(svg: &str) -> String {
+    svg.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
