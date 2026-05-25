@@ -3,6 +3,7 @@
 
 pub mod artifact;
 pub mod diagnostic;
+pub mod inventory;
 pub mod plugin;
 pub mod runtime;
 pub mod surface;
@@ -11,6 +12,7 @@ pub use artifact::{ArtifactHash, ArtifactId, ArtifactSchemaVersion, ArtifactVers
 pub use diagnostic::{
     Diagnostic, DiagnosticSeverity, RelatedContext, RuleId, SourceSpan, SuggestedFix,
 };
+pub use inventory::{ApiInventory, ApiModule, ApiTypeAudience, ApiTypeEntry, ApiTypeStatus};
 pub use plugin::{AutomationGesture, ParameterId, PluginEditorContract, PluginParameterContract};
 pub use runtime::{CapabilityKey, HostBindingContract, RuntimePhase};
 pub use surface::{HostSurfaceContract, SurfaceKind, SurfaceMetrics};
