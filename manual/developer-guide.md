@@ -1,7 +1,9 @@
 # Hawk2UI Developer Guide
 
-## Development Workflow
-Use `hawk2ui-cli validate`, `build-dev`, and the development loop before producing release artifacts.
+This is an end-user developer guide for authors building with Hawk2UI, not an internal development-process document.
 
-## Production Standard
-Implementations must pass validation, smoke fixtures, compatibility gates, and release readiness checks.
+- [Runtime APIs](runtime-apis.md)
+- [Style Reference](style-reference.md)
+- [Layout Reference](layout-reference.md)
+- [Rendering Reference](rendering-reference.md)
+- [Examples](examples.md)

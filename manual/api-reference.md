@@ -1,4 +1,9 @@
 # Hawk2UI API Reference
 
-## Crates
-The public API is organized by authoring, style, layout, rendering, runtime, host, plugin, platform, security, accessibility, smoke, and CLI crates.
+The public API reference is split by author-facing domain:
+
+- [Runtime APIs](runtime-apis.md)
+- [Plugin Editors](plugin-editors.md)
+- [Packaging](packaging.md)
+- [Layout Reference](layout-reference.md)
+- [Rendering Reference](rendering-reference.md)

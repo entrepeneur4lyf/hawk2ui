@@ -850,11 +850,15 @@ dependencies = [
 name = "hawk2ui-conformance"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-api",
  "hawk2ui-authoring",
  "hawk2ui-build",
+ "hawk2ui-cli",
+ "hawk2ui-compat",
  "hawk2ui-plugin",
  "hawk2ui-render",
  "hawk2ui-runtime",
+ "hawk2ui-style",
 ]
 
 [[package]]

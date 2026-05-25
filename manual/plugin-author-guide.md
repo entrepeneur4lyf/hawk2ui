@@ -1,4 +1,3 @@
 # Hawk2UI Plugin Author Guide
 
-## Plugin Editors
-Plugin editors are embedded surfaces. They never assume top-level window ownership and must preserve realtime audio-thread safety.
+Plugin authors should use the code-backed [Plugin Editors](plugin-editors.md) manual. It documents implemented plugin manifests, host formats, parameter records, editor records, state records, preset records, realtime data records, and `hawk2ui package-plugin`.

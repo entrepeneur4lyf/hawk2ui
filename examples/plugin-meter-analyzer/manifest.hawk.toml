@@ -12,3 +12,11 @@ keys = ["plugin-editor", "realtime-visuals"]
 [[targets]]
 kind = "plugin"
 name = "clap-vst3"
+
+[plugin]
+id = "com.hawk2ui.examples.plugin-meter-analyzer"
+name = "Hawk2UI Plugin Meter Analyzer"
+
+[editor]
+width = 960
+height = 540

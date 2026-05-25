@@ -13,6 +13,14 @@ keys = ["plugin-editor", "sealed-artifacts"]
 kind = "plugin"
 name = "clap-vst3"
 
+[plugin]
+id = "com.hawk2ui.examples.plugin-synth-editor"
+name = "Hawk2UI Plugin Synth Editor"
+
+[editor]
+width = 960
+height = 540
+
 [[parameters]]
 id = "osc.mix"
 name = "Osc Mix"

@@ -1,4 +1,3 @@
 # Hawk2UI Desktop App Guide
 
-## Desktop Surfaces
-Desktop apps own their native window, handle resize and DPI changes, and export accessibility metadata to platform services.
+Desktop app authors should use the code-backed [Desktop Apps](desktop-apps.md) manual. It documents implemented desktop manifests, compatibility targets, and `hawk2ui run-desktop`.

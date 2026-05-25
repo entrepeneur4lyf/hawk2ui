@@ -1,0 +1,14 @@
+# Hawk2UI Manual Summary
+
+- [Manual Home](README.md)
+- [Getting Started](getting-started.md)
+- [Desktop Apps](desktop-apps.md)
+- [Plugin Editors](plugin-editors.md)
+- [Style Reference](style-reference.md)
+- [Layout Reference](layout-reference.md)
+- [Rendering Reference](rendering-reference.md)
+- [Runtime APIs](runtime-apis.md)
+- [Packaging](packaging.md)
+- [Security](security.md)
+- [Troubleshooting](troubleshooting.md)
+- [Examples](examples.md)

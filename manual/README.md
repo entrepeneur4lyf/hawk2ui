@@ -1,57 +1,31 @@
 # Hawk2UI Manual
 
-`Hawk2UI` is a native windowing and rendering framework for production desktop applications and embeddable plugin editors. This manual is the stable user-facing entrypoint for application authors, plugin authors, and integration maintainers.
+Hawk2UI is a native windowing and rendering framework for production desktop applications and embeddable plugin editors. This manual is for application authors, plugin authors, and framework integration authors. It is grounded in implemented code: CLI command definitions, manifest parser behavior, public API inventory, compatibility matrices, examples, and conformance tests.
 
 ## Desktop Applications
 
-Desktop applications declare a `desktop` target in `manifest.hawk.toml` and run through a native host adapter. A desktop package must provide product identity, a source entrypoint, the capabilities it requires, and at least one target declaration.
-
-Required desktop manifest sections:
-
-- `[identity]`
-- `[source]`
-- `[capabilities]`
-- `[[targets]]` with `kind = "desktop"`
+Desktop applications declare a `desktop` target in `manifest.hawk.toml` and are modeled through the native host adapter API records. Start with [Desktop Apps](desktop-apps.md) and the fixtures `examples/desktop-basic/manifest.hawk.toml` and `examples/desktop-dashboard/manifest.hawk.toml`.
 
 ## Plugin Editors
 
-Plugin editors declare a `plugin` target and include editor metadata suitable for host embedding. Plugin packages must expose stable plugin identity, initial editor size, and parameter metadata that can be synchronized with the audio host.
-
-Required plugin manifest sections:
-
-- `[identity]`
-- `[source]`
-- `[capabilities]`
-- `[[targets]]` with `kind = "plugin"`
-- `[plugin]`
-- `[editor]`
-- `[[parameters]]`
+Plugin editors declare a `plugin` target and include host-facing plugin metadata. Start with [Plugin Editors](plugin-editors.md) and the fixtures `examples/plugin-basic/manifest.hawk.toml`, `examples/plugin-synth-editor/manifest.hawk.toml`, and `examples/plugin-meter-analyzer/manifest.hawk.toml`.
 
 ## Style System
 
-The style system accepts the supported `Hawk2UI` style subset and resolves it into typed style records before layout and rendering. Unsupported properties must fail with diagnostics instead of being silently ignored.
-
-Production style inputs must be deterministic, validate selectors, and produce stable output for visual regression tests.
+The style system accepts the production property registry and rejects unsupported selector forms with stable diagnostics. See [Style Reference](style-reference.md).
 
 ## Runtime APIs
 
-Runtime APIs connect framework adapters, the scene model, host services, asset loading, security capabilities, and plugin state. Runtime access must be capability-gated and must not expose ambient authority to application code.
-
-Runtime integrations are expected to use stable records from the core and schema crates rather than host-specific implementation details.
+Runtime APIs connect framework adapters, host services, surfaces, diagnostics, scheduling, and plugin state through public records. See [Runtime APIs](runtime-apis.md).
 
 ## Packaging
 
-Packaging produces sealed artifacts from validated manifests, compiled source, compiled styles, resolved assets, and target metadata. A package is release-ready only when verification reports contain no release-blocking diagnostics.
-
-Every package must preserve manifest identity, target declarations, schema version, and artifact hash metadata.
+Packaging APIs model sealed artifacts, target metadata, compatibility checks, and package outputs from validated manifests and compiled assets. See [Packaging](packaging.md).
 
 ## Troubleshooting
 
-Use diagnostics first. Every production-facing validation failure should include a stable rule, severity, and human-readable message.
+Use diagnostics and exit codes first. See [Troubleshooting](troubleshooting.md).
 
-Common checks:
+## Full Index
 
-- Confirm the manifest contains all required sections for its target.
-- Confirm capability keys are non-empty and contain no spaces.
-- Confirm plugin parameters are declared only when `[plugin]` metadata is present.
-- Confirm sealed artifacts use a compatible major schema version.
+See [SUMMARY.md](SUMMARY.md) for the complete manual index.
