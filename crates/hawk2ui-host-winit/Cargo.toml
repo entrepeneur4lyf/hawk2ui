@@ -18,4 +18,6 @@ workspace = true
 
 [dependencies]
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
+skia-safe = { version = "0.97.0", default-features = false, features = ["binary-cache"] }
+softbuffer = "0.4.8"
 winit = "0.30.12"

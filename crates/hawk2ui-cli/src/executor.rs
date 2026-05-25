@@ -8,6 +8,8 @@ use std::{
 use hawk2ui_build::{
     ArtifactSchemaVersion, HawkManifest, ManifestError, PackageTarget, SealedArtifact,
 };
+use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
+use hawk2ui_host_winit::{WinitDesktopRuntime, WinitDesktopRuntimeConfig};
 use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRange, ParameterRecord,
 };
@@ -182,14 +184,22 @@ impl WorkspaceCommandRunner {
                 )],
             );
         }
-        let targets = manifest
-            .targets
-            .iter()
-            .filter(|target| target.kind == PackageTarget::Desktop)
-            .map(|target| target.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        CommandExecution::success(format!("desktop targets validated: {targets}\n"))
+        let exit_after_first_frame = std::env::var_os("HAWK2UI_EXIT_AFTER_FIRST_FRAME").is_some();
+        let config = desktop_runtime_config_from_manifest(&manifest, exit_after_first_frame);
+        match WinitDesktopRuntime::new().run_blocking(config) {
+            Ok(summary) => CommandExecution::success(format!(
+                "desktop runtime exited cleanly\nframes-presented: {}\nresizes: {}\ndpi-changes: {}\ninput-events: {}\nclose-requested: {}\n",
+                summary.frames_presented,
+                summary.resizes,
+                summary.dpi_changes,
+                summary.input_events,
+                summary.close_requested
+            )),
+            Err(error) => CommandExecution::failure(
+                CliExitCode::Runtime,
+                vec![CliDiagnostic::error(error.rule(), error.message())],
+            ),
+        }
     }
 
     fn package_plugin(&self) -> CommandExecution {
@@ -446,6 +456,20 @@ fn bundle_name(identity_id: &str) -> String {
         .collect()
 }
 
+fn desktop_runtime_config_from_manifest(
+    manifest: &HawkManifest,
+    exit_after_first_frame: bool,
+) -> WinitDesktopRuntimeConfig {
+    let (width, height) = manifest.editor.as_ref().map_or((960.0, 540.0), |editor| {
+        (f64::from(editor.width), f64::from(editor.height))
+    });
+    WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+        manifest.identity.name.clone(),
+        SurfaceMetrics::new(width, height, 1.0),
+    ))
+    .with_exit_after_first_frame(exit_after_first_frame)
+}
+
 fn default_manifest() -> &'static str {
     r#"[identity]
 id = "com.example.hawk2ui-app"
@@ -462,4 +486,39 @@ keys = ["native-windowing"]
 kind = "desktop"
 name = "local-desktop"
 "#
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_runtime_config_from_manifest_uses_editor_size_and_title() {
+        let manifest = HawkManifest::parse(
+            r#"[identity]
+id = "com.example.desktop"
+name = "Desktop Smoke"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[editor]
+width = 1280
+height = 720
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+        )
+        .expect("manifest parses");
+
+        let config = desktop_runtime_config_from_manifest(&manifest, true);
+
+        assert_eq!(config.window().title, "Desktop Smoke");
+        assert_eq!(config.window().metrics.logical_width, 1280.0);
+        assert_eq!(config.window().metrics.logical_height, 720.0);
+        assert!(config.exit_after_first_frame());
+    }
 }

@@ -1,12 +1,20 @@
 #![forbid(unsafe_code)]
 //! `Winit`-backed desktop host adapter for `Hawk2UI`.
 
+mod runtime;
+mod software_frame;
+
 use hawk2ui_host::{
     ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
     HostPlatformHandle, KeyboardInput, LinuxWindowSystem, PointerInput, RepaintRequest,
     SurfaceMetrics, SurfaceOwnership, WindowMode,
 };
 use winit::dpi::LogicalSize;
+
+pub use runtime::{
+    DesktopRuntimeEvent, WinitDesktopRuntime, WinitDesktopRuntimeConfig, WinitDesktopRuntimeSummary,
+};
+pub use software_frame::{SoftwareFrame, SoftwareFrameRenderer, physical_frame_size};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-host-winit";
