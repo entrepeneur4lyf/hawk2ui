@@ -1,4 +1,10 @@
 //! Shared diagnostic contract for build, runtime, packaging, and developer tooling.
+//!
+//! ## Stability
+//!
+//! Public diagnostic records and CLI formatting are source-compatible within a
+//! major crate version. New optional fields may be added only with serde defaults
+//! or through additive constructors.
 
 use serde::{Deserialize, Serialize};
 

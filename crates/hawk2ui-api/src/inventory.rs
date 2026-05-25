@@ -1,4 +1,10 @@
 //! Public API inventory and stability classification records.
+//!
+//! ## Stability
+//!
+//! Inventory records are stable test fixtures for public API coverage. Entries
+//! may be added for new public contracts, but existing public entries must not be
+//! removed or reclassified without the breaking-change process.
 
 /// Public root modules exposed by `hawk2ui-api`.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

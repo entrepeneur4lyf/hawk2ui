@@ -1,4 +1,10 @@
 //! Versioned artifact API contracts.
+//!
+//! ## Stability
+//!
+//! Public artifact records are source-compatible within a major crate version.
+//! Sealed artifact readers may reject incompatible schema major versions and
+//! newer unsupported minor versions.
 
 use serde::{Deserialize, Serialize};
 

@@ -1,4 +1,10 @@
 //! Host surface API contracts.
+//!
+//! ## Stability
+//!
+//! Surface records are source-compatible within a major crate version. Input
+//! event, repaint, and metrics variants may be extended additively, but existing
+//! event meanings and coordinate units are compatibility commitments.
 
 use serde::{Deserialize, Serialize};
 

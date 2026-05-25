@@ -1,4 +1,10 @@
 //! Runtime API contracts.
+//!
+//! ## Stability
+//!
+//! Runtime records are source-compatible within a major crate version. Host
+//! binding, lifecycle, and job records may add optional fields, but existing
+//! phases, directions, and statuses are compatibility commitments.
 
 use serde::{Deserialize, Serialize};
 

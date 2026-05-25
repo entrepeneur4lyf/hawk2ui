@@ -1,4 +1,10 @@
 //! Plugin API contracts.
+//!
+//! ## Stability
+//!
+//! Plugin records are source-compatible within a major crate version and must
+//! preserve serialized state, preset, automation, and realtime channel semantics
+//! across compatible releases.
 
 use serde::{Deserialize, Serialize};
 
