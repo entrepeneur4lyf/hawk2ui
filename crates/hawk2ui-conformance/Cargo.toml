@@ -14,11 +14,11 @@ name = "hawk2ui_conformance"
 path = "src/lib.rs"
 
 [dev-dependencies]
-hawk2ui-authoring = { path = "../hawk2ui-authoring" }
-hawk2ui-build = { path = "../hawk2ui-build" }
-hawk2ui-plugin = { path = "../hawk2ui-plugin" }
-hawk2ui-render = { path = "../hawk2ui-render" }
-hawk2ui-runtime = { path = "../hawk2ui-runtime" }
+hawk2ui-authoring = { version = "0.1.0", path = "../hawk2ui-authoring" }
+hawk2ui-build = { version = "0.1.0", path = "../hawk2ui-build" }
+hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
+hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
+hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
 
 [lints]
 workspace = true

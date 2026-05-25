@@ -33,6 +33,10 @@ name = "render"
 harness = false
 
 [[bench]]
+name = "render_baseline"
+harness = false
+
+[[bench]]
 name = "runtime"
 harness = false
 
