@@ -4,6 +4,7 @@
 pub mod commands;
 pub mod dev_loop;
 pub mod diagnostics;
+pub mod executor;
 
 pub use commands::{
     BuildCommandResult, BuildCommandRunner, BuildCommandScenario, CliCommand, CliError,
@@ -11,6 +12,7 @@ pub use commands::{
 };
 pub use dev_loop::{DevLoop, DevLoopEvent, DevLoopReport, RecordingReloadTarget, RecordingWatcher};
 pub use diagnostics::{CliDiagnostic, DiagnosticSeverity, SourceSpan};
+pub use executor::{CommandExecution, WorkspaceCommandRunner};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-cli";

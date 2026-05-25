@@ -835,6 +835,9 @@ dependencies = [
 name = "hawk2ui-cli"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-build",
+ "hawk2ui-plugin",
+ "hawk2ui-plugin-adapters",
  "serde",
 ]
 
