@@ -9,7 +9,10 @@ pub mod visual;
 
 pub use fixtures::{FixtureCatalog, FixtureCatalogError, TempProject};
 pub use perf::PerformanceSuite;
-pub use security::{SecurityRejectionMatrix, SecurityRejectionMatrixError};
+pub use security::{
+    SecurityFixture, SecurityFixtureKind, SecurityRejectionFixtureSet, SecurityRejectionMatrix,
+    SecurityRejectionMatrixError,
+};
 pub use templates::{DomainTemplateKind, DomainTemplateSuite, DomainTestTemplate};
 pub use visual::{
     ImageComparisonMetadata, VisualFixture, VisualFixtureKind, VisualFixtureSet,
