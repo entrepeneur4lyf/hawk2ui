@@ -58,3 +58,32 @@ fn api_inventory_exposes_only_documented_root_modules() {
             .all(|module| !module.documentation().is_empty())
     );
 }
+
+#[test]
+fn api_contract_inventory_includes_all_surface_runtime_and_plugin_contracts() {
+    let inventory = ApiInventory::production_baseline();
+    let names = inventory
+        .types()
+        .iter()
+        .filter(|ty| ty.status() == ApiTypeStatus::Public)
+        .map(|ty| ty.name())
+        .collect::<Vec<_>>();
+
+    for required in [
+        "InputEvent",
+        "RepaintRequest",
+        "FrameSchedule",
+        "RuntimeJob",
+        "RuntimeLifecycleHook",
+        "BindingDirection",
+        "PluginStateContract",
+        "PluginPresetContract",
+        "RealtimeDataContract",
+        "RealtimeDataDirection",
+    ] {
+        assert!(
+            names.contains(&required),
+            "public API inventory is missing {required}"
+        );
+    }
+}
