@@ -8,7 +8,11 @@ pub mod plugin;
 pub mod runtime;
 pub mod surface;
 
-pub use artifact::{ArtifactHash, ArtifactId, ArtifactSchemaVersion, ArtifactVersionError};
+pub use artifact::{
+    ArtifactCapability, ArtifactHash, ArtifactId, ArtifactManifestSnapshot, ArtifactSchemaVersion,
+    ArtifactVersionError, CompiledAssetKind, CompiledAssetRecord, CompiledScriptRecord,
+    CompiledStyleRecord, TargetKind, TargetMetadata,
+};
 pub use diagnostic::{
     Diagnostic, DiagnosticSeverity, RelatedContext, RuleId, SourceSpan, SuggestedFix,
 };
