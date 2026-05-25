@@ -1,7 +1,9 @@
 //! Shared diagnostic contract for build, runtime, packaging, and developer tooling.
 
+use serde::{Deserialize, Serialize};
+
 /// Severity level for a `Hawk2UI` diagnostic.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DiagnosticSeverity {
     /// Informational diagnostic that does not block work.
     Info,
@@ -12,7 +14,7 @@ pub enum DiagnosticSeverity {
 }
 
 /// Stable identifier for a validation, runtime, or release rule.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RuleId(String);
 
 impl RuleId {
@@ -30,7 +32,7 @@ impl RuleId {
 }
 
 /// Location in an author source file.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SourceSpan {
     /// Source file path as provided by the build graph.
     pub path: String,
@@ -65,7 +67,7 @@ impl SourceSpan {
 }
 
 /// Suggested correction attached to a diagnostic.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SuggestedFix {
     /// Human-readable correction message.
     pub message: String,
@@ -82,7 +84,7 @@ impl SuggestedFix {
 }
 
 /// Additional related context for a diagnostic.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RelatedContext {
     /// Context label, such as a capability or target name.
     pub label: String,
@@ -102,7 +104,7 @@ impl RelatedContext {
 }
 
 /// Shared diagnostic record used by all `Hawk2UI` tooling.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Diagnostic {
     /// Diagnostic severity.
     pub severity: DiagnosticSeverity,
@@ -165,6 +167,39 @@ impl Diagnostic {
     pub const fn redacted(mut self) -> Self {
         self.redacted = true;
         self
+    }
+
+    /// Formats a stable one-line CLI diagnostic.
+    #[must_use]
+    pub fn to_cli_string(&self) -> String {
+        let severity = match self.severity {
+            DiagnosticSeverity::Info => "info",
+            DiagnosticSeverity::Warning => "warning",
+            DiagnosticSeverity::Error => "error",
+        };
+        let source = self.source.as_ref().map_or_else(String::new, |source| {
+            format!(
+                " {}:{}:{}..{}:{}",
+                source.path, source.line, source.column, source.end_line, source.end_column
+            )
+        });
+        let related = if self.related.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " [{}]",
+                self.related
+                    .iter()
+                    .map(|context| format!("{}={}", context.label, context.value))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        };
+        format!(
+            "{severity} {}{source} {}{related}",
+            self.rule.as_str(),
+            self.message
+        )
     }
 
     fn new(
