@@ -1,0 +1,43 @@
+[[hosts]]
+format = "clap"
+host_attachment = "covered"
+resize = "covered"
+dpi = "covered"
+keyboard_focus = "covered"
+accessibility = "covered"
+state = "covered"
+automation = "covered"
+realtime_visual_data = "covered"
+
+[[hosts]]
+format = "vst3"
+host_attachment = "covered"
+resize = "covered"
+dpi = "covered"
+keyboard_focus = "covered"
+accessibility = "covered"
+state = "covered"
+automation = "covered"
+realtime_visual_data = "covered"
+
+[[hosts]]
+format = "au"
+host_attachment = "covered"
+resize = "covered"
+dpi = "covered"
+keyboard_focus = "covered"
+accessibility = "covered"
+state = "covered"
+automation = "covered"
+realtime_visual_data = "covered"
+
+[[hosts]]
+format = "standalone"
+host_attachment = "covered"
+resize = "covered"
+dpi = "covered"
+keyboard_focus = "covered"
+accessibility = "covered"
+state = "covered"
+automation = "covered"
+realtime_visual_data = "covered"

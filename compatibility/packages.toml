@@ -1,0 +1,80 @@
+[[packages]]
+output = "desktop-linux"
+kind = "desktop-bundle"
+platform = "linux"
+signing = false
+notarization = false
+installer = true
+verify_command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
+
+[[packages]]
+output = "desktop-windows"
+kind = "desktop-bundle"
+platform = "windows"
+signing = true
+notarization = false
+installer = true
+verify_command = "rtk cargo test -p hawk2ui-build package_desktop_windows"
+
+[[packages]]
+output = "desktop-macos"
+kind = "app-bundle"
+platform = "macos"
+signing = true
+notarization = true
+installer = true
+verify_command = "rtk cargo test -p hawk2ui-build package_desktop_macos"
+
+[[packages]]
+output = "plugin-clap"
+kind = "plugin-bundle"
+platform = "cross-platform"
+signing = true
+notarization = true
+installer = false
+verify_command = "rtk cargo test -p hawk2ui-plugin-adapters plugin_adapters_generate_all_supported_package_targets"
+
+[[packages]]
+output = "plugin-vst3"
+kind = "plugin-bundle"
+platform = "cross-platform"
+signing = true
+notarization = true
+installer = false
+verify_command = "rtk cargo test -p hawk2ui-plugin-adapters plugin_adapters_generate_all_supported_package_targets"
+
+[[packages]]
+output = "plugin-au"
+kind = "plugin-bundle"
+platform = "macos"
+signing = true
+notarization = true
+installer = false
+verify_command = "rtk cargo test -p hawk2ui-plugin-adapters plugin_adapters_generate_all_supported_package_targets"
+
+[[packages]]
+output = "sealed-artifact"
+kind = "sealed-artifact"
+platform = "all"
+signing = true
+notarization = false
+installer = false
+verify_command = "rtk cargo test -p hawk2ui-build sealed_artifact"
+
+[[packages]]
+output = "debug-package"
+kind = "debug-bundle"
+platform = "all"
+signing = false
+notarization = false
+installer = false
+verify_command = "rtk cargo test -p hawk2ui-build debug_package"
+
+[[packages]]
+output = "release-package"
+kind = "release-bundle"
+platform = "all"
+signing = true
+notarization = true
+installer = true
+verify_command = "rtk cargo test -p hawk2ui-build release_package"

@@ -1,39 +1,47 @@
 [[targets]]
 name = "windows-desktop"
 family = "windows"
+os_version = "Windows 10 22H2 or newer"
 surface = "desktop"
 architecture = "x86_64"
 windowing = "hwnd"
 accessibility = "native"
 packaging = "desktop-bundle"
 release = "supported"
+ci_coverage = true
 
 [[targets]]
 name = "macos-desktop"
 family = "macos"
+os_version = "macOS 13 or newer"
 surface = "desktop"
 architecture = "aarch64"
 windowing = "nswindow"
 accessibility = "native"
 packaging = "app-bundle"
 release = "supported"
+ci_coverage = true
 
 [[targets]]
 name = "linux-wayland-desktop"
 family = "linux"
+os_version = "Ubuntu 24.04 LTS or newer"
 surface = "desktop"
 architecture = "x86_64"
 windowing = "wayland"
 accessibility = "native"
 packaging = "desktop-bundle"
 release = "supported"
+ci_coverage = true
 
 [[targets]]
 name = "linux-x11-plugin"
 family = "linux"
+os_version = "Ubuntu 24.04 LTS or newer"
 surface = "plugin"
 architecture = "x86_64"
 windowing = "x11-xcb"
 accessibility = "host-dependent"
 packaging = "clap-bundle"
 release = "supported"
+ci_coverage = true

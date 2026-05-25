@@ -4,7 +4,9 @@
 pub mod matrix;
 
 pub use matrix::{
-    CompatibilityMatrix, MatrixError, ReleaseStatus, SurfaceKind, TargetCompatibility,
+    CompatibilityMatrix, CoverageStatus, GraphicsBackendCompatibility, GraphicsCompatibilityMatrix,
+    HostCompatibilityMatrix, MatrixError, PackageCompatibility, PackageCompatibilityMatrix,
+    PluginHostCompatibility, ReleaseStatus, SurfaceKind, TargetCompatibility,
 };
 
 #[cfg(test)]
@@ -29,22 +31,26 @@ mod tests {
             [[targets]]
             name = "linux-wayland-desktop"
             family = "linux"
+            os_version = "Ubuntu 24.04 LTS or newer"
             surface = "desktop"
             architecture = "x86_64"
             windowing = "wayland"
             accessibility = "native"
             packaging = "desktop-bundle"
             release = "supported"
+            ci_coverage = true
 
             [[targets]]
             name = "linux-wayland-desktop"
             family = "linux"
+            os_version = "Ubuntu 24.04 LTS or newer"
             surface = "desktop"
             architecture = "x86_64"
             windowing = "wayland"
             accessibility = "native"
             packaging = "desktop-bundle"
             release = "supported"
+            ci_coverage = true
         "#;
 
         let error = CompatibilityMatrix::parse(duplicate).expect_err("duplicate target must fail");

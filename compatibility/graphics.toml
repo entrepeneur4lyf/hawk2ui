@@ -1,0 +1,19 @@
+[[backends]]
+backend = "skia-cpu-raster"
+supported = true
+features = [
+    "cpu-raster",
+    "high-dpi",
+    "text-shaping",
+    "image-layers",
+    "vector-layers",
+    "effects",
+    "dirty-regions",
+]
+diagnostic = "backend.capability.unsupported"
+
+[[backends]]
+backend = "skia-gpu-candidate"
+supported = false
+features = ["high-dpi", "image-layers", "vector-layers", "effects"]
+diagnostic = "backend.capability.gpu-unavailable"
