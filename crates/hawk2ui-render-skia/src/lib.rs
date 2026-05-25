@@ -372,6 +372,34 @@ impl SkiaRendererBackend {
         }
     }
 
+    fn surface_mut(&mut self, id: &str) -> Result<&mut SkiaSurface, BackendError> {
+        match self.surfaces.get_mut(id) {
+            Some(surface) => Ok(surface),
+            None => {
+                let message = "surface does not exist";
+                self.diagnostics
+                    .push(BackendDiagnostic::new("skia.surface.missing", message));
+                Err(BackendError::new("skia.surface.missing", message))
+            }
+        }
+    }
+
+    fn with_active_surface<T>(
+        &mut self,
+        draw: impl FnOnce(&mut SkiaSurface) -> T,
+    ) -> Result<T, BackendError> {
+        let active_id = self.require_active_frame()?;
+        match self.surfaces.get_mut(&active_id) {
+            Some(surface) => Ok(draw(surface)),
+            None => {
+                let message = "active surface does not exist";
+                self.diagnostics
+                    .push(BackendDiagnostic::new("skia.surface.missing", message));
+                Err(BackendError::new("skia.surface.missing", message))
+            }
+        }
+    }
+
     fn require_active_frame(&mut self) -> Result<String, BackendError> {
         let Some(id) = self.active_surface.clone() else {
             return self.fail("skia.frame.missing", "drawing requires an active frame");
@@ -425,10 +453,7 @@ impl RendererBackend for SkiaRendererBackend {
         validate_dpi_scale(dpi_scale).inspect_err(|error| {
             self.diagnostics.push(error.diagnostic().clone());
         })?;
-        let surface = self
-            .surfaces
-            .get_mut(id)
-            .expect("surface existence checked before resize");
+        let surface = self.surface_mut(id)?;
         surface.resize(width, height, dpi_scale)?;
         self.commands
             .push(format!("resize-surface:{id}:{width}x{height}@{dpi_scale}"));
@@ -440,10 +465,7 @@ impl RendererBackend for SkiaRendererBackend {
         if self.active_surface.is_some() {
             return self.fail("skia.frame.active", "a frame is already active");
         }
-        let surface = self
-            .surfaces
-            .get_mut(id)
-            .expect("surface existence checked before frame begin");
+        let surface = self.surface_mut(id)?;
         surface.frame_active = true;
         self.active_surface = Some(id.to_string());
         self.commands.push(format!("begin-frame:{id}"));
@@ -458,10 +480,7 @@ impl RendererBackend for SkiaRendererBackend {
                 "frame end does not match active surface",
             );
         }
-        let surface = self
-            .surfaces
-            .get_mut(id)
-            .expect("surface existence checked before frame end");
+        let surface = self.surface_mut(id)?;
         surface.frame_active = false;
         surface.presented_frames = surface.presented_frames.saturating_add(1);
         self.active_surface = None;
@@ -470,12 +489,9 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn clear(&mut self, color: Color) -> Result<(), BackendError> {
-        let active_id = self.require_active_frame()?;
-        let surface = self
-            .surfaces
-            .get_mut(&active_id)
-            .expect("active surface existence checked before clear");
-        surface.canvas().clear(to_skia_color(color));
+        self.with_active_surface(|surface| {
+            surface.canvas().clear(to_skia_color(color));
+        })?;
         self.commands.push(format!(
             "clear:{},{},{},{}",
             color.r, color.g, color.b, color.a
@@ -484,14 +500,11 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn fill(&mut self, geometry: Geometry, color: Color) -> Result<(), BackendError> {
-        let active_id = self.require_active_frame()?;
-        let surface = self
-            .surfaces
-            .get_mut(&active_id)
-            .expect("active surface existence checked before fill");
-        let mut paint = paint(color, PaintStyle::Fill);
-        paint.set_anti_alias(true);
-        surface.canvas().draw_rect(rect(geometry), &paint);
+        self.with_active_surface(|surface| {
+            let mut paint = paint(color, PaintStyle::Fill);
+            paint.set_anti_alias(true);
+            surface.canvas().draw_rect(rect(geometry), &paint);
+        })?;
         self.commands.push(format!(
             "fill:{},{},{},{}:{},{},{},{}",
             geometry.x,
@@ -507,15 +520,12 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn stroke(&mut self, geometry: Geometry, stroke: Stroke) -> Result<(), BackendError> {
-        let active_id = self.require_active_frame()?;
-        let surface = self
-            .surfaces
-            .get_mut(&active_id)
-            .expect("active surface existence checked before stroke");
-        let mut paint = paint(Color::rgba(255, 255, 255, 255), PaintStyle::Stroke);
-        paint.set_stroke_width(stroke.width);
-        paint.set_anti_alias(true);
-        surface.canvas().draw_rect(rect(geometry), &paint);
+        self.with_active_surface(|surface| {
+            let mut paint = paint(Color::rgba(255, 255, 255, 255), PaintStyle::Stroke);
+            paint.set_stroke_width(stroke.width);
+            paint.set_anti_alias(true);
+            surface.canvas().draw_rect(rect(geometry), &paint);
+        })?;
         self.commands.push(format!(
             "stroke:{},{},{},{}:{}",
             geometry.x, geometry.y, geometry.width, geometry.height, stroke.width
@@ -524,41 +534,37 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn draw_path(&mut self, path: &str) -> Result<(), BackendError> {
-        let active_id = self.require_active_frame()?;
+        self.require_active_frame()?;
         let Some(skia_path) = Path::from_svg(path) else {
             return self.fail(
                 "skia.path.invalid",
                 "path data is not valid SVG path syntax",
             );
         };
-        let surface = self
-            .surfaces
-            .get_mut(&active_id)
-            .expect("active surface existence checked before path");
-        let mut paint = paint(Color::rgba(255, 255, 255, 255), PaintStyle::Stroke);
-        paint.set_anti_alias(true);
-        surface.canvas().draw_path(&skia_path, &paint);
+        self.with_active_surface(|surface| {
+            let mut paint = paint(Color::rgba(255, 255, 255, 255), PaintStyle::Stroke);
+            paint.set_anti_alias(true);
+            surface.canvas().draw_path(&skia_path, &paint);
+        })?;
         self.commands.push(format!("path:{path}"));
         Ok(())
     }
 
     fn draw_text(&mut self, text: &str) -> Result<(), BackendError> {
-        let active_id = self.require_active_frame()?;
+        self.require_active_frame()?;
         if !self.capabilities.text {
             return self.fail(
                 "backend.capability.text.missing",
                 "backend does not support text rendering",
             );
         }
-        let surface = self
-            .surfaces
-            .get_mut(&active_id)
-            .expect("active surface existence checked before text");
-        let mut paint = paint(Color::rgba(255, 255, 255, 255), PaintStyle::Fill);
-        paint.set_anti_alias(true);
-        surface
-            .canvas()
-            .draw_str(text, (0.0, 0.0), &Font::default(), &paint);
+        self.with_active_surface(|surface| {
+            let mut paint = paint(Color::rgba(255, 255, 255, 255), PaintStyle::Fill);
+            paint.set_anti_alias(true);
+            surface
+                .canvas()
+                .draw_str(text, (0.0, 0.0), &Font::default(), &paint);
+        })?;
         self.commands.push(format!("text:{text}"));
         Ok(())
     }
@@ -576,14 +582,11 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn push_clip(&mut self, geometry: Geometry) -> Result<(), BackendError> {
-        let active_id = self.require_active_frame()?;
-        let surface = self
-            .surfaces
-            .get_mut(&active_id)
-            .expect("active surface existence checked before clip");
-        surface
-            .canvas()
-            .clip_rect(rect(geometry), ClipOp::Intersect, true);
+        self.with_active_surface(|surface| {
+            surface
+                .canvas()
+                .clip_rect(rect(geometry), ClipOp::Intersect, true);
+        })?;
         self.commands.push(format!(
             "clip:{},{},{},{}",
             geometry.x, geometry.y, geometry.width, geometry.height
@@ -592,14 +595,11 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn push_transform(&mut self, transform: Transform) -> Result<(), BackendError> {
-        let active_id = self.require_active_frame()?;
-        let surface = self
-            .surfaces
-            .get_mut(&active_id)
-            .expect("active surface existence checked before transform");
-        surface
-            .canvas()
-            .translate((transform.translate_x, transform.translate_y));
+        self.with_active_surface(|surface| {
+            surface
+                .canvas()
+                .translate((transform.translate_x, transform.translate_y));
+        })?;
         self.commands.push(format!(
             "transform:{},{}",
             transform.translate_x, transform.translate_y
@@ -620,17 +620,14 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn mark_dirty(&mut self, geometry: Geometry) -> Result<(), BackendError> {
-        let active_id = self.require_active_frame()?;
+        self.with_active_surface(|surface| {
+            surface.dirty_regions.push(geometry);
+        })?;
         self.commands.push(format!(
             "dirty:{},{},{},{}",
             geometry.x, geometry.y, geometry.width, geometry.height
         ));
         self.dirty_regions.push(geometry);
-        let surface = self
-            .surfaces
-            .get_mut(&active_id)
-            .expect("active surface existence checked before dirty tracking");
-        surface.dirty_regions.push(geometry);
         Ok(())
     }
 

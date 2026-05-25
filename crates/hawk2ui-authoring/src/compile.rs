@@ -211,12 +211,20 @@ impl Compiler {
 
     fn finish_component(&mut self) {
         if let Some(component) = self.current_component.take() {
-            let children = ChildList::ordered(component.default_children)
-                .expect("ordered children construction cannot fail");
-            self.components.push(
-                ComponentInstance::new(component.id, component.component_name)
-                    .with_slot("default", children),
-            );
+            match ChildList::ordered(component.default_children) {
+                Ok(children) => {
+                    self.components.push(
+                        ComponentInstance::new(component.id, component.component_name)
+                            .with_slot("default", children),
+                    );
+                }
+                Err(error) => {
+                    self.error(
+                        "authoring.children.duplicate-key",
+                        format!("duplicate child key `{}`", error.duplicate_key()),
+                    );
+                }
+            }
         }
     }
 

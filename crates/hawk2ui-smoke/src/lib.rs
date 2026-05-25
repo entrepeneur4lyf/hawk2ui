@@ -540,11 +540,11 @@ fn require_file(path: &Path) -> Result<(), String> {
 }
 
 fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
         .parent()
         .and_then(Path::parent)
-        .expect("smoke crate lives under crates/hawk2ui-smoke")
-        .to_path_buf()
+        .map_or_else(|| manifest_dir.to_path_buf(), Path::to_path_buf)
 }
 
 /// The canonical Cargo package name for this crate.
