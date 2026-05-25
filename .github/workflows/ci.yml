@@ -7,8 +7,26 @@ on:
     branches: [main]
 
 jobs:
-  fast:
-    name: fast gate (${{ matrix.os }})
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo clippy
+        run: cargo clippy --workspace -- -D warnings
+
+  unit-tests:
+    name: unit tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -17,15 +35,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Fast gate
-        run: bash scripts/check-fast.sh
+      - name: workspace tests
+        run: cargo test --workspace
 
-  full:
-    name: full gate
+  integration-tests:
+    name: integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: source to render
+        run: cargo test --test source_to_render
+      - name: api contract filter
+        run: cargo test --workspace api_contract
+      - name: domain template filter
+        run: cargo test --workspace domain_test_templates
+
+  dependency-policy:
+    name: dependency policy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-deny
-      - name: Full gate
-        run: bash scripts/check.sh
+      - name: cargo deny
+        run: cargo deny check
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps
+
+  examples-and-smoke:
+    name: examples and smoke fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: smoke apps
+        run: cargo test -p hawk2ui-smoke --test smoke_apps
+      - name: render baseline benchmark
+        run: cargo bench --bench render_baseline -- --quick
+      - name: whitespace diff check
+        run: git diff --check
