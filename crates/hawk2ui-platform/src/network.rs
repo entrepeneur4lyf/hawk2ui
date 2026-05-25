@@ -1,6 +1,7 @@
 //! Capability-scoped network API records.
 
 use crate::{CapabilityTable, PlatformContext, PlatformDiagnostic, PlatformOperation};
+use url::Url;
 
 /// Network manifest declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,13 +73,14 @@ impl NetworkPolicy {
             url: url.into(),
             diagnostic: PlatformDiagnostic::error(
                 "network.url.malformed",
-                "network URL is malformed",
+                "network URL is malformed or uses an unsupported scheme",
             ),
         })?;
         if !manifest
             .allowed_hosts
             .iter()
-            .any(|allowed| allowed == &host)
+            .filter_map(|allowed| canonical_host(allowed))
+            .any(|allowed| allowed == host)
         {
             return Err(NetworkDenied {
                 url: url.into(),
@@ -96,11 +98,26 @@ impl NetworkPolicy {
 }
 
 fn parse_host(url: &str) -> Option<String> {
-    let (_scheme, rest) = url.split_once("://")?;
-    let host = rest.split('/').next()?;
-    if host.is_empty() || host.contains(' ') {
-        None
-    } else {
-        Some(host.into())
+    let parsed = Url::parse(url).ok()?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        _ => return None,
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
+    parsed.host_str().and_then(canonical_host)
+}
+
+fn canonical_host(host: &str) -> Option<String> {
+    let trimmed = host.trim().trim_end_matches('.');
+    if trimmed.is_empty()
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.contains('@')
+        || trimmed.contains(char::is_whitespace)
+    {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
 }

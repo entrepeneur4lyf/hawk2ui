@@ -25,10 +25,51 @@ pub struct ParameterRange {
 }
 
 impl ParameterRange {
-    /// Creates a parameter range.
+    /// Creates a parameter range without validating it.
+    ///
+    /// Use [`Self::try_new`] when constructing ranges from untrusted input.
     #[must_use]
     pub const fn new(min: f64, max: f64, default: f64) -> Self {
         Self { min, max, default }
+    }
+
+    /// Creates a validated parameter range.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterValidationError`] when any bound is non-finite, the maximum is not
+    /// greater than the minimum, or the default value is outside the range.
+    pub fn try_new(min: f64, max: f64, default: f64) -> Result<Self, ParameterValidationError> {
+        let range = Self { min, max, default };
+        range.validate()?;
+        Ok(range)
+    }
+
+    /// Validates numeric range invariants required by host normalization.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterValidationError`] when the range can produce invalid host values.
+    pub fn validate(self) -> Result<(), ParameterValidationError> {
+        if !self.min.is_finite() || !self.max.is_finite() || !self.default.is_finite() {
+            return Err(ParameterValidationError::new(
+                "parameter.range.non-finite",
+                "parameter range values must be finite",
+            ));
+        }
+        if self.max <= self.min {
+            return Err(ParameterValidationError::new(
+                "parameter.range.invalid",
+                "parameter range maximum must be greater than minimum",
+            ));
+        }
+        if self.default < self.min || self.default > self.max {
+            return Err(ParameterValidationError::new(
+                "parameter.range.default-out-of-range",
+                "parameter range default must be inside the inclusive range",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -49,10 +90,40 @@ pub enum ParameterSmoothing {
 }
 
 impl ParameterSmoothing {
-    /// Creates linear smoothing metadata.
+    /// Creates linear smoothing metadata without validating it.
+    ///
+    /// Use [`Self::try_linear_ms`] when constructing smoothing metadata from untrusted input.
     #[must_use]
     pub const fn linear_ms(milliseconds: f64) -> Self {
         Self::LinearMs(milliseconds)
+    }
+
+    /// Creates validated linear smoothing metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterValidationError`] when the duration is negative or non-finite.
+    pub fn try_linear_ms(milliseconds: f64) -> Result<Self, ParameterValidationError> {
+        let smoothing = Self::LinearMs(milliseconds);
+        smoothing.validate()?;
+        Ok(smoothing)
+    }
+
+    /// Validates smoothing metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParameterValidationError`] when smoothing can produce invalid host timing.
+    pub fn validate(self) -> Result<(), ParameterValidationError> {
+        match self {
+            Self::LinearMs(milliseconds) if milliseconds.is_finite() && milliseconds >= 0.0 => {
+                Ok(())
+            }
+            Self::LinearMs(_) => Err(ParameterValidationError::new(
+                "parameter.smoothing.invalid",
+                "parameter smoothing duration must be finite and non-negative",
+            )),
+        }
     }
 }
 
@@ -205,6 +276,10 @@ impl ParameterRecord {
         let range = self
             .range
             .ok_or_else(|| "parameter has no numeric range".to_string())?;
+        range.validate().map_err(|error| error.message)?;
+        if !normalized.is_finite() {
+            return Err("normalized value must be finite".into());
+        }
         let normalized = normalized.clamp(0.0, 1.0);
         let mut value = range.min + ((range.max - range.min) * normalized);
         if let Some(steps) = self.steps {
@@ -223,6 +298,10 @@ impl ParameterRecord {
     pub fn normalize(&self, value: &ParameterValue) -> Result<f64, String> {
         match (self.range, value) {
             (Some(range), ParameterValue::Float(value)) => {
+                range.validate().map_err(|error| error.message)?;
+                if !value.is_finite() {
+                    return Err("parameter value must be finite".into());
+                }
                 Ok(((value - range.min) / (range.max - range.min)).clamp(0.0, 1.0))
             }
             (None, ParameterValue::Bool(value)) => Ok(f64::from(u8::from(*value))),
@@ -357,6 +436,34 @@ impl ParameterModel {
                 errors.push(ParameterValidationError::new(
                     "parameter.group-missing",
                     format!("parameter group does not exist: {group_id}"),
+                ));
+            }
+            if let Some(range) = parameter.range
+                && let Err(error) = range.validate()
+            {
+                errors.push(ParameterValidationError::new(
+                    error.code,
+                    format!(
+                        "parameter {} has invalid range: {}",
+                        parameter.id, error.message
+                    ),
+                ));
+            }
+            if let Some(smoothing) = parameter.smoothing
+                && let Err(error) = smoothing.validate()
+            {
+                errors.push(ParameterValidationError::new(
+                    error.code,
+                    format!(
+                        "parameter {} has invalid smoothing: {}",
+                        parameter.id, error.message
+                    ),
+                ));
+            }
+            if parameter.steps == Some(0) {
+                errors.push(ParameterValidationError::new(
+                    "parameter.steps.invalid",
+                    format!("parameter {} has zero discrete steps", parameter.id),
                 ));
             }
         }

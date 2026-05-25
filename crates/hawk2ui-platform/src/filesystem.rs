@@ -1,6 +1,7 @@
 //! Scoped filesystem API records.
 
 use crate::PlatformDiagnostic;
+use std::path::{Component, Path, PathBuf};
 
 /// Filesystem access scope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,18 +80,26 @@ impl FilesystemPolicy {
                 ),
             });
         }
-        if is_escaping(relative_path) {
-            return Err(FilesystemDenied {
+        let scoped_path =
+            validate_relative_path(relative_path).ok_or_else(|| FilesystemDenied {
                 path: relative_path.into(),
                 diagnostic: PlatformDiagnostic::error(
                     "filesystem.path.escape",
                     "filesystem path escapes its scope",
                 ),
+            })?;
+        if !is_valid_scope_root(&grant.root) {
+            return Err(FilesystemDenied {
+                path: relative_path.into(),
+                diagnostic: PlatformDiagnostic::error(
+                    "filesystem.root.invalid",
+                    "filesystem grant root is invalid",
+                ),
             });
         }
         Ok(FilesystemAccess {
             scope: grant.scope,
-            resolved_path: join_scope_path(&grant.root, relative_path),
+            resolved_path: join_scope_path(&grant.root, &scoped_path),
         })
     }
 
@@ -125,10 +134,39 @@ impl FilesystemPolicy {
     }
 }
 
-fn is_escaping(path: &str) -> bool {
-    path.starts_with('/') || path.split('/').any(|segment| segment == "..")
+fn validate_relative_path(path: &str) -> Option<PathBuf> {
+    if path.is_empty()
+        || path.contains('\0')
+        || path.contains('\\')
+        || path.contains(':')
+        || Path::new(path).is_absolute()
+    {
+        return None;
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(segment) => normalized.push(segment),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
-fn join_scope_path(root: &str, relative_path: &str) -> String {
-    format!("{}/{}", root.trim_end_matches('/'), relative_path)
+fn is_valid_scope_root(root: &str) -> bool {
+    !root.is_empty() && !root.contains('\0')
+}
+
+fn join_scope_path(root: &str, relative_path: &Path) -> String {
+    Path::new(root)
+        .join(relative_path)
+        .to_string_lossy()
+        .into_owned()
 }

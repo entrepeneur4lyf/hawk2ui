@@ -1,6 +1,7 @@
 //! Sealed artifact records and compatibility checks.
 
 use crate::{BuildDiagnostic, BuildDiagnosticSeverity, HawkManifest, PackageTarget};
+use sha2::{Digest, Sha256};
 
 /// Artifact schema version.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,16 +31,23 @@ impl ArtifactSchemaVersion {
 pub struct ArtifactHash(pub String);
 
 impl ArtifactHash {
-    /// Creates a deterministic hash string from bytes.
+    /// Creates a deterministic SHA-256 hash string from bytes.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-        for byte in bytes {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        let digest = Sha256::digest(bytes);
+        let mut encoded = String::with_capacity("sha256:".len() + (digest.len() * 2));
+        encoded.push_str("sha256:");
+        for byte in digest {
+            encoded.push(hex_nibble(byte >> 4));
+            encoded.push(hex_nibble(byte & 0x0f));
         }
-        Self(format!("fnv1a64:{hash:016x}"))
+        Self(encoded)
     }
+}
+
+fn hex_nibble(value: u8) -> char {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    char::from(HEX[usize::from(value & 0x0f)])
 }
 
 /// Compiled script payload recorded in a sealed artifact.
