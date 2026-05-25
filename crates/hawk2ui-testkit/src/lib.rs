@@ -11,7 +11,10 @@ pub use fixtures::{FixtureCatalog, FixtureCatalogError, TempProject};
 pub use perf::PerformanceSuite;
 pub use security::{SecurityRejectionMatrix, SecurityRejectionMatrixError};
 pub use templates::{DomainTemplateKind, DomainTemplateSuite, DomainTestTemplate};
-pub use visual::{VisualRegressionCase, VisualRegressionSuite};
+pub use visual::{
+    ImageComparisonMetadata, VisualFixture, VisualFixtureKind, VisualFixtureSet,
+    VisualRegressionCase, VisualRegressionSuite,
+};
 
 /// Fixture type used by deterministic `Hawk2UI` tests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
