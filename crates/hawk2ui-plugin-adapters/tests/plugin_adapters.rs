@@ -4,6 +4,7 @@ use hawk2ui_plugin::{
 use hawk2ui_plugin_adapters::{
     PackageAdapterSet, PackageFormat, PackageRequest, VerificationStatus,
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn plugin_adapters_generate_all_supported_package_targets() {
@@ -89,6 +90,37 @@ fn plugin_adapters_emit_metadata_and_verification_reports() {
             .iter()
             .all(|entry| entry.metadata().id == "com.hawk2ui.demo")
     );
+}
+
+#[test]
+fn plugin_adapters_materialize_package_metadata_outputs() {
+    let metadata =
+        FormatMetadata::new("com.hawk2ui.demo", "Demo", "Hawk2UI").feature("audio-effect");
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-plugin-adapters-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Demo"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+
+    assert_eq!(outputs.len(), 1);
+    assert!(std::path::Path::new(&outputs[0].manifest_path).is_file());
+    let manifest =
+        std::fs::read_to_string(&outputs[0].manifest_path).expect("metadata manifest reads");
+    assert!(manifest.contains("format = \"clap\""));
+    assert!(manifest.contains("id = \"com.hawk2ui.demo\""));
 }
 
 #[test]

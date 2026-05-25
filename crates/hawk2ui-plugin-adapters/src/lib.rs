@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 //! Production plugin and package adapters for `Hawk2UI` `CLAP`, `VST3`, AU, standalone, and desktop outputs.
 
+use std::{fs, path::Path};
+
 use hawk2ui_plugin::{BundleOutput, FormatMetadata, ParameterModel};
 
 /// The canonical Cargo package name for this crate.
@@ -37,6 +39,17 @@ impl PackageFormat {
             Self::Au => "component",
             Self::Standalone | Self::DesktopBundle => "app",
             Self::SealedArtifact => "hawk2ui",
+        }
+    }
+
+    fn manifest_key(self) -> &'static str {
+        match self {
+            Self::Clap => "clap",
+            Self::Vst3 => "vst3",
+            Self::Au => "au",
+            Self::Standalone => "standalone",
+            Self::DesktopBundle => "desktop-bundle",
+            Self::SealedArtifact => "sealed-artifact",
         }
     }
 }
@@ -103,6 +116,55 @@ impl PackageTargetPlan {
     pub const fn metadata(&self) -> &FormatMetadata {
         &self.metadata
     }
+
+    fn materialize(&self) -> Result<MaterializedPackageOutput, PackageMaterializationError> {
+        let output_path = Path::new(&self.output_path);
+        fs::create_dir_all(output_path).map_err(|error| {
+            materialization_error(
+                "package.output.create-failed",
+                format!(
+                    "failed to create package output {}: {error}",
+                    self.output_path
+                ),
+            )
+        })?;
+        let manifest_path = output_path.join("hawk2ui-package.toml");
+        fs::write(&manifest_path, self.manifest()).map_err(|error| {
+            materialization_error(
+                "package.output.write-failed",
+                format!(
+                    "failed to write package metadata {}: {error}",
+                    manifest_path.display()
+                ),
+            )
+        })?;
+        Ok(MaterializedPackageOutput {
+            format: self.format,
+            output_path: self.output_path.clone(),
+            manifest_path: manifest_path.to_string_lossy().into_owned(),
+        })
+    }
+
+    fn manifest(&self) -> String {
+        let features = self
+            .metadata
+            .features
+            .iter()
+            .map(|feature| format!("\"{feature}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "format = \"{}\"\nid = \"{}\"\ndisplay_name = \"{}\"\nvendor = \"{}\"\nversion = \"{}\"\ncategory = \"{}\"\nfeatures = [{}]\nparameter_count = {}\n",
+            self.format.manifest_key(),
+            self.metadata.id,
+            self.metadata.display_name,
+            self.metadata.vendor,
+            self.metadata.version,
+            self.metadata.category,
+            features,
+            self.parameter_count
+        )
+    }
 }
 
 /// Package plan.
@@ -118,6 +180,21 @@ impl PackagePlan {
         &self.targets
     }
 
+    /// Materializes package output directories with deterministic package metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageMaterializationError`] when an output directory or metadata manifest
+    /// cannot be created.
+    pub fn materialize(
+        &self,
+    ) -> Result<Vec<MaterializedPackageOutput>, PackageMaterializationError> {
+        self.targets
+            .iter()
+            .map(PackageTargetPlan::materialize)
+            .collect()
+    }
+
     /// Verifies planned package outputs.
     #[must_use]
     pub fn verify(&self) -> VerificationReport {
@@ -131,6 +208,31 @@ impl PackagePlan {
             })
             .collect();
         VerificationReport { entries }
+    }
+}
+
+/// Materialized package output metadata.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterializedPackageOutput {
+    /// Package format.
+    pub format: PackageFormat,
+    /// Output directory path.
+    pub output_path: String,
+    /// Metadata manifest path written inside the output directory.
+    pub manifest_path: String,
+}
+
+/// Package materialization error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PackageMaterializationError {
+    diagnostic: PackageDiagnostic,
+}
+
+impl PackageMaterializationError {
+    /// Returns the materialization diagnostic.
+    #[must_use]
+    pub const fn diagnostic(&self) -> &PackageDiagnostic {
+        &self.diagnostic
     }
 }
 
@@ -288,10 +390,29 @@ fn validate_request(request: &PackageRequest) -> Result<(), PackagePlanningError
             "output path must not be empty",
         ));
     }
+    if request.output.bundle_name.trim().is_empty()
+        || request.output.bundle_name.contains('/')
+        || request.output.bundle_name.contains('\\')
+        || request.output.bundle_name.contains('\0')
+    {
+        diagnostics.push(PackageDiagnostic::new(
+            "package.bundle-name.invalid",
+            "bundle name must be a single filesystem segment",
+        ));
+    }
     if diagnostics.is_empty() {
         Ok(())
     } else {
         Err(PackagePlanningError { diagnostics })
+    }
+}
+
+fn materialization_error(
+    rule: impl Into<String>,
+    message: impl Into<String>,
+) -> PackageMaterializationError {
+    PackageMaterializationError {
+        diagnostic: PackageDiagnostic::new(rule, message),
     }
 }
 
