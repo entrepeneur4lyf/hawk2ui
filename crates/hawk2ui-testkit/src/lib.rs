@@ -1,6 +1,16 @@
 #![forbid(unsafe_code)]
 //! Shared deterministic fixtures, diagnostics assertions, visual helpers, security helpers, and benchmark helpers for `Hawk2UI` tests.
 
+pub mod fixtures;
+pub mod perf;
+pub mod security;
+pub mod visual;
+
+pub use fixtures::{FixtureCatalog, FixtureCatalogError, TempProject};
+pub use perf::PerformanceSuite;
+pub use security::{SecurityRejectionMatrix, SecurityRejectionMatrixError};
+pub use visual::{VisualRegressionCase, VisualRegressionSuite};
+
 /// Fixture type used by deterministic `Hawk2UI` tests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FixtureKind {
