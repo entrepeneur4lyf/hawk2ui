@@ -17,7 +17,11 @@ pub use diagnostic::{
     Diagnostic, DiagnosticSeverity, RelatedContext, RuleId, SourceSpan, SuggestedFix,
 };
 pub use inventory::{ApiInventory, ApiModule, ApiTypeAudience, ApiTypeEntry, ApiTypeStatus};
-pub use plugin::{AutomationGesture, ParameterId, PluginEditorContract, PluginParameterContract};
+pub use plugin::{
+    AutomationGesture, ParameterId, PluginEditorContract, PluginEditorKind,
+    PluginParameterContract, PluginPresetContract, PluginStateContract, PluginStateEntry,
+    PluginStateFormat, RealtimeDataContract, RealtimeDataDirection, RealtimeDataKind,
+};
 pub use runtime::{
     BindingDirection, CapabilityKey, HostBindingContract, RuntimeJob, RuntimeJobId, RuntimeJobKind,
     RuntimeJobStatus, RuntimeLifecycleHook, RuntimePhase,
