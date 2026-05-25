@@ -18,8 +18,14 @@ pub use diagnostic::{
 };
 pub use inventory::{ApiInventory, ApiModule, ApiTypeAudience, ApiTypeEntry, ApiTypeStatus};
 pub use plugin::{AutomationGesture, ParameterId, PluginEditorContract, PluginParameterContract};
-pub use runtime::{CapabilityKey, HostBindingContract, RuntimePhase};
-pub use surface::{HostSurfaceContract, SurfaceKind, SurfaceMetrics};
+pub use runtime::{
+    BindingDirection, CapabilityKey, HostBindingContract, RuntimeJob, RuntimeJobId, RuntimeJobKind,
+    RuntimeJobStatus, RuntimeLifecycleHook, RuntimePhase,
+};
+pub use surface::{
+    FrameSchedule, HostSurfaceContract, InputEvent, KeyEvent, KeyModifiers, MouseButton,
+    RepaintReason, RepaintRequest, SurfaceKind, SurfaceMetrics,
+};
 
 #[cfg(test)]
 mod tests {
