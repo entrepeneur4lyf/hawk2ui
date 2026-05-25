@@ -8,7 +8,8 @@ use hawk2ui_render::{
     RendererBackend, Stroke, Transform,
 };
 use skia_safe::{
-    Canvas, ClipOp, Color as SkiaColor, Font, Paint, PaintStyle, Path, Rect, Surface, surfaces,
+    Canvas, ClipOp, Color as SkiaColor, Data, Font, Image, Paint, PaintStyle, Path, Rect, Surface,
+    surfaces,
 };
 
 /// The canonical Cargo package name for this crate.
@@ -270,6 +271,7 @@ pub struct SkiaRendererBackend {
     dirty_regions: Vec<Geometry>,
     diagnostics: Vec<BackendDiagnostic>,
     skia_capabilities: SkiaRendererCapabilities,
+    image_assets: BTreeMap<String, Image>,
 }
 
 impl SkiaRendererBackend {
@@ -287,6 +289,7 @@ impl SkiaRendererBackend {
             dirty_regions: Vec::new(),
             diagnostics: Vec::new(),
             skia_capabilities: SkiaRendererCapabilities::cpu_raster(),
+            image_assets: BTreeMap::new(),
         }
     }
 
@@ -345,6 +348,29 @@ impl SkiaRendererBackend {
     #[must_use]
     pub const fn skia_capabilities(&self) -> SkiaRendererCapabilities {
         self.skia_capabilities
+    }
+
+    /// Registers an encoded compiled image payload for later drawing by asset ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when the image payload cannot be decoded by `Skia`.
+    pub fn register_image_asset(
+        &mut self,
+        id: impl Into<String>,
+        encoded_bytes: &[u8],
+    ) -> Result<(), BackendError> {
+        let id = id.into();
+        let data = Data::new_copy(encoded_bytes);
+        let Some(image) = Image::from_encoded(data) else {
+            return self.fail(
+                "skia.image.decode-failed",
+                "compiled image payload could not be decoded",
+            );
+        };
+        self.image_assets.insert(id.clone(), image);
+        self.commands.push(format!("register-image:{id}"));
+        Ok(())
     }
 
     /// Draws a compiled vector asset by stable asset ID.
@@ -575,6 +601,17 @@ impl RendererBackend for SkiaRendererBackend {
                 "backend does not support image rendering",
             );
         }
+        let Some(asset) = self.image_assets.get(image).cloned() else {
+            return self.fail(
+                "skia.image.missing",
+                "compiled image asset is not registered with the renderer",
+            );
+        };
+        self.with_active_surface(|surface| {
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            surface.canvas().draw_image(asset, (0.0, 0.0), Some(&paint));
+        })?;
         self.commands.push(format!("image:{image}"));
         Ok(())
     }

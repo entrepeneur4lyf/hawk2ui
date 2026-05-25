@@ -9,11 +9,12 @@ fn skia_backend_matches_recording_backend_for_core_frame_commands() {
         .with_images(true);
     let mut recording = hawk2ui_render::RecordingBackend::new(capabilities);
     let mut skia = SkiaRendererBackend::new();
+    skia.register_image_asset("hero", ONE_BY_ONE_PNG).unwrap();
 
     drive_core_frame(&mut recording);
     drive_core_frame(&mut skia);
 
-    assert_eq!(skia.command_keys(), recording.command_keys());
+    assert_eq!(&skia.command_keys()[1..], recording.command_keys());
     assert_eq!(skia.dirty_regions(), recording.dirty_regions());
     assert_eq!(skia.capabilities(), capabilities);
 }
@@ -134,3 +135,9 @@ fn skia_backend_reports_detailed_capabilities_and_vector_commands() {
 
     assert!(backend.command_keys().contains(&"vector:logo".to_string()));
 }
+
+const ONE_BY_ONE_PNG: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
+    0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 15, 4, 0, 9, 251, 3,
+    253, 167, 175, 213, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
