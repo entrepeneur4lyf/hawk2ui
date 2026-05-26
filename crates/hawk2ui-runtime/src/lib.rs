@@ -7,6 +7,7 @@ pub mod lifecycle;
 pub mod safety;
 pub mod scheduler;
 pub mod script;
+pub mod view;
 
 pub use bindings::{
     BindingExecution, BindingLifecycleAvailability, BindingSchema, HostBindingCall,
@@ -25,6 +26,10 @@ pub use script::{
     HostCallRecord, PromiseId, RecordingScriptEngine, RuntimeCapability, RuntimeError,
     ScriptEngine, ScriptEngineError, ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord,
     StructuredValue,
+};
+pub use view::{
+    RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneError, RuntimeSceneFrame,
+    RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
 };
 
 /// The canonical Cargo package name for this crate.

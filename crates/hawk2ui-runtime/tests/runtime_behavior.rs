@@ -1,11 +1,15 @@
+use hawk2ui_layout::{BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue, Viewport};
+use hawk2ui_render::{Color, Geometry, RendererBackend, SceneNodeId};
+use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend};
 use hawk2ui_runtime::{
     BindingExecution, BindingLifecycleAvailability, BindingSchema, HostBindingRecord,
     HostBindingRegistry, HostCallRecord, LifecycleHook, LifecyclePhase, LifecycleRegistry,
-    PromiseId, RecordingScriptEngine, RuntimeCapability, RuntimeError, RuntimeEvent,
-    RuntimeEventDispatcher, RuntimeEventKind, RuntimeEventPayload, RuntimeEventPropagation,
-    RuntimeExecutionContext, RuntimeGuardOperation, RuntimeSafetyGuard, RuntimeScheduler,
-    ScriptEngine, ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord, StructuredValue,
-    TimerJob,
+    PromiseId, RecordingScriptEngine, RuntimeCapability, RuntimeDrawCommand, RuntimeError,
+    RuntimeEvent, RuntimeEventDispatcher, RuntimeEventKind, RuntimeEventPayload,
+    RuntimeEventPropagation, RuntimeExecutionContext, RuntimeGuardOperation, RuntimeSafetyGuard,
+    RuntimeSceneBridge, RuntimeSceneError, RuntimeSceneFrame, RuntimeScheduler, RuntimeTextVisual,
+    RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual, ScriptEngine,
+    ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord, StructuredValue, TimerJob,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -389,4 +393,283 @@ fn plugin_safety_guard_allows_ui_thread_runtime_operations() {
     guard
         .ensure_allowed(RuntimeGuardOperation::Rendering)
         .expect("UI thread may render");
+}
+
+#[test]
+fn runtime_view_tree_preserves_parent_child_order_and_rejects_duplicates() {
+    let root = RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column),
+        RuntimeVisual::Fill(Color::rgba(8, 10, 14, 255)),
+    );
+    let header = RuntimeViewNode::new(
+        RuntimeViewId::new("header"),
+        LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(300.0, 32.0)),
+        RuntimeVisual::Text(RuntimeTextVisual::new(
+            "Hello Hawk2UI",
+            18.0,
+            Color::rgba(240, 244, 255, 255),
+        )),
+    );
+    let meter = RuntimeViewNode::new(
+        RuntimeViewId::new("meter"),
+        LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(300.0, 48.0)),
+        RuntimeVisual::Fill(Color::rgba(30, 144, 255, 255)),
+    );
+
+    let tree = RuntimeViewTree::new(root)
+        .with_child(&RuntimeViewId::new("root"), header)
+        .expect("header attaches to root")
+        .with_child(&RuntimeViewId::new("root"), meter)
+        .expect("meter attaches to root");
+
+    assert_eq!(tree.root_id().as_str(), "root");
+    assert_eq!(
+        tree.children_of(&RuntimeViewId::new("root"))
+            .iter()
+            .map(RuntimeViewId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["header", "meter"]
+    );
+    assert!(tree.node(&RuntimeViewId::new("header")).is_some());
+
+    let duplicate = RuntimeViewNode::new(
+        RuntimeViewId::new("meter"),
+        LayoutStyle::custom_measured(),
+        RuntimeVisual::None,
+    );
+    let error = tree
+        .with_child(&RuntimeViewId::new("root"), duplicate)
+        .expect_err("duplicate view IDs must be rejected");
+
+    assert_eq!(error, RuntimeSceneError::DuplicateNode("meter".into()));
+}
+
+#[test]
+fn runtime_scene_bridge_computes_layout_scene_and_paint_commands() {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(320.0, 200.0))
+            .with_padding(BoxEdges::all(LayoutValue::px(8.0)))
+            .with_gap(LayoutValue::px(4.0)),
+        RuntimeVisual::Fill(Color::rgba(12, 14, 18, 255)),
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("title"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(200.0, 32.0)),
+            RuntimeVisual::Text(RuntimeTextVisual::new(
+                "Runtime Scene",
+                16.0,
+                Color::rgba(255, 255, 255, 255),
+            )),
+        ),
+    )
+    .expect("title attaches")
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("accent"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(120.0, 24.0)),
+            RuntimeVisual::Fill(Color::rgba(255, 80, 48, 255)),
+        ),
+    )
+    .expect("accent attaches");
+
+    let frame = RuntimeSceneBridge::new(Viewport::new(320.0, 200.0))
+        .build(&tree)
+        .expect("runtime view tree bridges into render data");
+
+    assert_eq!(
+        frame.geometry_for(&RuntimeViewId::new("root")).unwrap(),
+        Geometry::new(0.0, 0.0, 320.0, 200.0)
+    );
+    assert_eq!(
+        frame.geometry_for(&RuntimeViewId::new("title")).unwrap(),
+        Geometry::new(8.0, 8.0, 200.0, 32.0)
+    );
+    assert_eq!(
+        frame.geometry_for(&RuntimeViewId::new("accent")).unwrap(),
+        Geometry::new(8.0, 44.0, 120.0, 24.0)
+    );
+    assert!(
+        frame
+            .scene()
+            .node(&SceneNodeId::new("title"))
+            .unwrap()
+            .hit_test()
+            .is_some()
+    );
+    assert_eq!(frame.draw_commands().len(), 3);
+    assert_eq!(frame.paint_commands().commands().len(), 3);
+    assert!(
+        frame
+            .paint_commands()
+            .serialize_stable()
+            .contains("draw-text:title:Runtime Scene")
+    );
+}
+
+#[test]
+fn runtime_scene_bridge_marks_invalidated_nodes_and_ancestors() {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column),
+        RuntimeVisual::Fill(Color::rgba(0, 0, 0, 255)),
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("meter"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(80.0, 20.0)),
+            RuntimeVisual::Fill(Color::rgba(0, 200, 120, 255)),
+        ),
+    )
+    .expect("meter attaches")
+    .invalidate(&RuntimeViewId::new("meter"))
+    .expect("meter invalidates");
+
+    let frame = RuntimeSceneBridge::new(Viewport::new(100.0, 100.0))
+        .build(&tree)
+        .expect("invalidated tree bridges");
+
+    assert_eq!(
+        frame
+            .invalidated_view_ids()
+            .iter()
+            .map(RuntimeViewId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["meter"]
+    );
+    assert!(
+        frame
+            .scene()
+            .node(&SceneNodeId::new("meter"))
+            .unwrap()
+            .invalidated()
+    );
+    assert!(
+        frame
+            .scene()
+            .node(&SceneNodeId::new("root"))
+            .unwrap()
+            .invalidated()
+    );
+}
+
+#[test]
+fn runtime_scene_bridge_output_renders_visible_pixels_with_skia() {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(180.0, 96.0))
+            .with_padding(BoxEdges::all(LayoutValue::px(8.0)))
+            .with_gap(LayoutValue::px(8.0)),
+        RuntimeVisual::Fill(Color::rgba(8, 8, 12, 255)),
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("label"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(140.0, 28.0)),
+            RuntimeVisual::Text(RuntimeTextVisual::new(
+                "Pixels",
+                18.0,
+                Color::rgba(255, 255, 255, 255),
+            )),
+        ),
+    )
+    .expect("label attaches")
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("bar"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(96.0, 24.0)),
+            RuntimeVisual::Fill(Color::rgba(240, 88, 40, 255)),
+        ),
+    )
+    .expect("bar attaches");
+
+    let frame = RuntimeSceneBridge::new(Viewport::new(180.0, 96.0))
+        .build(&tree)
+        .expect("runtime scene frame builds");
+    let mut backend = SkiaRendererBackend::default();
+    backend
+        .create_surface("main", 180, 96)
+        .expect("surface creates");
+    backend.begin_frame("main").expect("frame begins");
+    backend
+        .clear(Color::rgba(0, 0, 0, 255))
+        .expect("surface clears");
+    render_frame_with_skia(&frame, &mut backend);
+    backend.end_frame("main").expect("frame ends");
+
+    let snapshot = backend.frame_snapshot("main").expect("snapshot exists");
+    assert!(snapshot.pixels().iter().any(|pixel| *pixel == 0xf05828));
+    let changed_text_pixels = count_changed_pixels(
+        snapshot,
+        0x08080c,
+        frame.geometry_for(&RuntimeViewId::new("label")).unwrap(),
+    );
+    assert!(
+        changed_text_pixels > 0,
+        "text draw should affect label pixels; changed={changed_text_pixels}, commands={:?}",
+        backend.command_keys()
+    );
+}
+
+fn render_frame_with_skia(frame: &RuntimeSceneFrame, backend: &mut SkiaRendererBackend) {
+    for command in frame.draw_commands() {
+        match command {
+            RuntimeDrawCommand::Fill {
+                geometry, color, ..
+            } => backend
+                .fill(*geometry, *color)
+                .expect("fill command renders"),
+            RuntimeDrawCommand::Text {
+                geometry,
+                text,
+                font_size,
+                color,
+                ..
+            } => backend
+                .draw_text_at(
+                    text,
+                    geometry.x,
+                    geometry.y + geometry.height,
+                    *font_size,
+                    *color,
+                )
+                .expect("text command renders"),
+        }
+    }
+}
+
+fn count_changed_pixels(
+    snapshot: &SkiaFrameSnapshot,
+    background: u32,
+    geometry: Geometry,
+) -> usize {
+    let start_x = geometry.x.max(0.0).floor() as u32;
+    let start_y = geometry.y.max(0.0).floor() as u32;
+    let end_x = (geometry.x + geometry.width)
+        .ceil()
+        .min(snapshot.width() as f32) as u32;
+    let end_y = (geometry.y + geometry.height)
+        .ceil()
+        .min(snapshot.height() as f32) as u32;
+    let mut changed = 0;
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            if snapshot
+                .pixel_at(x, y)
+                .is_some_and(|pixel| pixel != background)
+            {
+                changed += 1;
+            }
+        }
+    }
+    changed
 }

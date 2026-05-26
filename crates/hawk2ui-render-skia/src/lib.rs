@@ -9,8 +9,8 @@ use hawk2ui_render::{
 };
 use skia_safe::{
     AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
-    IRect, Image, ImageInfo, MaskFilter, Paint, PaintStyle, Path, Rect, Surface, TileMode,
-    gradient, surfaces,
+    FontMgr, FontStyle, IRect, Image, ImageInfo, MaskFilter, Paint, PaintStyle, Path, Rect,
+    Surface, TileMode, Typeface, gradient, surfaces,
 };
 
 /// The canonical Cargo package name for this crate.
@@ -409,6 +409,7 @@ pub struct SkiaRendererBackend {
     skia_capabilities: SkiaRendererCapabilities,
     image_assets: BTreeMap<String, Image>,
     layer_caches: BTreeMap<String, SkiaLayerCacheEntry>,
+    default_typeface: Option<Typeface>,
 }
 
 impl SkiaRendererBackend {
@@ -428,6 +429,7 @@ impl SkiaRendererBackend {
             skia_capabilities: SkiaRendererCapabilities::cpu_raster(),
             image_assets: BTreeMap::new(),
             layer_caches: BTreeMap::new(),
+            default_typeface: FontMgr::new().legacy_make_typeface(None, FontStyle::normal()),
         }
     }
 
@@ -559,11 +561,16 @@ impl SkiaRendererBackend {
                 "text position and font size must be finite and font size must be greater than zero",
             );
         }
+        let Some(typeface) = self.default_typeface.clone() else {
+            return self.fail(
+                "skia.text.typeface-unavailable",
+                "system font manager did not provide a default typeface",
+            );
+        };
+        let font = Font::new(typeface, font_size);
         self.with_active_surface(|surface| {
             let mut paint = paint(color, PaintStyle::Fill);
             paint.set_anti_alias(true);
-            let mut font = Font::default();
-            font.set_size(font_size);
             surface.canvas().draw_str(text, (x, y), &font, &paint);
         })?;
         self.commands
