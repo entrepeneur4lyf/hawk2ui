@@ -126,6 +126,13 @@ fn plugin_adapters_materialize_package_metadata_outputs() {
         .expect("artifact descriptor reads");
     assert!(artifact.contains("artifact_format = \"hawk2ui-plugin-package\""));
     assert!(artifact.contains("entry_library = \"Demo.clap\""));
+
+    let report = plan.verify_materialized(&outputs);
+    assert_eq!(report.status(), VerificationStatus::Passed);
+    std::fs::remove_file(&outputs[0].artifact_descriptor_path)
+        .expect("artifact descriptor should be removable");
+    let failed = plan.verify_materialized(&outputs);
+    assert_eq!(failed.status(), VerificationStatus::Failed);
 }
 
 #[test]

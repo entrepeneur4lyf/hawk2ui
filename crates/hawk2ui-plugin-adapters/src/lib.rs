@@ -240,6 +240,30 @@ impl PackagePlan {
             .collect();
         VerificationReport { entries }
     }
+
+    /// Verifies materialized package outputs exist on disk with their metadata and artifact
+    /// descriptors.
+    #[must_use]
+    pub fn verify_materialized(&self, outputs: &[MaterializedPackageOutput]) -> VerificationReport {
+        let entries = self
+            .targets
+            .iter()
+            .cloned()
+            .map(|target| {
+                let status = outputs
+                    .iter()
+                    .find(|output| output.format == target.format)
+                    .filter(|output| {
+                        Path::new(&output.output_path).is_dir()
+                            && Path::new(&output.manifest_path).is_file()
+                            && Path::new(&output.artifact_descriptor_path).is_file()
+                    })
+                    .map_or(VerificationStatus::Failed, |_| VerificationStatus::Passed);
+                VerificationEntry { target, status }
+            })
+            .collect();
+        VerificationReport { entries }
+    }
 }
 
 /// Materialized package output metadata.
