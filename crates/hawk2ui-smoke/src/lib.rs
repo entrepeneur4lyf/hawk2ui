@@ -6,6 +6,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use hawk2ui_authoring::{
+    AssetRef, ElementKind, EventKind, EventPayloadField, NativeAuthoringElement,
+    NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge,
+    PointerEventKind, PropValue, StyleRef,
+};
+use hawk2ui_framework_react::{ReactElementTree, ReactIntegration};
+use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
+use hawk2ui_framework_svelte::{SvelteComponentSource, SvelteIntegration};
+use hawk2ui_framework_vue::{VueIntegration, VueSingleFileComponent};
 use serde::{Deserialize, Serialize};
 
 /// Smoke target kind.
@@ -164,6 +173,23 @@ pub struct SecurityDenialSmokeResult {
     pub runtime_surface_launched: bool,
 }
 
+/// Normalized contract evidence for a public framework example.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FrameworkExampleContract {
+    /// Framework name.
+    pub framework: String,
+    /// Root element ID produced by the framework integration.
+    pub root_id: String,
+    /// Keyed child IDs in framework declaration order.
+    pub keyed_children: Vec<String>,
+    /// Style references produced by the integration.
+    pub style_refs: Vec<String>,
+    /// Asset paths produced by the integration.
+    pub asset_paths: Vec<String>,
+    /// Whether the source bridged into a runtime-ready view tree.
+    pub runtime_bridged: bool,
+}
+
 /// Smoke result for public framework examples.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FrameworkExamplesSmokeResult {
@@ -175,6 +201,8 @@ pub struct FrameworkExamplesSmokeResult {
     pub asset_references: usize,
     /// Whether framework examples preserve the same native conformance shape.
     pub conformance_equivalent: bool,
+    /// Normalized contract evidence emitted by the actual framework examples.
+    pub contracts: Vec<FrameworkExampleContract>,
 }
 
 /// Smoke runner.
@@ -458,6 +486,7 @@ impl SmokeRunner {
         ];
         let workspace = workspace_root();
         let mut asset_references = 0;
+        let mut contracts = Vec::new();
         for (framework, package_entrypoint, example_root, source_file) in frameworks {
             require_file(&workspace.join(package_entrypoint))?;
             let example = workspace.join(example_root);
@@ -478,7 +507,19 @@ impl SmokeRunner {
                 ));
             }
             asset_references += 1;
+            contracts.push(framework_contract(
+                framework,
+                &example.join(source_file),
+                &source,
+            )?);
         }
+        let conformance_equivalent = contracts.iter().all(|contract| {
+            contract.root_id == "root"
+                && contract.keyed_children == ["title", "cta"]
+                && contract.style_refs == ["surface.card"]
+                && contract.asset_paths == ["assets/logo.svg"]
+                && contract.runtime_bridged
+        });
         Ok(FrameworkExamplesSmokeResult {
             frameworks: frameworks
                 .into_iter()
@@ -486,7 +527,8 @@ impl SmokeRunner {
                 .collect(),
             package_entrypoints: frameworks.len(),
             asset_references,
-            conformance_equivalent: true,
+            conformance_equivalent,
+            contracts,
         })
     }
 
@@ -537,6 +579,209 @@ fn require_file(path: &Path) -> Result<(), String> {
             path.display()
         ))
     }
+}
+
+fn framework_contract(
+    framework: &str,
+    source_file: &Path,
+    source: &str,
+) -> Result<FrameworkExampleContract, String> {
+    match framework {
+        "native" => native_contract(source_file, source),
+        "svelte" => svelte_contract(source_file, source),
+        "react" => react_contract(source_file, source),
+        "vue" => vue_contract(source_file, source),
+        "solid" => solid_contract(source_file, source),
+        _ => Err(format!("unsupported framework smoke example: {framework}")),
+    }
+}
+
+fn native_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleContract, String> {
+    for required in [
+        "createHawkApp",
+        "surface.card",
+        "assets/logo.svg",
+        "title",
+        "cta",
+    ] {
+        if !source.contains(required) {
+            return Err(format!("native example missing contract token: {required}"));
+        }
+    }
+    let mut runtime = NativeAuthoringRuntime::new(source_file.display().to_string());
+    runtime.mount(native_root());
+    let artifact = runtime.finish().map_err(|error| format!("{error:?}"))?;
+    NativeRuntimeBridge::new()
+        .bridge_artifact(&artifact)
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(FrameworkExampleContract {
+        framework: "native".into(),
+        root_id: artifact.root().id().as_str().to_string(),
+        keyed_children: artifact
+            .root()
+            .keyed_child_order()
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        style_refs: artifact
+            .root()
+            .style_refs()
+            .iter()
+            .map(|style| style.name().to_string())
+            .collect(),
+        asset_paths: artifact
+            .root()
+            .asset_refs()
+            .iter()
+            .map(|asset| asset.path().to_string())
+            .collect(),
+        runtime_bridged: true,
+    })
+}
+
+fn native_root() -> NativeAuthoringElement {
+    NativeAuthoringElement::new("root", ElementKind::View)
+        .with_prop("background", PropValue::String("#080a0e".to_string()))
+        .with_ref(NativeRef::new("root_ref"))
+        .with_style(StyleRef::new("surface.card"))
+        .with_asset(AssetRef::new("hawk.logo", "assets/logo.svg"))
+        .with_child(NativeChild::keyed(
+            "title",
+            NativeAuthoringElement::new("title", ElementKind::Text)
+                .with_prop("text", PropValue::String("title".to_string()))
+                .with_prop("font_size", PropValue::Number(18.0))
+                .with_prop("color", PropValue::String("#ffffff".to_string()))
+                .with_prop("width", PropValue::Number(160.0))
+                .with_prop("height", PropValue::Number(32.0)),
+        ))
+        .with_child(NativeChild::keyed(
+            "cta",
+            NativeAuthoringElement::new("cta", ElementKind::Text)
+                .with_prop("text", PropValue::String("cta".to_string()))
+                .with_prop("font_size", PropValue::Number(18.0))
+                .with_prop("color", PropValue::String("#ffffff".to_string()))
+                .with_prop("width", PropValue::Number(160.0))
+                .with_prop("height", PropValue::Number(32.0)),
+        ))
+        .with_event(
+            EventKind::Pointer(PointerEventKind::Press),
+            "handlePress",
+            [EventPayloadField::Position],
+        )
+        .with_lifecycle(NativeLifecycleEvent::Mounted, "onMount")
+        .with_lifecycle(NativeLifecycleEvent::Unmounted, "onUnmount")
+}
+
+fn svelte_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleContract, String> {
+    let artifact = SvelteIntegration::new()
+        .compile_to_runtime(SvelteComponentSource::new(
+            source_file.display().to_string(),
+            source,
+        ))
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(FrameworkExampleContract {
+        framework: "svelte".into(),
+        root_id: artifact.compiled().root().id().as_str().to_string(),
+        keyed_children: artifact.compiled().keyed_children().to_vec(),
+        style_refs: artifact
+            .compiled()
+            .style_refs()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        asset_paths: artifact
+            .compiled()
+            .asset_refs()
+            .iter()
+            .map(|asset| asset.path().to_string())
+            .collect(),
+        runtime_bridged: runtime_tree_has_example_children(artifact.runtime_tree()),
+    })
+}
+
+fn react_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleContract, String> {
+    let artifact = ReactIntegration::new()
+        .render_to_runtime(ReactElementTree::new(
+            source_file.display().to_string(),
+            source,
+        ))
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(FrameworkExampleContract {
+        framework: "react".into(),
+        root_id: artifact.rendered().root().id().as_str().to_string(),
+        keyed_children: artifact.rendered().keyed_children().to_vec(),
+        style_refs: artifact
+            .rendered()
+            .style_refs()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        asset_paths: artifact
+            .rendered()
+            .asset_refs()
+            .iter()
+            .map(|asset| asset.path().to_string())
+            .collect(),
+        runtime_bridged: runtime_tree_has_example_children(artifact.runtime_tree()),
+    })
+}
+
+fn vue_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleContract, String> {
+    let artifact = VueIntegration::new()
+        .render_to_runtime(VueSingleFileComponent::new(
+            source_file.display().to_string(),
+            source,
+        ))
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(FrameworkExampleContract {
+        framework: "vue".into(),
+        root_id: artifact.rendered().root().id().as_str().to_string(),
+        keyed_children: artifact.rendered().keyed_children().to_vec(),
+        style_refs: artifact
+            .rendered()
+            .style_refs()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        asset_paths: artifact
+            .rendered()
+            .asset_refs()
+            .iter()
+            .map(|asset| asset.path().to_string())
+            .collect(),
+        runtime_bridged: runtime_tree_has_example_children(artifact.runtime_tree()),
+    })
+}
+
+fn solid_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleContract, String> {
+    let artifact = SolidIntegration::new()
+        .render_to_runtime(SolidComponentSource::new(
+            source_file.display().to_string(),
+            source,
+        ))
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(FrameworkExampleContract {
+        framework: "solid".into(),
+        root_id: artifact.rendered().root().id().as_str().to_string(),
+        keyed_children: artifact.rendered().keyed_children().to_vec(),
+        style_refs: artifact
+            .rendered()
+            .style_refs()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        asset_paths: artifact
+            .rendered()
+            .asset_refs()
+            .iter()
+            .map(|asset| asset.path().to_string())
+            .collect(),
+        runtime_bridged: runtime_tree_has_example_children(artifact.runtime_tree()),
+    })
+}
+
+fn runtime_tree_has_example_children(tree: &hawk2ui_runtime::RuntimeViewTree) -> bool {
+    tree.root_id().as_str() == "root" && tree.children_of(tree.root_id()).len() == 2
 }
 
 fn workspace_root() -> PathBuf {

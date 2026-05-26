@@ -169,4 +169,17 @@ fn framework_examples_cover_all_public_framework_fixtures() {
     assert_eq!(result.package_entrypoints, 5);
     assert_eq!(result.asset_references, 5);
     assert!(result.conformance_equivalent);
+    assert_eq!(result.contracts.len(), 5);
+    for contract in &result.contracts {
+        assert_eq!(contract.root_id, "root");
+        assert_eq!(contract.keyed_children, vec!["title", "cta"]);
+        assert_eq!(contract.style_refs, vec!["surface.card"]);
+        assert_eq!(contract.asset_paths, vec!["assets/logo.svg"]);
+    }
+    assert!(
+        result
+            .contracts
+            .iter()
+            .all(|contract| contract.runtime_bridged)
+    );
 }
