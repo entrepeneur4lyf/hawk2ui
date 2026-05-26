@@ -1,3 +1,5 @@
+import { recordsForApp, type HawkElementSpec } from "../../hawk2ui-native/src/index.ts";
+
 export interface HawkReactRoot {
   readonly records: readonly string[];
   readonly render: (element: unknown) => void;
@@ -14,9 +16,10 @@ export function createHawkReactRoot(target: { readonly id: string }): HawkReactR
       return records;
     },
     render: (element: unknown) => {
-      const rootId = readElementId(element) ?? target.id;
-      records.push(`mount-element:${rootId}`);
-      records.push(`commit-root:${rootId}`);
+      records.splice(0, records.length, ...recordsForApp({
+        name: `react:${target.id}`,
+        root: elementToNativeSpec(element, target.id),
+      }));
     },
     unmount: () => {
       records.push(`unmount-element:${target.id}`);
@@ -24,10 +27,41 @@ export function createHawkReactRoot(target: { readonly id: string }): HawkReactR
   };
 }
 
-function readElementId(element: unknown): string | undefined {
+function elementToNativeSpec(element: unknown, fallbackId: string): HawkElementSpec {
+  const props = readProps(element);
+  const id = readString(props, "id") ?? fallbackId;
+  return {
+    id,
+    kind: "view",
+    refs: readString(props, "ref") ? [readString(props, "ref") as string] : [],
+    styleRefs: readString(props, "className") ? [readString(props, "className") as string] : [],
+    assetRefs: readString(props, "data-asset")
+      ? [{ name: "react.asset", path: readString(props, "data-asset") as string }]
+      : [],
+    events: props && "onPointerDown" in props ? [{ kind: "pointer.press", handler: "handlePress" }] : [],
+    children: readChildren(element).map((child) => ({
+      id: readString(child, "id") ?? "child",
+      kind: "text",
+      key: readString(child, "id"),
+    })),
+  };
+}
+
+function readProps(element: unknown): Record<string, unknown> | undefined {
   if (!element || typeof element !== "object") return undefined;
   const props = "props" in element ? (element as { readonly props?: unknown }).props : element;
-  if (!props || typeof props !== "object" || !("id" in props)) return undefined;
-  const id = (props as { readonly id?: unknown }).id;
-  return typeof id === "string" && id.trim() ? id : undefined;
+  return props && typeof props === "object" ? (props as Record<string, unknown>) : undefined;
+}
+
+function readChildren(element: unknown): readonly Record<string, unknown>[] {
+  if (!element || typeof element !== "object" || !("children" in element)) return [];
+  const children = (element as { readonly children?: unknown }).children;
+  return Array.isArray(children)
+    ? children.filter((child): child is Record<string, unknown> => Boolean(child) && typeof child === "object")
+    : [];
+}
+
+function readString(record: Record<string, unknown> | undefined, name: string): string | undefined {
+  const value = record?.[name];
+  return typeof value === "string" && value.trim() ? value : undefined;
 }

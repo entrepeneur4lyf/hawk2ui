@@ -1,3 +1,5 @@
+import { recordsForApp, type HawkElementSpec } from "../../hawk2ui-native/src/index.ts";
+
 export interface HawkSvelteCompileInput {
   readonly filename: string;
   readonly source: string;
@@ -19,20 +21,31 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
     throw new Error("svelte.asset.path-invalid: Svelte asset references must use workspace-relative paths.");
   }
 
-  const records = [`mount-element:${rootId}`];
   const ref = readAttribute(input.source, "use:ref");
-  if (ref) records.push(`ref:${rootId}:${ref}`);
   const style = readAttribute(input.source, "class");
-  if (style) records.push(`style:${rootId}:${style}`);
-  if (assetPath) records.push(`asset:${rootId}:${assetPath}`);
-  if (input.source.includes("on:press")) records.push(`bind-event:${rootId}:pointer.press`);
-  if (input.source.includes("on:mount")) records.push(`lifecycle:mounted:${rootId}:onMount`);
-  if (input.source.includes("on:destroy")) records.push(`lifecycle:unmounted:${rootId}:onDestroy`);
-  for (const childId of keyedChildIds(input.source)) {
-    records.push(`mount-element:${childId}`);
+  const lifecycle: HawkElementSpec["lifecycle"] = [];
+  if (input.source.includes("on:mount")) {
+    lifecycle.push({ phase: "mounted", handler: "onMount" });
   }
+  if (input.source.includes("on:destroy")) {
+    lifecycle.push({ phase: "unmounted", handler: "onDestroy" });
+  }
+  const root: HawkElementSpec = {
+    id: rootId,
+    kind: "view",
+    refs: ref ? [ref] : [],
+    styleRefs: style ? [style] : [],
+    assetRefs: assetPath ? [{ name: "svelte.asset", path: assetPath }] : [],
+    events: input.source.includes("on:press") ? [{ kind: "pointer.press", handler: "handlePress" }] : [],
+    lifecycle,
+    children: keyedChildIds(input.source).map((childId) => ({
+      id: childId,
+      kind: "text",
+      key: childId,
+    })),
+  };
 
-  return { framework: "svelte", filename: input.filename, records };
+  return { framework: "svelte", filename: input.filename, records: recordsForApp({ name: input.filename, root }) };
 }
 
 function readAttribute(source: string, name: string): string | undefined {
