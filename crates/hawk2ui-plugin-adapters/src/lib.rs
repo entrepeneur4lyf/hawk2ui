@@ -128,6 +128,16 @@ impl PackageTargetPlan {
                 ),
             )
         })?;
+        let resources_path = output_path.join("Contents").join("Resources");
+        fs::create_dir_all(&resources_path).map_err(|error| {
+            materialization_error(
+                "package.resources.create-failed",
+                format!(
+                    "failed to create package resources {}: {error}",
+                    resources_path.display()
+                ),
+            )
+        })?;
         let manifest_path = output_path.join("hawk2ui-package.toml");
         fs::write(&manifest_path, self.manifest()).map_err(|error| {
             materialization_error(
@@ -138,10 +148,21 @@ impl PackageTargetPlan {
                 ),
             )
         })?;
+        let artifact_descriptor_path = resources_path.join("hawk2ui-artifact.toml");
+        fs::write(&artifact_descriptor_path, self.artifact_descriptor()).map_err(|error| {
+            materialization_error(
+                "package.artifact.write-failed",
+                format!(
+                    "failed to write package artifact descriptor {}: {error}",
+                    artifact_descriptor_path.display()
+                ),
+            )
+        })?;
         Ok(MaterializedPackageOutput {
             format: self.format,
             output_path: self.output_path.clone(),
             manifest_path: manifest_path.to_string_lossy().into_owned(),
+            artifact_descriptor_path: artifact_descriptor_path.to_string_lossy().into_owned(),
         })
     }
 
@@ -162,6 +183,16 @@ impl PackageTargetPlan {
             self.metadata.version,
             self.metadata.category,
             features,
+            self.parameter_count
+        )
+    }
+
+    fn artifact_descriptor(&self) -> String {
+        format!(
+            "artifact_format = \"hawk2ui-plugin-package\"\nformat = \"{}\"\nentry_library = \"{}.{}\"\nmetadata_manifest = \"hawk2ui-package.toml\"\nparameter_count = {}\n",
+            self.format.manifest_key(),
+            self.metadata.display_name,
+            self.format.extension(),
             self.parameter_count
         )
     }
@@ -220,6 +251,8 @@ pub struct MaterializedPackageOutput {
     pub output_path: String,
     /// Metadata manifest path written inside the output directory.
     pub manifest_path: String,
+    /// Runtime artifact descriptor path written inside the output directory.
+    pub artifact_descriptor_path: String,
 }
 
 /// Package materialization error.

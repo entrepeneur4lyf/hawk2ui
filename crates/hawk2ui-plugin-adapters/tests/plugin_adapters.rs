@@ -117,10 +117,15 @@ fn plugin_adapters_materialize_package_metadata_outputs() {
 
     assert_eq!(outputs.len(), 1);
     assert!(std::path::Path::new(&outputs[0].manifest_path).is_file());
+    assert!(std::path::Path::new(&outputs[0].artifact_descriptor_path).is_file());
     let manifest =
         std::fs::read_to_string(&outputs[0].manifest_path).expect("metadata manifest reads");
     assert!(manifest.contains("format = \"clap\""));
     assert!(manifest.contains("id = \"com.hawk2ui.demo\""));
+    let artifact = std::fs::read_to_string(&outputs[0].artifact_descriptor_path)
+        .expect("artifact descriptor reads");
+    assert!(artifact.contains("artifact_format = \"hawk2ui-plugin-package\""));
+    assert!(artifact.contains("entry_library = \"Demo.clap\""));
 }
 
 #[test]

@@ -214,6 +214,75 @@ path = "assets/logo.svg"
     assert!(execution.stderr.contains("assets/logo.svg"));
 }
 
+#[test]
+fn workspace_package_plugin_materializes_plugin_outputs() {
+    let root = temp_cli_workspace("package-plugin");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.cli-plugin"
+name = "CLI Plugin"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[capabilities]
+keys = ["sealed-artifacts"]
+
+[[targets]]
+kind = "plugin"
+name = "audio-plugin"
+
+[plugin]
+id = "com.hawk2ui.cli-plugin"
+name = "CLI Plugin"
+
+[editor]
+width = 960
+height = 540
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+default = 0.5
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'plugin';");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::PackagePlugin);
+
+    assert_eq!(execution.exit_code, CliExitCode::Success);
+    assert!(
+        execution
+            .stdout
+            .contains("materialized plugin package outputs")
+    );
+    for extension in ["clap", "vst3", "component", "app"] {
+        let package_root = root
+            .join("target/hawk2ui")
+            .join(format!("com-hawk2ui-cli-plugin.{extension}"));
+        assert!(
+            package_root.is_dir(),
+            "{} should exist",
+            package_root.display()
+        );
+        assert!(
+            package_root.join("hawk2ui-package.toml").is_file(),
+            "{} package metadata should exist",
+            package_root.display()
+        );
+        assert!(
+            package_root
+                .join("Contents/Resources/hawk2ui-artifact.toml")
+                .is_file(),
+            "{} artifact descriptor should exist",
+            package_root.display()
+        );
+    }
+}
+
 use hawk2ui_cli::{DevLoop, DevLoopEvent, RecordingReloadTarget, RecordingWatcher};
 
 #[test]

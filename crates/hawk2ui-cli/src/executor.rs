@@ -14,7 +14,9 @@ use hawk2ui_host_winit::{WinitDesktopRuntime, WinitDesktopRuntimeConfig};
 use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRange, ParameterRecord,
 };
-use hawk2ui_plugin_adapters::{PackageAdapterSet, PackageFormat, PackageRequest};
+use hawk2ui_plugin_adapters::{
+    PackageAdapterSet, PackageFormat, PackageMaterializationError, PackageRequest,
+};
 
 use crate::{CliCommand, CliDiagnostic, CliExitCode};
 
@@ -246,7 +248,10 @@ impl WorkspaceCommandRunner {
         };
         let metadata = FormatMetadata::new(&plugin.id, &plugin.name, "Hawk2UI")
             .version(&manifest.identity.version);
-        let output = BundleOutput::new("target/hawk2ui", bundle_name(&manifest.identity.id));
+        let output = BundleOutput::new(
+            self.root.join("target/hawk2ui").to_string_lossy(),
+            bundle_name(&manifest.identity.id),
+        );
         let request = [
             PackageFormat::Clap,
             PackageFormat::Vst3,
@@ -271,10 +276,19 @@ impl WorkspaceCommandRunner {
                 return CommandExecution::failure(CliExitCode::Validation, diagnostics);
             }
         };
-        let mut stdout = String::from("planned plugin package outputs:\n");
-        for target in plan.targets() {
+        let outputs = match plan.materialize() {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                return CommandExecution::failure(
+                    CliExitCode::Validation,
+                    vec![package_materialization_diagnostic(&error)],
+                );
+            }
+        };
+        let mut stdout = String::from("materialized plugin package outputs:\n");
+        for target in &outputs {
             stdout.push_str("- ");
-            stdout.push_str(target.output_path());
+            stdout.push_str(&target.output_path);
             stdout.push('\n');
         }
         CommandExecution::success(stdout)
@@ -484,6 +498,13 @@ fn asset_compilation_diagnostic(error: AssetCompilationError, root: &Path) -> Cl
             format!("declared asset kind is unsupported: {kind}"),
         ),
     }
+}
+
+fn package_materialization_diagnostic(error: &PackageMaterializationError) -> CliDiagnostic {
+    CliDiagnostic::error(
+        error.diagnostic().rule(),
+        "plugin package materialization failed",
+    )
 }
 
 fn io_failure(rule: &str, path: &Path, error: &std::io::Error) -> CommandExecution {
