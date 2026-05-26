@@ -198,6 +198,56 @@ fn vector_gradient_and_effects_render_pixels() {
 }
 
 #[test]
+fn cache_lifecycle_tracks_generation_and_invalidation() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 96, 64).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend
+        .clear(hawk2ui_render::Color::rgba(8, 10, 14, 255))
+        .unwrap();
+    backend
+        .fill(
+            Geometry::new(8.0, 8.0, 18.0, 18.0),
+            hawk2ui_render::Color::rgba(240, 80, 60, 255),
+        )
+        .unwrap();
+    backend
+        .cache_current_frame_region("meter-cache", Geometry::new(8.0, 8.0, 18.0, 18.0))
+        .unwrap();
+    backend
+        .clear(hawk2ui_render::Color::rgba(8, 10, 14, 255))
+        .unwrap();
+    backend
+        .draw_cached_layer("meter-cache", Geometry::new(56.0, 8.0, 18.0, 18.0))
+        .unwrap();
+
+    let initial = backend.layer_cache("meter-cache").unwrap();
+    assert_eq!(initial.generation(), 1);
+    assert!(initial.valid());
+    assert_eq!(initial.width(), 18);
+    assert_eq!(initial.height(), 18);
+
+    backend
+        .mark_dirty(Geometry::new(10.0, 10.0, 2.0, 2.0))
+        .unwrap();
+    let invalidated = backend.layer_cache("meter-cache").unwrap();
+    assert_eq!(invalidated.generation(), 2);
+    assert!(!invalidated.valid());
+
+    let error = backend
+        .draw_cached_layer("meter-cache", Geometry::new(8.0, 36.0, 18.0, 18.0))
+        .expect_err("invalidated cache must not be replayed");
+    assert_eq!(error.diagnostic().rule(), "skia.cache.invalid");
+
+    backend.end_frame("main").unwrap();
+    let snapshot = backend.frame_snapshot("main").unwrap();
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(56.0, 8.0, 18.0, 18.0)) > 0,
+        "cache replay before invalidation must draw real cached pixels"
+    );
+}
+
+#[test]
 fn skia_backend_reports_structured_diagnostics_for_invalid_lifecycle() {
     let mut backend = SkiaRendererBackend::new();
 

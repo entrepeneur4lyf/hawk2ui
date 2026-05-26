@@ -9,8 +9,8 @@ use hawk2ui_render::{
 };
 use skia_safe::{
     AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
-    Image, ImageInfo, MaskFilter, Paint, PaintStyle, Path, Rect, Surface, TileMode, gradient,
-    surfaces,
+    IRect, Image, ImageInfo, MaskFilter, Paint, PaintStyle, Path, Rect, Surface, TileMode,
+    gradient, surfaces,
 };
 
 /// The canonical Cargo package name for this crate.
@@ -279,6 +279,75 @@ pub struct SkiaFrameSnapshot {
     pixels: Vec<u32>,
 }
 
+/// Cached Skia raster layer entry.
+pub struct SkiaLayerCacheEntry {
+    id: String,
+    source: Geometry,
+    width: u32,
+    height: u32,
+    generation: u64,
+    valid: bool,
+    image: Image,
+}
+
+impl SkiaLayerCacheEntry {
+    fn new(
+        id: impl Into<String>,
+        source: Geometry,
+        width: u32,
+        height: u32,
+        generation: u64,
+        image: Image,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            source,
+            width,
+            height,
+            generation,
+            valid: true,
+            image,
+        }
+    }
+
+    /// Returns the cache identifier.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns cached layer width in pixels.
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Returns cached layer height in pixels.
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Returns cache generation.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Returns whether the cache entry is valid for replay.
+    #[must_use]
+    pub const fn valid(&self) -> bool {
+        self.valid
+    }
+
+    fn invalidate(&mut self) {
+        if self.valid {
+            self.valid = false;
+            self.generation = self.generation.saturating_add(1);
+        }
+    }
+}
+
 impl SkiaFrameSnapshot {
     fn new(width: u32, height: u32, pixels: Vec<u32>) -> Result<Self, BackendError> {
         let expected = usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| {
@@ -339,6 +408,7 @@ pub struct SkiaRendererBackend {
     diagnostics: Vec<BackendDiagnostic>,
     skia_capabilities: SkiaRendererCapabilities,
     image_assets: BTreeMap<String, Image>,
+    layer_caches: BTreeMap<String, SkiaLayerCacheEntry>,
 }
 
 impl SkiaRendererBackend {
@@ -357,6 +427,7 @@ impl SkiaRendererBackend {
             diagnostics: Vec::new(),
             skia_capabilities: SkiaRendererCapabilities::cpu_raster(),
             image_assets: BTreeMap::new(),
+            layer_caches: BTreeMap::new(),
         }
     }
 
@@ -409,6 +480,12 @@ impl SkiaRendererBackend {
     #[must_use]
     pub fn diagnostics(&self) -> &[BackendDiagnostic] {
         &self.diagnostics
+    }
+
+    /// Returns a layer cache entry by ID.
+    #[must_use]
+    pub fn layer_cache(&self, id: &str) -> Option<&SkiaLayerCacheEntry> {
+        self.layer_caches.get(id)
     }
 
     /// Returns detailed Skia-specific capabilities without exposing `skia-safe` types.
@@ -521,7 +598,7 @@ impl SkiaRendererBackend {
             let mut paint = Paint::default();
             paint.set_anti_alias(true);
             let dst = rect(geometry);
-            surface.canvas().draw_image_rect(asset, None, &dst, &paint);
+            surface.canvas().draw_image_rect(asset, None, dst, &paint);
         })?;
         self.commands.push(format!(
             "image-rect:{image}:{},{},{},{}",
@@ -708,6 +785,115 @@ impl SkiaRendererBackend {
             "glow-rect:{},{},{},{}:{blur_radius}",
             geometry.x, geometry.y, geometry.width, geometry.height
         ));
+        Ok(())
+    }
+
+    /// Captures a region of the active frame into a reusable Skia layer cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, the geometry is invalid, or the
+    /// surface cannot create a snapshot for the requested region.
+    pub fn cache_current_frame_region(
+        &mut self,
+        id: &str,
+        geometry: Geometry,
+    ) -> Result<BackendCacheHandle, BackendError> {
+        validate_surface_id(id).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        let active_id = self.require_active_frame()?;
+        validate_geometry("skia.cache.invalid-geometry", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        let bounds = geometry_to_irect(geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        let Some(surface) = self.surfaces.get_mut(&active_id) else {
+            return self.fail("skia.surface.missing", "active surface does not exist");
+        };
+        let Some(image) = surface.raster_surface.image_snapshot_with_bounds(bounds) else {
+            return self.fail(
+                "skia.cache.snapshot-failed",
+                "failed to capture Skia cache region",
+            );
+        };
+        let generation = self
+            .layer_caches
+            .get(id)
+            .map_or(1, |entry| entry.generation.saturating_add(1));
+        let width = u32::try_from(bounds.width()).map_err(|_| {
+            BackendError::new(
+                "skia.cache.size-overflow",
+                "cached layer width exceeds supported size",
+            )
+        })?;
+        let height = u32::try_from(bounds.height()).map_err(|_| {
+            BackendError::new(
+                "skia.cache.size-overflow",
+                "cached layer height exceeds supported size",
+            )
+        })?;
+        self.layer_caches.insert(
+            id.to_string(),
+            SkiaLayerCacheEntry::new(id, geometry, width, height, generation, image),
+        );
+        self.commands.push(format!(
+            "cache-region:{id}:{},{},{},{}:gen={generation}",
+            geometry.x, geometry.y, geometry.width, geometry.height
+        ));
+        Ok(BackendCacheHandle::new(id))
+    }
+
+    /// Replays a valid cached layer into the active frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, the cache is missing/invalid, or the
+    /// destination geometry is invalid.
+    pub fn draw_cached_layer(
+        &mut self,
+        id: &str,
+        destination: Geometry,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        validate_geometry("skia.cache.invalid-destination", destination).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        let Some(cache) = self.layer_caches.get(id) else {
+            return self.fail("skia.cache.missing", "layer cache entry does not exist");
+        };
+        if !cache.valid {
+            return self.fail(
+                "skia.cache.invalid",
+                "layer cache entry has been invalidated",
+            );
+        }
+        let image = cache.image.clone();
+        self.with_active_surface(|surface| {
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            let dst = rect(destination);
+            surface.canvas().draw_image_rect(image, None, dst, &paint);
+        })?;
+        self.commands.push(format!(
+            "draw-cache:{id}:{},{},{},{}",
+            destination.x, destination.y, destination.width, destination.height
+        ));
+        Ok(())
+    }
+
+    /// Invalidates a cached layer entry by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when the cache entry is missing.
+    pub fn invalidate_cache(&mut self, id: &str) -> Result<(), BackendError> {
+        let Some(cache) = self.layer_caches.get_mut(id) else {
+            return self.fail("skia.cache.missing", "layer cache entry does not exist");
+        };
+        cache.invalidate();
+        self.commands.push(format!("invalidate-cache:{id}"));
         Ok(())
     }
 
@@ -1004,6 +1190,7 @@ impl RendererBackend for SkiaRendererBackend {
         self.with_active_surface(|surface| {
             surface.dirty_regions.push(geometry);
         })?;
+        self.invalidate_caches_intersecting(geometry);
         self.commands.push(format!(
             "dirty:{},{},{},{}",
             geometry.x, geometry.y, geometry.width, geometry.height
@@ -1014,6 +1201,16 @@ impl RendererBackend for SkiaRendererBackend {
 
     fn capabilities(&self) -> BackendCapabilities {
         self.capabilities
+    }
+}
+
+impl SkiaRendererBackend {
+    fn invalidate_caches_intersecting(&mut self, geometry: Geometry) {
+        for cache in self.layer_caches.values_mut() {
+            if cache.valid && geometry_intersects(cache.source, geometry) {
+                cache.invalidate();
+            }
+        }
     }
 }
 
@@ -1076,6 +1273,37 @@ fn validate_blur(rule: &'static str, blur_radius: f32) -> Result<(), BackendErro
             "blur radius must be finite and greater than zero",
         ))
     }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn geometry_to_irect(geometry: Geometry) -> Result<IRect, BackendError> {
+    let left = geometry.x.floor();
+    let top = geometry.y.floor();
+    let right = (geometry.x + geometry.width).ceil();
+    let bottom = (geometry.y + geometry.height).ceil();
+    if left < i32::MIN as f32
+        || top < i32::MIN as f32
+        || right > i32::MAX as f32
+        || bottom > i32::MAX as f32
+    {
+        return Err(BackendError::new(
+            "skia.geometry.integer-overflow",
+            "geometry exceeds Skia integer rectangle limits",
+        ));
+    }
+    Ok(IRect::from_ltrb(
+        left as i32,
+        top as i32,
+        right as i32,
+        bottom as i32,
+    ))
+}
+
+fn geometry_intersects(left: Geometry, right: Geometry) -> bool {
+    left.x < right.x + right.width
+        && left.x + left.width > right.x
+        && left.y < right.y + right.height
+        && left.y + left.height > right.y
 }
 
 fn create_raster_surface(width: u32, height: u32, dpi_scale: f32) -> Result<Surface, BackendError> {
