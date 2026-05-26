@@ -8,7 +8,7 @@ fn vue_35_renderer_maps_lifecycle_keyed_children_events_refs_styles_assets_and_s
         "examples/frameworks/vue-basic/src/App.vue",
         r#"
 <script setup>
-const items = [{ id: 'title' }, { id: 'cta' }];
+const items = [{ id: 'title' }, { id: 'cta' }, { id: 'meter' }];
 </script>
 
 <template>
@@ -27,7 +27,7 @@ const items = [{ id: 'title' }, { id: 'cta' }];
     assert_eq!(artifact.framework_version_requirement(), ">=3.5");
     assert_eq!(artifact.root().id().as_str(), "root");
     assert_eq!(artifact.root().kind(), ElementKind::View);
-    assert_eq!(artifact.keyed_children(), ["title", "cta"]);
+    assert_eq!(artifact.keyed_children(), ["title", "cta", "meter"]);
     assert_eq!(artifact.refs(), ["root_ref"]);
     assert_eq!(artifact.style_refs(), ["surface.card", "intent.primary"]);
     assert_eq!(artifact.asset_refs()[0].path(), "assets/logo.svg");
@@ -50,6 +50,7 @@ const items = [{ id: 'title' }, { id: 'cta' }];
             "create:root",
             "insert:title",
             "insert:cta",
+            "insert:meter",
             "patch-props:root"
         ]
     );
@@ -85,7 +86,7 @@ fn vue_35_renderer_reports_author_source_diagnostics() {
 fn vue_35_renderer_bridges_to_runtime_tree() {
     let source = VueSingleFileComponent::new(
         "examples/frameworks/vue-basic/src/App.vue",
-        r#"<template><hawk-view id="root" ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted"><hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text></hawk-view></template>"#,
+        r#"<script setup>const items = [{ id: 'title' }, { id: 'cta' }, { id: 'meter' }];</script><template><hawk-view id="root" ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted"><hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text></hawk-view></template>"#,
     );
 
     let artifact = VueIntegration::new()
@@ -101,7 +102,7 @@ fn vue_35_renderer_bridges_to_runtime_tree() {
             .iter()
             .map(RuntimeViewId::as_str)
             .collect::<Vec<_>>(),
-        vec!["title", "cta"]
+        vec!["title", "cta", "meter"]
     );
     assert_eq!(artifact.metadata_for("root").unwrap().refs(), ["root_ref"]);
     assert_eq!(

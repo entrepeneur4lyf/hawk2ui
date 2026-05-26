@@ -9,7 +9,7 @@ fn solid_renderer_maps_fine_grained_updates_lifecycle_keyed_children_events_refs
         "examples/frameworks/solid-basic/src/App.tsx",
         r#"
 export function App() {
-  const [items] = createSignal([{ id: 'title' }, { id: 'cta' }]);
+  const [items] = createSignal([{ id: 'title' }, { id: 'cta' }, { id: 'meter' }]);
   return <hawk-view id="root" ref={root_ref} class="surface.card intent.primary" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}>
     <For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For>
   </hawk-view>;
@@ -25,7 +25,7 @@ export function App() {
     assert_eq!(artifact.framework_version_requirement(), ">=1");
     assert_eq!(artifact.root().id().as_str(), "root");
     assert_eq!(artifact.root().kind(), ElementKind::View);
-    assert_eq!(artifact.keyed_children(), ["title", "cta"]);
+    assert_eq!(artifact.keyed_children(), ["title", "cta", "meter"]);
     assert_eq!(artifact.refs(), ["root_ref"]);
     assert_eq!(artifact.style_refs(), ["surface.card", "intent.primary"]);
     assert_eq!(artifact.asset_refs()[0].path(), "assets/logo.svg");
@@ -78,7 +78,7 @@ fn solid_renderer_reports_author_source_diagnostics() {
 fn solid_renderer_bridges_to_runtime_tree() {
     let source = SolidComponentSource::new(
         "examples/frameworks/solid-basic/src/App.tsx",
-        r#"<hawk-view id="root" ref={root_ref} class="surface.card intent.primary" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}><For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For></hawk-view>"#,
+        r#"const [items] = createSignal([{ id: 'title' }, { id: 'cta' }, { id: 'meter' }]);<hawk-view id="root" ref={root_ref} class="surface.card intent.primary" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}><For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For></hawk-view>"#,
     );
 
     let artifact = SolidIntegration::new()
@@ -94,7 +94,7 @@ fn solid_renderer_bridges_to_runtime_tree() {
             .iter()
             .map(RuntimeViewId::as_str)
             .collect::<Vec<_>>(),
-        vec!["title", "cta"]
+        vec!["title", "cta", "meter"]
     );
     assert_eq!(artifact.metadata_for("root").unwrap().refs(), ["root_ref"]);
     assert_eq!(

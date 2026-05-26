@@ -418,10 +418,36 @@ fn unsupported_svelte_events(source: &str) -> Vec<String> {
 
 fn keyed_children(source: &str) -> Vec<String> {
     if source.contains("(item.id)") {
-        vec!["title".into(), "cta".into()]
+        declared_item_ids(source)
     } else {
         Vec::new()
     }
+}
+
+fn declared_item_ids(source: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = source;
+    while let Some(index) = rest.find("id:") {
+        let after = rest[index + "id:".len()..].trim_start();
+        let Some(quote) = after
+            .chars()
+            .next()
+            .filter(|quote| matches!(quote, '\'' | '"'))
+        else {
+            rest = after;
+            continue;
+        };
+        let value = &after[quote.len_utf8()..];
+        let Some(end) = value.find(quote) else {
+            break;
+        };
+        let id = &value[..end];
+        if !id.is_empty() && !ids.iter().any(|existing| existing == id) {
+            ids.push(id.to_string());
+        }
+        rest = &value[end + quote.len_utf8()..];
+    }
+    ids
 }
 
 #[cfg(test)]

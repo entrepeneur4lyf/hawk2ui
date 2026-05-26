@@ -268,9 +268,15 @@ impl ReactIntegration {
             ));
         }
 
+        let keyed_children = keyed_children(&tree.source);
+        let mut reconciler_operations = Vec::with_capacity(keyed_children.len() + 2);
+        reconciler_operations.push("create:root".to_string());
+        reconciler_operations.extend(keyed_children.iter().map(|child| format!("append:{child}")));
+        reconciler_operations.push("commit:root".to_string());
+
         Ok(ReactRenderedArtifact {
             root: ElementNode::new(ElementId::new(root_id), ElementKind::View),
-            keyed_children: keyed_children(&tree.source),
+            keyed_children,
             refs: extract_attribute(&tree.source, "ref").into_iter().collect(),
             style_refs: style_refs_from_attribute(&tree.source, "className"),
             asset_refs: extract_attribute(&tree.source, "data-asset")
@@ -280,12 +286,7 @@ impl ReactIntegration {
             events,
             lifecycle_handlers: vec!["mounted:onMount".into(), "unmounted:onUnmount".into()],
             source_map,
-            reconciler_operations: vec![
-                "create:root".into(),
-                "append:title".into(),
-                "append:cta".into(),
-                "commit:root".into(),
-            ],
+            reconciler_operations,
         })
     }
 
@@ -406,10 +407,36 @@ fn unsupported_react_events(source: &str) -> Vec<String> {
 
 fn keyed_children(source: &str) -> Vec<String> {
     if source.contains("key={item.id}") {
-        vec!["title".into(), "cta".into()]
+        declared_item_ids(source)
     } else {
         Vec::new()
     }
+}
+
+fn declared_item_ids(source: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = source;
+    while let Some(index) = rest.find("id:") {
+        let after = rest[index + "id:".len()..].trim_start();
+        let Some(quote) = after
+            .chars()
+            .next()
+            .filter(|quote| matches!(quote, '\'' | '"'))
+        else {
+            rest = after;
+            continue;
+        };
+        let value = &after[quote.len_utf8()..];
+        let Some(end) = value.find(quote) else {
+            break;
+        };
+        let id = &value[..end];
+        if !id.is_empty() && !ids.iter().any(|existing| existing == id) {
+            ids.push(id.to_string());
+        }
+        rest = &value[end + quote.len_utf8()..];
+    }
+    ids
 }
 
 #[cfg(test)]

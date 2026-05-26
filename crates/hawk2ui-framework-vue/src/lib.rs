@@ -272,9 +272,15 @@ impl VueIntegration {
             ));
         }
 
+        let keyed_children = keyed_children(&component.source);
+        let mut renderer_operations = Vec::with_capacity(keyed_children.len() + 2);
+        renderer_operations.push("create:root".to_string());
+        renderer_operations.extend(keyed_children.iter().map(|child| format!("insert:{child}")));
+        renderer_operations.push("patch-props:root".to_string());
+
         Ok(VueRenderedArtifact {
             root: ElementNode::new(ElementId::new(root_id), ElementKind::View),
-            keyed_children: keyed_children(&component.source),
+            keyed_children,
             refs: extract_attribute(&component.source, "ref")
                 .into_iter()
                 .collect(),
@@ -286,12 +292,7 @@ impl VueIntegration {
             events,
             lifecycle_handlers: vec!["mounted:onMounted".into(), "unmounted:onUnmounted".into()],
             source_map,
-            renderer_operations: vec![
-                "create:root".into(),
-                "insert:title".into(),
-                "insert:cta".into(),
-                "patch-props:root".into(),
-            ],
+            renderer_operations,
         })
     }
 
@@ -412,10 +413,36 @@ fn unsupported_vue_events(source: &str) -> Vec<String> {
 
 fn keyed_children(source: &str) -> Vec<String> {
     if source.contains(":key=\"item.id\"") {
-        vec!["title".into(), "cta".into()]
+        declared_item_ids(source)
     } else {
         Vec::new()
     }
+}
+
+fn declared_item_ids(source: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = source;
+    while let Some(index) = rest.find("id:") {
+        let after = rest[index + "id:".len()..].trim_start();
+        let Some(quote) = after
+            .chars()
+            .next()
+            .filter(|quote| matches!(quote, '\'' | '"'))
+        else {
+            rest = after;
+            continue;
+        };
+        let value = &after[quote.len_utf8()..];
+        let Some(end) = value.find(quote) else {
+            break;
+        };
+        let id = &value[..end];
+        if !id.is_empty() && !ids.iter().any(|existing| existing == id) {
+            ids.push(id.to_string());
+        }
+        rest = &value[end + quote.len_utf8()..];
+    }
+    ids
 }
 
 #[cfg(test)]

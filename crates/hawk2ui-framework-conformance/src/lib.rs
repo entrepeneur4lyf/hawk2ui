@@ -875,7 +875,7 @@ fn svelte_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = SvelteIntegration::new()
         .compile_to_runtime(SvelteComponentSource::new(
             "src/Broken.svelte",
-            r#"<hawk-view id="root">{#each items as item (item.id)}<hawk-text id={item.id} data-font-size="0">{item.id}</hawk-text>{/each}</hawk-view>"#,
+              r#"<script>let items = [{ id: 'title' }];</script><hawk-view id="root">{#each items as item (item.id)}<hawk-text id={item.id} data-font-size="0">{item.id}</hawk-text>{/each}</hawk-view>"#,
         ))
         .map_or_else(Ok, |_| {
             Err("invalid Svelte runtime layout number fixture was accepted".to_string())
@@ -907,7 +907,7 @@ fn react_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = ReactIntegration::new()
         .render_to_runtime(ReactElementTree::new(
             "src/Broken.tsx",
-            r#"<hawk-view id="root">{items.map((item) => <hawk-text id={item.id} key={item.id} data-font-size="0">{item.id}</hawk-text>)}</hawk-view>"#,
+              r#"const items = [{ id: 'title' }];<hawk-view id="root">{items.map((item) => <hawk-text id={item.id} key={item.id} data-font-size="0">{item.id}</hawk-text>)}</hawk-view>"#,
         ))
         .map_or_else(Ok, |_| {
             Err("invalid React runtime layout number fixture was accepted".to_string())
@@ -939,7 +939,7 @@ fn vue_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = VueIntegration::new()
         .render_to_runtime(VueSingleFileComponent::new(
             "src/Broken.vue",
-            r#"<template><hawk-view id="root"><hawk-text v-for="item in items" :id="item.id" :key="item.id" data-font-size="0">{{ item.id }}</hawk-text></hawk-view></template>"#,
+              r#"<script setup>const items = [{ id: 'title' }];</script><template><hawk-view id="root"><hawk-text v-for="item in items" :id="item.id" :key="item.id" data-font-size="0">{{ item.id }}</hawk-text></hawk-view></template>"#,
         ))
         .map_or_else(Ok, |_| {
             Err("invalid Vue runtime layout number fixture was accepted".to_string())
@@ -971,7 +971,7 @@ fn solid_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = SolidIntegration::new()
         .render_to_runtime(SolidComponentSource::new(
             "src/Broken.tsx",
-            r#"<hawk-view id="root"><For each={items()}>{(item) => <hawk-text id={item.id} data-font-size="0">{item.id}</hawk-text>}</For></hawk-view>"#,
+              r#"const [items] = createSignal([{ id: 'title' }]);<hawk-view id="root"><For each={items()}>{(item) => <hawk-text id={item.id} data-font-size="0">{item.id}</hawk-text>}</For></hawk-view>"#,
         ))
         .map_or_else(Ok, |_| {
             Err("invalid Solid runtime layout number fixture was accepted".to_string())
@@ -1014,10 +1014,10 @@ fn to_strings(items: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
         .collect()
 }
 
-const SVELTE_FIXTURE: &str = r#"<hawk-view id="root" use:ref="root_ref" class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>{#each items as item (item.id)}<hawk-text id={item.id}>{item.id}</hawk-text>{/each}</hawk-view>"#;
-const REACT_FIXTURE: &str = r#"<hawk-view id="root" ref="root_ref" className="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>{items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}</hawk-view>"#;
-const VUE_FIXTURE: &str = r#"<hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted"><hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text></hawk-view>"#;
-const SOLID_FIXTURE: &str = r#"<hawk-view id="root" ref={root_ref} class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}><For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For></hawk-view>"#;
+const SVELTE_FIXTURE: &str = r#"<script>let items = [{ id: 'title' }, { id: 'cta' }];</script><hawk-view id="root" use:ref="root_ref" class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>{#each items as item (item.id)}<hawk-text id={item.id}>{item.id}</hawk-text>{/each}</hawk-view>"#;
+const REACT_FIXTURE: &str = r#"const items = [{ id: 'title' }, { id: 'cta' }];<hawk-view id="root" ref="root_ref" className="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>{items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}</hawk-view>"#;
+const VUE_FIXTURE: &str = r#"<script setup>const items = [{ id: 'title' }, { id: 'cta' }];</script><hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted"><hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text></hawk-view>"#;
+const SOLID_FIXTURE: &str = r#"const [items] = createSignal([{ id: 'title' }, { id: 'cta' }]);<hawk-view id="root" ref={root_ref} class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}><For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For></hawk-view>"#;
 
 #[cfg(test)]
 mod tests {
