@@ -137,6 +137,18 @@ impl NativeChild {
             element,
         }
     }
+
+    /// Returns the optional stable child key.
+    #[must_use]
+    pub fn key(&self) -> Option<&str> {
+        self.key.as_deref()
+    }
+
+    /// Returns the child element.
+    #[must_use]
+    pub const fn element(&self) -> &NativeAuthoringElement {
+        &self.element
+    }
 }
 
 /// Native element authoring node before it is finalized into typed records.
@@ -235,6 +247,18 @@ impl NativeAuthoringElement {
     #[must_use]
     pub const fn id(&self) -> &ElementId {
         self.node.id()
+    }
+
+    /// Returns the typed element node.
+    #[must_use]
+    pub const fn node(&self) -> &ElementNode {
+        &self.node
+    }
+
+    /// Returns child elements in declaration order.
+    #[must_use]
+    pub fn children(&self) -> &[NativeChild] {
+        &self.children
     }
 
     /// Returns style references in declaration order.

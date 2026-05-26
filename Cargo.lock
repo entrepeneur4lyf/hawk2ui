@@ -882,6 +882,12 @@ dependencies = [
 [[package]]
 name = "hawk2ui-authoring"
 version = "0.1.0"
+dependencies = [
+ "hawk2ui-layout",
+ "hawk2ui-render",
+ "hawk2ui-render-skia",
+ "hawk2ui-runtime",
+]
 
 [[package]]
 name = "hawk2ui-build"

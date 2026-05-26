@@ -7,6 +7,7 @@ pub mod component;
 pub mod element;
 pub mod events;
 pub mod native;
+pub mod runtime_bridge;
 pub mod state;
 
 pub use adapter::{
@@ -28,6 +29,10 @@ pub use events::{
 pub use native::{
     AssetRef, NativeAuthoringArtifact, NativeAuthoringElement, NativeAuthoringError,
     NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef, StyleRef,
+};
+pub use runtime_bridge::{
+    NativeRuntimeBridge, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError,
+    NativeRuntimeNodeMetadata,
 };
 pub use state::{
     BatchedUpdate, StateId, StateScope, StateScopeKind, StateSubscription, StateUpdate,
