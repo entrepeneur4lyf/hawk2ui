@@ -4,7 +4,10 @@ use hawk2ui_plugin::{
 use hawk2ui_plugin_adapters::{
     PackageAdapterSet, PackageFormat, PackageRequest, VerificationStatus,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[test]
 fn plugin_adapters_generate_all_supported_package_targets() {
@@ -133,6 +136,78 @@ fn plugin_adapters_materialize_package_metadata_outputs() {
         .expect("artifact descriptor should be removable");
     let failed = plan.verify_materialized(&outputs);
     assert_eq!(failed.status(), VerificationStatus::Failed);
+}
+
+#[test]
+fn plugin_adapters_materialize_format_specific_layouts_and_hash_manifest() {
+    let metadata = FormatMetadata::new("com.hawk2ui.layout", "Layout", "Hawk2UI").version("2.0.0");
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-plugin-layouts-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Layout"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap)
+    .with_format(PackageFormat::Vst3)
+    .with_format(PackageFormat::Au)
+    .with_format(PackageFormat::Standalone);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+
+    for output in &outputs {
+        let root = Path::new(&output.output_path);
+        assert!(
+            root.join("Contents/Resources/hawk2ui-artifact.toml")
+                .is_file()
+        );
+        assert!(
+            root.join("Contents/Resources/hawk2ui-hashes.toml")
+                .is_file()
+        );
+        let hashes = std::fs::read_to_string(root.join("Contents/Resources/hawk2ui-hashes.toml"))
+            .expect("hash manifest reads");
+        assert!(hashes.contains("algorithm = \"sha256\""));
+        assert!(hashes.contains("hawk2ui-package.toml"));
+        assert!(hashes.contains("Contents/Resources/hawk2ui-artifact.toml"));
+        match output.format {
+            PackageFormat::Clap => {
+                assert!(root.join("Layout.clap").is_file());
+                assert!(root.join("Contents/Resources/clap.json").is_file());
+                assert!(hashes.contains("Contents/Resources/clap.json"));
+            }
+            PackageFormat::Vst3 => {
+                assert!(root.join("Contents/Info.plist").is_file());
+                assert!(root.join("Contents/x86_64-linux/Layout.vst3").is_file());
+                assert!(hashes.contains("Contents/Info.plist"));
+            }
+            PackageFormat::Au => {
+                assert!(root.join("Contents/Info.plist").is_file());
+                assert!(root.join("Contents/MacOS/Layout").is_file());
+                assert!(hashes.contains("Contents/MacOS/Layout"));
+            }
+            PackageFormat::Standalone => {
+                assert!(root.join("Contents/Info.plist").is_file());
+                assert!(root.join("Contents/MacOS/Layout").is_file());
+                assert!(
+                    root.join("Contents/Resources/hawk2ui-launch.toml")
+                        .is_file()
+                );
+                assert!(hashes.contains("Contents/Resources/hawk2ui-launch.toml"));
+            }
+            PackageFormat::DesktopBundle | PackageFormat::SealedArtifact => {
+                panic!("unexpected format in layout test");
+            }
+        }
+    }
 }
 
 #[test]

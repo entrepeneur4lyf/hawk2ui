@@ -1,9 +1,13 @@
 #![forbid(unsafe_code)]
 //! Production plugin and package adapters for `Hawk2UI` `CLAP`, `VST3`, AU, standalone, and desktop outputs.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use hawk2ui_plugin::{BundleOutput, FormatMetadata, ParameterModel};
+use sha2::{Digest, Sha256};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-plugin-adapters";
@@ -138,6 +142,7 @@ impl PackageTargetPlan {
                 ),
             )
         })?;
+        let mut package_files = Vec::new();
         let manifest_path = output_path.join("hawk2ui-package.toml");
         fs::write(&manifest_path, self.manifest()).map_err(|error| {
             materialization_error(
@@ -148,6 +153,7 @@ impl PackageTargetPlan {
                 ),
             )
         })?;
+        package_files.push(manifest_path.clone());
         let artifact_descriptor_path = resources_path.join("hawk2ui-artifact.toml");
         fs::write(&artifact_descriptor_path, self.artifact_descriptor()).map_err(|error| {
             materialization_error(
@@ -158,11 +164,28 @@ impl PackageTargetPlan {
                 ),
             )
         })?;
+        package_files.push(artifact_descriptor_path.clone());
+        package_files.extend(self.write_format_layout(output_path, &resources_path)?);
+        let hash_manifest_path = resources_path.join("hawk2ui-hashes.toml");
+        fs::write(
+            &hash_manifest_path,
+            hash_manifest(output_path, &package_files)?,
+        )
+        .map_err(|error| {
+            materialization_error(
+                "package.hashes.write-failed",
+                format!(
+                    "failed to write package hash manifest {}: {error}",
+                    hash_manifest_path.display()
+                ),
+            )
+        })?;
         Ok(MaterializedPackageOutput {
             format: self.format,
             output_path: self.output_path.clone(),
             manifest_path: manifest_path.to_string_lossy().into_owned(),
             artifact_descriptor_path: artifact_descriptor_path.to_string_lossy().into_owned(),
+            hash_manifest_path: hash_manifest_path.to_string_lossy().into_owned(),
         })
     }
 
@@ -194,6 +217,90 @@ impl PackageTargetPlan {
             self.metadata.display_name,
             self.format.extension(),
             self.parameter_count
+        )
+    }
+
+    fn write_format_layout(
+        &self,
+        output_path: &Path,
+        resources_path: &Path,
+    ) -> Result<Vec<PathBuf>, PackageMaterializationError> {
+        let mut written = Vec::new();
+        match self.format {
+            PackageFormat::Clap => {
+                let entry_path = output_path.join(format!("{}.clap", self.metadata.display_name));
+                write_package_file(&entry_path, self.entry_stub("clap"))?;
+                written.push(entry_path);
+                let clap_manifest_path = resources_path.join("clap.json");
+                write_package_file(&clap_manifest_path, self.clap_manifest())?;
+                written.push(clap_manifest_path);
+            }
+            PackageFormat::Vst3 => {
+                let info_path = output_path.join("Contents").join("Info.plist");
+                write_package_file(&info_path, self.info_plist("vst3"))?;
+                written.push(info_path);
+                let binary_dir = output_path.join("Contents").join("x86_64-linux");
+                create_package_dir(&binary_dir)?;
+                let binary_path = binary_dir.join(format!("{}.vst3", self.metadata.display_name));
+                write_package_file(&binary_path, self.entry_stub("vst3"))?;
+                written.push(binary_path);
+            }
+            PackageFormat::Au | PackageFormat::Standalone | PackageFormat::DesktopBundle => {
+                let package_type = self.format.manifest_key();
+                let info_path = output_path.join("Contents").join("Info.plist");
+                write_package_file(&info_path, self.info_plist(package_type))?;
+                written.push(info_path);
+                let binary_dir = output_path.join("Contents").join("MacOS");
+                create_package_dir(&binary_dir)?;
+                let binary_path = binary_dir.join(&self.metadata.display_name);
+                write_package_file(&binary_path, self.entry_stub(package_type))?;
+                written.push(binary_path);
+                if matches!(
+                    self.format,
+                    PackageFormat::Standalone | PackageFormat::DesktopBundle
+                ) {
+                    let launch_path = resources_path.join("hawk2ui-launch.toml");
+                    write_package_file(&launch_path, self.launch_manifest())?;
+                    written.push(launch_path);
+                }
+            }
+            PackageFormat::SealedArtifact => {
+                let artifact_path = resources_path.join("sealed-artifact.hawk2ui");
+                write_package_file(&artifact_path, self.entry_stub("sealed-artifact"))?;
+                written.push(artifact_path);
+            }
+        }
+        Ok(written)
+    }
+
+    fn clap_manifest(&self) -> String {
+        format!(
+            "{{\n  \"id\": \"{}\",\n  \"name\": \"{}\",\n  \"vendor\": \"{}\",\n  \"version\": \"{}\"\n}}\n",
+            self.metadata.id,
+            self.metadata.display_name,
+            self.metadata.vendor,
+            self.metadata.version
+        )
+    }
+
+    fn info_plist(&self, package_type: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>{}</string><key>CFBundleName</key><string>{}</string><key>Hawk2UIPackageType</key><string>{}</string></dict></plist>\n",
+            self.metadata.id, self.metadata.display_name, package_type
+        )
+    }
+
+    fn launch_manifest(&self) -> String {
+        format!(
+            "entry = \"Contents/MacOS/{}\"\nid = \"{}\"\n",
+            self.metadata.display_name, self.metadata.id
+        )
+    }
+
+    fn entry_stub(&self, format: &str) -> String {
+        format!(
+            "hawk2ui package entry\nformat={format}\nid={}\nversion={}\n",
+            self.metadata.id, self.metadata.version
         )
     }
 }
@@ -257,6 +364,7 @@ impl PackagePlan {
                         Path::new(&output.output_path).is_dir()
                             && Path::new(&output.manifest_path).is_file()
                             && Path::new(&output.artifact_descriptor_path).is_file()
+                            && Path::new(&output.hash_manifest_path).is_file()
                     })
                     .map_or(VerificationStatus::Failed, |_| VerificationStatus::Passed);
                 VerificationEntry { target, status }
@@ -277,6 +385,8 @@ pub struct MaterializedPackageOutput {
     pub manifest_path: String,
     /// Runtime artifact descriptor path written inside the output directory.
     pub artifact_descriptor_path: String,
+    /// Package hash manifest path written inside the output directory.
+    pub hash_manifest_path: String,
 }
 
 /// Package materialization error.
@@ -471,6 +581,82 @@ fn materialization_error(
     PackageMaterializationError {
         diagnostic: PackageDiagnostic::new(rule, message),
     }
+}
+
+fn create_package_dir(path: &Path) -> Result<(), PackageMaterializationError> {
+    fs::create_dir_all(path).map_err(|error| {
+        materialization_error(
+            "package.directory.create-failed",
+            format!(
+                "failed to create package directory {}: {error}",
+                path.display()
+            ),
+        )
+    })
+}
+
+fn write_package_file(
+    path: &Path,
+    contents: impl AsRef<[u8]>,
+) -> Result<(), PackageMaterializationError> {
+    fs::write(path, contents).map_err(|error| {
+        materialization_error(
+            "package.file.write-failed",
+            format!("failed to write package file {}: {error}", path.display()),
+        )
+    })
+}
+
+fn hash_manifest(root: &Path, files: &[PathBuf]) -> Result<String, PackageMaterializationError> {
+    let mut entries = Vec::with_capacity(files.len());
+    for path in files {
+        let bytes = fs::read(path).map_err(|error| {
+            materialization_error(
+                "package.hashes.read-failed",
+                format!("failed to hash package file {}: {error}", path.display()),
+            )
+        })?;
+        let relative = path.strip_prefix(root).map_err(|error| {
+            materialization_error(
+                "package.hashes.path-invalid",
+                format!(
+                    "package file {} is outside package root {}: {error}",
+                    path.display(),
+                    root.display()
+                ),
+            )
+        })?;
+        entries.push((
+            relative.to_string_lossy().replace('\\', "/"),
+            sha256(&bytes),
+        ));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut manifest = String::from("algorithm = \"sha256\"\n\n");
+    for (path, hash) in entries {
+        manifest.push_str("[[files]]\npath = \"");
+        manifest.push_str(&path);
+        manifest.push_str("\"\nhash = \"");
+        manifest.push_str(&hash);
+        manifest.push_str("\"\n\n");
+    }
+    Ok(manifest)
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity("sha256:".len() + (digest.len() * 2));
+    encoded.push_str("sha256:");
+    for byte in digest {
+        encoded.push(hex_nibble(byte >> 4));
+        encoded.push(hex_nibble(byte & 0x0f));
+    }
+    encoded
+}
+
+fn hex_nibble(value: u8) -> char {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    char::from(HEX[usize::from(value & 0x0f)])
 }
 
 fn output_path(output: &BundleOutput, format: PackageFormat) -> String {

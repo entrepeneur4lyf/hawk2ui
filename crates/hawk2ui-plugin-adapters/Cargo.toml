@@ -18,3 +18,4 @@ workspace = true
 
 [dependencies]
 hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
+sha2.workspace = true
