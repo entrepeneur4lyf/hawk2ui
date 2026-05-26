@@ -7,6 +7,7 @@ pub mod diagnostic;
 pub mod manifest;
 pub mod pipeline;
 pub mod report;
+pub mod workspace;
 
 pub use artifact::{
     ArtifactHash, ArtifactHashes, ArtifactSchemaVersion, AssetManifestEntry, BuildMetadata,
@@ -21,6 +22,7 @@ pub use diagnostic::{BuildDiagnostic, BuildDiagnosticSeverity, DiagnosticLocatio
 pub use manifest::{HawkManifest, ManifestError, PackageTarget};
 pub use pipeline::{BuildPhase, BuildPhaseDiagnostic, BuildPipeline, BuildPipelineError};
 pub use report::{PackageTargetRecord, VerificationReport};
+pub use workspace::{BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-build";

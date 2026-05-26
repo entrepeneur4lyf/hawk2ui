@@ -2,9 +2,14 @@ use hawk2ui_build::{
     ArtifactHash, ArtifactSchemaVersion, AssetCompilationError, AssetCompilationPlan,
     AssetDimensions, AssetKind, AssetManifestEntry, AssetSanitizationStatus, AssetSource,
     AssetSourceIndex, BuildDiagnostic, BuildDiagnosticSeverity, BuildPhase, BuildPipeline,
-    BuildPipelineError, CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord,
-    HawkManifest, ManifestError, PackageTarget, PackageTargetRecord, SealedArtifact,
-    SealedArtifactError, SourceSpan, VerificationReport,
+    BuildPipelineError, BuildWorkspace, BuildWorkspaceError, CompiledAssetRecord,
+    CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget,
+    PackageTargetRecord, SealedArtifact, SealedArtifactError, SourceSpan, VerificationReport,
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 const VALID_MANIFEST: &str = r#"
@@ -574,4 +579,109 @@ diagnostics:
 "
     );
     assert!(!report.is_release_ready());
+}
+
+#[test]
+fn build_workspace_reads_project_files_and_materializes_sealed_artifact() {
+    let root = temp_build_workspace("complete");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.workspace"
+name = "Workspace"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+style = "styles/main.hawk.css"
+script = "src/bootstrap.ts"
+
+[capabilities]
+keys = ["native-windowing", "sealed-artifacts"]
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'hawk';");
+    write_file(&root.join("src/bootstrap.ts"), "export const boot = true;");
+    write_file(
+        &root.join("styles/main.hawk.css"),
+        ".root { color: white; }",
+    );
+    write_file(&root.join("assets/logo.svg"), "<svg />");
+
+    let output = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect("workspace should build from real files");
+
+    assert_eq!(output.manifest.identity.id, "com.hawk2ui.workspace");
+    assert!(output.pipeline.ensure_release_ready().is_ok());
+    assert!(output.verification.is_release_ready());
+    assert_eq!(output.artifact.compiled_scripts.len(), 2);
+    assert_eq!(output.artifact.compiled_styles.len(), 1);
+    assert_eq!(output.artifact.asset_manifest.len(), 1);
+    assert_eq!(output.artifact.compiled_assets.len(), 1);
+    assert_eq!(
+        output.artifact.compiled_scripts[0].source_hash,
+        ArtifactHash::from_bytes(b"export const app = 'hawk';")
+    );
+    assert_eq!(
+        output.artifact.compiled_styles[0].source_path,
+        "styles/main.hawk.css"
+    );
+    assert_eq!(
+        output.artifact.asset_manifest[0].artifact_path,
+        "assets/logo.pack"
+    );
+}
+
+#[test]
+fn build_workspace_rejects_missing_declared_source_file() {
+    let root = temp_build_workspace("missing-source");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.missing-source"
+name = "Missing Source"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+"#,
+    );
+
+    let error = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect_err("missing source must fail");
+
+    assert_eq!(
+        error,
+        BuildWorkspaceError::MissingFile("src/main.ts".into())
+    );
+}
+
+fn temp_build_workspace(label: &str) -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("hawk2ui-build-{label}-{now}"));
+    fs::create_dir_all(&root).expect("temp build workspace should be created");
+    root
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("test parent directory should be created");
+    }
+    fs::write(path, contents).expect("test file should be written");
 }
