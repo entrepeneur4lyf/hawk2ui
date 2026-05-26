@@ -4,8 +4,11 @@
 use hawk2ui_authoring::{
     AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementId, ElementKind,
     ElementNode, EventBinding, EventKind, EventPayloadField, HandlerRef, LifecycleEventKind,
-    PointerEventKind, StyleRef,
+    NativeAuthoringElement, NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef,
+    NativeRuntimeBridge, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PointerEventKind,
+    PropValue, StyleRef,
 };
+use hawk2ui_runtime::RuntimeViewTree;
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-framework-svelte";
@@ -60,6 +63,42 @@ pub struct SvelteCompiledArtifact {
     lifecycle_handlers: Vec<String>,
     source_map: SvelteSourceMap,
     diagnostics: Vec<AuthoringDiagnostic>,
+}
+
+/// Runtime-ready Svelte artifact.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SvelteRuntimeArtifact {
+    compiled: SvelteCompiledArtifact,
+    runtime: NativeRuntimeBridgeArtifact,
+}
+
+impl SvelteRuntimeArtifact {
+    /// Returns the typed compiled Svelte record artifact.
+    #[must_use]
+    pub const fn compiled(&self) -> &SvelteCompiledArtifact {
+        &self.compiled
+    }
+
+    /// Returns the runtime view tree produced through the native bridge.
+    #[must_use]
+    pub const fn runtime_tree(&self) -> &RuntimeViewTree {
+        self.runtime.runtime_tree()
+    }
+
+    /// Returns bridge metadata for a runtime node ID.
+    #[must_use]
+    pub fn metadata_for(
+        &self,
+        node_id: &str,
+    ) -> Option<&hawk2ui_authoring::NativeRuntimeNodeMetadata> {
+        self.runtime.metadata_for(node_id)
+    }
+
+    /// Returns stable native operation keys.
+    #[must_use]
+    pub fn operation_keys(&self) -> &[String] {
+        self.runtime.operation_keys()
+    }
 }
 
 impl SvelteCompiledArtifact {
@@ -244,6 +283,90 @@ impl SvelteIntegration {
             source_map,
             diagnostics: Vec::new(),
         })
+    }
+
+    /// Compiles Svelte author source into a runtime-ready native bridge artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SvelteCompileError`] when source validation, native authoring finalization, or
+    /// runtime bridging fails.
+    pub fn compile_to_runtime(
+        self,
+        source: SvelteComponentSource,
+    ) -> Result<SvelteRuntimeArtifact, SvelteCompileError> {
+        let author_file = source.author_file.clone();
+        let source_text = source.source.clone();
+        let compiled = self.compile(source)?;
+        let native_artifact =
+            native_artifact_from_svelte(author_file.as_str(), source_text.as_str(), &compiled)?;
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact(&native_artifact)
+            .map_err(|error| bridge_error(author_file.as_str(), &error))?;
+        Ok(SvelteRuntimeArtifact { compiled, runtime })
+    }
+}
+
+fn native_artifact_from_svelte(
+    author_file: &str,
+    source_text: &str,
+    compiled: &SvelteCompiledArtifact,
+) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, SvelteCompileError> {
+    let mut runtime = NativeAuthoringRuntime::new(author_file);
+    let mut root = NativeAuthoringElement::new(compiled.root().id().as_str(), ElementKind::View)
+        .with_prop("background", PropValue::String("#080a0e".to_string()));
+    for reference in compiled.refs() {
+        root = root.with_ref(NativeRef::new(reference));
+    }
+    for style in compiled.style_refs() {
+        root = root.with_style(StyleRef::new(style));
+    }
+    for asset in compiled.asset_refs() {
+        root = root.with_asset(AssetRef::new(asset.name(), asset.path()));
+    }
+    if source_text.contains("on:press") {
+        root = root.with_event(
+            EventKind::Pointer(PointerEventKind::Press),
+            "handlePress",
+            [EventPayloadField::Position],
+        );
+    }
+    if source_text.contains("on:mount") {
+        root = root.with_lifecycle(NativeLifecycleEvent::Mounted, "onMount");
+    }
+    if source_text.contains("on:destroy") {
+        root = root.with_lifecycle(NativeLifecycleEvent::Unmounted, "onDestroy");
+    }
+    for child_id in compiled.keyed_children() {
+        root = root.with_child(NativeChild::keyed(
+            child_id,
+            NativeAuthoringElement::new(child_id, ElementKind::Text)
+                .with_prop("text", PropValue::String(child_id.clone()))
+                .with_prop("font_size", PropValue::Number(18.0))
+                .with_prop("color", PropValue::String("#ffffff".to_string()))
+                .with_prop("width", PropValue::Number(160.0))
+                .with_prop("height", PropValue::Number(32.0)),
+        ));
+    }
+    runtime.mount(root);
+    runtime.finish().map_err(|error| SvelteCompileError {
+        diagnostics: error.diagnostics().to_vec(),
+        source_map: SvelteSourceMap {
+            author_file: author_file.to_string(),
+        },
+    })
+}
+
+fn bridge_error(author_file: &str, error: &NativeRuntimeBridgeError) -> SvelteCompileError {
+    SvelteCompileError {
+        diagnostics: vec![AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "svelte.runtime-bridge.failed",
+            error.message().to_string(),
+        )],
+        source_map: SvelteSourceMap {
+            author_file: author_file.to_string(),
+        },
     }
 }
 
