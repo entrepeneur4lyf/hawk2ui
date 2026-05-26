@@ -1,4 +1,9 @@
-use hawk2ui_cli::{CliCommand, CliExitCode, CommandCatalog};
+use hawk2ui_cli::{CliCommand, CliExitCode, CommandCatalog, WorkspaceCommandRunner};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[test]
 fn cli_commands_help_lists_required_workflows() {
@@ -104,6 +109,82 @@ fn build_commands_return_success_validation_failure_and_verification_failure_cod
     );
 }
 
+#[test]
+fn workspace_build_release_materializes_real_project_artifact() {
+    let root = temp_cli_workspace("build-release");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.cli-build"
+name = "CLI Build"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+style = "styles/main.hawk.css"
+script = "src/bootstrap.ts"
+
+[capabilities]
+keys = ["native-windowing", "sealed-artifacts"]
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'cli';");
+    write_file(&root.join("src/bootstrap.ts"), "export const boot = true;");
+    write_file(
+        &root.join("styles/main.hawk.css"),
+        ".root { color: white; }",
+    );
+    write_file(&root.join("assets/logo.svg"), "<svg />");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::BuildRelease);
+
+    assert_eq!(execution.exit_code, CliExitCode::Success);
+    assert!(execution.stdout.contains("built production artifact"));
+    assert!(execution.stdout.contains("compiled-scripts: 2"));
+    assert!(execution.stdout.contains("compiled-styles: 1"));
+    assert!(execution.stdout.contains("compiled-assets: 1"));
+    assert!(execution.stdout.contains("content-hash: sha256:"));
+}
+
+#[test]
+fn workspace_build_release_rejects_missing_declared_asset() {
+    let root = temp_cli_workspace("missing-asset");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.cli-missing-asset"
+name = "CLI Missing Asset"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'cli';");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::BuildRelease);
+
+    assert_eq!(execution.exit_code, CliExitCode::Validation);
+    assert_eq!(execution.diagnostics[0].rule, "build.file-missing");
+    assert!(execution.stderr.contains("assets/logo.svg"));
+}
+
 use hawk2ui_cli::{DevLoop, DevLoopEvent, RecordingReloadTarget, RecordingWatcher};
 
 #[test]
@@ -171,4 +252,21 @@ fn manual_presence_pages_exist_and_contain_required_headings() {
         let content = std::fs::read_to_string(root.join(path)).expect("manual page should exist");
         assert!(content.contains(heading), "{path} missing {heading}");
     }
+}
+
+fn temp_cli_workspace(label: &str) -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("hawk2ui-cli-{label}-{now}"));
+    fs::create_dir_all(&root).expect("temp cli workspace should be created");
+    root
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("test parent directory should be created");
+    }
+    fs::write(path, contents).expect("test file should be written");
 }

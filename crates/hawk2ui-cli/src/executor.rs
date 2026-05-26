@@ -6,7 +6,8 @@ use std::{
 };
 
 use hawk2ui_build::{
-    ArtifactSchemaVersion, HawkManifest, ManifestError, PackageTarget, SealedArtifact,
+    ArtifactSchemaVersion, AssetCompilationError, BuildWorkspace, BuildWorkspaceError,
+    BuildWorkspaceOutput, HawkManifest, ManifestError, PackageTarget,
 };
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{WinitDesktopRuntime, WinitDesktopRuntimeConfig};
@@ -128,24 +129,28 @@ impl WorkspaceCommandRunner {
     }
 
     fn build(&self, profile: &str) -> CommandExecution {
-        let manifest = match self.validated_manifest() {
-            Ok(manifest) => manifest,
+        let output = match self.build_workspace() {
+            Ok(output) => output,
             Err(execution) => return execution,
         };
-        let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest);
         CommandExecution::success(format!(
-            "built {profile} artifact for {}\nmanifest-hash: {}\ncontent-hash: {}\n",
-            manifest.identity.id, artifact.hashes.manifest.0, artifact.hashes.content.0
+            "built {profile} artifact for {}\nmanifest-hash: {}\ncontent-hash: {}\ncompiled-scripts: {}\ncompiled-styles: {}\ncompiled-assets: {}\n",
+            output.manifest.identity.id,
+            output.artifact.hashes.manifest.0,
+            output.artifact.hashes.content.0,
+            output.artifact.compiled_scripts.len(),
+            output.artifact.compiled_styles.len(),
+            output.artifact.compiled_assets.len()
         ))
     }
 
     fn verify_artifact(&self) -> CommandExecution {
-        let manifest = match self.validated_manifest() {
-            Ok(manifest) => manifest,
+        let output = match self.build_workspace() {
+            Ok(output) => output,
             Err(execution) => return execution,
         };
-        let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest);
-        if artifact
+        if output
+            .artifact
             .ensure_compatible_with(ArtifactSchemaVersion::new(1, 0))
             .is_err()
         {
@@ -157,8 +162,8 @@ impl WorkspaceCommandRunner {
                 )],
             );
         }
-        let expected_hash = artifact.content_hash();
-        if expected_hash != artifact.hashes.content {
+        let expected_hash = output.artifact.content_hash();
+        if expected_hash != output.artifact.hashes.content {
             return CommandExecution::failure(
                 CliExitCode::Verification,
                 vec![CliDiagnostic::error(
@@ -167,7 +172,10 @@ impl WorkspaceCommandRunner {
                 )],
             );
         }
-        CommandExecution::success(format!("verified artifact {}\n", artifact.hashes.content.0))
+        CommandExecution::success(format!(
+            "verified artifact {}\n",
+            output.artifact.hashes.content.0
+        ))
     }
 
     fn run_desktop(&self) -> CommandExecution {
@@ -305,6 +313,17 @@ impl WorkspaceCommandRunner {
         }
     }
 
+    fn build_workspace(&self) -> Result<BuildWorkspaceOutput, CommandExecution> {
+        BuildWorkspace::load(&self.root)
+            .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+            .map_err(|error| {
+                CommandExecution::failure(
+                    CliExitCode::Validation,
+                    vec![build_workspace_error_diagnostic(error, &self.root)],
+                )
+            })
+    }
+
     fn load_manifest(&self) -> Result<HawkManifest, Box<CliDiagnostic>> {
         let manifest_path = self.manifest_path();
         let input = fs::read_to_string(&manifest_path).map_err(|error| {
@@ -424,6 +443,51 @@ fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {
         ManifestError::InvalidPluginMetadata(message) => {
             CliDiagnostic::error("manifest.plugin.invalid", message)
         }
+    }
+}
+
+fn build_workspace_error_diagnostic(error: BuildWorkspaceError, root: &Path) -> CliDiagnostic {
+    match error {
+        BuildWorkspaceError::MissingFile(path) => CliDiagnostic::error(
+            "build.file-missing",
+            format!("declared build file is missing: {path}"),
+        )
+        .file(root.join(path).display().to_string()),
+        BuildWorkspaceError::UnreadableFile(path) => CliDiagnostic::error(
+            "build.file-unreadable",
+            format!("declared build file could not be read: {path}"),
+        )
+        .file(root.join(path).display().to_string()),
+        BuildWorkspaceError::UnsafePath(path) => CliDiagnostic::error(
+            "build.path.unsafe",
+            format!("declared build path escapes the workspace: {path}"),
+        ),
+        BuildWorkspaceError::ManifestInvalid(error) => manifest_error_diagnostic(error)
+            .file(root.join("manifest.hawk.toml").display().to_string()),
+        BuildWorkspaceError::AssetCompilation(error) => asset_compilation_diagnostic(error, root),
+        BuildWorkspaceError::PipelineBlocked(error) => CliDiagnostic::error(
+            "build.pipeline.blocked",
+            format!("production build pipeline is blocked: {error:?}"),
+        ),
+    }
+}
+
+fn asset_compilation_diagnostic(error: AssetCompilationError, root: &Path) -> CliDiagnostic {
+    match error {
+        AssetCompilationError::MissingAsset { path, .. } => CliDiagnostic::error(
+            "asset.missing",
+            format!("declared asset source is missing: {path}"),
+        )
+        .file(root.join(path).display().to_string()),
+        AssetCompilationError::UnsafeAsset { path, .. } => CliDiagnostic::error(
+            "asset.unsafe",
+            format!("declared asset failed safety validation: {path}"),
+        )
+        .file(root.join(path).display().to_string()),
+        AssetCompilationError::UnsupportedAssetKind { kind, .. } => CliDiagnostic::error(
+            "asset.kind.unsupported",
+            format!("declared asset kind is unsupported: {kind}"),
+        ),
     }
 }
 
