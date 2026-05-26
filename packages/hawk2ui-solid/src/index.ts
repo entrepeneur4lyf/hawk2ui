@@ -7,6 +7,7 @@ export interface HawkSolidRenderOptions {
 export interface HawkSolidDisposer {
   (): void;
   readonly records: readonly string[];
+  readonly update: () => void;
 }
 
 export function renderHawkSolid(component: () => unknown, options: HawkSolidRenderOptions): HawkSolidDisposer {
@@ -14,7 +15,8 @@ export function renderHawkSolid(component: () => unknown, options: HawkSolidRend
     throw new Error("Hawk2UI Solid render targets require a stable id.");
   }
   const records: string[] = [];
-  const root = componentToNativeSpec(component(), options.target.id);
+  let root = componentToNativeSpec(component(), options.target.id);
+  validateUniqueChildKeys(root);
   records.push(...recordsForApp({ name: `solid:${options.target.id}`, root }));
   const dispose = (() => {
     records.push(`unmount-element:${root.id}`);
@@ -22,6 +24,15 @@ export function renderHawkSolid(component: () => unknown, options: HawkSolidRend
   Object.defineProperty(dispose, "records", {
     enumerable: true,
     get: () => records,
+  });
+  Object.defineProperty(dispose, "update", {
+    enumerable: true,
+    value: () => {
+      const next = componentToNativeSpec(component(), options.target.id);
+      validateUniqueChildKeys(next);
+      records.push(...diffRecords(root, next));
+      root = next;
+    },
   });
   return dispose;
 }
@@ -39,10 +50,11 @@ function componentToNativeSpec(component: unknown, fallbackId: string): HawkElem
     events: readStringArray(props, "on").includes("pointer.press")
       ? [{ kind: "pointer.press", handler: "handlePress" }]
       : [],
-    children: readChildren(props).map((child) => ({
-      id: readString(child, "id") ?? "child",
+    children: readChildren(props).map((child, index) => ({
+      id: readString(child, "id") ?? `child-${index}`,
       kind: "text",
-      key: readString(child, "id"),
+      key: readString(child, "key") ?? readString(child, "id"),
+      props: readTextProp(child),
     })),
   };
 }
@@ -66,4 +78,68 @@ function readString(record: Record<string, unknown> | undefined, name: string): 
 function readStringArray(record: Record<string, unknown> | undefined, name: string): readonly string[] {
   const value = record?.[name];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function readTextProp(record: Record<string, unknown>): Record<string, string> | undefined {
+  const text = readString(record, "text");
+  return text ? { text } : undefined;
+}
+
+function validateUniqueChildKeys(element: HawkElementSpec): void {
+  const keys = new Set<string>();
+  for (const child of element.children ?? []) {
+    if (child.key) {
+      if (keys.has(child.key)) {
+        throw new Error(`solid.child-key.duplicate: duplicate Solid child key \`${child.key}\``);
+      }
+      keys.add(child.key);
+    }
+    validateUniqueChildKeys(child);
+  }
+}
+
+function diffRecords(previous: HawkElementSpec, next: HawkElementSpec): readonly string[] {
+  const records: string[] = [];
+  if (previous.id !== next.id) {
+    records.push(`remove-element:${previous.id}`);
+    records.push(...recordsForApp({ name: `solid:${next.id}`, root: next }));
+    return records;
+  }
+  if ((previous.styleRefs ?? []).join(" ") !== (next.styleRefs ?? []).join(" ")) {
+    for (const style of next.styleRefs ?? []) {
+      records.push(`style:${next.id}:${style}`);
+    }
+  }
+  emitPropDiffs(previous, next, records);
+  emitChildDiffs(previous, next, records);
+  return records;
+}
+
+function emitPropDiffs(previous: HawkElementSpec, next: HawkElementSpec, records: string[]): void {
+  const names = new Set([...Object.keys(previous.props ?? {}), ...Object.keys(next.props ?? {})]);
+  for (const name of [...names].sort()) {
+    const previousValue = previous.props?.[name];
+    const nextValue = next.props?.[name];
+    if (previousValue !== nextValue && nextValue !== undefined) {
+      records.push(`prop:${next.id}:${name}=${String(nextValue)}`);
+    }
+  }
+}
+
+function emitChildDiffs(previous: HawkElementSpec, next: HawkElementSpec, records: string[]): void {
+  const previousChildren = new Map((previous.children ?? []).map((child) => [child.key ?? child.id, child]));
+  const nextChildren = new Map((next.children ?? []).map((child) => [child.key ?? child.id, child]));
+  for (const [key, child] of nextChildren) {
+    const previousChild = previousChildren.get(key);
+    if (!previousChild) {
+      records.push(...recordsForApp({ name: `solid:${child.id}`, root: child }));
+    } else {
+      records.push(...diffRecords(previousChild, child));
+    }
+  }
+  for (const [key, child] of previousChildren) {
+    if (!nextChildren.has(key)) {
+      records.push(`remove-element:${child.id}`);
+    }
+  }
 }

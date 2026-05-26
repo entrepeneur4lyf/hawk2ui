@@ -1,0 +1,63 @@
+import { expect, test } from "bun:test";
+import { renderHawkSolid } from "../src/index.ts";
+
+test("Solid renderer records fine-grained updates, removals, and dispose", () => {
+  let component = {
+    id: "root",
+    ref: "root_ref",
+    class: "surface.card",
+    asset: "assets/logo.svg",
+    on: ["pointer.press"],
+    children: [
+      { id: "title", key: "title", text: "Title" },
+      { id: "cta", key: "cta", text: "Go" },
+    ],
+  };
+  const disposer = renderHawkSolid(() => component, { target: { id: "host" } });
+
+  expect(disposer.records).toEqual([
+    "mount-element:root",
+    "ref:root:root_ref",
+    "style:root:surface.card",
+    "asset:root:assets/logo.svg",
+    "bind-event:root:pointer.press",
+    "mount-element:title",
+    "prop:title:text=Title",
+    "mount-element:cta",
+    "prop:cta:text=Go",
+  ]);
+
+  component = {
+    id: "root",
+    ref: "root_ref",
+    class: "surface.card emphasis",
+    asset: "assets/logo.svg",
+    on: ["pointer.press"],
+    children: [{ id: "title", key: "title", text: "Updated" }],
+  };
+  disposer.update();
+
+  expect(disposer.records.slice(9)).toEqual([
+    "style:root:surface.card emphasis",
+    "prop:title:text=Updated",
+    "remove-element:cta",
+  ]);
+
+  disposer();
+  expect(disposer.records.at(-1)).toBe("unmount-element:root");
+});
+
+test("Solid renderer rejects duplicate keyed children", () => {
+  expect(() =>
+    renderHawkSolid(
+      () => ({
+        id: "root",
+        children: [
+          { id: "first", key: "title" },
+          { id: "second", key: "title" },
+        ],
+      }),
+      { target: { id: "host" } },
+    ),
+  ).toThrow("solid.child-key.duplicate");
+});
