@@ -8,8 +8,9 @@ use hawk2ui_render::{
     RendererBackend, Stroke, Transform,
 };
 use skia_safe::{
-    AlphaType, Canvas, ClipOp, Color as SkiaColor, ColorType, Data, Font, Image, ImageInfo, Paint,
-    PaintStyle, Path, Rect, Surface, surfaces,
+    AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
+    Image, ImageInfo, MaskFilter, Paint, PaintStyle, Path, Rect, Surface, TileMode, gradient,
+    surfaces,
 };
 
 /// The canonical Cargo package name for this crate.
@@ -529,6 +530,187 @@ impl SkiaRendererBackend {
         Ok(())
     }
 
+    /// Draws a filled SVG path string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame or path syntax is invalid.
+    pub fn draw_filled_path(&mut self, path: &str, color: Color) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        let Some(skia_path) = Path::from_svg(path) else {
+            return self.fail(
+                "skia.path.invalid",
+                "path data is not valid SVG path syntax",
+            );
+        };
+        self.with_active_surface(|surface| {
+            let mut paint = paint(color, PaintStyle::Fill);
+            paint.set_anti_alias(true);
+            surface.canvas().draw_path(&skia_path, &paint);
+        })?;
+        self.commands.push(format!("filled-path:{path}"));
+        Ok(())
+    }
+
+    /// Draws a filled rounded rectangle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame or geometry/radius is invalid.
+    pub fn draw_rounded_rect(
+        &mut self,
+        geometry: Geometry,
+        radius: f32,
+        color: Color,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        validate_geometry("skia.rounded-rect.invalid-geometry", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        if !radius.is_finite() || radius < 0.0 {
+            return self.fail(
+                "skia.rounded-rect.invalid-radius",
+                "rounded rectangle radius must be finite and non-negative",
+            );
+        }
+        self.with_active_surface(|surface| {
+            let mut paint = paint(color, PaintStyle::Fill);
+            paint.set_anti_alias(true);
+            surface
+                .canvas()
+                .draw_round_rect(rect(geometry), radius, radius, &paint);
+        })?;
+        self.commands.push(format!(
+            "rounded-rect:{},{},{},{}:{radius}",
+            geometry.x, geometry.y, geometry.width, geometry.height
+        ));
+        Ok(())
+    }
+
+    /// Draws a left-to-right linear gradient inside a rectangle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, geometry is invalid, or Skia cannot
+    /// create the gradient shader.
+    pub fn draw_linear_gradient(
+        &mut self,
+        geometry: Geometry,
+        start: Color,
+        end: Color,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        validate_geometry("skia.gradient.invalid-geometry", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        self.with_active_surface(|surface| {
+            let colors = [to_skia_color4f(start), to_skia_color4f(end)];
+            let gradient_colors =
+                gradient::Colors::new_evenly_spaced(&colors, TileMode::Clamp, None);
+            let shader_gradient =
+                gradient::Gradient::new(gradient_colors, gradient::Interpolation::default());
+            let shader = gradient::shaders::linear_gradient(
+                (
+                    (geometry.x, geometry.y),
+                    (geometry.x + geometry.width, geometry.y),
+                ),
+                &shader_gradient,
+                None::<&skia_safe::Matrix>,
+            );
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_shader(shader);
+            surface.canvas().draw_rect(rect(geometry), &paint);
+        })?;
+        self.commands.push(format!(
+            "linear-gradient:{},{},{},{}",
+            geometry.x, geometry.y, geometry.width, geometry.height
+        ));
+        Ok(())
+    }
+
+    /// Draws a blurred shadow rectangle offset from the source rectangle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame or geometry/effect parameters are
+    /// invalid.
+    pub fn draw_shadow_rect(
+        &mut self,
+        geometry: Geometry,
+        offset_x: f32,
+        offset_y: f32,
+        blur_radius: f32,
+        color: Color,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        validate_geometry("skia.shadow.invalid-geometry", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        validate_blur("skia.shadow.invalid-blur", blur_radius)?;
+        if !offset_x.is_finite() || !offset_y.is_finite() {
+            return self.fail(
+                "skia.shadow.invalid-offset",
+                "shadow offsets must be finite",
+            );
+        }
+        let shadow = Geometry::new(
+            geometry.x + offset_x,
+            geometry.y + offset_y,
+            geometry.width,
+            geometry.height,
+        );
+        self.with_active_surface(|surface| {
+            let mut paint = paint(color, PaintStyle::Fill);
+            paint.set_anti_alias(true);
+            paint.set_mask_filter(MaskFilter::blur(
+                BlurStyle::Normal,
+                blur_radius,
+                Some(false),
+            ));
+            surface.canvas().draw_rect(rect(shadow), &paint);
+        })?;
+        self.commands.push(format!(
+            "shadow-rect:{},{},{},{}:{offset_x},{offset_y}:{blur_radius}",
+            geometry.x, geometry.y, geometry.width, geometry.height
+        ));
+        Ok(())
+    }
+
+    /// Draws a blurred glow around a rectangle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame or geometry/effect parameters are
+    /// invalid.
+    pub fn draw_glow_rect(
+        &mut self,
+        geometry: Geometry,
+        blur_radius: f32,
+        color: Color,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        validate_geometry("skia.glow.invalid-geometry", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        validate_blur("skia.glow.invalid-blur", blur_radius)?;
+        self.with_active_surface(|surface| {
+            let mut paint = paint(color, PaintStyle::Fill);
+            paint.set_anti_alias(true);
+            paint.set_mask_filter(MaskFilter::blur(
+                BlurStyle::Normal,
+                blur_radius,
+                Some(false),
+            ));
+            surface.canvas().draw_rect(rect(geometry), &paint);
+        })?;
+        self.commands.push(format!(
+            "glow-rect:{},{},{},{}:{blur_radius}",
+            geometry.x, geometry.y, geometry.width, geometry.height
+        ));
+        Ok(())
+    }
+
     /// Draws a compiled vector asset by stable asset ID.
     ///
     /// # Errors
@@ -885,6 +1067,17 @@ fn validate_geometry(rule: &'static str, geometry: Geometry) -> Result<(), Backe
     }
 }
 
+fn validate_blur(rule: &'static str, blur_radius: f32) -> Result<(), BackendError> {
+    if blur_radius.is_finite() && blur_radius > 0.0 {
+        Ok(())
+    } else {
+        Err(BackendError::new(
+            rule,
+            "blur radius must be finite and greater than zero",
+        ))
+    }
+}
+
 fn create_raster_surface(width: u32, height: u32, dpi_scale: f32) -> Result<Surface, BackendError> {
     let pixel_width = i32::try_from(scaled_pixels(width, dpi_scale)).map_err(|_| {
         BackendError::new(
@@ -976,6 +1169,15 @@ fn rect(geometry: Geometry) -> Rect {
 
 fn to_skia_color(color: Color) -> SkiaColor {
     SkiaColor::from_argb(color.a, color.r, color.g, color.b)
+}
+
+fn to_skia_color4f(color: Color) -> Color4f {
+    Color4f::new(
+        f32::from(color.r) / 255.0,
+        f32::from(color.g) / 255.0,
+        f32::from(color.b) / 255.0,
+        f32::from(color.a) / 255.0,
+    )
 }
 
 #[allow(

@@ -127,6 +127,77 @@ fn placed_text_and_images_render_into_target_regions() {
 }
 
 #[test]
+fn vector_gradient_and_effects_render_pixels() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 128, 80).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend
+        .clear(hawk2ui_render::Color::rgba(8, 10, 14, 255))
+        .unwrap();
+    backend
+        .draw_filled_path(
+            "M10 10 L30 10 L30 30 L10 30 Z",
+            hawk2ui_render::Color::rgba(20, 220, 120, 255),
+        )
+        .unwrap();
+    backend
+        .draw_rounded_rect(
+            Geometry::new(40.0, 10.0, 24.0, 20.0),
+            6.0,
+            hawk2ui_render::Color::rgba(80, 140, 255, 255),
+        )
+        .unwrap();
+    backend
+        .draw_linear_gradient(
+            Geometry::new(72.0, 10.0, 42.0, 20.0),
+            hawk2ui_render::Color::rgba(255, 64, 64, 255),
+            hawk2ui_render::Color::rgba(64, 128, 255, 255),
+        )
+        .unwrap();
+    backend
+        .draw_shadow_rect(
+            Geometry::new(12.0, 46.0, 20.0, 12.0),
+            4.0,
+            4.0,
+            4.0,
+            hawk2ui_render::Color::rgba(0, 0, 0, 180),
+        )
+        .unwrap();
+    backend
+        .draw_glow_rect(
+            Geometry::new(54.0, 46.0, 20.0, 12.0),
+            5.0,
+            hawk2ui_render::Color::rgba(80, 220, 255, 180),
+        )
+        .unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(10.0, 10.0, 20.0, 20.0)) > 0,
+        "filled vector path must affect its path bounds"
+    );
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(40.0, 10.0, 24.0, 20.0)) > 0,
+        "rounded rectangle must affect its requested bounds"
+    );
+    assert_ne!(
+        snapshot.pixel_at(74, 20),
+        snapshot.pixel_at(112, 20),
+        "linear gradient should produce different start and end colors"
+    );
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 50.0, 26.0, 18.0)) > 0,
+        "shadow must affect pixels in the offset blur region"
+    );
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(50.0, 42.0, 30.0, 22.0)) > 0,
+        "glow must affect pixels around the source rectangle"
+    );
+}
+
+#[test]
 fn skia_backend_reports_structured_diagnostics_for_invalid_lifecycle() {
     let mut backend = SkiaRendererBackend::new();
 
