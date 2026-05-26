@@ -47,6 +47,44 @@ fn skia_backend_tracks_surface_resize_dpi_frame_and_dirty_state() {
 }
 
 #[test]
+fn frame_snapshot_reads_presented_pixels_and_enforces_lifecycle() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 16, 16).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend
+        .clear(hawk2ui_render::Color::rgba(0, 0, 0, 255))
+        .unwrap();
+    backend
+        .fill(
+            Geometry::new(2.0, 2.0, 4.0, 4.0),
+            hawk2ui_render::Color::rgba(255, 0, 0, 255),
+        )
+        .unwrap();
+
+    let active_error = backend
+        .frame_snapshot("main")
+        .expect_err("active frames must not expose a presented snapshot");
+
+    assert_eq!(active_error.diagnostic().rule(), "skia.frame.active");
+
+    backend.end_frame("main").unwrap();
+    let snapshot = backend
+        .frame_snapshot("main")
+        .expect("snapshot is available after presentation");
+
+    assert_eq!(snapshot.width(), 16);
+    assert_eq!(snapshot.height(), 16);
+    assert_eq!(snapshot.pixels().len(), 16 * 16);
+    assert_eq!(snapshot.pixel_at(0, 0), Some(0x000000));
+    assert_eq!(snapshot.pixel_at(3, 3), Some(0xff0000));
+    assert_eq!(
+        backend.surface("main").unwrap().presented_frames(),
+        1,
+        "ending a frame presents exactly one frame"
+    );
+}
+
+#[test]
 fn skia_backend_reports_structured_diagnostics_for_invalid_lifecycle() {
     let mut backend = SkiaRendererBackend::new();
 

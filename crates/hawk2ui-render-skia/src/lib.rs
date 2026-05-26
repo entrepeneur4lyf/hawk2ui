@@ -8,8 +8,8 @@ use hawk2ui_render::{
     RendererBackend, Stroke, Transform,
 };
 use skia_safe::{
-    Canvas, ClipOp, Color as SkiaColor, Data, Font, Image, Paint, PaintStyle, Path, Rect, Surface,
-    surfaces,
+    AlphaType, Canvas, ClipOp, Color as SkiaColor, ColorType, Data, Font, Image, ImageInfo, Paint,
+    PaintStyle, Path, Rect, Surface, surfaces,
 };
 
 /// The canonical Cargo package name for this crate.
@@ -171,6 +171,7 @@ pub struct SkiaSurface {
     frame_active: bool,
     presented_frames: u64,
     dirty_regions: Vec<Geometry>,
+    last_presented_frame: Option<SkiaFrameSnapshot>,
 }
 
 impl SkiaSurface {
@@ -186,6 +187,7 @@ impl SkiaSurface {
             frame_active: false,
             presented_frames: 0,
             dirty_regions: Vec::new(),
+            last_presented_frame: None,
         })
     }
 
@@ -249,6 +251,12 @@ impl SkiaSurface {
         &self.dirty_regions
     }
 
+    /// Returns the last fully-presented frame snapshot.
+    #[must_use]
+    pub const fn last_presented_frame(&self) -> Option<&SkiaFrameSnapshot> {
+        self.last_presented_frame.as_ref()
+    }
+
     fn resize(&mut self, width: u32, height: u32, dpi_scale: f32) -> Result<(), BackendError> {
         self.width = width;
         self.height = height;
@@ -259,6 +267,64 @@ impl SkiaSurface {
 
     fn canvas(&mut self) -> &Canvas {
         self.raster_surface.canvas()
+    }
+}
+
+/// CPU-readable snapshot of a fully-presented Skia frame.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SkiaFrameSnapshot {
+    width: u32,
+    height: u32,
+    pixels: Vec<u32>,
+}
+
+impl SkiaFrameSnapshot {
+    fn new(width: u32, height: u32, pixels: Vec<u32>) -> Result<Self, BackendError> {
+        let expected = usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| {
+            BackendError::new(
+                "skia.snapshot.pixel-count-overflow",
+                "frame snapshot pixel count exceeds addressable memory",
+            )
+        })?;
+        if pixels.len() != expected {
+            return Err(BackendError::new(
+                "skia.snapshot.pixel-count-mismatch",
+                "frame snapshot pixel count does not match dimensions",
+            ));
+        }
+        Ok(Self {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    /// Returns snapshot width in physical pixels.
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Returns snapshot height in physical pixels.
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Returns pixels in `0x00RRGGBB` order.
+    #[must_use]
+    pub fn pixels(&self) -> &[u32] {
+        &self.pixels
+    }
+
+    /// Returns a pixel by physical coordinate.
+    #[must_use]
+    pub fn pixel_at(&self, x: u32, y: u32) -> Option<u32> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let index = usize::try_from(u64::from(y) * u64::from(self.width) + u64::from(x)).ok()?;
+        self.pixels.get(index).copied()
     }
 }
 
@@ -348,6 +414,28 @@ impl SkiaRendererBackend {
     #[must_use]
     pub const fn skia_capabilities(&self) -> SkiaRendererCapabilities {
         self.skia_capabilities
+    }
+
+    /// Returns the last fully-presented frame snapshot for a surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when the surface is missing, a frame is still active, or no frame
+    /// has been presented yet.
+    pub fn frame_snapshot(&mut self, id: &str) -> Result<&SkiaFrameSnapshot, BackendError> {
+        let surface = self.surface_mut(id)?;
+        if surface.frame_active {
+            return Err(BackendError::new(
+                "skia.frame.active",
+                "cannot read a presented snapshot while a frame is active",
+            ));
+        }
+        surface.last_presented_frame.as_ref().ok_or_else(|| {
+            BackendError::new(
+                "skia.frame.not-presented",
+                "surface does not have a presented frame snapshot",
+            )
+        })
     }
 
     /// Registers an encoded compiled image payload for later drawing by asset ID.
@@ -505,8 +593,16 @@ impl RendererBackend for SkiaRendererBackend {
             );
         }
         let surface = self.surface_mut(id)?;
+        let snapshot = match capture_frame_snapshot(surface) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.diagnostics.push(error.diagnostic().clone());
+                return Err(error);
+            }
+        };
         surface.frame_active = false;
         surface.presented_frames = surface.presented_frames.saturating_add(1);
+        surface.last_presented_frame = Some(snapshot);
         self.active_surface = None;
         self.commands.push(format!("end-frame:{id}"));
         Ok(())
@@ -723,6 +819,63 @@ fn create_raster_surface(width: u32, height: u32, dpi_scale: f32) -> Result<Surf
             "failed to allocate Skia CPU raster surface",
         )
     })
+}
+
+fn capture_frame_snapshot(surface: &mut SkiaSurface) -> Result<SkiaFrameSnapshot, BackendError> {
+    let width = surface.pixel_width();
+    let height = surface.pixel_height();
+    let skia_width = i32::try_from(width).map_err(|_| {
+        BackendError::new(
+            "skia.snapshot.size-overflow",
+            "frame snapshot width exceeds Skia raster limits",
+        )
+    })?;
+    let skia_height = i32::try_from(height).map_err(|_| {
+        BackendError::new(
+            "skia.snapshot.size-overflow",
+            "frame snapshot height exceeds Skia raster limits",
+        )
+    })?;
+    let row_bytes = usize::try_from(u64::from(width) * 4).map_err(|_| {
+        BackendError::new(
+            "skia.snapshot.row-bytes-overflow",
+            "frame snapshot row byte count exceeds addressable memory",
+        )
+    })?;
+    let byte_len = row_bytes
+        .checked_mul(usize::try_from(height).map_err(|_| {
+            BackendError::new(
+                "skia.snapshot.byte-count-overflow",
+                "frame snapshot byte count exceeds addressable memory",
+            )
+        })?)
+        .ok_or_else(|| {
+            BackendError::new(
+                "skia.snapshot.byte-count-overflow",
+                "frame snapshot byte count exceeds addressable memory",
+            )
+        })?;
+    let image_info = ImageInfo::new(
+        (skia_width, skia_height),
+        ColorType::RGBA8888,
+        AlphaType::Premul,
+        None,
+    );
+    let mut rgba = vec![0_u8; byte_len];
+    if !surface
+        .raster_surface
+        .read_pixels(&image_info, &mut rgba, row_bytes, (0, 0))
+    {
+        return Err(BackendError::new(
+            "skia.snapshot.readback-failed",
+            "failed to read presented Skia frame pixels",
+        ));
+    }
+    let pixels = rgba
+        .chunks_exact(4)
+        .map(|chunk| (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]))
+        .collect();
+    SkiaFrameSnapshot::new(width, height, pixels)
 }
 
 fn paint(color: Color, style: PaintStyle) -> Paint {
