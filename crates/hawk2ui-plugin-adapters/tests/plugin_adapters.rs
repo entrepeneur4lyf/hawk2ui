@@ -211,6 +211,44 @@ fn plugin_adapters_materialize_format_specific_layouts_and_hash_manifest() {
 }
 
 #[test]
+fn plugin_adapters_verify_materialized_rejects_tampered_package_payloads() {
+    let metadata = FormatMetadata::new("com.hawk2ui.tamper", "Tamper", "Hawk2UI").version("3.0.0");
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-plugin-tamper-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Tamper"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+    assert_eq!(
+        plan.verify_materialized(&outputs).status(),
+        VerificationStatus::Passed
+    );
+
+    std::fs::write(
+        Path::new(&outputs[0].output_path).join("Tamper.clap"),
+        "tampered",
+    )
+    .expect("entry payload should be writable");
+
+    assert_eq!(
+        plan.verify_materialized(&outputs).status(),
+        VerificationStatus::Failed
+    );
+}
+
+#[test]
 fn plugin_adapters_reject_invalid_package_metadata() {
     let request = PackageRequest::new(
         FormatMetadata::new("not-reverse-dns", "Demo", "Hawk2UI"),

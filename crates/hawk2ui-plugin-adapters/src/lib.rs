@@ -3,6 +3,7 @@
 
 use std::{
     fs,
+    path::Component,
     path::{Path, PathBuf},
 };
 
@@ -229,7 +230,7 @@ impl PackageTargetPlan {
         match self.format {
             PackageFormat::Clap => {
                 let entry_path = output_path.join(format!("{}.clap", self.metadata.display_name));
-                write_package_file(&entry_path, self.entry_stub("clap"))?;
+                write_package_file(&entry_path, self.entry_descriptor("clap"))?;
                 written.push(entry_path);
                 let clap_manifest_path = resources_path.join("clap.json");
                 write_package_file(&clap_manifest_path, self.clap_manifest())?;
@@ -242,7 +243,7 @@ impl PackageTargetPlan {
                 let binary_dir = output_path.join("Contents").join("x86_64-linux");
                 create_package_dir(&binary_dir)?;
                 let binary_path = binary_dir.join(format!("{}.vst3", self.metadata.display_name));
-                write_package_file(&binary_path, self.entry_stub("vst3"))?;
+                write_package_file(&binary_path, self.entry_descriptor("vst3"))?;
                 written.push(binary_path);
             }
             PackageFormat::Au | PackageFormat::Standalone | PackageFormat::DesktopBundle => {
@@ -253,7 +254,7 @@ impl PackageTargetPlan {
                 let binary_dir = output_path.join("Contents").join("MacOS");
                 create_package_dir(&binary_dir)?;
                 let binary_path = binary_dir.join(&self.metadata.display_name);
-                write_package_file(&binary_path, self.entry_stub(package_type))?;
+                write_package_file(&binary_path, self.entry_descriptor(package_type))?;
                 written.push(binary_path);
                 if matches!(
                     self.format,
@@ -266,7 +267,7 @@ impl PackageTargetPlan {
             }
             PackageFormat::SealedArtifact => {
                 let artifact_path = resources_path.join("sealed-artifact.hawk2ui");
-                write_package_file(&artifact_path, self.entry_stub("sealed-artifact"))?;
+                write_package_file(&artifact_path, self.entry_descriptor("sealed-artifact"))?;
                 written.push(artifact_path);
             }
         }
@@ -297,11 +298,71 @@ impl PackageTargetPlan {
         )
     }
 
-    fn entry_stub(&self, format: &str) -> String {
+    fn entry_descriptor(&self, format: &str) -> String {
         format!(
-            "hawk2ui package entry\nformat={format}\nid={}\nversion={}\n",
-            self.metadata.id, self.metadata.version
+            "hawk2ui package entry\nformat={format}\nid={}\nversion={}\nparameters={}\nartifact_descriptor=Contents/Resources/hawk2ui-artifact.toml\n",
+            self.metadata.id, self.metadata.version, self.parameter_count
         )
+    }
+
+    fn required_package_files(&self, output_path: &Path, resources_path: &Path) -> Vec<PathBuf> {
+        let mut files = vec![
+            output_path.join("hawk2ui-package.toml"),
+            resources_path.join("hawk2ui-artifact.toml"),
+        ];
+        match self.format {
+            PackageFormat::Clap => {
+                files.push(output_path.join(format!("{}.clap", self.metadata.display_name)));
+                files.push(resources_path.join("clap.json"));
+            }
+            PackageFormat::Vst3 => {
+                files.push(output_path.join("Contents").join("Info.plist"));
+                files.push(
+                    output_path
+                        .join("Contents")
+                        .join("x86_64-linux")
+                        .join(format!("{}.vst3", self.metadata.display_name)),
+                );
+            }
+            PackageFormat::Au => {
+                files.push(output_path.join("Contents").join("Info.plist"));
+                files.push(
+                    output_path
+                        .join("Contents")
+                        .join("MacOS")
+                        .join(&self.metadata.display_name),
+                );
+            }
+            PackageFormat::Standalone | PackageFormat::DesktopBundle => {
+                files.push(output_path.join("Contents").join("Info.plist"));
+                files.push(
+                    output_path
+                        .join("Contents")
+                        .join("MacOS")
+                        .join(&self.metadata.display_name),
+                );
+                files.push(resources_path.join("hawk2ui-launch.toml"));
+            }
+            PackageFormat::SealedArtifact => {
+                files.push(resources_path.join("sealed-artifact.hawk2ui"));
+            }
+        }
+        files
+    }
+
+    fn verify_materialized_output(&self, output: &MaterializedPackageOutput) -> bool {
+        let output_path = Path::new(&output.output_path);
+        let resources_path = output_path.join("Contents").join("Resources");
+        let hash_manifest_path = Path::new(&output.hash_manifest_path);
+        output_path.is_dir()
+            && Path::new(&output.manifest_path).is_file()
+            && Path::new(&output.artifact_descriptor_path).is_file()
+            && hash_manifest_path.is_file()
+            && self
+                .required_package_files(output_path, &resources_path)
+                .iter()
+                .all(|path| path.is_file())
+            && hash_manifest_matches(output_path, hash_manifest_path)
     }
 }
 
@@ -360,12 +421,7 @@ impl PackagePlan {
                 let status = outputs
                     .iter()
                     .find(|output| output.format == target.format)
-                    .filter(|output| {
-                        Path::new(&output.output_path).is_dir()
-                            && Path::new(&output.manifest_path).is_file()
-                            && Path::new(&output.artifact_descriptor_path).is_file()
-                            && Path::new(&output.hash_manifest_path).is_file()
-                    })
+                    .filter(|output| target.verify_materialized_output(output))
                     .map_or(VerificationStatus::Failed, |_| VerificationStatus::Passed);
                 VerificationEntry { target, status }
             })
@@ -641,6 +697,80 @@ fn hash_manifest(root: &Path, files: &[PathBuf]) -> Result<String, PackageMateri
         manifest.push_str("\"\n\n");
     }
     Ok(manifest)
+}
+
+fn hash_manifest_matches(root: &Path, manifest_path: &Path) -> bool {
+    let Ok(manifest) = fs::read_to_string(manifest_path) else {
+        return false;
+    };
+    let Some(entries) = parse_hash_manifest(&manifest) else {
+        return false;
+    };
+    !entries.is_empty()
+        && entries.into_iter().all(|(relative_path, expected)| {
+            let relative = Path::new(&relative_path);
+            if relative.is_absolute()
+                || relative
+                    .components()
+                    .any(|component| matches!(component, Component::ParentDir))
+            {
+                return false;
+            }
+            let path = root.join(relative);
+            fs::read(path).is_ok_and(|bytes| sha256(&bytes) == expected)
+        })
+}
+
+fn parse_hash_manifest(manifest: &str) -> Option<Vec<(String, String)>> {
+    let mut algorithm_is_sha256 = false;
+    let mut entries = Vec::new();
+    let mut current_path: Option<String> = None;
+    let mut current_hash: Option<String> = None;
+    for line in manifest.lines().map(str::trim) {
+        if line.is_empty() {
+            continue;
+        }
+        if line == "algorithm = \"sha256\"" {
+            algorithm_is_sha256 = true;
+            continue;
+        }
+        if line == "[[files]]" {
+            push_hash_entry(&mut entries, &mut current_path, &mut current_hash)?;
+            continue;
+        }
+        if let Some(value) = line
+            .strip_prefix("path = \"")
+            .and_then(|value| value.strip_suffix('"'))
+        {
+            current_path = Some(value.to_string());
+            continue;
+        }
+        if let Some(value) = line
+            .strip_prefix("hash = \"")
+            .and_then(|value| value.strip_suffix('"'))
+        {
+            current_hash = Some(value.to_string());
+            continue;
+        }
+        return None;
+    }
+    push_hash_entry(&mut entries, &mut current_path, &mut current_hash)?;
+    algorithm_is_sha256.then_some(entries)
+}
+
+fn push_hash_entry(
+    entries: &mut Vec<(String, String)>,
+    current_path: &mut Option<String>,
+    current_hash: &mut Option<String>,
+) -> Option<()> {
+    match (current_path.take(), current_hash.take()) {
+        (Some(path), Some(hash)) => {
+            entries.push((path, hash));
+            Some(())
+        }
+        (None, None) => Some(()),
+        _ => None,
+    }
 }
 
 fn sha256(bytes: &[u8]) -> String {

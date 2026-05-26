@@ -290,6 +290,7 @@ impl RuntimeSceneFrame {
 /// Retained runtime view tree.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeViewTree {
+    root_id: RuntimeViewId,
     entries: Vec<RuntimeViewEntry>,
 }
 
@@ -297,7 +298,9 @@ impl RuntimeViewTree {
     /// Creates a runtime view tree with a root node.
     #[must_use]
     pub fn new(root: RuntimeViewNode) -> Self {
+        let root_id = root.id().clone();
         Self {
+            root_id,
             entries: vec![RuntimeViewEntry {
                 node: root,
                 parent: None,
@@ -339,17 +342,9 @@ impl RuntimeViewTree {
     }
 
     /// Returns the root node identifier.
-    ///
-    /// # Panics
-    ///
-    /// Panics only if the tree invariant is broken internally. Public constructors always create
-    /// a root entry and no public method removes entries.
     #[must_use]
-    pub fn root_id(&self) -> &RuntimeViewId {
-        self.entries
-            .first()
-            .map(|entry| entry.node.id())
-            .expect("runtime view trees always contain a root")
+    pub const fn root_id(&self) -> &RuntimeViewId {
+        &self.root_id
     }
 
     /// Returns a runtime node by identifier.
