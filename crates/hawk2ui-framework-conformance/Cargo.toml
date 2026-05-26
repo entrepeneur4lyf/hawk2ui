@@ -22,3 +22,7 @@ hawk2ui-framework-react = { version = "0.1.0", path = "../hawk2ui-framework-reac
 hawk2ui-framework-solid = { version = "0.1.0", path = "../hawk2ui-framework-solid" }
 hawk2ui-framework-svelte = { version = "0.1.0", path = "../hawk2ui-framework-svelte" }
 hawk2ui-framework-vue = { version = "0.1.0", path = "../hawk2ui-framework-vue" }
+hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
+hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
+hawk2ui-render-skia = { version = "0.1.0", path = "../hawk2ui-render-skia" }
+hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }

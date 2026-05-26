@@ -223,6 +223,13 @@ impl SvelteIntegration {
                 "Svelte asset references must use workspace-relative paths",
             ));
         }
+        for event in unsupported_svelte_events(&source.source) {
+            diagnostics.push(AuthoringDiagnostic::new(
+                AuthoringDiagnosticSeverity::Error,
+                "svelte.event.unsupported",
+                format!("Svelte event `{event}` is not part of the native event contract"),
+            ));
+        }
         if source.source.contains("<Broken") {
             diagnostics.push(AuthoringDiagnostic::new(
                 AuthoringDiagnosticSeverity::Error,
@@ -337,12 +344,13 @@ fn native_artifact_from_svelte(
     if source_text.contains("on:destroy") {
         root = root.with_lifecycle(NativeLifecycleEvent::Unmounted, "onDestroy");
     }
+    let font_size = extract_number_attribute(source_text, "data-font-size").unwrap_or(18.0);
     for child_id in compiled.keyed_children() {
         root = root.with_child(NativeChild::keyed(
             child_id,
             NativeAuthoringElement::new(child_id, ElementKind::Text)
                 .with_prop("text", PropValue::String(child_id.clone()))
-                .with_prop("font_size", PropValue::Number(18.0))
+                .with_prop("font_size", PropValue::Number(font_size))
                 .with_prop("color", PropValue::String("#ffffff".to_string()))
                 .with_prop("width", PropValue::Number(160.0))
                 .with_prop("height", PropValue::Number(32.0)),
@@ -376,6 +384,30 @@ fn extract_attribute(source: &str, name: &str) -> Option<String> {
     let rest = &source[start..];
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
+}
+
+fn extract_number_attribute(source: &str, name: &str) -> Option<f64> {
+    extract_attribute(source, name)?.parse().ok()
+}
+
+fn unsupported_svelte_events(source: &str) -> Vec<String> {
+    let mut events = Vec::new();
+    let mut rest = source;
+    while let Some(index) = rest.find("on:") {
+        let after_prefix = &rest[index + "on:".len()..];
+        let event: String = after_prefix
+            .chars()
+            .take_while(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
+            .collect();
+        let event_len = event.len();
+        if !event.is_empty() && !matches!(event.as_str(), "press" | "mount" | "destroy") {
+            events.push(event);
+        }
+        rest = &after_prefix[event_len..];
+    }
+    events
 }
 
 fn keyed_children(source: &str) -> Vec<String> {

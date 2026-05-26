@@ -39,13 +39,71 @@ fn framework_conformance_outputs_equivalent_records_for_lifecycle_state_events_r
 
 #[test]
 fn framework_conformance_diagnostics_point_to_author_source_files() {
-    let report = FrameworkConformanceHarness::new().run_diagnostic_matrix();
+    let report = FrameworkConformanceHarness::new()
+        .run_diagnostic_matrix()
+        .expect("invalid framework fixtures should produce diagnostics");
 
     assert_eq!(report.diagnostics().len(), 4);
     for diagnostic in report.diagnostics() {
         assert!(diagnostic.author_file().starts_with("src/Broken"));
         assert!(diagnostic.rule().contains("asset.path-invalid"));
     }
+}
+
+#[test]
+fn framework_conformance_runtime_bridge_renders_visible_pixels_for_reference_frameworks() {
+    let report = FrameworkConformanceHarness::new()
+        .run_runtime_matrix()
+        .expect("native and Svelte reference fixtures should render through runtime and Skia");
+
+    assert_eq!(
+        report.frameworks(),
+        [FrameworkKind::Native, FrameworkKind::Svelte]
+    );
+    for evidence in report.evidence() {
+        assert_eq!(evidence.root_id(), "root");
+        assert_eq!(evidence.child_ids(), ["title", "cta"]);
+        assert!(evidence.frames_presented() > 0);
+        assert!(evidence.changed_pixels() > 0);
+        assert!(
+            evidence
+                .operation_keys()
+                .contains(&"mount-element:root".to_string())
+        );
+        assert!(
+            evidence
+                .operation_keys()
+                .contains(&"bind-event:root:pointer.press".to_string())
+        );
+    }
+}
+
+#[test]
+fn framework_conformance_failure_matrix_rejects_invalid_contracts() {
+    let report = FrameworkConformanceHarness::new()
+        .run_failure_matrix()
+        .expect("invalid contract fixtures should produce structured failures");
+
+    assert!(report.has_failure(
+        FrameworkKind::Native,
+        "duplicate-keyed-child",
+        "native.child-key.duplicate"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::Svelte,
+        "invalid-asset-path",
+        "svelte.asset.path-invalid"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::Svelte,
+        "invalid-layout-number",
+        "svelte.runtime-bridge.failed"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::Svelte,
+        "unsupported-event",
+        "svelte.event.unsupported"
+    ));
 }
 
 #[test]
