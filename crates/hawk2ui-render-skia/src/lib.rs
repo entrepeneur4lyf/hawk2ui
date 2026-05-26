@@ -461,6 +461,74 @@ impl SkiaRendererBackend {
         Ok(())
     }
 
+    /// Draws text at a concrete baseline position.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame or the font size is invalid.
+    pub fn draw_text_at(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        color: Color,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        if !x.is_finite() || !y.is_finite() || !font_size.is_finite() || font_size <= 0.0 {
+            return self.fail(
+                "skia.text.invalid-placement",
+                "text position and font size must be finite and font size must be greater than zero",
+            );
+        }
+        self.with_active_surface(|surface| {
+            let mut paint = paint(color, PaintStyle::Fill);
+            paint.set_anti_alias(true);
+            let mut font = Font::default();
+            font.set_size(font_size);
+            surface.canvas().draw_str(text, (x, y), &font, &paint);
+        })?;
+        self.commands
+            .push(format!("text-at:{text}:{x},{y}:{font_size}"));
+        Ok(())
+    }
+
+    /// Draws a registered image asset into a destination rectangle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, the image is missing, or the
+    /// destination geometry is invalid.
+    pub fn draw_image_rect(&mut self, image: &str, geometry: Geometry) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        validate_geometry("skia.image.invalid-geometry", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        if !self.capabilities.images {
+            return self.fail(
+                "backend.capability.image.missing",
+                "backend does not support image rendering",
+            );
+        }
+        let Some(asset) = self.image_assets.get(image).cloned() else {
+            return self.fail(
+                "skia.image.missing",
+                "compiled image asset is not registered with the renderer",
+            );
+        };
+        self.with_active_surface(|surface| {
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            let dst = rect(geometry);
+            surface.canvas().draw_image_rect(asset, None, &dst, &paint);
+        })?;
+        self.commands.push(format!(
+            "image-rect:{image}:{},{},{},{}",
+            geometry.x, geometry.y, geometry.width, geometry.height
+        ));
+        Ok(())
+    }
+
     /// Draws a compiled vector asset by stable asset ID.
     ///
     /// # Errors
@@ -796,6 +864,23 @@ fn validate_dpi_scale(dpi_scale: f32) -> Result<(), BackendError> {
         Err(BackendError::new(
             "skia.surface.invalid-dpi",
             "DPI scale must be finite and greater than zero",
+        ))
+    }
+}
+
+fn validate_geometry(rule: &'static str, geometry: Geometry) -> Result<(), BackendError> {
+    if geometry.x.is_finite()
+        && geometry.y.is_finite()
+        && geometry.width.is_finite()
+        && geometry.height.is_finite()
+        && geometry.width > 0.0
+        && geometry.height > 0.0
+    {
+        Ok(())
+    } else {
+        Err(BackendError::new(
+            rule,
+            "geometry coordinates and dimensions must be finite and dimensions must be greater than zero",
         ))
     }
 }

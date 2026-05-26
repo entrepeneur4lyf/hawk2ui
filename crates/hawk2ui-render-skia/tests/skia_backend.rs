@@ -85,6 +85,48 @@ fn frame_snapshot_reads_presented_pixels_and_enforces_lifecycle() {
 }
 
 #[test]
+fn placed_text_and_images_render_into_target_regions() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 128, 72).unwrap();
+    backend
+        .register_image_asset("hero", ONE_BY_ONE_PNG)
+        .unwrap();
+    backend.begin_frame("main").unwrap();
+    backend
+        .clear(hawk2ui_render::Color::rgba(8, 10, 14, 255))
+        .unwrap();
+    backend
+        .draw_text_at(
+            "Placed",
+            18.0,
+            42.0,
+            18.0,
+            hawk2ui_render::Color::rgba(240, 245, 255, 255),
+        )
+        .unwrap();
+    backend
+        .draw_image_rect("hero", Geometry::new(84.0, 24.0, 24.0, 24.0))
+        .unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 22.0, 72.0, 28.0)) > 0,
+        "placed text must affect pixels near its requested baseline"
+    );
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(84.0, 24.0, 24.0, 24.0)) > 0,
+        "target-rectangle image draw must affect pixels in the requested rectangle"
+    );
+    assert_eq!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(0.0, 0.0, 8.0, 8.0)),
+        0,
+        "unaffected background corner should remain unchanged"
+    );
+}
+
+#[test]
 fn skia_backend_reports_structured_diagnostics_for_invalid_lifecycle() {
     let mut backend = SkiaRendererBackend::new();
 
@@ -149,6 +191,27 @@ fn drive_core_frame(backend: &mut impl RendererBackend) {
         .unwrap();
     backend.end_frame("main").unwrap();
     backend.teardown_surface("main").unwrap();
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn count_changed_pixels(
+    snapshot: &hawk2ui_render_skia::SkiaFrameSnapshot,
+    background: u32,
+    geometry: Geometry,
+) -> usize {
+    let x0 = geometry.x.max(0.0).floor() as u32;
+    let y0 = geometry.y.max(0.0).floor() as u32;
+    let x1 = (geometry.x + geometry.width)
+        .ceil()
+        .clamp(0.0, snapshot.width() as f32) as u32;
+    let y1 = (geometry.y + geometry.height)
+        .ceil()
+        .clamp(0.0, snapshot.height() as f32) as u32;
+
+    (y0..y1)
+        .flat_map(|y| (x0..x1).filter_map(move |x| snapshot.pixel_at(x, y)))
+        .filter(|pixel| *pixel != background)
+        .count()
 }
 
 #[test]
