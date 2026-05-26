@@ -185,6 +185,35 @@ path = "assets/logo.svg"
     assert!(execution.stderr.contains("assets/logo.svg"));
 }
 
+#[test]
+fn workspace_validate_rejects_missing_declared_asset() {
+    let root = temp_cli_workspace("validate-missing-asset");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.cli-validate-missing-asset"
+name = "CLI Validate Missing Asset"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'cli';");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::Validate);
+
+    assert_eq!(execution.exit_code, CliExitCode::Validation);
+    assert_eq!(execution.diagnostics[0].rule, "build.file-missing");
+    assert!(execution.stderr.contains("assets/logo.svg"));
+}
+
 use hawk2ui_cli::{DevLoop, DevLoopEvent, RecordingReloadTarget, RecordingWatcher};
 
 #[test]

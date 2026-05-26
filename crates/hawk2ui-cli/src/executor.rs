@@ -114,17 +114,12 @@ impl WorkspaceCommandRunner {
     }
 
     fn validate(&self) -> CommandExecution {
-        match self.load_manifest() {
-            Ok(manifest) => match self.validate_manifest_sources(&manifest) {
-                Ok(()) => CommandExecution::success(format!(
-                    "validated manifest {}\n",
-                    manifest.identity.id
-                )),
-                Err(diagnostics) => CommandExecution::failure(CliExitCode::Validation, diagnostics),
-            },
-            Err(diagnostic) => {
-                CommandExecution::failure(CliExitCode::Validation, vec![*diagnostic])
-            }
+        match self.build_workspace() {
+            Ok(output) => CommandExecution::success(format!(
+                "validated manifest {}\n",
+                output.manifest.identity.id
+            )),
+            Err(execution) => execution,
         }
     }
 
