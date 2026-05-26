@@ -377,6 +377,9 @@ impl FrameworkConformanceHarness {
             evidence: vec![
                 runtime_evidence_from_native()?,
                 runtime_evidence_from_svelte()?,
+                runtime_evidence_from_react()?,
+                runtime_evidence_from_vue()?,
+                runtime_evidence_from_solid()?,
             ],
         })
     }
@@ -393,6 +396,12 @@ impl FrameworkConformanceHarness {
                 svelte_invalid_asset_failure()?,
                 svelte_invalid_layout_failure()?,
                 svelte_unsupported_event_failure()?,
+                react_invalid_layout_failure()?,
+                react_unsupported_event_failure()?,
+                vue_invalid_layout_failure()?,
+                vue_unsupported_event_failure()?,
+                solid_invalid_layout_failure()?,
+                solid_unsupported_event_failure()?,
             ],
         })
     }
@@ -645,6 +654,39 @@ fn runtime_evidence_from_svelte() -> Result<FrameworkRuntimeEvidence, String> {
     )
 }
 
+fn runtime_evidence_from_react() -> Result<FrameworkRuntimeEvidence, String> {
+    let artifact = ReactIntegration::new()
+        .render_to_runtime(ReactElementTree::new("src/App.tsx", REACT_FIXTURE))
+        .map_err(|error| format!("{error:?}"))?;
+    runtime_evidence(
+        FrameworkKind::React,
+        artifact.runtime_tree(),
+        artifact.operation_keys(),
+    )
+}
+
+fn runtime_evidence_from_vue() -> Result<FrameworkRuntimeEvidence, String> {
+    let artifact = VueIntegration::new()
+        .render_to_runtime(VueSingleFileComponent::new("src/App.vue", VUE_FIXTURE))
+        .map_err(|error| format!("{error:?}"))?;
+    runtime_evidence(
+        FrameworkKind::Vue,
+        artifact.runtime_tree(),
+        artifact.operation_keys(),
+    )
+}
+
+fn runtime_evidence_from_solid() -> Result<FrameworkRuntimeEvidence, String> {
+    let artifact = SolidIntegration::new()
+        .render_to_runtime(SolidComponentSource::new("src/App.tsx", SOLID_FIXTURE))
+        .map_err(|error| format!("{error:?}"))?;
+    runtime_evidence(
+        FrameworkKind::Solid,
+        artifact.runtime_tree(),
+        artifact.operation_keys(),
+    )
+}
+
 fn runtime_evidence(
     framework: FrameworkKind,
     runtime_tree: &hawk2ui_runtime::RuntimeViewTree,
@@ -856,6 +898,102 @@ fn svelte_unsupported_event_failure() -> Result<FrameworkFailureEvidence, String
         })?;
     Ok(failure_evidence(
         FrameworkKind::Svelte,
+        "unsupported-event",
+        error.diagnostics()[0].rule.as_str(),
+    ))
+}
+
+fn react_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
+    let error = ReactIntegration::new()
+        .render_to_runtime(ReactElementTree::new(
+            "src/Broken.tsx",
+            r#"<hawk-view id="root">{items.map((item) => <hawk-text id={item.id} key={item.id} data-font-size="0">{item.id}</hawk-text>)}</hawk-view>"#,
+        ))
+        .map_or_else(Ok, |_| {
+            Err("invalid React runtime layout number fixture was accepted".to_string())
+        })?;
+    Ok(failure_evidence(
+        FrameworkKind::React,
+        "invalid-layout-number",
+        error.diagnostics()[0].rule.as_str(),
+    ))
+}
+
+fn react_unsupported_event_failure() -> Result<FrameworkFailureEvidence, String> {
+    let error = ReactIntegration::new()
+        .render(ReactElementTree::new(
+            "src/Broken.tsx",
+            r#"<hawk-view id="root" onHover={handleHover} />"#,
+        ))
+        .map_or_else(Ok, |_| {
+            Err("unsupported React event fixture was accepted".to_string())
+        })?;
+    Ok(failure_evidence(
+        FrameworkKind::React,
+        "unsupported-event",
+        error.diagnostics()[0].rule.as_str(),
+    ))
+}
+
+fn vue_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
+    let error = VueIntegration::new()
+        .render_to_runtime(VueSingleFileComponent::new(
+            "src/Broken.vue",
+            r#"<template><hawk-view id="root"><hawk-text v-for="item in items" :id="item.id" :key="item.id" data-font-size="0">{{ item.id }}</hawk-text></hawk-view></template>"#,
+        ))
+        .map_or_else(Ok, |_| {
+            Err("invalid Vue runtime layout number fixture was accepted".to_string())
+        })?;
+    Ok(failure_evidence(
+        FrameworkKind::Vue,
+        "invalid-layout-number",
+        error.diagnostics()[0].rule.as_str(),
+    ))
+}
+
+fn vue_unsupported_event_failure() -> Result<FrameworkFailureEvidence, String> {
+    let error = VueIntegration::new()
+        .render(VueSingleFileComponent::new(
+            "src/Broken.vue",
+            r#"<template><hawk-view id="root" @hover="handleHover" /></template>"#,
+        ))
+        .map_or_else(Ok, |_| {
+            Err("unsupported Vue event fixture was accepted".to_string())
+        })?;
+    Ok(failure_evidence(
+        FrameworkKind::Vue,
+        "unsupported-event",
+        error.diagnostics()[0].rule.as_str(),
+    ))
+}
+
+fn solid_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
+    let error = SolidIntegration::new()
+        .render_to_runtime(SolidComponentSource::new(
+            "src/Broken.tsx",
+            r#"<hawk-view id="root"><For each={items()}>{(item) => <hawk-text id={item.id} data-font-size="0">{item.id}</hawk-text>}</For></hawk-view>"#,
+        ))
+        .map_or_else(Ok, |_| {
+            Err("invalid Solid runtime layout number fixture was accepted".to_string())
+        })?;
+    Ok(failure_evidence(
+        FrameworkKind::Solid,
+        "invalid-layout-number",
+        error.diagnostics()[0].rule.as_str(),
+    ))
+}
+
+fn solid_unsupported_event_failure() -> Result<FrameworkFailureEvidence, String> {
+    let error = SolidIntegration::new()
+        .render(SolidComponentSource::new(
+            "src/Broken.tsx",
+            r#"<hawk-view id="root" onHover={handleHover} />"#,
+        ))
+        .map_or_else(Ok, |_| {
+            Err("unsupported Solid event fixture was accepted".to_string())
+        })?;
+    Ok(failure_evidence(
+        FrameworkKind::Solid,
         "unsupported-event",
         error.diagnostics()[0].rule.as_str(),
     ))

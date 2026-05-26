@@ -1,5 +1,6 @@
 use hawk2ui_authoring::{ElementKind, EventPayloadField};
 use hawk2ui_framework_vue::{VueIntegration, VueSingleFileComponent};
+use hawk2ui_runtime::RuntimeViewId;
 
 #[test]
 fn vue_35_renderer_maps_lifecycle_keyed_children_events_refs_styles_assets_and_source_maps() {
@@ -78,6 +79,44 @@ fn vue_35_renderer_reports_author_source_diagnostics() {
         ]
     );
     assert_eq!(error.source_map().author_file(), "src/Broken.vue");
+}
+
+#[test]
+fn vue_35_renderer_bridges_to_runtime_tree() {
+    let source = VueSingleFileComponent::new(
+        "examples/frameworks/vue-basic/src/App.vue",
+        r#"<template><hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted"><hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text></hawk-view></template>"#,
+    );
+
+    let artifact = VueIntegration::new()
+        .render_to_runtime(source)
+        .expect("valid Vue source should bridge to runtime");
+
+    assert_eq!(artifact.rendered().framework(), "vue");
+    assert_eq!(artifact.runtime_tree().root_id().as_str(), "root");
+    assert_eq!(
+        artifact
+            .runtime_tree()
+            .children_of(&RuntimeViewId::new("root"))
+            .iter()
+            .map(RuntimeViewId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["title", "cta"]
+    );
+    assert_eq!(artifact.metadata_for("root").unwrap().refs(), ["root_ref"]);
+    assert_eq!(
+        artifact.metadata_for("root").unwrap().style_refs(),
+        ["surface.card"]
+    );
+    assert_eq!(
+        artifact.metadata_for("root").unwrap().asset_paths(),
+        ["assets/logo.svg"]
+    );
+    assert!(
+        artifact
+            .operation_keys()
+            .contains(&"bind-event:root:pointer.press".to_string())
+    );
 }
 
 #[test]

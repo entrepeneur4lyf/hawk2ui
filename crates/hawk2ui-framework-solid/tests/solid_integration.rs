@@ -1,5 +1,6 @@
 use hawk2ui_authoring::{ElementKind, EventPayloadField};
 use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
+use hawk2ui_runtime::RuntimeViewId;
 
 #[test]
 fn solid_renderer_maps_fine_grained_updates_lifecycle_keyed_children_events_refs_styles_assets_and_source_maps()
@@ -71,6 +72,44 @@ fn solid_renderer_reports_author_source_diagnostics() {
         ]
     );
     assert_eq!(error.source_map().author_file(), "src/Broken.tsx");
+}
+
+#[test]
+fn solid_renderer_bridges_to_runtime_tree() {
+    let source = SolidComponentSource::new(
+        "examples/frameworks/solid-basic/src/App.tsx",
+        r#"<hawk-view id="root" ref={root_ref} class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}><For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For></hawk-view>"#,
+    );
+
+    let artifact = SolidIntegration::new()
+        .render_to_runtime(source)
+        .expect("valid Solid source should bridge to runtime");
+
+    assert_eq!(artifact.rendered().framework(), "solid");
+    assert_eq!(artifact.runtime_tree().root_id().as_str(), "root");
+    assert_eq!(
+        artifact
+            .runtime_tree()
+            .children_of(&RuntimeViewId::new("root"))
+            .iter()
+            .map(RuntimeViewId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["title", "cta"]
+    );
+    assert_eq!(artifact.metadata_for("root").unwrap().refs(), ["root_ref"]);
+    assert_eq!(
+        artifact.metadata_for("root").unwrap().style_refs(),
+        ["surface.card"]
+    );
+    assert_eq!(
+        artifact.metadata_for("root").unwrap().asset_paths(),
+        ["assets/logo.svg"]
+    );
+    assert!(
+        artifact
+            .operation_keys()
+            .contains(&"bind-event:root:pointer.press".to_string())
+    );
 }
 
 #[test]

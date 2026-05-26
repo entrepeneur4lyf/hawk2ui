@@ -4,8 +4,11 @@
 use hawk2ui_authoring::{
     AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementId, ElementKind,
     ElementNode, EventBinding, EventKind, EventPayloadField, HandlerRef, LifecycleEventKind,
-    PointerEventKind, StyleRef,
+    NativeAuthoringElement, NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef,
+    NativeRuntimeBridge, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PointerEventKind,
+    PropValue, StyleRef,
 };
+use hawk2ui_runtime::RuntimeViewTree;
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-framework-vue";
@@ -60,6 +63,42 @@ pub struct VueRenderedArtifact {
     lifecycle_handlers: Vec<String>,
     source_map: VueSourceMap,
     renderer_operations: Vec<String>,
+}
+
+/// Runtime-ready Vue artifact.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VueRuntimeArtifact {
+    rendered: VueRenderedArtifact,
+    runtime: NativeRuntimeBridgeArtifact,
+}
+
+impl VueRuntimeArtifact {
+    /// Returns the typed rendered Vue artifact.
+    #[must_use]
+    pub const fn rendered(&self) -> &VueRenderedArtifact {
+        &self.rendered
+    }
+
+    /// Returns the runtime view tree produced through the native bridge.
+    #[must_use]
+    pub const fn runtime_tree(&self) -> &RuntimeViewTree {
+        self.runtime.runtime_tree()
+    }
+
+    /// Returns bridge metadata for a runtime node ID.
+    #[must_use]
+    pub fn metadata_for(
+        &self,
+        node_id: &str,
+    ) -> Option<&hawk2ui_authoring::NativeRuntimeNodeMetadata> {
+        self.runtime.metadata_for(node_id)
+    }
+
+    /// Returns stable native operation keys.
+    #[must_use]
+    pub fn operation_keys(&self) -> &[String] {
+        self.runtime.operation_keys()
+    }
 }
 
 impl VueRenderedArtifact {
@@ -184,6 +223,13 @@ impl VueIntegration {
                 "Vue asset references must use workspace-relative paths",
             ));
         }
+        for event in unsupported_vue_events(&component.source) {
+            diagnostics.push(AuthoringDiagnostic::new(
+                AuthoringDiagnosticSeverity::Error,
+                "vue.event.unsupported",
+                format!("Vue event `{event}` is not part of the native event contract"),
+            ));
+        }
         if component.source.contains("<Missing") {
             diagnostics.push(AuthoringDiagnostic::new(
                 AuthoringDiagnosticSeverity::Error,
@@ -251,6 +297,91 @@ impl VueIntegration {
             ],
         })
     }
+
+    /// Renders a Vue component into a runtime-ready native bridge artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VueRenderError`] when source validation, native authoring finalization, or runtime
+    /// bridging fails.
+    pub fn render_to_runtime(
+        self,
+        component: VueSingleFileComponent,
+    ) -> Result<VueRuntimeArtifact, VueRenderError> {
+        let author_file = component.author_file.clone();
+        let source_text = component.source.clone();
+        let rendered = self.render(component)?;
+        let native_artifact =
+            native_artifact_from_vue(author_file.as_str(), source_text.as_str(), &rendered)?;
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact(&native_artifact)
+            .map_err(|error| bridge_error(author_file.as_str(), &error))?;
+        Ok(VueRuntimeArtifact { rendered, runtime })
+    }
+}
+
+fn native_artifact_from_vue(
+    author_file: &str,
+    source_text: &str,
+    rendered: &VueRenderedArtifact,
+) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, VueRenderError> {
+    let mut runtime = NativeAuthoringRuntime::new(author_file);
+    let mut root = NativeAuthoringElement::new(rendered.root().id().as_str(), ElementKind::View)
+        .with_prop("background", PropValue::String("#080a0e".to_string()));
+    for reference in rendered.refs() {
+        root = root.with_ref(NativeRef::new(reference));
+    }
+    for style in rendered.style_refs() {
+        root = root.with_style(StyleRef::new(style));
+    }
+    for asset in rendered.asset_refs() {
+        root = root.with_asset(AssetRef::new(asset.name(), asset.path()));
+    }
+    if source_text.contains("@pointerdown") {
+        root = root.with_event(
+            EventKind::Pointer(PointerEventKind::Press),
+            "handlePress",
+            [EventPayloadField::Position],
+        );
+    }
+    if source_text.contains("@mounted") {
+        root = root.with_lifecycle(NativeLifecycleEvent::Mounted, "onMounted");
+    }
+    if source_text.contains("@unmounted") {
+        root = root.with_lifecycle(NativeLifecycleEvent::Unmounted, "onUnmounted");
+    }
+    let font_size = extract_number_attribute(source_text, "data-font-size").unwrap_or(18.0);
+    for child_id in rendered.keyed_children() {
+        root = root.with_child(NativeChild::keyed(
+            child_id,
+            NativeAuthoringElement::new(child_id, ElementKind::Text)
+                .with_prop("text", PropValue::String(child_id.clone()))
+                .with_prop("font_size", PropValue::Number(font_size))
+                .with_prop("color", PropValue::String("#ffffff".to_string()))
+                .with_prop("width", PropValue::Number(160.0))
+                .with_prop("height", PropValue::Number(32.0)),
+        ));
+    }
+    runtime.mount(root);
+    runtime.finish().map_err(|error| VueRenderError {
+        diagnostics: error.diagnostics().to_vec(),
+        source_map: VueSourceMap {
+            author_file: author_file.to_string(),
+        },
+    })
+}
+
+fn bridge_error(author_file: &str, error: &NativeRuntimeBridgeError) -> VueRenderError {
+    VueRenderError {
+        diagnostics: vec![AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "vue.runtime-bridge.failed",
+            error.message().to_string(),
+        )],
+        source_map: VueSourceMap {
+            author_file: author_file.to_string(),
+        },
+    }
 }
 
 fn extract_attribute(source: &str, name: &str) -> Option<String> {
@@ -259,6 +390,18 @@ fn extract_attribute(source: &str, name: &str) -> Option<String> {
     let rest = &source[start..];
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
+}
+
+fn extract_number_attribute(source: &str, name: &str) -> Option<f64> {
+    extract_attribute(source, name)?.parse().ok()
+}
+
+fn unsupported_vue_events(source: &str) -> Vec<String> {
+    ["@click", "@hover", "@mouseenter", "@keydown"]
+        .into_iter()
+        .filter(|event| source.contains(event))
+        .map(str::to_string)
+        .collect()
 }
 
 fn keyed_children(source: &str) -> Vec<String> {

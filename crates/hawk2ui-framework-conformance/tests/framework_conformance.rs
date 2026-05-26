@@ -54,11 +54,17 @@ fn framework_conformance_diagnostics_point_to_author_source_files() {
 fn framework_conformance_runtime_bridge_renders_visible_pixels_for_reference_frameworks() {
     let report = FrameworkConformanceHarness::new()
         .run_runtime_matrix()
-        .expect("native and Svelte reference fixtures should render through runtime and Skia");
+        .expect("all framework reference fixtures should render through runtime and Skia");
 
     assert_eq!(
         report.frameworks(),
-        [FrameworkKind::Native, FrameworkKind::Svelte]
+        [
+            FrameworkKind::Native,
+            FrameworkKind::Svelte,
+            FrameworkKind::React,
+            FrameworkKind::Vue,
+            FrameworkKind::Solid,
+        ]
     );
     for evidence in report.evidence() {
         assert_eq!(evidence.root_id(), "root");
@@ -103,6 +109,36 @@ fn framework_conformance_failure_matrix_rejects_invalid_contracts() {
         FrameworkKind::Svelte,
         "unsupported-event",
         "svelte.event.unsupported"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::React,
+        "unsupported-event",
+        "react.event.unsupported"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::React,
+        "invalid-layout-number",
+        "react.runtime-bridge.failed"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::Vue,
+        "unsupported-event",
+        "vue.event.unsupported"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::Vue,
+        "invalid-layout-number",
+        "vue.runtime-bridge.failed"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::Solid,
+        "unsupported-event",
+        "solid.event.unsupported"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::Solid,
+        "invalid-layout-number",
+        "solid.runtime-bridge.failed"
     ));
 }
 

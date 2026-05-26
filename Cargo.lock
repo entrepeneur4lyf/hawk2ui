@@ -960,6 +960,7 @@ name = "hawk2ui-framework-react"
 version = "0.1.0"
 dependencies = [
  "hawk2ui-authoring",
+ "hawk2ui-runtime",
 ]
 
 [[package]]
@@ -967,6 +968,7 @@ name = "hawk2ui-framework-solid"
 version = "0.1.0"
 dependencies = [
  "hawk2ui-authoring",
+ "hawk2ui-runtime",
 ]
 
 [[package]]
@@ -985,6 +987,7 @@ name = "hawk2ui-framework-vue"
 version = "0.1.0"
 dependencies = [
  "hawk2ui-authoring",
+ "hawk2ui-runtime",
 ]
 
 [[package]]
