@@ -312,6 +312,80 @@ default = 0.5
     }
 }
 
+#[test]
+fn workspace_package_plugin_rejects_missing_declared_asset() {
+    let root = temp_cli_workspace("package-plugin-missing-asset");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.cli-plugin-missing-asset"
+name = "CLI Plugin Missing Asset"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[targets]]
+kind = "plugin"
+name = "audio-plugin"
+
+[plugin]
+id = "com.hawk2ui.cli-plugin-missing-asset"
+name = "CLI Plugin Missing Asset"
+
+[editor]
+width = 960
+height = 540
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'plugin';");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::PackagePlugin);
+
+    assert_eq!(execution.exit_code, CliExitCode::Validation);
+    assert_eq!(execution.diagnostics[0].rule, "build.file-missing");
+    assert!(execution.stderr.contains("assets/logo.svg"));
+}
+
+#[test]
+fn workspace_run_desktop_rejects_missing_declared_asset_before_runtime() {
+    let root = temp_cli_workspace("run-desktop-missing-asset");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.cli-desktop-missing-asset"
+name = "CLI Desktop Missing Asset"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'desktop';");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::RunDesktop);
+
+    assert_eq!(execution.exit_code, CliExitCode::Validation);
+    assert_eq!(execution.diagnostics[0].rule, "build.file-missing");
+    assert!(execution.stderr.contains("assets/logo.svg"));
+}
+
 use hawk2ui_cli::{DevLoop, DevLoopEvent, RecordingReloadTarget, RecordingWatcher};
 
 #[test]

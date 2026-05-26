@@ -302,19 +302,7 @@ impl WorkspaceCommandRunner {
     }
 
     fn validated_manifest(&self) -> Result<HawkManifest, CommandExecution> {
-        match self.load_manifest() {
-            Ok(manifest) => match self.validate_manifest_sources(&manifest) {
-                Ok(()) => Ok(manifest),
-                Err(diagnostics) => Err(CommandExecution::failure(
-                    CliExitCode::Validation,
-                    diagnostics,
-                )),
-            },
-            Err(diagnostic) => Err(CommandExecution::failure(
-                CliExitCode::Validation,
-                vec![*diagnostic],
-            )),
-        }
+        self.build_workspace().map(|output| output.manifest)
     }
 
     fn build_workspace(&self) -> Result<BuildWorkspaceOutput, CommandExecution> {
@@ -328,58 +316,8 @@ impl WorkspaceCommandRunner {
             })
     }
 
-    fn load_manifest(&self) -> Result<HawkManifest, Box<CliDiagnostic>> {
-        let manifest_path = self.manifest_path();
-        let input = fs::read_to_string(&manifest_path).map_err(|error| {
-            Box::new(
-                CliDiagnostic::error(
-                    "manifest.read-failed",
-                    format!("failed to read manifest.hawk.toml: {error}"),
-                )
-                .file(manifest_path.display().to_string()),
-            )
-        })?;
-        HawkManifest::parse(&input).map_err(|error| {
-            Box::new(manifest_error_diagnostic(error).file(manifest_path.display().to_string()))
-        })
-    }
-
-    fn validate_manifest_sources(&self, manifest: &HawkManifest) -> Result<(), Vec<CliDiagnostic>> {
-        let mut diagnostics = Vec::new();
-        require_file(
-            &self.root,
-            &manifest.source.entry,
-            "source.entry",
-            &mut diagnostics,
-        );
-        if let Some(style) = &manifest.source.style {
-            require_file(&self.root, style, "source.style", &mut diagnostics);
-        }
-        if let Some(script) = &manifest.source.script {
-            require_file(&self.root, script, "source.script", &mut diagnostics);
-        }
-        if diagnostics.is_empty() {
-            Ok(())
-        } else {
-            Err(diagnostics)
-        }
-    }
-
     fn manifest_path(&self) -> PathBuf {
         self.root.join("manifest.hawk.toml")
-    }
-}
-
-fn require_file(root: &Path, relative: &str, field: &str, diagnostics: &mut Vec<CliDiagnostic>) {
-    let path = root.join(relative);
-    if !path.is_file() {
-        diagnostics.push(
-            CliDiagnostic::error(
-                "source.file-missing",
-                format!("{field} does not point to an existing file: {relative}"),
-            )
-            .file(path.display().to_string()),
-        );
     }
 }
 
