@@ -10,7 +10,7 @@ fn react_19_renderer_maps_reconciler_lifecycle_keyed_children_events_refs_styles
         r#"
 export function App() {
   const items = [{ id: 'title' }, { id: 'cta' }];
-  return <hawk-view id="root" ref="root_ref" className="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>
+  return <hawk-view id="root" ref="root_ref" className="surface.card intent.primary" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>
     {items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}
   </hawk-view>;
 }
@@ -27,7 +27,7 @@ export function App() {
     assert_eq!(artifact.root().kind(), ElementKind::View);
     assert_eq!(artifact.keyed_children(), ["title", "cta"]);
     assert_eq!(artifact.refs(), ["root_ref"]);
-    assert_eq!(artifact.style_refs(), ["surface.card"]);
+    assert_eq!(artifact.style_refs(), ["surface.card", "intent.primary"]);
     assert_eq!(artifact.asset_refs()[0].path(), "assets/logo.svg");
     assert_eq!(artifact.events()[0].event().stable_key(), "pointer.press");
     assert_eq!(
@@ -78,7 +78,7 @@ fn react_19_renderer_reports_author_source_diagnostics() {
 fn react_19_renderer_bridges_to_runtime_tree() {
     let source = ReactElementTree::new(
         "examples/frameworks/react-basic/src/App.tsx",
-        r#"<hawk-view id="root" ref="root_ref" className="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>{items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}</hawk-view>"#,
+        r#"<hawk-view id="root" ref="root_ref" className="surface.card intent.primary" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>{items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}</hawk-view>"#,
     );
 
     let artifact = ReactIntegration::new()
@@ -99,7 +99,7 @@ fn react_19_renderer_bridges_to_runtime_tree() {
     assert_eq!(artifact.metadata_for("root").unwrap().refs(), ["root_ref"]);
     assert_eq!(
         artifact.metadata_for("root").unwrap().style_refs(),
-        ["surface.card"]
+        ["surface.card", "intent.primary"]
     );
     assert_eq!(
         artifact.metadata_for("root").unwrap().asset_paths(),

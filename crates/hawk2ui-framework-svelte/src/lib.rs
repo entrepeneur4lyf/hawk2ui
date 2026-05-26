@@ -277,10 +277,7 @@ impl SvelteIntegration {
             refs: extract_attribute(&source.source, "use:ref")
                 .into_iter()
                 .collect(),
-            style_refs: extract_attribute(&source.source, "class")
-                .into_iter()
-                .map(StyleRef::new)
-                .collect(),
+            style_refs: style_refs_from_attribute(&source.source, "class"),
             asset_refs: extract_attribute(&source.source, "data-asset")
                 .into_iter()
                 .map(|path| AssetRef::new("svelte.asset", path))
@@ -388,6 +385,15 @@ fn extract_attribute(source: &str, name: &str) -> Option<String> {
 
 fn extract_number_attribute(source: &str, name: &str) -> Option<f64> {
     extract_attribute(source, name)?.parse().ok()
+}
+
+fn style_refs_from_attribute(source: &str, name: &str) -> Vec<StyleRef> {
+    extract_attribute(source, name).map_or_else(Vec::new, |classes| {
+        classes
+            .split_ascii_whitespace()
+            .map(StyleRef::new)
+            .collect()
+    })
 }
 
 fn unsupported_svelte_events(source: &str) -> Vec<String> {

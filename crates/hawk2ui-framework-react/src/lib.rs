@@ -272,10 +272,7 @@ impl ReactIntegration {
             root: ElementNode::new(ElementId::new(root_id), ElementKind::View),
             keyed_children: keyed_children(&tree.source),
             refs: extract_attribute(&tree.source, "ref").into_iter().collect(),
-            style_refs: extract_attribute(&tree.source, "className")
-                .into_iter()
-                .map(StyleRef::new)
-                .collect(),
+            style_refs: style_refs_from_attribute(&tree.source, "className"),
             asset_refs: extract_attribute(&tree.source, "data-asset")
                 .into_iter()
                 .map(|path| AssetRef::new("react.asset", path))
@@ -388,6 +385,15 @@ fn extract_attribute(source: &str, name: &str) -> Option<String> {
 
 fn extract_number_attribute(source: &str, name: &str) -> Option<f64> {
     extract_attribute(source, name)?.parse().ok()
+}
+
+fn style_refs_from_attribute(source: &str, name: &str) -> Vec<StyleRef> {
+    extract_attribute(source, name).map_or_else(Vec::new, |classes| {
+        classes
+            .split_ascii_whitespace()
+            .map(StyleRef::new)
+            .collect()
+    })
 }
 
 fn unsupported_react_events(source: &str) -> Vec<String> {

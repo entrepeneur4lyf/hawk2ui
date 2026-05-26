@@ -12,7 +12,7 @@ const items = [{ id: 'title' }, { id: 'cta' }];
 </script>
 
 <template>
-  <hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted">
+  <hawk-view id="root" ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted">
     <hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text>
   </hawk-view>
 </template>
@@ -29,7 +29,7 @@ const items = [{ id: 'title' }, { id: 'cta' }];
     assert_eq!(artifact.root().kind(), ElementKind::View);
     assert_eq!(artifact.keyed_children(), ["title", "cta"]);
     assert_eq!(artifact.refs(), ["root_ref"]);
-    assert_eq!(artifact.style_refs(), ["surface.card"]);
+    assert_eq!(artifact.style_refs(), ["surface.card", "intent.primary"]);
     assert_eq!(artifact.asset_refs()[0].path(), "assets/logo.svg");
     assert_eq!(artifact.events()[0].event().stable_key(), "pointer.press");
     assert_eq!(
@@ -85,7 +85,7 @@ fn vue_35_renderer_reports_author_source_diagnostics() {
 fn vue_35_renderer_bridges_to_runtime_tree() {
     let source = VueSingleFileComponent::new(
         "examples/frameworks/vue-basic/src/App.vue",
-        r#"<template><hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted"><hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text></hawk-view></template>"#,
+        r#"<template><hawk-view id="root" ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted"><hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text></hawk-view></template>"#,
     );
 
     let artifact = VueIntegration::new()
@@ -106,7 +106,7 @@ fn vue_35_renderer_bridges_to_runtime_tree() {
     assert_eq!(artifact.metadata_for("root").unwrap().refs(), ["root_ref"]);
     assert_eq!(
         artifact.metadata_for("root").unwrap().style_refs(),
-        ["surface.card"]
+        ["surface.card", "intent.primary"]
     );
     assert_eq!(
         artifact.metadata_for("root").unwrap().asset_paths(),

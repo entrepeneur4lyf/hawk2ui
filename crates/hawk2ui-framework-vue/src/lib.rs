@@ -278,10 +278,7 @@ impl VueIntegration {
             refs: extract_attribute(&component.source, "ref")
                 .into_iter()
                 .collect(),
-            style_refs: extract_attribute(&component.source, "class")
-                .into_iter()
-                .map(StyleRef::new)
-                .collect(),
+            style_refs: style_refs_from_attribute(&component.source, "class"),
             asset_refs: extract_attribute(&component.source, "data-asset")
                 .into_iter()
                 .map(|path| AssetRef::new("vue.asset", path))
@@ -394,6 +391,15 @@ fn extract_attribute(source: &str, name: &str) -> Option<String> {
 
 fn extract_number_attribute(source: &str, name: &str) -> Option<f64> {
     extract_attribute(source, name)?.parse().ok()
+}
+
+fn style_refs_from_attribute(source: &str, name: &str) -> Vec<StyleRef> {
+    extract_attribute(source, name).map_or_else(Vec::new, |classes| {
+        classes
+            .split_ascii_whitespace()
+            .map(StyleRef::new)
+            .collect()
+    })
 }
 
 fn unsupported_vue_events(source: &str) -> Vec<String> {

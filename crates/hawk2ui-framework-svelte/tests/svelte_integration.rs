@@ -15,7 +15,7 @@ fn svelte_5_compile_maps_lifecycle_keyed_children_events_refs_styles_assets_and_
   let items = [{ id: 'title' }, { id: 'cta' }];
 </script>
 
-<hawk-view id="root" use:ref="root_ref" class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>
+<hawk-view id="root" use:ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>
   {#each items as item (item.id)}
     <hawk-text id={item.id}>{item.id}</hawk-text>
   {/each}
@@ -33,7 +33,7 @@ fn svelte_5_compile_maps_lifecycle_keyed_children_events_refs_styles_assets_and_
     assert_eq!(artifact.root().kind(), ElementKind::View);
     assert_eq!(artifact.keyed_children(), ["title", "cta"]);
     assert_eq!(artifact.refs(), ["root_ref"]);
-    assert_eq!(artifact.style_refs(), ["surface.card"]);
+    assert_eq!(artifact.style_refs(), ["surface.card", "intent.primary"]);
     assert_eq!(artifact.asset_refs()[0].path(), "assets/logo.svg");
     assert_eq!(artifact.events()[0].event().stable_key(), "pointer.press");
     assert_eq!(
@@ -107,7 +107,7 @@ fn svelte_5_compile_to_runtime_uses_native_bridge_contract() {
 <script>
   let items = [{ id: 'title' }, { id: 'cta' }];
 </script>
-<hawk-view id="root" use:ref="root_ref" class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>
+<hawk-view id="root" use:ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>
   {#each items as item (item.id)}
     <hawk-text id={item.id}>{item.id}</hawk-text>
   {/each}
@@ -133,7 +133,7 @@ fn svelte_5_compile_to_runtime_uses_native_bridge_contract() {
     assert_eq!(artifact.metadata_for("root").unwrap().refs(), ["root_ref"]);
     assert_eq!(
         artifact.metadata_for("root").unwrap().style_refs(),
-        ["surface.card"]
+        ["surface.card", "intent.primary"]
     );
     assert_eq!(
         artifact.metadata_for("root").unwrap().asset_paths(),
@@ -155,7 +155,7 @@ fn svelte_5_compile_to_runtime_uses_native_bridge_contract() {
 fn svelte_5_runtime_bridge_renders_visible_skia_pixels() {
     let source = SvelteComponentSource::new(
         "examples/frameworks/svelte-basic/src/App.svelte",
-        r#"<hawk-view id="root" use:ref="root_ref" class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>{#each items as item (item.id)}<hawk-text id={item.id}>{item.id}</hawk-text>{/each}</hawk-view>"#,
+        r#"<hawk-view id="root" use:ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>{#each items as item (item.id)}<hawk-text id={item.id}>{item.id}</hawk-text>{/each}</hawk-view>"#,
     );
     let artifact = SvelteIntegration::new()
         .compile_to_runtime(source)
