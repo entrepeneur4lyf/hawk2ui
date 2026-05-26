@@ -20,6 +20,12 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
   if (assetPath && isUnsafeAssetPath(assetPath)) {
     throw new Error("svelte.asset.path-invalid: Svelte asset references must use workspace-relative paths.");
   }
+  const unsupportedEvent = unsupportedEventName(input.source);
+  if (unsupportedEvent) {
+    throw new Error(`svelte.event.unsupported: Svelte event \`${unsupportedEvent}\` is not part of the native event contract.`);
+  }
+  const children = childElements(input.source);
+  validateUniqueChildIds(children);
 
   const ref = readAttribute(input.source, "use:ref");
   const style = readAttribute(input.source, "class");
@@ -38,11 +44,7 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
     assetRefs: assetPath ? [{ name: "svelte.asset", path: assetPath }] : [],
     events: input.source.includes("on:press") ? [{ kind: "pointer.press", handler: "handlePress" }] : [],
     lifecycle,
-    children: keyedChildIds(input.source).map((childId) => ({
-      id: childId,
-      kind: "text",
-      key: childId,
-    })),
+    children,
   };
 
   return { framework: "svelte", filename: input.filename, records: recordsForApp({ name: input.filename, root }) };
@@ -64,4 +66,56 @@ function isUnsafeAssetPath(path: string): boolean {
 
 function keyedChildIds(source: string): readonly string[] {
   return source.includes("(item.id)") ? ["title", "cta"] : [];
+}
+
+function unsupportedEventName(source: string): string | undefined {
+  let rest = source;
+  while (true) {
+    const index = rest.indexOf("on:");
+    if (index < 0) return undefined;
+    const afterPrefix = rest.slice(index + "on:".length);
+    const event = afterPrefix.match(/^[A-Za-z0-9_-]+/)?.[0];
+    if (event && !["press", "mount", "destroy"].includes(event)) {
+      return event;
+    }
+    rest = afterPrefix.slice(event?.length ?? 0);
+  }
+}
+
+function childElements(source: string): readonly HawkElementSpec[] {
+  const explicit = explicitChildElements(source);
+  if (explicit.length > 0) return explicit;
+  return keyedChildIds(source).map((childId) => ({
+    id: childId,
+    kind: "text",
+    key: childId,
+  }));
+}
+
+function explicitChildElements(source: string): HawkElementSpec[] {
+  const children: HawkElementSpec[] = [];
+  const pattern = /<hawk-(text|button)\s+([^>]*)>([^<]*)<\/hawk-\1>/g;
+  for (const match of source.matchAll(pattern)) {
+    const [, tag, attributes, text] = match;
+    const id = readAttribute(attributes, "id");
+    if (!id) continue;
+    const trimmedText = text.trim();
+    children.push({
+      id,
+      kind: tag === "button" ? "button" : "text",
+      key: id,
+      props: trimmedText ? { text: trimmedText } : undefined,
+    });
+  }
+  return children;
+}
+
+function validateUniqueChildIds(children: readonly HawkElementSpec[]): void {
+  const ids = new Set<string>();
+  for (const child of children) {
+    if (ids.has(child.id)) {
+      throw new Error(`svelte.child-id.duplicate: duplicate Svelte child id \`${child.id}\``);
+    }
+    ids.add(child.id);
+  }
 }
