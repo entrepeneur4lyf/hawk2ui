@@ -295,14 +295,9 @@ impl WorkspaceCommandRunner {
     }
 
     fn diagnostics(&self) -> CommandExecution {
-        match self.load_manifest() {
-            Ok(manifest) => match self.validate_manifest_sources(&manifest) {
-                Ok(()) => CommandExecution::success("no diagnostics\n"),
-                Err(diagnostics) => CommandExecution::failure(CliExitCode::Validation, diagnostics),
-            },
-            Err(diagnostic) => {
-                CommandExecution::failure(CliExitCode::Validation, vec![*diagnostic])
-            }
+        match self.build_workspace() {
+            Ok(_) => CommandExecution::success("no diagnostics\n"),
+            Err(execution) => execution,
         }
     }
 

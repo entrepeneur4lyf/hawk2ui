@@ -215,6 +215,35 @@ path = "assets/logo.svg"
 }
 
 #[test]
+fn workspace_diagnostics_reports_missing_declared_asset() {
+    let root = temp_cli_workspace("diagnostics-missing-asset");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.cli-diagnostics-missing-asset"
+name = "CLI Diagnostics Missing Asset"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'cli';");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::Diagnostics);
+
+    assert_eq!(execution.exit_code, CliExitCode::Validation);
+    assert_eq!(execution.diagnostics[0].rule, "build.file-missing");
+    assert!(execution.stderr.contains("assets/logo.svg"));
+}
+
+#[test]
 fn workspace_package_plugin_materializes_plugin_outputs() {
     let root = temp_cli_workspace("package-plugin");
     write_file(
