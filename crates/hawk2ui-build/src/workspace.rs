@@ -39,8 +39,8 @@ impl BuildWorkspace {
     ///
     /// Returns [`BuildWorkspaceError`] when the manifest file is missing, unreadable, or invalid.
     pub fn load(root: impl AsRef<Path>) -> Result<Self, BuildWorkspaceError> {
-        let root = root.as_ref().to_path_buf();
-        let manifest_path = root.join("manifest.hawk.toml");
+        let requested_root = root.as_ref();
+        let manifest_path = requested_root.join("manifest.hawk.toml");
         if !manifest_path.is_file() {
             return Err(BuildWorkspaceError::MissingFile(
                 "manifest.hawk.toml".into(),
@@ -50,6 +50,9 @@ impl BuildWorkspace {
             .map_err(|_| BuildWorkspaceError::UnreadableFile("manifest.hawk.toml".into()))?;
         let manifest =
             HawkManifest::parse(&manifest_source).map_err(BuildWorkspaceError::ManifestInvalid)?;
+        let root = requested_root
+            .canonicalize()
+            .map_err(|_| BuildWorkspaceError::UnreadableFile(".".into()))?;
         Ok(Self { root, manifest })
     }
 
@@ -161,6 +164,12 @@ impl BuildWorkspace {
         let absolute = self.root.join(path);
         if !absolute.is_file() {
             return Err(BuildWorkspaceError::MissingFile(path.into()));
+        }
+        let resolved = absolute
+            .canonicalize()
+            .map_err(|_| BuildWorkspaceError::UnreadableFile(path.into()))?;
+        if !resolved.starts_with(&self.root) {
+            return Err(BuildWorkspaceError::UnsafePath(path.into()));
         }
         fs::read(&absolute).map_err(|_| BuildWorkspaceError::UnreadableFile(path.into()))
     }

@@ -692,6 +692,35 @@ entry = "src/main.ts"
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn build_workspace_rejects_symlinked_declared_files_outside_workspace() {
+    let root = temp_build_workspace("symlink-escape");
+    let outside = temp_build_workspace("symlink-outside");
+    write_file(&outside.join("secret.ts"), "export const secret = true;");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.symlink"
+name = "Symlink"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+"#,
+    );
+    fs::create_dir_all(root.join("src")).expect("source directory should be created");
+    std::os::unix::fs::symlink(outside.join("secret.ts"), root.join("src/main.ts"))
+        .expect("test symlink should be created");
+
+    let error = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect_err("symlink escape must fail");
+
+    assert_eq!(error, BuildWorkspaceError::UnsafePath("src/main.ts".into()));
+}
+
 fn temp_build_workspace(label: &str) -> PathBuf {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
