@@ -6,8 +6,11 @@ use hawk2ui_runtime::{
     RuntimeSceneError, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
     RuntimeVisual,
 };
+use hawk2ui_style::{
+    CompiledStyleSheet, PropertyId, RuntimeStyleError, RuntimeStyleTable, StyleValue, TokenSet,
+};
 
-use crate::{ElementKind, NativeAuthoringArtifact, NativeAuthoringElement, PropValue};
+use crate::{ElementKind, NativeAuthoringArtifact, NativeAuthoringElement, PropValue, StyleRef};
 
 /// Converts native authoring records into runtime view records.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -30,7 +33,27 @@ impl NativeRuntimeBridge {
         self,
         artifact: &NativeAuthoringArtifact,
     ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
-        let mut bridged = self.bridge_element(artifact.root())?;
+        let mut bridged = Self::bridge_element_with_style_resources(artifact.root(), None)?;
+        bridged.operation_keys = artifact.operation_keys().to_vec();
+        Ok(bridged)
+    }
+
+    /// Bridges a finalized native authoring artifact and applies compiled style references.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeRuntimeBridgeError`] when runtime tree construction, style resolution, or
+    /// property mapping fails.
+    pub fn bridge_artifact_with_styles(
+        self,
+        artifact: &NativeAuthoringArtifact,
+        sheet: &CompiledStyleSheet,
+        tokens: &TokenSet,
+    ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
+        let mut bridged = Self::bridge_element_with_style_resources(
+            artifact.root(),
+            Some(StyleResources { sheet, tokens }),
+        )?;
         bridged.operation_keys = artifact.operation_keys().to_vec();
         Ok(bridged)
     }
@@ -45,12 +68,40 @@ impl NativeRuntimeBridge {
         self,
         root: &NativeAuthoringElement,
     ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
+        Self::bridge_element_with_style_resources(root, None)
+    }
+
+    /// Bridges a native authoring element tree and applies compiled style references.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeRuntimeBridgeError`] when runtime tree construction, style resolution, or
+    /// property mapping fails.
+    pub fn bridge_element_with_styles(
+        self,
+        root: &NativeAuthoringElement,
+        sheet: &CompiledStyleSheet,
+        tokens: &TokenSet,
+    ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
+        Self::bridge_element_with_style_resources(root, Some(StyleResources { sheet, tokens }))
+    }
+
+    fn bridge_element_with_style_resources(
+        root: &NativeAuthoringElement,
+        styles: Option<StyleResources<'_>>,
+    ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
         let mut metadata = Vec::new();
-        let root_node = runtime_node(root, true)?;
+        let root_node = runtime_node(root, true, styles)?;
         metadata.push(metadata_for(root));
         let mut tree = RuntimeViewTree::new(root_node);
         for child in root.children() {
-            tree = bridge_child(root.id().as_str(), child.element(), tree, &mut metadata)?;
+            tree = bridge_child(
+                root.id().as_str(),
+                child.element(),
+                tree,
+                &mut metadata,
+                styles,
+            )?;
         }
         Ok(NativeRuntimeBridgeArtifact {
             runtime_tree: tree,
@@ -180,19 +231,41 @@ impl From<RuntimeSceneError> for NativeRuntimeBridgeError {
     }
 }
 
+impl From<RuntimeStyleError> for NativeRuntimeBridgeError {
+    fn from(error: RuntimeStyleError) -> Self {
+        Self::new(
+            error.diagnostic().rule(),
+            error.diagnostic().message().to_string(),
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+struct StyleResources<'a> {
+    sheet: &'a CompiledStyleSheet,
+    tokens: &'a TokenSet,
+}
+
 fn bridge_child(
     parent_id: &str,
     element: &NativeAuthoringElement,
     mut tree: RuntimeViewTree,
     metadata: &mut Vec<NativeRuntimeNodeMetadata>,
+    styles: Option<StyleResources<'_>>,
 ) -> Result<RuntimeViewTree, NativeRuntimeBridgeError> {
     tree = tree.with_child(
         &RuntimeViewId::new(parent_id),
-        runtime_node(element, false)?,
+        runtime_node(element, false, styles)?,
     )?;
     metadata.push(metadata_for(element));
     for child in element.children() {
-        tree = bridge_child(element.id().as_str(), child.element(), tree, metadata)?;
+        tree = bridge_child(
+            element.id().as_str(),
+            child.element(),
+            tree,
+            metadata,
+            styles,
+        )?;
     }
     Ok(tree)
 }
@@ -200,12 +273,34 @@ fn bridge_child(
 fn runtime_node(
     element: &NativeAuthoringElement,
     is_root: bool,
+    styles: Option<StyleResources<'_>>,
 ) -> Result<RuntimeViewNode, NativeRuntimeBridgeError> {
+    let style_table = runtime_styles(element, styles)?;
     Ok(RuntimeViewNode::new(
         RuntimeViewId::new(element.id().as_str()),
         layout_style(element, is_root)?,
-        visual(element)?,
+        visual(element, style_table.as_ref())?,
     ))
+}
+
+fn runtime_styles(
+    element: &NativeAuthoringElement,
+    styles: Option<StyleResources<'_>>,
+) -> Result<Option<RuntimeStyleTable>, NativeRuntimeBridgeError> {
+    let Some(styles) = styles else {
+        return Ok(None);
+    };
+    if element.style_refs().is_empty() {
+        return Ok(None);
+    }
+    RuntimeStyleTable::from_style_refs_with_tokens(
+        element.id().as_str(),
+        styles.sheet,
+        element.style_refs().iter().map(StyleRef::name),
+        styles.tokens,
+    )
+    .map(Some)
+    .map_err(Into::into)
 }
 
 fn layout_style(
@@ -231,16 +326,51 @@ fn layout_style(
     }
 }
 
-fn visual(element: &NativeAuthoringElement) -> Result<RuntimeVisual, NativeRuntimeBridgeError> {
+fn visual(
+    element: &NativeAuthoringElement,
+    styles: Option<&RuntimeStyleTable>,
+) -> Result<RuntimeVisual, NativeRuntimeBridgeError> {
     match element.node().kind() {
         ElementKind::Text => Ok(RuntimeVisual::Text(RuntimeTextVisual::new(
             string_prop(element, "text").unwrap_or_default(),
-            optional_positive_number(element, "font_size")?.unwrap_or(16.0),
-            color_prop(element, "color")?.unwrap_or(Color::rgba(255, 255, 255, 255)),
+            optional_positive_number(element, "font_size")?
+                .or(styled_positive_length(element, styles, "font-size")?)
+                .unwrap_or(16.0),
+            color_prop(element, "color")?
+                .or_else(|| styled_color(element, styles, "color"))
+                .unwrap_or(Color::rgba(255, 255, 255, 255)),
         ))),
-        ElementKind::View | ElementKind::Button => {
-            Ok(color_prop(element, "background")?.map_or(RuntimeVisual::None, RuntimeVisual::Fill))
-        }
+        ElementKind::View | ElementKind::Button => Ok(color_prop(element, "background")?
+            .or_else(|| styled_color(element, styles, "background-color"))
+            .map_or(RuntimeVisual::None, RuntimeVisual::Fill)),
+    }
+}
+
+fn styled_positive_length(
+    element: &NativeAuthoringElement,
+    styles: Option<&RuntimeStyleTable>,
+    property: &str,
+) -> Result<Option<f32>, NativeRuntimeBridgeError> {
+    let Some(value) = styles
+        .and_then(|styles| styles.typed_value(element.id().as_str(), &PropertyId::new(property)))
+    else {
+        return Ok(None);
+    };
+    match value {
+        StyleValue::LengthPx(value) if *value > 0.0 && value.is_finite() => Ok(Some(*value)),
+        _ => Err(invalid_number(property, NumberDomain::Positive)),
+    }
+}
+
+fn styled_color(
+    element: &NativeAuthoringElement,
+    styles: Option<&RuntimeStyleTable>,
+    property: &str,
+) -> Option<Color> {
+    let value = styles?.typed_value(element.id().as_str(), &PropertyId::new(property))?;
+    match value {
+        StyleValue::ColorRgba(r, g, b, a) => Some(Color::rgba(*r, *g, *b, *a)),
+        _ => None,
     }
 }
 

@@ -8,6 +8,7 @@ use hawk2ui_render::{Color, Geometry, RendererBackend};
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend};
 use hawk2ui_runtime::RuntimeViewId;
 use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneFrame};
+use hawk2ui_style::{TokenSet, compile_style_source};
 
 #[test]
 fn native_authoring_runtime_emits_typed_operations_for_lifecycle_children_refs_events_styles_assets_and_diagnostics()
@@ -175,6 +176,90 @@ fn native_runtime_bridge_converts_authoring_artifact_to_runtime_view_tree() {
     );
     assert_eq!(bridged.metadata_for("root").unwrap().refs(), ["root_ref"]);
     assert_eq!(bridged.operation_keys(), artifact.operation_keys());
+}
+
+#[test]
+fn native_runtime_bridge_applies_compiled_style_refs_to_runtime_visuals() {
+    let sheet = compile_style_source(
+        r#"
+.surface {
+  background-color: token(color.surface);
+}
+.headline {
+  font-size: 22px;
+}
+"#,
+    )
+    .expect("style source compiles");
+    let tokens = TokenSet::production().with_color("color.surface", 8, 10, 14, 255);
+    let mut runtime = NativeAuthoringRuntime::new("native-styled-runtime");
+    runtime.mount(
+        NativeAuthoringElement::new("root", ElementKind::View)
+            .with_style(StyleRef::new("surface"))
+            .with_child(NativeChild::keyed(
+                "title",
+                NativeAuthoringElement::new("title", ElementKind::Text)
+                    .with_style(StyleRef::new("headline"))
+                    .with_prop("text", PropValue::String("Styled Runtime".into()))
+                    .with_prop("width", PropValue::Number(180.0))
+                    .with_prop("height", PropValue::Number(36.0)),
+            )),
+    );
+    let artifact = runtime.finish().expect("authoring finalizes");
+
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact_with_styles(&artifact, &sheet, &tokens)
+        .expect("styled artifact bridges");
+    let frame = RuntimeSceneBridge::new(Viewport::new(200.0, 100.0))
+        .build(bridged.runtime_tree())
+        .expect("runtime scene builds");
+
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Fill {
+                id,
+                color: Color { .. },
+                ..
+            } if id.as_str() == "root"
+        )
+    }));
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Fill {
+                id,
+                color,
+                ..
+            } if id.as_str() == "root" && *color == Color::rgba(8, 10, 14, 255)
+        )
+    }));
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Text {
+                id,
+                font_size,
+                ..
+            } if id.as_str() == "title" && *font_size == 22.0
+        )
+    }));
+}
+
+#[test]
+fn native_runtime_bridge_rejects_invalid_styled_font_size() {
+    let sheet = compile_style_source(".headline { font-size: 0px; }")
+        .expect("style source compiles before runtime validation");
+    let element = NativeAuthoringElement::new("title", ElementKind::Text)
+        .with_style(StyleRef::new("headline"))
+        .with_prop("text", PropValue::String("Invalid styled type".into()));
+
+    let error = NativeRuntimeBridge::new()
+        .bridge_element_with_styles(&element, &sheet, &TokenSet::production())
+        .expect_err("zero styled font-size must fail before rendering");
+
+    assert_eq!(error.rule(), "native-runtime.layout.invalid-number");
+    assert!(error.message().contains("font-size"));
 }
 
 #[test]
