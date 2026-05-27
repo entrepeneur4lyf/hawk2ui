@@ -344,6 +344,34 @@ impl SolidIntegration {
             .map_err(|error| bridge_error(author_file.as_str(), &error))?;
         Ok(SolidRuntimeArtifact { rendered, runtime })
     }
+
+    /// Renders a Solid component into a themed runtime artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SolidRenderError`] when source validation, native authoring finalization, theme
+    /// token resolution, style resolution, or runtime bridging fails.
+    pub fn render_to_runtime_with_theme(
+        self,
+        component: SolidComponentSource,
+        sheet: &CompiledStyleSheet,
+        tokens: &TokenSet,
+        theme: &str,
+    ) -> Result<SolidRuntimeArtifact, SolidRenderError> {
+        let author_file = component.author_file.clone();
+        let source_text = component.source.clone();
+        let rendered = self.render(component)?;
+        let native_artifact = native_artifact_from_solid_with_defaults(
+            author_file.as_str(),
+            source_text.as_str(),
+            &rendered,
+            false,
+        )?;
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact_with_theme(&native_artifact, sheet, tokens, theme)
+            .map_err(|error| bridge_error(author_file.as_str(), &error))?;
+        Ok(SolidRuntimeArtifact { rendered, runtime })
+    }
 }
 
 fn native_artifact_from_solid(

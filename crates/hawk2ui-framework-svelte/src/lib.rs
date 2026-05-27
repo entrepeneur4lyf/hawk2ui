@@ -337,6 +337,34 @@ impl SvelteIntegration {
             .map_err(|error| bridge_error(author_file.as_str(), &error))?;
         Ok(SvelteRuntimeArtifact { compiled, runtime })
     }
+
+    /// Compiles Svelte author source into a themed runtime artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SvelteCompileError`] when source validation, native authoring finalization, theme
+    /// token resolution, style resolution, or runtime bridging fails.
+    pub fn compile_to_runtime_with_theme(
+        self,
+        source: SvelteComponentSource,
+        sheet: &CompiledStyleSheet,
+        tokens: &TokenSet,
+        theme: &str,
+    ) -> Result<SvelteRuntimeArtifact, SvelteCompileError> {
+        let author_file = source.author_file.clone();
+        let source_text = source.source.clone();
+        let compiled = self.compile(source)?;
+        let native_artifact = native_artifact_from_svelte_with_defaults(
+            author_file.as_str(),
+            source_text.as_str(),
+            &compiled,
+            false,
+        )?;
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact_with_theme(&native_artifact, sheet, tokens, theme)
+            .map_err(|error| bridge_error(author_file.as_str(), &error))?;
+        Ok(SvelteRuntimeArtifact { compiled, runtime })
+    }
 }
 
 fn native_artifact_from_svelte(

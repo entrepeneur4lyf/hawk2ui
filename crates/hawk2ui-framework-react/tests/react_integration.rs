@@ -151,6 +151,40 @@ fn react_19_render_to_runtime_with_styles_applies_compiled_root_background() {
 }
 
 #[test]
+fn react_19_render_to_runtime_with_theme_applies_theme_background() {
+    let source = ReactElementTree::new(
+        "examples/frameworks/react-basic/src/App.tsx",
+        r#"<hawk-view id="root" className="surface"></hawk-view>"#,
+    );
+    let sheet = compile_style_source(".surface { background-color: token(color.surface); }")
+        .expect("style source compiles");
+    let tokens = TokenSet::production()
+        .with_color("color.surface", 8, 10, 14, 255)
+        .with_theme(hawk2ui_style::ThemeVariant::new("light").with_token(
+            "color.surface",
+            hawk2ui_style::TokenValue::ColorRgba(245, 243, 238, 255),
+        ));
+
+    let artifact = ReactIntegration::new()
+        .render_to_runtime_with_theme(source, &sheet, &tokens, "light")
+        .expect("valid React source should bridge with themed styles");
+    let frame = RuntimeSceneBridge::new(Viewport::new(160.0, 80.0))
+        .build(artifact.runtime_tree())
+        .expect("runtime scene builds");
+
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Fill {
+                id,
+                color,
+                ..
+            } if id.as_str() == "root" && *color == Color::rgba(245, 243, 238, 255)
+        )
+    }));
+}
+
+#[test]
 fn react_smoke_app_declares_public_package_entrypoint() {
     let package_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
