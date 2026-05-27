@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::RuntimeEvent;
+use crate::{RuntimeEvent, RuntimeSceneUpdate};
 
 /// Timer job scheduled by the runtime.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -94,6 +94,17 @@ impl RuntimeScheduler {
     /// Marks a render target invalid. Duplicate targets are coalesced.
     pub fn invalidate_render(&mut self, target: impl Into<String>) {
         self.render_invalidations.insert(target.into());
+    }
+
+    /// Schedules runtime work needed to present a scene update.
+    pub fn schedule_scene_update(&mut self, update: &RuntimeSceneUpdate) {
+        if !update.requires_repaint() {
+            return;
+        }
+        for view_id in update.affected_view_ids() {
+            self.invalidate_render(view_id.as_str());
+        }
+        self.schedule_host_callback("host.repaint.scene-dirty");
     }
 
     /// Schedules an animation tick timestamp.

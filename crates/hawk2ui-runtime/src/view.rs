@@ -1,13 +1,15 @@
 //! Retained runtime view records and runtime-to-render bridge types.
 
+use std::collections::BTreeSet;
+
 use hawk2ui_layout::{
     ComputedGeometry, LayoutNode, LayoutNodeId, LayoutOutput, LayoutStyle, LayoutTree,
     LayoutTreeError, Viewport,
 };
 use hawk2ui_render::{
     Color, Geometry, InvalidationReason, LayerKind, LayerStack, LayerValidationError,
-    PaintCommandList, PaintLayer, SceneGraph, SceneGraphError, SceneNode, SceneNodeId, TextLayer,
-    export_paint_commands,
+    PaintCommandList, PaintLayer, SceneGraph, SceneGraphDiff, SceneGraphError, SceneNode,
+    SceneNodeId, TextLayer, export_paint_commands,
 };
 
 /// Stable runtime view identifier.
@@ -309,6 +311,68 @@ impl RuntimeSceneFrame {
     pub fn invalidated_view_ids(&self) -> &[RuntimeViewId] {
         &self.invalidated_view_ids
     }
+
+    /// Computes the runtime update plan needed to move from a previous frame to this frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when either frame contains invalid retained scene data.
+    pub fn diff_from(&self, previous: &Self) -> Result<RuntimeSceneUpdate, RuntimeSceneError> {
+        let diff = previous.scene().diff(self.scene())?;
+        Ok(RuntimeSceneUpdate::from_scene_diff(&diff))
+    }
+}
+
+/// Runtime scene update plan for repaint and cache invalidation consumers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RuntimeSceneUpdate {
+    repaint_bounds: Option<Geometry>,
+    affected_view_ids: Vec<RuntimeViewId>,
+    cache_invalidated_view_ids: Vec<RuntimeViewId>,
+}
+
+impl RuntimeSceneUpdate {
+    fn from_scene_diff(diff: &SceneGraphDiff) -> Self {
+        let mut affected_view_ids = BTreeSet::new();
+        for node_id in diff
+            .added_node_ids()
+            .iter()
+            .chain(diff.removed_node_ids())
+            .chain(diff.changed_node_ids())
+            .chain(diff.cache_invalidated_node_ids())
+        {
+            affected_view_ids.insert(RuntimeViewId::new(node_id.as_str()));
+        }
+        Self {
+            repaint_bounds: diff.repaint_bounds(),
+            affected_view_ids: affected_view_ids.into_iter().collect(),
+            cache_invalidated_view_ids: scene_ids_to_view_ids(diff.cache_invalidated_node_ids()),
+        }
+    }
+
+    /// Returns whether the update needs a host repaint.
+    #[must_use]
+    pub fn requires_repaint(&self) -> bool {
+        self.repaint_bounds.is_some() || !self.affected_view_ids.is_empty()
+    }
+
+    /// Returns aggregate dirty bounds for the repaint request.
+    #[must_use]
+    pub const fn repaint_bounds(&self) -> Option<Geometry> {
+        self.repaint_bounds
+    }
+
+    /// Returns runtime view IDs affected by added, removed, changed, or invalidated scene data.
+    #[must_use]
+    pub fn affected_view_ids(&self) -> &[RuntimeViewId] {
+        &self.affected_view_ids
+    }
+
+    /// Returns runtime view IDs whose cached render content must be evicted before replay.
+    #[must_use]
+    pub fn cache_invalidated_view_ids(&self) -> &[RuntimeViewId] {
+        &self.cache_invalidated_view_ids
+    }
 }
 
 /// Retained runtime view tree.
@@ -574,6 +638,13 @@ fn geometry_for(
         .iter()
         .find(|(id, _)| id.as_str() == view_id.as_str())
         .map(|(_, geometry)| *geometry)
+}
+
+fn scene_ids_to_view_ids(node_ids: &[SceneNodeId]) -> Vec<RuntimeViewId> {
+    node_ids
+        .iter()
+        .map(|node_id| RuntimeViewId::new(node_id.as_str()))
+        .collect()
 }
 
 fn checked_order(order: usize) -> i32 {

@@ -15,6 +15,30 @@ use serde::{Serialize, de::DeserializeOwned};
 
 fn assert_serde_contract<T: Serialize + DeserializeOwned>() {}
 
+fn runtime_scene_tree(invalidate_meter: bool) -> RuntimeViewTree {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(100.0, 100.0)),
+        RuntimeVisual::Fill(Color::rgba(0, 0, 0, 255)),
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("meter"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(80.0, 20.0)),
+            RuntimeVisual::Fill(Color::rgba(0, 200, 120, 255)),
+        ),
+    )
+    .expect("meter attaches");
+    if invalidate_meter {
+        tree.invalidate(&RuntimeViewId::new("meter"))
+            .expect("meter invalidates")
+    } else {
+        tree
+    }
+}
+
 #[test]
 fn runtime_records_module_identity_is_stable() {
     let module = ScriptModuleRecord::new("main", "app://main.js", ScriptModuleKind::JavaScript)
@@ -294,6 +318,38 @@ fn scheduler_coalesces_render_invalidations() {
     let batch = scheduler.drain_batch().expect("scheduler should drain");
 
     assert_eq!(batch.render_invalidations, vec!["meter", "root"]);
+}
+
+#[test]
+fn scheduler_consumes_scene_update_for_repaint_and_cache_eviction() {
+    let bridge = RuntimeSceneBridge::new(Viewport::new(100.0, 100.0));
+    let previous = bridge
+        .build(&runtime_scene_tree(false))
+        .expect("previous frame builds");
+    let next = bridge
+        .build(&runtime_scene_tree(true))
+        .expect("next frame builds");
+
+    let update = next
+        .diff_from(&previous)
+        .expect("scene update diff succeeds");
+
+    assert!(update.requires_repaint());
+    assert_eq!(
+        update.repaint_bounds(),
+        Some(Geometry::new(0.0, 0.0, 80.0, 20.0))
+    );
+    assert_eq!(
+        update.cache_invalidated_view_ids(),
+        &[RuntimeViewId::new("meter"), RuntimeViewId::new("root")]
+    );
+
+    let mut scheduler = RuntimeScheduler::default();
+    scheduler.schedule_scene_update(&update);
+    let batch = scheduler.drain_batch().expect("scheduler should drain");
+
+    assert_eq!(batch.render_invalidations, vec!["meter", "root"]);
+    assert_eq!(batch.host_callbacks, vec!["host.repaint.scene-dirty"]);
 }
 
 #[test]

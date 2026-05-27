@@ -29,7 +29,8 @@ pub use script::{
 };
 pub use view::{
     RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneError, RuntimeSceneFrame,
-    RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
+    RuntimeSceneUpdate, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
+    RuntimeVisual,
 };
 
 /// The canonical Cargo package name for this crate.
