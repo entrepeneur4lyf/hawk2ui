@@ -1351,8 +1351,8 @@ Status:
 
 - CLAP adapter metadata now depends on `clap-sys` and emits a CLAP entry plan containing the CLAP ABI version, `clap_entry` symbol, plugin factory ID, plugin ID, vendor/name/version, descriptor ABI marker, and CLAP feature list.
 - CLAP package materialization now writes `Contents/Resources/clap-entry.toml` and includes it in required file and hash verification coverage.
-- CLAP `cdylib` scaffold generation now writes a Cargo project with a `clap_entry` export, plugin descriptor, plugin factory callbacks, and minimal create-plugin path; tests compile it to a release dynamic library and host-load it through a generated external checker that resolves the entry, obtains the factory, reads the descriptor, and creates a plugin instance.
-- Full audio processing callbacks and editor attachment remain open under this item.
+- CLAP `cdylib` scaffold generation now writes a Cargo project with a `clap_entry` export, plugin descriptor, plugin factory callbacks, lifecycle callbacks, realtime-safe bypass processing callback, audio-port extension, parameter extension generated from `ParameterModel`, state save/load extension, GUI/editor extension, and create-plugin path; tests compile it to a release dynamic library and host-load it through a generated external checker that resolves the entry, obtains the factory, reads the descriptor, creates a plugin instance, invokes lifecycle/process callbacks, reads parameter metadata/default values, round-trips state, and discovers audio-port and GUI extensions.
+- Remaining work under this item is to connect the scaffolded CLAP entry surface to Hawk2UI package assets and real host editor window attachment.
 
 Required remediation:
 

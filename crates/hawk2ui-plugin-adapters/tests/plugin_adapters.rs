@@ -1,5 +1,5 @@
 use hawk2ui_plugin::{
-    BundleOutput, FormatMetadata, ParameterModel, ParameterRange, ParameterRecord,
+    BundleOutput, FormatMetadata, ParameterFlags, ParameterModel, ParameterRange, ParameterRecord,
 };
 use hawk2ui_plugin_adapters::{
     ClapCdylibScaffold, ClapPluginEntryPlan, MaterializedPackageOutput, PackageAdapterSet,
@@ -241,6 +241,13 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     let metadata = FormatMetadata::new("com.hawk2ui.loadable", "Loadable", "Hawk2UI")
         .version("1.0.0")
         .feature("audio-effect");
+    let parameters = ParameterModel::new([ParameterRecord::numeric(
+        "gain",
+        "Gain",
+        "dB",
+        ParameterRange::new(-60.0, 6.0, 0.0),
+    )
+    .flags(ParameterFlags::automatable())]);
     let output_root = std::env::temp_dir().join(format!(
         "hawk2ui-clap-cdylib-{}",
         SystemTime::now()
@@ -249,7 +256,7 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
             .as_nanos()
     ));
 
-    let scaffold = ClapCdylibScaffold::from_metadata(&metadata);
+    let scaffold = ClapCdylibScaffold::from_metadata(&metadata).with_parameters(&parameters);
     let output = scaffold
         .write_to(&output_root)
         .expect("CLAP scaffold should write");
@@ -262,6 +269,14 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     assert!(source.contains("clap_plugin_entry"));
     assert!(source.contains("get_plugin_descriptor"));
     assert!(source.contains("create_plugin"));
+    assert!(source.contains("plugin_activate"));
+    assert!(source.contains("plugin_process"));
+    assert!(source.contains("clap_plugin_audio_ports"));
+    assert!(source.contains("clap_plugin_gui"));
+    assert!(source.contains("clap_plugin_params"));
+    assert!(source.contains("clap_plugin_state"));
+    assert!(source.contains("PARAMETERS"));
+    assert!(source.contains("Gain"));
 
     let target_dir = output_root.join("target");
     let status = std::process::Command::new("cargo")
@@ -351,7 +366,7 @@ libloading = "0.8.9"
 }
 
 fn generated_clap_host_check_source() -> &'static str {
-    r#"use std::{env, ffi::CStr, ptr};
+    r#"use std::{env, ffi::{c_void, CStr}, ptr};
 
 fn main() {
     let library_path = env::args().nth(1).expect("library path argument");
@@ -385,7 +400,107 @@ fn main() {
         );
         assert!(!plugin.is_null());
         assert_eq!((*plugin).desc, descriptor as *const _);
+
+        assert!(((*plugin).init.expect("plugin init"))(plugin));
+        assert!(((*plugin).activate.expect("activate"))(plugin, 48_000.0, 32, 1_024));
+        assert!(((*plugin).start_processing.expect("start processing"))(plugin));
+        let process = clap_sys::process::clap_process {
+            steady_time: 0,
+            frames_count: 0,
+            transport: ptr::null(),
+            audio_inputs: ptr::null(),
+            audio_outputs: ptr::null_mut(),
+            audio_inputs_count: 0,
+            audio_outputs_count: 0,
+            in_events: ptr::null(),
+            out_events: ptr::null(),
+        };
+        assert_eq!(
+            ((*plugin).process.expect("process"))(plugin, &process),
+            clap_sys::process::CLAP_PROCESS_CONTINUE
+        );
+        ((*plugin).stop_processing.expect("stop processing"))(plugin);
+        ((*plugin).deactivate.expect("deactivate"))(plugin);
+
+        let audio_ports = ((*plugin).get_extension.expect("extension"))(
+            plugin,
+            b"clap.audio-ports\0".as_ptr().cast(),
+        );
+        assert!(!audio_ports.is_null());
+        let audio_ports =
+            &*(audio_ports as *const clap_sys::ext::audio_ports::clap_plugin_audio_ports);
+        assert_eq!((audio_ports.count.expect("audio port count"))(plugin, true), 1);
+        assert_eq!((audio_ports.count.expect("audio port count"))(plugin, false), 1);
+
+        let gui = ((*plugin).get_extension.expect("gui extension"))(
+            plugin,
+            b"clap.gui\0".as_ptr().cast(),
+        );
+        assert!(!gui.is_null());
+        let gui = &*(gui as *const clap_sys::ext::gui::clap_plugin_gui);
+        let mut width = 0;
+        let mut height = 0;
+        assert!((gui.get_size.expect("gui size"))(plugin, &mut width, &mut height));
+        assert_eq!((width, height), (800, 600));
+
+        let params = ((*plugin).get_extension.expect("params extension"))(
+            plugin,
+            b"clap.params\0".as_ptr().cast(),
+        );
+        assert!(!params.is_null());
+        let params = &*(params as *const clap_sys::ext::params::clap_plugin_params);
+        assert_eq!((params.count.expect("param count"))(plugin), 1);
+        let mut info =
+            std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::zeroed()
+                .assume_init();
+        assert!((params.get_info.expect("param info"))(plugin, 0, &mut info));
+        assert_eq!(info.id, 1);
+        assert_eq!(CStr::from_ptr(info.name.as_ptr()).to_string_lossy(), "Gain");
+        assert_eq!(info.min_value, -60.0);
+        assert_eq!(info.max_value, 6.0);
+        assert_eq!(info.default_value, 0.0);
+        let mut value = f64::NAN;
+        assert!((params.get_value.expect("param value"))(plugin, 1, &mut value));
+        assert_eq!(value, 0.0);
+
+        let state = ((*plugin).get_extension.expect("state extension"))(
+            plugin,
+            b"clap.state\0".as_ptr().cast(),
+        );
+        assert!(!state.is_null());
+        let state = &*(state as *const clap_sys::ext::state::clap_plugin_state);
+        let mut saved = Vec::new();
+        let ostream = clap_sys::stream::clap_ostream {
+            ctx: (&mut saved as *mut Vec<u8>).cast(),
+            write: Some(write_stream),
+        };
+        assert!((state.save.expect("state save"))(plugin, &ostream));
+        assert_eq!(std::str::from_utf8(&saved).expect("state is utf8"), "hawk2ui-state-v1\n");
+        let istream = clap_sys::stream::clap_istream {
+            ctx: ptr::null_mut(),
+            read: Some(empty_read),
+        };
+        assert!((state.load.expect("state load"))(plugin, &istream));
     }
+}
+
+unsafe extern "C" fn write_stream(
+    stream: *const clap_sys::stream::clap_ostream,
+    buffer: *const c_void,
+    size: u64,
+) -> i64 {
+    let output = unsafe { &mut *((*stream).ctx as *mut Vec<u8>) };
+    let bytes = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), size as usize) };
+    output.extend_from_slice(bytes);
+    size as i64
+}
+
+unsafe extern "C" fn empty_read(
+    _stream: *const clap_sys::stream::clap_istream,
+    _buffer: *mut c_void,
+    _size: u64,
+) -> i64 {
+    0
 }
 "#
 }
