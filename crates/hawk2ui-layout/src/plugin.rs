@@ -127,6 +127,36 @@ impl GeneratedParameterLayout {
     }
 }
 
+/// Plugin layout validation error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginLayoutError {
+    rule: String,
+    message: String,
+}
+
+impl PluginLayoutError {
+    /// Creates a plugin layout error.
+    #[must_use]
+    pub fn new(rule: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            rule: rule.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable diagnostic rule.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        &self.rule
+    }
+
+    /// Returns the diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
 /// Plugin editor constraints.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PluginEditorConstraints {
@@ -196,12 +226,60 @@ impl PluginEditorConstraints {
     /// Clamps a host-provided editor size to min/max constraints.
     #[must_use]
     pub fn clamp_host_size(&self, host_size: PluginEditorSize) -> PluginEditorSize {
+        self.try_clamp_host_size(host_size)
+            .unwrap_or(self.default_size)
+    }
+
+    /// Clamps a host-provided editor size to min/max constraints after validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginLayoutError`] when constraints or host size are invalid.
+    pub fn try_clamp_host_size(
+        &self,
+        host_size: PluginEditorSize,
+    ) -> Result<PluginEditorSize, PluginLayoutError> {
+        self.validate()?;
+        validate_size("host", host_size)?;
         let min = self.min_size.unwrap_or(self.default_size);
         let max = self.max_size.unwrap_or(self.default_size);
-        PluginEditorSize::new(
+        Ok(PluginEditorSize::new(
             host_size.width.clamp(min.width, max.width),
             host_size.height.clamp(min.height, max.height),
-        )
+        ))
+    }
+
+    /// Validates all plugin editor layout constraints.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginLayoutError`] when size, region, or generated parameter metadata is invalid.
+    pub fn validate(&self) -> Result<(), PluginLayoutError> {
+        validate_size("default", self.default_size)?;
+        if let Some(min_size) = self.min_size {
+            validate_size("min", min_size)?;
+        }
+        if let Some(max_size) = self.max_size {
+            validate_size("max", max_size)?;
+        }
+        let min = self.min_size.unwrap_or(self.default_size);
+        let max = self.max_size.unwrap_or(self.default_size);
+        if min.width > max.width || min.height > max.height {
+            return Err(PluginLayoutError::new(
+                "plugin-layout.range.invalid",
+                "minimum plugin editor size must not exceed maximum size",
+            ));
+        }
+        for region in &self.graph_regions {
+            validate_region(region.id(), region.x, region.y, region.width, region.height)?;
+        }
+        for region in &self.analyzer_regions {
+            validate_region(region.id(), region.x, region.y, region.width, region.height)?;
+        }
+        for layout in &self.generated_parameters {
+            validate_generated_parameters(layout)?;
+        }
+        Ok(())
     }
 
     /// Returns a graph region by ID.
@@ -222,5 +300,59 @@ impl PluginEditorConstraints {
         self.generated_parameters
             .iter()
             .find(|layout| layout.id == id)
+    }
+}
+
+fn validate_size(_label: &str, size: PluginEditorSize) -> Result<(), PluginLayoutError> {
+    if size.width.is_finite() && size.height.is_finite() && size.width > 0.0 && size.height > 0.0 {
+        Ok(())
+    } else {
+        Err(PluginLayoutError::new(
+            "plugin-layout.size.invalid",
+            "plugin editor sizes must be finite and greater than zero",
+        ))
+    }
+}
+
+fn validate_region(
+    id: &str,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> Result<(), PluginLayoutError> {
+    if id.trim().is_empty()
+        || !x.is_finite()
+        || !y.is_finite()
+        || !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+    {
+        Err(PluginLayoutError::new(
+            "plugin-layout.region.invalid",
+            "plugin layout regions require non-empty IDs and finite positive sizes",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_generated_parameters(
+    layout: &GeneratedParameterLayout,
+) -> Result<(), PluginLayoutError> {
+    if layout.id.trim().is_empty()
+        || layout.parameters.is_empty()
+        || layout
+            .parameters
+            .iter()
+            .any(|parameter| parameter.trim().is_empty())
+    {
+        Err(PluginLayoutError::new(
+            "plugin-layout.parameters.invalid",
+            "generated parameter layouts require non-empty IDs and parameter IDs",
+        ))
+    } else {
+        Ok(())
     }
 }

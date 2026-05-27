@@ -312,17 +312,50 @@ fn plugin_constraints_clamp_host_sizes() {
         .with_max_size(PluginEditorSize::new(1440.0, 900.0));
 
     assert_eq!(
-        constraints.clamp_host_size(PluginEditorSize::new(320.0, 240.0)),
+        constraints
+            .try_clamp_host_size(PluginEditorSize::new(320.0, 240.0))
+            .expect("valid host size clamps"),
         PluginEditorSize::new(640.0, 360.0)
     );
     assert_eq!(
-        constraints.clamp_host_size(PluginEditorSize::new(1920.0, 1200.0)),
+        constraints
+            .try_clamp_host_size(PluginEditorSize::new(1920.0, 1200.0))
+            .expect("valid host size clamps"),
         PluginEditorSize::new(1440.0, 900.0)
     );
     assert_eq!(
-        constraints.clamp_host_size(PluginEditorSize::new(1000.0, 700.0)),
+        constraints
+            .try_clamp_host_size(PluginEditorSize::new(1000.0, 700.0))
+            .expect("valid host size clamps"),
         PluginEditorSize::new(1000.0, 700.0)
     );
+}
+
+#[test]
+fn plugin_constraints_reject_invalid_sizes_regions_and_parameters() {
+    let error = PluginEditorConstraints::new(PluginEditorSize::new(f32::NAN, 540.0))
+        .validate()
+        .expect_err("non-finite default sizes must fail");
+    assert_eq!(error.rule(), "plugin-layout.size.invalid");
+
+    let error = PluginEditorConstraints::new(PluginEditorSize::new(960.0, 540.0))
+        .with_min_size(PluginEditorSize::new(1440.0, 900.0))
+        .with_max_size(PluginEditorSize::new(640.0, 360.0))
+        .try_clamp_host_size(PluginEditorSize::new(1000.0, 700.0))
+        .expect_err("inverted min/max ranges must fail");
+    assert_eq!(error.rule(), "plugin-layout.range.invalid");
+
+    let error = PluginEditorConstraints::new(PluginEditorSize::new(960.0, 540.0))
+        .with_graph_region(GraphRegion::new("", 0.0, 0.0, 10.0, 10.0))
+        .validate()
+        .expect_err("empty graph region IDs must fail");
+    assert_eq!(error.rule(), "plugin-layout.region.invalid");
+
+    let error = PluginEditorConstraints::new(PluginEditorSize::new(960.0, 540.0))
+        .with_generated_parameters(GeneratedParameterLayout::dense_panel("parameters", [""], 2))
+        .validate()
+        .expect_err("empty generated parameter IDs must fail");
+    assert_eq!(error.rule(), "plugin-layout.parameters.invalid");
 }
 
 #[test]
