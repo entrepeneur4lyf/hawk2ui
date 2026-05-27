@@ -118,6 +118,15 @@ impl FilesystemPolicy {
         grant: &FilesystemGrant,
         requested_path: &str,
     ) -> Result<FilesystemAccess, FilesystemDenied> {
+        if !is_valid_scope_root(&grant.root) {
+            return Err(FilesystemDenied {
+                path: requested_path.into(),
+                diagnostic: PlatformDiagnostic::error(
+                    "filesystem.user-grant.invalid",
+                    "filesystem user-selected grant is invalid",
+                ),
+            });
+        }
         if grant.scope != FilesystemScope::UserSelectedFile || grant.root != requested_path {
             return Err(FilesystemDenied {
                 path: requested_path.into(),

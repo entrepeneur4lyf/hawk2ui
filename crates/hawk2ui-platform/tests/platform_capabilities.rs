@@ -146,6 +146,22 @@ fn filesystem_scope_allows_user_selected_file_grants() {
 }
 
 #[test]
+fn filesystem_scope_rejects_structurally_unsafe_user_selected_grants() {
+    for path in [
+        "relative/session.hawk",
+        "/home/user/../secrets",
+        "C:\\\\Users\\\\session.hawk",
+    ] {
+        let grant = FilesystemPolicy::user_selected_file(path);
+
+        let error = FilesystemPolicy::resolve_user_selected(&grant, path)
+            .expect_err("unsafe exact user-selected grants must be denied");
+
+        assert_eq!(error.diagnostic.rule, "filesystem.user-grant.invalid");
+    }
+}
+
+#[test]
 fn network_capabilities_allow_declared_host() {
     let table = CapabilityTable::new([CapabilityRecord::new("network.fetch")
         .allow(PlatformOperation::NetworkRequest)
