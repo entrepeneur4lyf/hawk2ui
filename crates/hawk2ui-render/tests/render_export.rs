@@ -218,6 +218,46 @@ fn scene_graph_records_layers_effects_opacity_groups_and_paint_order() {
 }
 
 #[test]
+fn scene_graph_resolves_accessibility_geometry_from_hit_test_or_layout() {
+    let graph = SceneGraph::new(
+        SceneNode::new(SceneNodeId::new("root")).with_layout(Geometry::new(0.0, 0.0, 320.0, 200.0)),
+    )
+    .with_child(
+        SceneNodeId::new("root"),
+        SceneNode::new(SceneNodeId::new("meter"))
+            .with_layout(Geometry::new(10.0, 20.0, 120.0, 48.0))
+            .with_transform(Transform::translate(4.0, 8.0))
+            .with_hit_test(HitTestGeometry::new(8.0, 18.0, 124.0, 52.0))
+            .with_accessibility_ref(AccessibilityRef::new("meter-a11y")),
+    )
+    .expect("meter child insertion succeeds")
+    .with_child(
+        SceneNodeId::new("root"),
+        SceneNode::new(SceneNodeId::new("label"))
+            .with_layout(Geometry::new(16.0, 72.0, 80.0, 20.0))
+            .with_accessibility_ref(AccessibilityRef::new("label-a11y")),
+    )
+    .expect("label child insertion succeeds");
+
+    assert_eq!(
+        graph
+            .accessibility_geometry(&AccessibilityRef::new("meter-a11y"))
+            .expect("meter accessibility geometry resolves"),
+        Geometry::new(12.0, 26.0, 124.0, 52.0)
+    );
+    assert_eq!(
+        graph
+            .accessibility_geometry(&AccessibilityRef::new("label-a11y"))
+            .expect("label accessibility geometry resolves"),
+        Geometry::new(16.0, 72.0, 80.0, 20.0)
+    );
+    assert_eq!(
+        graph.accessibility_geometry(&AccessibilityRef::new("missing-a11y")),
+        None
+    );
+}
+
+#[test]
 fn scene_graph_preserves_full_affine_transforms_and_serializes_them_stably() {
     let transform = Transform::affine(1.25, 0.5, -0.25, 0.75, 12.0, 18.0);
     let graph = SceneGraph::new(SceneNode::new(SceneNodeId::new("root")).with_transform(transform));
@@ -395,7 +435,9 @@ fn backend_boundary_records_surface_lifecycle_and_frame_commands() {
     backend
         .push_transform(Transform::translate(4.0, 8.0))
         .unwrap();
-    backend.apply_layer_effect("shadow").unwrap();
+    backend
+        .apply_layer_effect("shadow-rect:0,0,100,50:4,4:4:0,0,0,180")
+        .unwrap();
     let cache = backend.create_cache_handle("card").unwrap();
     backend
         .mark_dirty(Geometry::new(0.0, 0.0, 100.0, 50.0))
@@ -420,7 +462,7 @@ fn backend_boundary_records_surface_lifecycle_and_frame_commands() {
             "image:hero",
             "clip:0,0,80,40",
             "transform:1,0,0,1,4,8",
-            "effect:shadow",
+            "effect:shadow-rect:0,0,100,50:4,4:4:0,0,0,180",
             "cache:card",
             "dirty:0,0,100,50",
             "end-frame:main",

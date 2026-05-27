@@ -318,12 +318,11 @@ Acceptance:
 
 ### REM-RENDER-003: Complete Scene Graph Semantics
 
-Status: In progress; full affine transforms, dirty-bounds invalidation, deterministic scene diffing, retained scene metadata semantics, runtime repaint scheduling, backend cache eviction application, and Skia opacity-group compositing are remediated in source.
+Status: Remediated in source.
 
 Evidence:
 
 - `SceneNode` has layout, clip, affine transform, opacity, hit-test, accessibility refs, and invalidation flags.
-- Full renderer effect execution remains incomplete.
 - Dirty bounds, invalidation reasons, and cache invalidation state are now recorded on scene nodes.
 - Scene diffs now report added, removed, changed, repaint bounds, and cache-invalidated node IDs.
 - Scene nodes now record typed layer membership, opacity groups, and effect references.
@@ -332,10 +331,8 @@ Evidence:
 - Runtime scheduler now consumes scene updates into coalesced render invalidations and host repaint callbacks.
 - Runtime scene updates now apply explicit cache evictions through the render backend cache-invalidation contract.
 - Skia now executes opacity groups through save-layer alpha compositing.
-
-Required remediation:
-
-- Complete renderer-side effect execution.
+- Skia now executes supported structured layer effects through real shadow/glow primitives.
+- Scene graphs now resolve accessibility geometry from hit-test geometry or layout geometry.
 
 Acceptance:
 
@@ -346,8 +343,9 @@ Acceptance:
 - `crates/hawk2ui-runtime/tests/runtime_behavior.rs` covers runtime scene update planning, cache invalidation target propagation, and host repaint scheduling.
 - `crates/hawk2ui-runtime/tests/runtime_behavior.rs` covers applying runtime scene update cache evictions to the Skia backend before frame replay.
 - `crates/hawk2ui-render-skia/tests/skia_backend.rs` covers opacity-group compositing through rendered pixels.
+- `crates/hawk2ui-render-skia/tests/skia_backend.rs` covers structured effect execution through rendered pixels.
+- `crates/hawk2ui-render/tests/render_export.rs` covers accessibility geometry resolution.
 - `crates/hawk2ui-render-skia/tests/skia_backend.rs` proves affine transforms affect rendered pixels.
-- Remaining scene graph and presentation tests must cover accessibility geometry.
 
 ### REM-RENDER-004: Complete Skia Backend Execution
 
@@ -355,13 +353,12 @@ Evidence:
 
 - `hawk2ui-render-skia` draws several primitives.
 - `draw_vector` only records a command.
-- `apply_layer_effect` only records a command.
+- `apply_layer_effect` executes supported structured shadow/glow effects through Skia primitives and returns explicit diagnostics for unsupported effect strings.
 - Trait-level `draw_text` uses `(0.0, 0.0)` and `Font::default()`.
 
 Required remediation:
 
 - Implement vector asset rendering from compiled vector records.
-- Implement layer effects through Skia primitives where supported and explicit fallback diagnostics where unsupported.
 - Implement text drawing with resolved font, position, baseline, color, DPI, and shaped layout.
 - Implement image scaling, caching, color handling, and nine-slice if accepted by spec.
 

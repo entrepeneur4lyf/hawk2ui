@@ -254,6 +254,33 @@ fn opacity_group_composites_children_at_group_alpha() {
 }
 
 #[test]
+fn apply_layer_effect_executes_supported_structured_effects() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 128, 80).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend
+        .clear(hawk2ui_render::Color::rgba(8, 10, 14, 255))
+        .unwrap();
+    backend
+        .apply_layer_effect("shadow-rect:12,46,20,12:4,4:4:0,0,0,180")
+        .unwrap();
+    backend
+        .apply_layer_effect("glow-rect:54,46,20,12:5:80,220,255,180")
+        .unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 50.0, 26.0, 18.0)) > 0,
+        "structured shadow effect must render pixels"
+    );
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(50.0, 42.0, 30.0, 22.0)) > 0,
+        "structured glow effect must render pixels"
+    );
+}
+
+#[test]
 fn cache_lifecycle_tracks_generation_and_invalidation() {
     let mut backend = SkiaRendererBackend::new();
     backend.create_surface("main", 96, 64).unwrap();
@@ -378,7 +405,9 @@ fn drive_core_frame(backend: &mut impl RendererBackend) {
     backend
         .push_transform(Transform::translate(4.0, 8.0))
         .unwrap();
-    backend.apply_layer_effect("shadow").unwrap();
+    backend
+        .apply_layer_effect("shadow-rect:0,0,100,50:4,4:4:0,0,0,180")
+        .unwrap();
     let cache = backend.create_cache_handle("card").unwrap();
     assert_eq!(cache.as_str(), "card");
     backend

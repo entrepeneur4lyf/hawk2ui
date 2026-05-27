@@ -803,6 +803,24 @@ impl SceneGraph {
         Ok(opacity)
     }
 
+    /// Resolves render geometry for an accessibility reference.
+    ///
+    /// Hit-test geometry is preferred because it represents the interactive target. Layout geometry
+    /// is used as the fallback for non-interactive semantic nodes.
+    #[must_use]
+    pub fn accessibility_geometry(&self, accessibility_ref: &AccessibilityRef) -> Option<Geometry> {
+        self.entries
+            .iter()
+            .find(|entry| entry.node.accessibility_ref() == Some(accessibility_ref))
+            .and_then(|entry| {
+                entry
+                    .node
+                    .hit_test()
+                    .or_else(|| entry.node.layout())
+                    .map(|geometry| transform_geometry(geometry, entry.node.transform()))
+            })
+    }
+
     /// Computes deterministic scene changes needed for repaint and cache invalidation.
     ///
     /// # Errors

@@ -1236,9 +1236,32 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn apply_layer_effect(&mut self, effect: &str) -> Result<(), BackendError> {
-        self.require_active_frame()?;
-        self.commands.push(format!("effect:{effect}"));
-        Ok(())
+        match parse_layer_effect(effect).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })? {
+            ParsedLayerEffect::ShadowRect {
+                geometry,
+                offset_x,
+                offset_y,
+                blur_radius,
+                color,
+            } => {
+                self.draw_shadow_rect(geometry, offset_x, offset_y, blur_radius, color)?;
+                self.commands.pop();
+                self.commands.push(format!("effect:{effect}"));
+                Ok(())
+            }
+            ParsedLayerEffect::GlowRect {
+                geometry,
+                blur_radius,
+                color,
+            } => {
+                self.draw_glow_rect(geometry, blur_radius, color)?;
+                self.commands.pop();
+                self.commands.push(format!("effect:{effect}"));
+                Ok(())
+            }
+        }
     }
 
     fn begin_opacity_group(&mut self, opacity: f32) -> Result<(), BackendError> {
@@ -1383,6 +1406,106 @@ fn validate_opacity(opacity: f32) -> Result<(), BackendError> {
             "opacity group alpha must be finite and within 0.0..=1.0",
         ))
     }
+}
+
+enum ParsedLayerEffect {
+    ShadowRect {
+        geometry: Geometry,
+        offset_x: f32,
+        offset_y: f32,
+        blur_radius: f32,
+        color: Color,
+    },
+    GlowRect {
+        geometry: Geometry,
+        blur_radius: f32,
+        color: Color,
+    },
+}
+
+fn parse_layer_effect(effect: &str) -> Result<ParsedLayerEffect, BackendError> {
+    let fields: Vec<_> = effect.split(':').collect();
+    match fields.as_slice() {
+        ["shadow-rect", geometry, offset, blur_radius, color] => {
+            let geometry = parse_geometry(geometry)?;
+            let (offset_x, offset_y) = parse_pair(offset)?;
+            let blur_radius = parse_f32(blur_radius)?;
+            let color = parse_color(color)?;
+            Ok(ParsedLayerEffect::ShadowRect {
+                geometry,
+                offset_x,
+                offset_y,
+                blur_radius,
+                color,
+            })
+        }
+        ["glow-rect", geometry, blur_radius, color] => {
+            let geometry = parse_geometry(geometry)?;
+            let blur_radius = parse_f32(blur_radius)?;
+            let color = parse_color(color)?;
+            Ok(ParsedLayerEffect::GlowRect {
+                geometry,
+                blur_radius,
+                color,
+            })
+        }
+        _ => Err(BackendError::new(
+            "skia.effect.unsupported",
+            "effect must be shadow-rect:x,y,w,h:dx,dy:blur:r,g,b,a or glow-rect:x,y,w,h:blur:r,g,b,a",
+        )),
+    }
+}
+
+fn parse_geometry(value: &str) -> Result<Geometry, BackendError> {
+    let values = parse_f32_list(value, 4)?;
+    Ok(Geometry::new(values[0], values[1], values[2], values[3]))
+}
+
+fn parse_pair(value: &str) -> Result<(f32, f32), BackendError> {
+    let values = parse_f32_list(value, 2)?;
+    Ok((values[0], values[1]))
+}
+
+fn parse_color(value: &str) -> Result<Color, BackendError> {
+    let values: Vec<_> = value.split(',').map(parse_u8).collect::<Result<_, _>>()?;
+    if values.len() == 4 {
+        Ok(Color::rgba(values[0], values[1], values[2], values[3]))
+    } else {
+        Err(BackendError::new(
+            "skia.effect.invalid-color",
+            "effect color must have four u8 channels",
+        ))
+    }
+}
+
+fn parse_f32_list(value: &str, expected_len: usize) -> Result<Vec<f32>, BackendError> {
+    let values: Vec<_> = value.split(',').map(parse_f32).collect::<Result<_, _>>()?;
+    if values.len() == expected_len {
+        Ok(values)
+    } else {
+        Err(BackendError::new(
+            "skia.effect.invalid-number-list",
+            "effect numeric list has the wrong number of entries",
+        ))
+    }
+}
+
+fn parse_f32(value: &str) -> Result<f32, BackendError> {
+    value.parse::<f32>().map_err(|_| {
+        BackendError::new(
+            "skia.effect.invalid-number",
+            "effect numeric values must be valid f32 values",
+        )
+    })
+}
+
+fn parse_u8(value: &str) -> Result<u8, BackendError> {
+    value.parse::<u8>().map_err(|_| {
+        BackendError::new(
+            "skia.effect.invalid-color",
+            "effect color channels must be valid u8 values",
+        )
+    })
 }
 
 fn validate_transform(transform: Transform) -> Result<(), BackendError> {
