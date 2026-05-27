@@ -61,10 +61,29 @@ fn text_backend_wraps_truncates_and_scales_high_dpi_metrics() {
         .expect("truncated layout succeeds");
 
     assert!(wrapped_layout.line_count() > 1);
+    assert_eq!(
+        wrapped_layout.lines().len(),
+        usize::try_from(wrapped_layout.line_count()).unwrap()
+    );
+    assert_eq!(
+        wrapped_layout.lines()[0].baseline_px(),
+        wrapped_layout.baseline_px()
+    );
+    assert!(wrapped_layout.lines()[1].baseline_px() > wrapped_layout.lines()[0].baseline_px());
+    assert!(
+        wrapped_layout
+            .lines()
+            .iter()
+            .all(|line| line.width_px() <= 96.0)
+    );
     assert!(high_dpi_layout.width_px() > wrapped_layout.width_px());
     assert!(high_dpi_layout.baseline_px() > wrapped_layout.baseline_px());
     assert!(truncated_layout.truncated());
     assert!(truncated_layout.display_text().ends_with('…'));
+    assert_eq!(
+        truncated_layout.lines()[0].text(),
+        truncated_layout.display_text()
+    );
 }
 
 #[test]

@@ -228,12 +228,41 @@ impl TextLayoutInput {
 pub struct TextLayout {
     resolved_family: String,
     display_text: String,
+    lines: Vec<TextLayoutLine>,
     width_px: f32,
     height_px: f32,
     baseline_px: f32,
     line_count: u32,
     cluster_count: usize,
     flags: u8,
+}
+
+/// One positioned line produced by the text backend.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextLayoutLine {
+    text: String,
+    width_px: f32,
+    baseline_px: f32,
+}
+
+impl TextLayoutLine {
+    /// Returns the text slice to draw for this line.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Returns this line's measured width in physical pixels.
+    #[must_use]
+    pub const fn width_px(&self) -> f32 {
+        self.width_px
+    }
+
+    /// Returns this line's baseline offset from the layout top in physical pixels.
+    #[must_use]
+    pub const fn baseline_px(&self) -> f32 {
+        self.baseline_px
+    }
 }
 
 impl TextLayout {
@@ -247,6 +276,12 @@ impl TextLayout {
     #[must_use]
     pub fn display_text(&self) -> &str {
         &self.display_text
+    }
+
+    /// Returns positioned lines that renderers should draw.
+    #[must_use]
+    pub fn lines(&self) -> &[TextLayoutLine] {
+        &self.lines
     }
 
     /// Returns measured width in physical pixels.
@@ -447,15 +482,13 @@ impl TextBackend {
         let cluster_count = clusters.len();
         let contains_emoji = clusters.iter().any(|cluster| cluster.chars().any(is_emoji));
         let bidi_resolved = input.bidi && display_text.chars().any(is_rtl);
-        let intrinsic_width = measure_clusters(&clusters, input.size_px, input.dpi_scale);
-        let line_count = line_count(intrinsic_width, input.line_break, input.dpi_scale);
-        let width_px = line_width(
-            intrinsic_width,
-            input.line_break,
-            input.truncation,
-            input.dpi_scale,
-        );
         let line_height = input.size_px * input.dpi_scale * 1.2;
+        let baseline_px = input.size_px * input.dpi_scale * 0.8;
+        let lines = layout_lines(&display_text, input, line_height, baseline_px);
+        let line_count = u32::try_from(lines.len()).unwrap_or(u32::MAX);
+        let width_px = lines
+            .iter()
+            .fold(0.0_f32, |width, line| width.max(line.width_px()));
         let height_px = (0..line_count).fold(0.0_f32, |height, _| height + line_height);
         let parley_processed = self.process_with_parley(input, &display_text)?;
         let _bidi_info = BidiInfo::new(&display_text, None);
@@ -477,9 +510,10 @@ impl TextBackend {
         Ok(TextLayout {
             resolved_family,
             display_text,
+            lines,
             width_px: round_tenth(width_px),
             height_px: round_tenth(height_px),
-            baseline_px: round_tenth(input.size_px * input.dpi_scale * 0.8),
+            baseline_px: round_tenth(baseline_px),
             line_count,
             cluster_count,
             flags,
@@ -603,42 +637,67 @@ fn truncate_text(input: &TextLayoutInput) -> String {
     display
 }
 
-fn line_count(width_px: f32, line_break: LineBreakMode, dpi_scale: f32) -> u32 {
-    let LineBreakMode::Wrap { max_width_px } = line_break else {
-        return 1;
-    };
-    let max_width_px = max_width_px * dpi_scale;
-    if max_width_px <= 0.0 {
-        return 1;
-    }
-    let mut remaining = width_px;
-    let mut lines = 1_u32;
-    while remaining > max_width_px {
-        remaining -= max_width_px;
-        lines = lines.saturating_add(1);
-    }
-    lines
-}
-
-fn line_width(
-    width_px: f32,
-    line_break: LineBreakMode,
-    truncation: TruncationMode,
-    dpi_scale: f32,
-) -> f32 {
-    match truncation {
-        TruncationMode::EndEllipsis { max_width_px } => (max_width_px * dpi_scale).min(width_px),
-        TruncationMode::None => match line_break {
-            LineBreakMode::None => width_px,
-            LineBreakMode::Wrap { max_width_px } => (max_width_px * dpi_scale).min(width_px),
-        },
-    }
-}
-
 fn measure_clusters(clusters: &[&str], size_px: f32, dpi_scale: f32) -> f32 {
     clusters.iter().fold(0.0_f32, |width, cluster| {
         width + cluster_width_factor(cluster) * size_px * dpi_scale
     })
+}
+
+fn layout_lines(
+    display_text: &str,
+    input: &TextLayoutInput,
+    line_height: f32,
+    baseline_px: f32,
+) -> Vec<TextLayoutLine> {
+    let LineBreakMode::Wrap { max_width_px } = input.line_break else {
+        return vec![text_layout_line(display_text, input, baseline_px)];
+    };
+    let max_width_px = max_width_px * input.dpi_scale;
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut line_width_px = 0.0_f32;
+    let mut next_baseline_px = baseline_px;
+
+    for cluster in display_text.graphemes(true) {
+        let cluster_width = measure_clusters(&[cluster], input.size_px, input.dpi_scale);
+        if !line.is_empty() && line_width_px + cluster_width > max_width_px {
+            lines.push(TextLayoutLine {
+                text: line,
+                width_px: round_tenth(line_width_px),
+                baseline_px: round_tenth(next_baseline_px),
+            });
+            line = String::new();
+            line_width_px = 0.0;
+            next_baseline_px += line_height;
+        }
+        line.push_str(cluster);
+        line_width_px += cluster_width;
+    }
+
+    if line.is_empty() {
+        lines.push(text_layout_line(display_text, input, baseline_px));
+    } else {
+        lines.push(TextLayoutLine {
+            text: line,
+            width_px: round_tenth(line_width_px),
+            baseline_px: round_tenth(next_baseline_px),
+        });
+    }
+
+    lines
+}
+
+fn text_layout_line(
+    display_text: &str,
+    input: &TextLayoutInput,
+    baseline_px: f32,
+) -> TextLayoutLine {
+    let clusters: Vec<&str> = display_text.graphemes(true).collect();
+    TextLayoutLine {
+        text: display_text.to_string(),
+        width_px: round_tenth(measure_clusters(&clusters, input.size_px, input.dpi_scale)),
+        baseline_px: round_tenth(baseline_px),
+    }
 }
 
 fn cluster_width_factor(cluster: &str) -> f32 {

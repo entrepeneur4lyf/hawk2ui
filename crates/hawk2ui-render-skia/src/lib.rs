@@ -9,6 +9,7 @@ use hawk2ui_render::{
     CustomSurfaceCategory, CustomSurfaceDrawRequest, Geometry, RendererBackend,
     RendererCacheInvalidator, Stroke, Transform,
 };
+use hawk2ui_text::TextLayout;
 use skia_safe::{
     AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
     FontMgr, FontStyle, IRect, Image, ImageInfo, MaskFilter, Matrix, Paint, PaintStyle, Path,
@@ -753,6 +754,32 @@ impl SkiaRendererBackend {
         Ok(())
     }
 
+    /// Draws a shaped text layout at a concrete top-left position.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, text support is unavailable, or the
+    /// layout contains invalid metrics.
+    pub fn draw_text_layout(
+        &mut self,
+        layout: &TextLayout,
+        x: f32,
+        y: f32,
+        color: Color,
+    ) -> Result<(), BackendError> {
+        self.render_text_layout(layout, x, y, color)?;
+        self.commands.push(format!(
+            "text-layout:{}:{x},{y}:lines={}:clusters={}:bidi={}:parley={}:truncated={}",
+            layout.resolved_family(),
+            layout.line_count(),
+            layout.cluster_count(),
+            layout.bidi_resolved(),
+            layout.parley_processed(),
+            layout.truncated()
+        ));
+        Ok(())
+    }
+
     /// Draws a registered image asset into a destination rectangle.
     ///
     /// # Errors
@@ -1242,6 +1269,46 @@ impl SkiaRendererBackend {
         })?;
         Ok(())
     }
+
+    fn render_text_layout(
+        &mut self,
+        layout: &TextLayout,
+        x: f32,
+        y: f32,
+        color: Color,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        if !self.capabilities.text {
+            return self.fail(
+                "backend.capability.text.missing",
+                "backend does not support text rendering",
+            );
+        }
+        let font_size = font_size_from_layout(layout)?;
+        validate_text_layout(layout, x, y, font_size).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        let Some(typeface) = FontMgr::new()
+            .legacy_make_typeface(Some(layout.resolved_family()), FontStyle::normal())
+            .or_else(|| self.default_typeface.clone())
+        else {
+            return self.fail(
+                "skia.text.typeface-unavailable",
+                "system font manager did not provide a typeface for text layout rendering",
+            );
+        };
+        let font = Font::new(typeface, font_size);
+        self.with_active_surface(|surface| {
+            let mut paint = paint(color, PaintStyle::Fill);
+            paint.set_anti_alias(true);
+            for line in layout.lines() {
+                surface
+                    .canvas()
+                    .draw_str(line.text(), (x, y + line.baseline_px()), &font, &paint);
+            }
+        })?;
+        Ok(())
+    }
 }
 
 impl Default for SkiaRendererBackend {
@@ -1665,6 +1732,51 @@ fn validate_text_placement(x: f32, y: f32, font_size: f32) -> Result<(), Backend
         Err(BackendError::new(
             "skia.text.invalid-placement",
             "text position and font size must be finite and font size must be greater than zero",
+        ))
+    }
+}
+
+fn validate_text_layout(
+    layout: &TextLayout,
+    x: f32,
+    y: f32,
+    font_size: f32,
+) -> Result<(), BackendError> {
+    if layout.lines().is_empty()
+        || !layout.width_px().is_finite()
+        || !layout.height_px().is_finite()
+        || layout.width_px() <= 0.0
+        || layout.height_px() <= 0.0
+    {
+        return Err(BackendError::new(
+            "skia.text.invalid-layout",
+            "text layout must contain at least one line with finite positive dimensions",
+        ));
+    }
+    validate_text_placement(x, y + layout.baseline_px(), font_size)?;
+    for line in layout.lines() {
+        if line.text().is_empty()
+            || !line.width_px().is_finite()
+            || !line.baseline_px().is_finite()
+            || line.width_px() <= 0.0
+        {
+            return Err(BackendError::new(
+                "skia.text.invalid-layout-line",
+                "text layout lines must contain text and finite positive metrics",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn font_size_from_layout(layout: &TextLayout) -> Result<f32, BackendError> {
+    let font_size = layout.baseline_px() / 0.8;
+    if font_size.is_finite() && font_size > 0.0 {
+        Ok(font_size)
+    } else {
+        Err(BackendError::new(
+            "skia.text.invalid-layout",
+            "text layout baseline must produce a finite positive font size",
         ))
     }
 }

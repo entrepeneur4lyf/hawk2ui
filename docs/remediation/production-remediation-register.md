@@ -464,11 +464,15 @@ Acceptance:
 
 ### REM-RENDER-005: Integrate Text Measurement With Layout And Rendering
 
+Status: Remediated in source.
+
 Evidence:
 
 - `hawk2ui-layout` exposes `HawkTextMeasurer`, which adapts `hawk2ui-text` measurement into layout measurement records.
 - `LayoutTree::try_compute_layout_with_text_measurer` feeds text measurement into Taffy leaf sizing.
 - `RuntimeSceneBridge::build_with_text_measurer` attaches runtime text visuals to layout text measurement inputs before scene export.
+- `hawk2ui-text::TextLayout` now carries positioned `TextLayoutLine` records with measured line text, width, and baseline offsets.
+- `hawk2ui-render-skia::SkiaRendererBackend::draw_text_layout` consumes `TextLayout` directly, resolves the requested family through Skia with default fallback, and draws each measured line at its layout baseline.
 
 Required remediation:
 
@@ -477,6 +481,16 @@ Required remediation:
 Acceptance:
 
 - Text wrapping, truncation, bidi, fallback, and high-DPI measurements affect layout and rendering.
+
+Remediation delivered:
+
+- Text layout output now exposes renderer-owned line records instead of only aggregate metrics.
+- Skia text layout rendering now uses the production text backend's resolved family, display text, line count, bidi/parley/truncation flags, high-DPI baseline, and positioned line records.
+- Regression coverage verifies wrapped line records, truncation display text propagation, high-DPI baseline changes, and visible Skia pixels from shaped text layout drawing.
+
+Review check:
+
+- As the implementer delivering this product, I am satisfied with this remediation for production stability. Text is no longer rendered only through raw string placement; renderers can consume the production text layout contract directly.
 
 ### REM-RENDER-006: Complete Asset-To-Renderer Flow
 

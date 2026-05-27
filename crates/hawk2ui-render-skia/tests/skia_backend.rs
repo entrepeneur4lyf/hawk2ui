@@ -5,6 +5,7 @@ use hawk2ui_render::{
     RendererBackend, Transform,
 };
 use hawk2ui_render_skia::{SkiaRendererBackend, SkiaSurfaceConfig};
+use hawk2ui_text::{FontCatalog, LineBreakMode, TextBackend, TextLayoutInput};
 use image::{ColorType, ImageEncoder};
 
 #[test]
@@ -175,6 +176,49 @@ fn trait_draw_text_uses_configured_default_text_style() {
         count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 22.0, 72.0, 28.0)) > 0,
         "trait-level text draw must use configured visible placement and color"
     );
+}
+
+#[test]
+fn shaped_text_layout_renders_positioned_lines() {
+    let text = TextBackend::new(
+        FontCatalog::new()
+            .with_system_family("Display")
+            .with_fallback_family("Sans"),
+    );
+    let layout = text
+        .layout(
+            &TextLayoutInput::new("Gain reduction meter שלום", "Display", 18.0)
+                .with_dpi_scale(1.25)
+                .with_bidi(true)
+                .with_line_break(LineBreakMode::Wrap {
+                    max_width_px: 104.0,
+                }),
+        )
+        .unwrap();
+    assert!(layout.line_count() > 1);
+    assert!(layout.bidi_resolved());
+    assert!(layout.parley_processed());
+
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 180, 120).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(8, 10, 14, 255)).unwrap();
+    backend
+        .draw_text_layout(&layout, 18.0, 18.0, Color::rgba(240, 245, 255, 255))
+        .unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 22.0, 128.0, 72.0)) > 0,
+        "shaped layout lines must affect pixels in their measured region"
+    );
+    assert!(backend.command_keys().iter().any(|key| {
+        key.starts_with("text-layout:Display:18,18:lines=")
+            && key.contains(":bidi=true:")
+            && key.contains(":parley=true:")
+    }));
 }
 
 #[test]
