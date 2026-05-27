@@ -268,9 +268,16 @@ impl PropertyRegistry {
                 actual,
             });
         }
+        if let StyleValue::LengthPx(value) = value
+            && (!value.is_finite() || *value < 0.0)
+        {
+            return Err(ValidationError::NumberOutOfRange {
+                property: id.as_str().to_string(),
+            });
+        }
         if id.as_str() == "opacity"
             && let StyleValue::Number(value) = value
-            && !(0.0..=1.0).contains(value)
+            && (!value.is_finite() || !(0.0..=1.0).contains(value))
         {
             return Err(ValidationError::NumberOutOfRange {
                 property: id.as_str().to_string(),

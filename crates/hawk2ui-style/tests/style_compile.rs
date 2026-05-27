@@ -66,6 +66,11 @@ fn property_registry_validates_typed_values() {
     );
     assert!(
         registry
+            .validate(&PropertyId::new("font-size"), &StyleValue::LengthPx(-1.0))
+            .is_err()
+    );
+    assert!(
+        registry
             .validate(
                 &PropertyId::new("background-color"),
                 &StyleValue::TokenRef("color.surface".to_string()),
@@ -312,6 +317,11 @@ fn style_compile_rejects_unsupported_syntax_with_diagnostics() {
         .expect_err("unknown property must fail");
 
     assert_eq!(error.diagnostics()[0].rule(), "style.property.unknown");
+
+    let error = hawk2ui_style::compile_style_source(".card { font-size: -1px; }")
+        .expect_err("negative lengths must fail");
+
+    assert_eq!(error.diagnostics()[0].rule(), "style.value.range");
 }
 
 #[test]
