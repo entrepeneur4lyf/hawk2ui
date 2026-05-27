@@ -16,7 +16,7 @@ pub use backend::{
 pub use custom_surface::{
     CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory, CustomSurfaceError,
 };
-pub use export::{PaintCommand, PaintCommandList, export_paint_commands};
+pub use export::{PaintCommand, PaintCommandKind, PaintCommandList, export_paint_commands};
 pub use layer::{
     Color, GlowLayer, GradientLayer, LayerKind, LayerStack, LayerValidationError, PaintLayer,
     PathLayer, RoundedRect, ShadowLayer, Stroke, TextLayer,

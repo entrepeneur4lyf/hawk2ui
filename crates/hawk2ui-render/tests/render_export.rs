@@ -336,6 +336,32 @@ fn render_export_produces_stable_paint_commands() {
 }
 
 #[test]
+fn render_export_exposes_typed_paint_commands_for_backend_parity() {
+    let stack = hawk2ui_render::LayerStack::new()
+        .with_layer(hawk2ui_render::PaintLayer::new(
+            "background",
+            0,
+            hawk2ui_render::LayerKind::Fill(hawk2ui_render::Color::rgba(12, 24, 48, 255)),
+        ))
+        .with_layer(hawk2ui_render::PaintLayer::new(
+            "hero",
+            10,
+            hawk2ui_render::LayerKind::Image("hero-image".to_string()),
+        ));
+
+    let commands = hawk2ui_render::export_paint_commands(&stack).expect("layer stack is valid");
+
+    assert_eq!(
+        commands.commands()[0].kind(),
+        &hawk2ui_render::PaintCommandKind::Fill(hawk2ui_render::Color::rgba(12, 24, 48, 255))
+    );
+    assert_eq!(
+        commands.commands()[1].kind(),
+        &hawk2ui_render::PaintCommandKind::Image("hero-image".to_string())
+    );
+}
+
+#[test]
 fn paint_export_rejects_invalid_layer_records() {
     let error = hawk2ui_render::export_paint_commands(
         &hawk2ui_render::LayerStack::new().with_layer(hawk2ui_render::PaintLayer::new(

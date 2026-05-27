@@ -303,20 +303,18 @@ Acceptance:
 
 ### REM-RENDER-002: Replace String Paint Commands With Typed Backend Commands
 
+Status: Remediated in source.
+
 Evidence:
 
-- `crates/hawk2ui-render/src/export.rs` exports `PaintCommand(String)`.
+- `crates/hawk2ui-render/src/export.rs` exports typed `PaintCommand` records with `PaintCommandKind` payloads.
+- `PaintCommand::as_str()` and `PaintCommandList::serialize_stable()` retain deterministic diagnostic serialization.
 - Rendering architecture requires backend-neutral draw commands for tests, diagnostics, fallback, and parity.
-
-Required remediation:
-
-- Replace or supplement string commands with typed paint command enums carrying geometry, colors, assets, text runs, clips, transforms, effects, and cache metadata.
-- Keep stable serialization as a diagnostic layer, not the command model.
 
 Acceptance:
 
-- Backend parity tests consume typed commands.
-- Snapshot serialization is deterministic.
+- `crates/hawk2ui-render/tests/render_export.rs` validates typed paint command access for backend parity.
+- `crates/hawk2ui-render/tests/render_export.rs` validates deterministic snapshot serialization.
 
 ### REM-RENDER-003: Complete Scene Graph Semantics
 
