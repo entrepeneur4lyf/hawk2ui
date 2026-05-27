@@ -92,6 +92,56 @@ fn script_backend_handles_promises_timers_and_structured_host_calls() {
 }
 
 #[test]
+fn script_backend_projects_host_promises_and_timers_into_boa_jobs() {
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+    let promise = backend.create_promise("load-data");
+    backend
+        .resolve_promise(promise, StructuredValue::String("ready".to_string()))
+        .expect("promise resolves");
+    backend
+        .schedule_timer("animation", 16)
+        .expect("timer schedules");
+
+    let execution = backend
+        .execute_module_with_host_jobs(ScriptModule::javascript(
+            "host-jobs.js",
+            r#"
+globalThis.__hawk2uiResult = "pending";
+hawk2ui.promise("load-data").then((value) => {
+  globalThis.__hawk2uiResult = value;
+});
+hawk2ui.onTimer("animation", () => {
+  globalThis.__hawk2uiResult = globalThis.__hawk2uiResult + ":timer";
+});
+"#,
+        ))
+        .expect("host jobs execute through Boa");
+
+    assert_eq!(
+        execution.value(),
+        &StructuredValue::String("ready:timer".to_string())
+    );
+}
+
+#[test]
+fn script_backend_teardown_cancels_host_promises_and_timer_jobs() {
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+    let promise = backend.create_promise("load-data");
+    backend
+        .schedule_timer("animation", 16)
+        .expect("timer schedules");
+
+    backend.teardown();
+
+    assert!(backend.promise_state(promise).is_none());
+    assert!(backend.timers().is_empty());
+    let error = backend
+        .execute_module_with_host_jobs(ScriptModule::javascript("after-teardown.js", "1 + 1"))
+        .expect_err("torn down backend rejects host job execution");
+    assert_eq!(error.diagnostic().rule(), "script.torn-down");
+}
+
+#[test]
 fn script_backend_denies_host_calls_interrupts_and_tears_down_safely() {
     let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
 

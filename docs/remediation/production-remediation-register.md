@@ -889,6 +889,8 @@ Acceptance:
 
 ### REM-RUNTIME-001A: Wire Script Promises And Timers To JavaScript Runtime
 
+Status: Remediated in production slice.
+
 Evidence:
 
 - `ScriptBackend::create_promise`, `ScriptBackend::resolve_promise`, and `ScriptBackend::schedule_timer` maintain Rust-side records.
@@ -908,6 +910,18 @@ Acceptance:
 - JavaScript code can await a host-created promise and observe its resolution through the runtime job queue.
 - JavaScript timer callbacks execute deterministically in headless/runtime tests.
 - Teardown prevents further callback execution and reports structured diagnostics for invalid operations.
+
+Remediation delivered:
+
+- `ScriptBackend::execute_module_with_host_jobs` projects resolved Rust-owned promise records into Boa as real JavaScript promises through `hawk2ui.promise(label)`.
+- Deterministic timer records are projected into JavaScript callback registration through `hawk2ui.onTimer(label, callback)` and are flushed under host control after the initial Boa job queue drain.
+- Boa jobs are drained after module evaluation and after each deterministic timer flush, so promise continuations and timer callbacks settle in a predictable order for headless/runtime execution.
+- `ScriptBackend::teardown` clears pending promises and timers and prevents later host-job execution with a structured `script.torn-down` diagnostic.
+- Regression coverage verifies JavaScript-visible promise resolution, deterministic timer callback execution, and teardown cancellation.
+
+Review check:
+
+- As the implementer delivering this product, I am satisfied with this remediation slice for production stability of the script backend host-job bridge. It does not close the larger `REM-RUNTIME-001` runtime ownership item; scheduler ownership, cross-thread queues, app artifact driving, and host presentation remain tracked there.
 
 ### REM-RUNTIME-002: Capability Policy Enforcement
 

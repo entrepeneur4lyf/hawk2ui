@@ -3,7 +3,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt,
+    fmt::{self, Write as _},
     path::Path,
 };
 
@@ -370,6 +370,50 @@ impl ScriptBackend {
         Ok(execution)
     }
 
+    /// Executes a module after projecting Rust-owned host promises and timers into Boa.
+    ///
+    /// The module can call `hawk2ui.promise(label)` to receive a real JavaScript `Promise` backed
+    /// by resolved host promise records, and `hawk2ui.onTimer(label, callback)` to register a
+    /// deterministic timer callback. After evaluation, Boa jobs are drained, registered timer
+    /// callbacks for scheduled Rust timers are invoked, and jobs are drained again.
+    ///
+    /// The returned value is `globalThis.__hawk2uiResult` after host jobs settle when that global is
+    /// defined; otherwise the module evaluation result is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptBackendError`] when execution is interrupted, torn down, exceeds configured
+    /// limits, fails JavaScript evaluation, or a projected host job fails.
+    pub fn execute_module_with_host_jobs(
+        &mut self,
+        module: ScriptModule,
+    ) -> Result<ScriptExecution, ScriptBackendError> {
+        self.ensure_running()?;
+        enforce_source_limit(
+            "script.source.too-large",
+            "script source exceeds configured execution limit",
+            module.source.len(),
+            self.execution_limits.max_source_bytes(),
+        )?;
+        let executable = match module.kind {
+            ScriptModuleKind::JavaScript => module.source.clone(),
+            ScriptModuleKind::TypeScript => compile_typescript(&module.id, &module.source)?,
+        };
+        enforce_source_limit(
+            "script.compiled-source.too-large",
+            "compiled JavaScript exceeds configured execution limit",
+            executable.len(),
+            self.execution_limits.max_compiled_source_bytes(),
+        )?;
+        let value = evaluate_javascript_with_host_jobs(&executable, &self.promises, &self.timers)?;
+        let execution = ScriptExecution {
+            module_id: module.id.clone(),
+            value,
+        };
+        self.executed_modules.push(module);
+        Ok(execution)
+    }
+
     /// Returns executed modules.
     #[must_use]
     pub fn executed_modules(&self) -> &[ScriptModule] {
@@ -480,6 +524,7 @@ impl ScriptBackend {
     /// Tears down runtime-owned state.
     pub fn teardown(&mut self) {
         self.torn_down = true;
+        self.promises.clear();
         self.timers.clear();
     }
 
@@ -586,6 +631,152 @@ fn evaluate_javascript(source: &str) -> Result<StructuredValue, ScriptBackendErr
         )
     })?;
     structured_value_from_js(&value)
+}
+
+fn evaluate_javascript_with_host_jobs(
+    source: &str,
+    promises: &BTreeMap<PromiseId, PromiseState>,
+    timers: &[TimerRecord],
+) -> Result<StructuredValue, ScriptBackendError> {
+    let mut context = Context::default();
+    eval_js_unit(
+        &mut context,
+        host_job_prelude(),
+        "script.host-jobs.bootstrap-failed",
+    )?;
+    for promise in promises.values() {
+        if let Some(value) = promise.value() {
+            eval_js_unit(
+                &mut context,
+                &format!(
+                    "globalThis.__hawk2uiResolve({}, {});",
+                    js_string_literal(&promise.label),
+                    structured_value_js_literal(value)?
+                ),
+                "script.host-jobs.promise-bootstrap-failed",
+            )?;
+        }
+    }
+
+    let evaluation_result = context.eval(Source::from_bytes(source)).map_err(|error| {
+        ScriptBackendError::new(
+            "script.eval.failed",
+            format!("JavaScript execution failed: {error}"),
+        )
+    })?;
+    run_boa_jobs(&mut context)?;
+
+    for timer in timers {
+        eval_js_unit(
+            &mut context,
+            &format!(
+                "globalThis.__hawk2uiFlushTimer({});",
+                js_string_literal(&timer.label)
+            ),
+            "script.host-jobs.timer-failed",
+        )?;
+        run_boa_jobs(&mut context)?;
+    }
+
+    let settled_result = context
+        .eval(Source::from_bytes(
+            "typeof globalThis.__hawk2uiResult === 'undefined' ? undefined : globalThis.__hawk2uiResult",
+        ))
+        .map_err(|error| {
+            ScriptBackendError::new(
+                "script.host-jobs.result-read-failed",
+                format!("JavaScript host job result read failed: {error}"),
+            )
+        })?;
+    if matches!(settled_result.variant(), JsVariant::Undefined) {
+        structured_value_from_js(&evaluation_result)
+    } else {
+        structured_value_from_js(&settled_result)
+    }
+}
+
+fn host_job_prelude() -> &'static str {
+    r#"
+const __hawk2uiResolvedPromises = new Map();
+const __hawk2uiTimerCallbacks = new Map();
+globalThis.__hawk2uiResolve = (label, value) => {
+  __hawk2uiResolvedPromises.set(label, value);
+};
+globalThis.__hawk2uiFlushTimer = (label) => {
+  const callback = __hawk2uiTimerCallbacks.get(label);
+  if (callback !== undefined) {
+    callback();
+  }
+};
+globalThis.hawk2ui = Object.freeze({
+  promise(label) {
+    if (!__hawk2uiResolvedPromises.has(label)) {
+      return Promise.reject(new Error(`host promise is not resolved: ${label}`));
+    }
+    return Promise.resolve(__hawk2uiResolvedPromises.get(label));
+  },
+  onTimer(label, callback) {
+    if (typeof callback !== "function") {
+      throw new TypeError("timer callback must be a function");
+    }
+    __hawk2uiTimerCallbacks.set(label, callback);
+    return label;
+  }
+});
+"#
+}
+
+fn eval_js_unit(
+    context: &mut Context,
+    source: &str,
+    rule: &'static str,
+) -> Result<(), ScriptBackendError> {
+    context.eval(Source::from_bytes(source)).map_err(|error| {
+        ScriptBackendError::new(rule, format!("JavaScript host job setup failed: {error}"))
+    })?;
+    Ok(())
+}
+
+fn run_boa_jobs(context: &mut Context) -> Result<(), ScriptBackendError> {
+    context.run_jobs().map_err(|error| {
+        ScriptBackendError::new(
+            "script.jobs.failed",
+            format!("JavaScript job queue failed: {error}"),
+        )
+    })
+}
+
+fn structured_value_js_literal(value: &StructuredValue) -> Result<String, ScriptBackendError> {
+    match value {
+        StructuredValue::Null => Ok("null".to_string()),
+        StructuredValue::Bool(value) => Ok(value.to_string()),
+        StructuredValue::Number(value) if value.is_finite() => Ok(value.to_string()),
+        StructuredValue::Number(_) => Err(ScriptBackendError::new(
+            "script.value.invalid-number",
+            "host promise numeric value must be finite",
+        )),
+        StructuredValue::String(value) => Ok(js_string_literal(value)),
+    }
+}
+
+fn js_string_literal(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                let _ = write!(escaped, "\\u{:04x}", u32::from(character));
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped.push('"');
+    escaped
 }
 
 fn structured_value_from_js(value: &JsValue) -> Result<StructuredValue, ScriptBackendError> {
