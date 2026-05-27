@@ -27,6 +27,48 @@ impl RendererTargetRequest {
     }
 }
 
+/// Combined host update request for layout invalidation and renderer target recreation.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct HostSurfaceUpdateRequest {
+    /// Metrics that should drive layout and renderer target sizing.
+    pub metrics: SurfaceMetrics,
+    /// Renderer target request for the same host change.
+    pub renderer_target: RendererTargetRequest,
+    /// Diagnostic reason.
+    pub reason: String,
+    /// Whether the retained layout tree must be recomputed.
+    pub invalidate_layout: bool,
+}
+
+impl HostSurfaceUpdateRequest {
+    /// Creates a full host surface update request.
+    #[must_use]
+    pub fn new(
+        metrics: SurfaceMetrics,
+        renderer_target: RendererTargetRequest,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            metrics,
+            renderer_target,
+            reason: reason.into(),
+            invalidate_layout: true,
+        }
+    }
+
+    /// Returns logical viewport dimensions.
+    #[must_use]
+    pub const fn logical_viewport(&self) -> (f64, f64) {
+        (self.metrics.logical_width, self.metrics.logical_height)
+    }
+
+    /// Returns physical target dimensions.
+    #[must_use]
+    pub fn physical_size(&self) -> (u32, u32) {
+        self.metrics.physical_size()
+    }
+}
+
 /// Renderer resize bridge.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RendererResizeBridge;
@@ -46,6 +88,20 @@ impl RendererResizeBridge {
             | SurfaceEvent::RepaintRequested(_)
             | SurfaceEvent::TeardownRequested(_) => None,
         }
+    }
+
+    /// Converts a common surface event into a layout invalidation and renderer target request.
+    #[must_use]
+    pub fn surface_event_to_update_request(
+        &self,
+        event: &SurfaceEvent,
+    ) -> Option<HostSurfaceUpdateRequest> {
+        let request = self.surface_event_to_target_request(event)?;
+        Some(HostSurfaceUpdateRequest::new(
+            request.metrics,
+            request.clone(),
+            request.reason,
+        ))
     }
 
     /// Converts a desktop host event into a renderer target request.
@@ -82,6 +138,21 @@ impl RendererResizeBridge {
         }
     }
 
+    /// Converts a desktop host event into a layout invalidation and renderer target request.
+    #[must_use]
+    pub fn desktop_event_to_update_request(
+        &self,
+        event: &DesktopHostEvent,
+        current_metrics: SurfaceMetrics,
+    ) -> Option<HostSurfaceUpdateRequest> {
+        let request = self.desktop_event_to_target_request(event, current_metrics)?;
+        Some(HostSurfaceUpdateRequest::new(
+            request.metrics,
+            request.clone(),
+            request.reason,
+        ))
+    }
+
     /// Converts a plugin host event into a renderer target request.
     #[must_use]
     pub fn plugin_event_to_target_request(
@@ -107,5 +178,20 @@ impl RendererResizeBridge {
             | PluginHostEvent::EditorDestroyed(_)
             | PluginHostEvent::SafeTeardownComplete => None,
         }
+    }
+
+    /// Converts a plugin host event into a layout invalidation and renderer target request.
+    #[must_use]
+    pub fn plugin_event_to_update_request(
+        &self,
+        event: &PluginHostEvent,
+        current_metrics: SurfaceMetrics,
+    ) -> Option<HostSurfaceUpdateRequest> {
+        let request = self.plugin_event_to_target_request(event, current_metrics)?;
+        Some(HostSurfaceUpdateRequest::new(
+            request.metrics,
+            request.clone(),
+            request.reason,
+        ))
     }
 }

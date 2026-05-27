@@ -269,14 +269,12 @@ fn renderer_resize_bridge_recreates_target_and_forces_redraw_on_maximize() {
 
 #[test]
 fn renderer_resize_bridge_recreates_target_and_forces_redraw_on_dpi_change() {
-    use hawk2ui_host::{RendererResizeBridge, RendererTargetRequest};
+    use hawk2ui_host::{HostSurfaceUpdateRequest, RendererResizeBridge, RendererTargetRequest};
 
     let bridge = RendererResizeBridge::default();
+    let metrics = SurfaceMetrics::new(800.0, 600.0, 1.75);
     let request = bridge
-        .desktop_event_to_target_request(
-            &DesktopHostEvent::DpiChanged(1.75),
-            SurfaceMetrics::new(800.0, 600.0, 1.75),
-        )
+        .desktop_event_to_target_request(&DesktopHostEvent::DpiChanged(1.75), metrics)
         .expect("DPI changes should recreate renderer target");
 
     assert_eq!(
@@ -287,4 +285,46 @@ fn renderer_resize_bridge_recreates_target_and_forces_redraw_on_dpi_change() {
         )
     );
     assert_eq!(request.metrics.physical_size(), (1400, 1050));
+
+    let update = bridge
+        .desktop_event_to_update_request(&DesktopHostEvent::DpiChanged(1.75), metrics)
+        .expect("DPI changes should invalidate layout and renderer targets");
+    assert_eq!(
+        update,
+        HostSurfaceUpdateRequest::new(
+            metrics,
+            RendererTargetRequest::recreate(metrics, "desktop DPI changed to 1.75"),
+            "desktop DPI changed to 1.75",
+        )
+    );
+    assert!(update.invalidate_layout);
+    assert_eq!(update.logical_viewport(), (800.0, 600.0));
+    assert_eq!(update.physical_size(), (1400, 1050));
+}
+
+#[test]
+fn renderer_resize_bridge_invalidates_layout_for_surface_desktop_and_plugin_size_changes() {
+    use hawk2ui_host::{HostSurfaceUpdateRequest, RendererResizeBridge, RendererTargetRequest};
+
+    let bridge = RendererResizeBridge::default();
+    let resized = SurfaceMetrics::new(1024.0, 768.0, 1.5);
+    let surface_update = bridge
+        .surface_event_to_update_request(&SurfaceEvent::Resized(resized))
+        .expect("surface resize should produce update request");
+    assert_eq!(
+        surface_update,
+        HostSurfaceUpdateRequest::new(
+            resized,
+            RendererTargetRequest::recreate(resized, "surface resized"),
+            "surface resized",
+        )
+    );
+
+    let plugin_update = bridge
+        .plugin_event_to_update_request(&PluginHostEvent::HostResize(resized), resized)
+        .expect("plugin host resize should produce update request");
+    assert_eq!(plugin_update.logical_viewport(), (1024.0, 768.0));
+    assert_eq!(plugin_update.physical_size(), (1536, 1152));
+    assert!(plugin_update.invalidate_layout);
+    assert!(plugin_update.renderer_target.force_redraw);
 }

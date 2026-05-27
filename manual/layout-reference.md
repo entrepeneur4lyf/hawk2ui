@@ -31,3 +31,9 @@ The layout surface is intentionally data-oriented so desktop windows and plugin 
 `LayoutTree::try_compute_layout(...)` lowers Hawk2UI-owned records into Taffy. The production mapping covers nested flex trees, row and column directions, fixed and percentage sizing, min/max constraints, margins, padding, gaps, scroll clips, absolute positioning, absolute insets, flex basis, flex grow, explicit flex shrink, cross-axis alignment, main-axis distribution, and measured text leaves.
 
 Hawk2UI defaults preserve native UI overflow behavior: flex children do not shrink unless `LayoutStyle::with_flex_shrink(...)` opts in. This keeps scrollable graph and analyzer regions from collapsing under constrained plugin or desktop hosts.
+
+## Host Resize And DPI
+
+Host resize and DPI changes flow through `RendererResizeBridge`. The bridge emits `HostSurfaceUpdateRequest`, which contains the logical viewport, physical target size, renderer target recreation request, and layout invalidation flag.
+
+Desktop resize, maximize/fullscreen, and DPI changes require a full layout recomputation and renderer target recreation. Plugin hosts use `PluginEditorConstraints::try_negotiate_host_resize(...)` to clamp requested editor sizes, preserve the accepted logical editor size, attach DPI scale, and derive physical target dimensions before layout and render invalidation.

@@ -10,7 +10,7 @@ pub mod tree;
 pub use compute::{ComputedGeometry, LayoutOutput, Viewport};
 pub use plugin::{
     AnalyzerRegion, GeneratedParameterLayout, GraphRegion, PluginEditorConstraints,
-    PluginEditorSize, PluginLayoutError,
+    PluginEditorSize, PluginEditorSurfaceMetrics, PluginHostResizeNegotiation, PluginLayoutError,
 };
 pub use scene::{SceneGeometry, SceneGeometryAttachment};
 pub use text::{

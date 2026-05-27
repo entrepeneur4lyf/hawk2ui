@@ -17,6 +17,90 @@ impl PluginEditorSize {
     }
 }
 
+/// Plugin editor surface metrics after host resize negotiation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PluginEditorSurfaceMetrics {
+    /// Logical width.
+    pub logical_width: f32,
+    /// Logical height.
+    pub logical_height: f32,
+    /// Device scale factor.
+    pub scale_factor: f32,
+}
+
+impl PluginEditorSurfaceMetrics {
+    /// Creates plugin editor surface metrics.
+    #[must_use]
+    pub const fn new(logical_width: f32, logical_height: f32, scale_factor: f32) -> Self {
+        Self {
+            logical_width,
+            logical_height,
+            scale_factor,
+        }
+    }
+
+    /// Returns physical pixel size rounded to the nearest pixel.
+    #[must_use]
+    pub fn physical_size(&self) -> (u32, u32) {
+        (
+            scaled_physical_dimension(self.logical_width, self.scale_factor),
+            scaled_physical_dimension(self.logical_height, self.scale_factor),
+        )
+    }
+}
+
+/// Result of plugin host resize negotiation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PluginHostResizeNegotiation {
+    requested_size: PluginEditorSize,
+    accepted_size: PluginEditorSize,
+    surface_metrics: PluginEditorSurfaceMetrics,
+}
+
+impl PluginHostResizeNegotiation {
+    /// Creates a plugin host resize negotiation record.
+    #[must_use]
+    pub const fn new(
+        requested_size: PluginEditorSize,
+        accepted_size: PluginEditorSize,
+        scale_factor: f32,
+    ) -> Self {
+        Self {
+            requested_size,
+            accepted_size,
+            surface_metrics: PluginEditorSurfaceMetrics::new(
+                accepted_size.width,
+                accepted_size.height,
+                scale_factor,
+            ),
+        }
+    }
+
+    /// Returns the host-requested size.
+    #[must_use]
+    pub const fn requested_size(&self) -> PluginEditorSize {
+        self.requested_size
+    }
+
+    /// Returns the accepted, constraints-clamped size.
+    #[must_use]
+    pub const fn accepted_size(&self) -> PluginEditorSize {
+        self.accepted_size
+    }
+
+    /// Returns whether constraints changed the requested size.
+    #[must_use]
+    pub fn was_clamped(&self) -> bool {
+        self.requested_size != self.accepted_size
+    }
+
+    /// Returns accepted surface metrics.
+    #[must_use]
+    pub const fn surface_metrics(&self) -> PluginEditorSurfaceMetrics {
+        self.surface_metrics
+    }
+}
+
 /// Graph region geometry.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphRegion {
@@ -249,6 +333,30 @@ impl PluginEditorConstraints {
         ))
     }
 
+    /// Negotiates a host-provided editor size and DPI scale into accepted plugin metrics.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginLayoutError`] when constraints, host size, or DPI scale are invalid.
+    pub fn try_negotiate_host_resize(
+        &self,
+        host_size: PluginEditorSize,
+        scale_factor: f32,
+    ) -> Result<PluginHostResizeNegotiation, PluginLayoutError> {
+        if !scale_factor.is_finite() || scale_factor <= 0.0 {
+            return Err(PluginLayoutError::new(
+                "plugin-layout.dpi.invalid",
+                "plugin editor DPI scale must be finite and greater than zero",
+            ));
+        }
+        let accepted_size = self.try_clamp_host_size(host_size)?;
+        Ok(PluginHostResizeNegotiation::new(
+            host_size,
+            accepted_size,
+            scale_factor,
+        ))
+    }
+
     /// Validates all plugin editor layout constraints.
     ///
     /// # Errors
@@ -300,6 +408,22 @@ impl PluginEditorConstraints {
         self.generated_parameters
             .iter()
             .find(|layout| layout.id == id)
+    }
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn scaled_physical_dimension(logical: f32, scale_factor: f32) -> u32 {
+    let scaled = (logical.max(0.0) * scale_factor.max(0.0)).round();
+    if !scaled.is_finite() {
+        0
+    } else if scaled >= u32::MAX as f32 {
+        u32::MAX
+    } else {
+        scaled as u32
     }
 }
 

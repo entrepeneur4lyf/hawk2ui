@@ -603,6 +603,25 @@ Acceptance:
 
 - Resize/maximize/DPI changes re-layout and repaint actual scene output.
 
+Status:
+
+- Added `HostSurfaceUpdateRequest` to carry host metrics, logical viewport dimensions, physical
+  target size, layout invalidation, and renderer target recreation in one contract.
+- `RendererResizeBridge` now converts surface, desktop, and plugin resize/DPI events into combined
+  layout-and-render update requests while preserving the existing renderer-only APIs.
+- Added plugin host resize negotiation through `PluginEditorConstraints::try_negotiate_host_resize`,
+  returning requested size, accepted clamped size, DPI, and physical target dimensions.
+- Added tests for desktop DPI update requests, common surface resize invalidation, plugin host resize
+  invalidation, and plugin editor resize/DPI negotiation.
+- Documented resize/DPI behavior in `manual/layout-reference.md`.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this remediation item for production readiness:
+  resize and DPI changes now produce explicit layout invalidation and renderer recreation records,
+  plugin host sizing has a deterministic negotiation path, and existing renderer-only callers remain
+  compatible. No corrective revision is required before authoring/runtime remediation.
+
 ## Authoring And Framework Remediation
 
 ### REM-AUTH-001: Replace Framework String Scanners

@@ -18,7 +18,7 @@ pub use plugin::{
     PluginEditorConfig, PluginHostAdapter, PluginHostEvent, PluginParentHandle,
     RecordingPluginAdapter,
 };
-pub use resize_bridge::{RendererResizeBridge, RendererTargetRequest};
+pub use resize_bridge::{HostSurfaceUpdateRequest, RendererResizeBridge, RendererTargetRequest};
 pub use surface::{
     FramePresenter, HostCapabilities, HostCapability, HostSurface, PresentedFrame,
     RecordingFramePresenter, RecordingHostSurface, RepaintRequest, SurfaceEvent, SurfaceMetrics,

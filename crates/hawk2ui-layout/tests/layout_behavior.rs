@@ -481,6 +481,31 @@ fn plugin_constraints_clamp_host_sizes() {
 }
 
 #[test]
+fn plugin_constraints_negotiate_host_resize_with_clamp_and_dpi_metrics() {
+    let constraints = PluginEditorConstraints::new(PluginEditorSize::new(960.0, 540.0))
+        .with_min_size(PluginEditorSize::new(640.0, 360.0))
+        .with_max_size(PluginEditorSize::new(1440.0, 900.0));
+
+    let negotiation = constraints
+        .try_negotiate_host_resize(PluginEditorSize::new(1920.0, 1200.0), 1.5)
+        .expect("valid plugin host resize negotiates");
+
+    assert_eq!(
+        negotiation.requested_size(),
+        PluginEditorSize::new(1920.0, 1200.0)
+    );
+    assert_eq!(
+        negotiation.accepted_size(),
+        PluginEditorSize::new(1440.0, 900.0)
+    );
+    assert!(negotiation.was_clamped());
+    assert_eq!(negotiation.surface_metrics().logical_width, 1440.0);
+    assert_eq!(negotiation.surface_metrics().logical_height, 900.0);
+    assert_eq!(negotiation.surface_metrics().scale_factor, 1.5);
+    assert_eq!(negotiation.surface_metrics().physical_size(), (2160, 1350));
+}
+
+#[test]
 fn plugin_constraints_reject_invalid_sizes_regions_and_parameters() {
     let error = PluginEditorConstraints::new(PluginEditorSize::new(f32::NAN, 540.0))
         .validate()
