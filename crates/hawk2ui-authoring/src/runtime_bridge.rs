@@ -52,7 +52,36 @@ impl NativeRuntimeBridge {
     ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
         let mut bridged = Self::bridge_element_with_style_resources(
             artifact.root(),
-            Some(StyleResources { sheet, tokens }),
+            Some(StyleResources {
+                sheet,
+                tokens,
+                theme: None,
+            }),
+        )?;
+        bridged.operation_keys = artifact.operation_keys().to_vec();
+        Ok(bridged)
+    }
+
+    /// Bridges a finalized native authoring artifact and applies themed compiled style references.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeRuntimeBridgeError`] when runtime tree construction, theme token resolution,
+    /// style resolution, or property mapping fails.
+    pub fn bridge_artifact_with_theme(
+        self,
+        artifact: &NativeAuthoringArtifact,
+        sheet: &CompiledStyleSheet,
+        tokens: &TokenSet,
+        theme: &str,
+    ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
+        let mut bridged = Self::bridge_element_with_style_resources(
+            artifact.root(),
+            Some(StyleResources {
+                sheet,
+                tokens,
+                theme: Some(theme),
+            }),
         )?;
         bridged.operation_keys = artifact.operation_keys().to_vec();
         Ok(bridged)
@@ -83,7 +112,37 @@ impl NativeRuntimeBridge {
         sheet: &CompiledStyleSheet,
         tokens: &TokenSet,
     ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
-        Self::bridge_element_with_style_resources(root, Some(StyleResources { sheet, tokens }))
+        Self::bridge_element_with_style_resources(
+            root,
+            Some(StyleResources {
+                sheet,
+                tokens,
+                theme: None,
+            }),
+        )
+    }
+
+    /// Bridges a native authoring element tree and applies themed compiled style references.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeRuntimeBridgeError`] when runtime tree construction, theme token resolution,
+    /// style resolution, or property mapping fails.
+    pub fn bridge_element_with_theme(
+        self,
+        root: &NativeAuthoringElement,
+        sheet: &CompiledStyleSheet,
+        tokens: &TokenSet,
+        theme: &str,
+    ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
+        Self::bridge_element_with_style_resources(
+            root,
+            Some(StyleResources {
+                sheet,
+                tokens,
+                theme: Some(theme),
+            }),
+        )
     }
 
     fn bridge_element_with_style_resources(
@@ -244,6 +303,7 @@ impl From<RuntimeStyleError> for NativeRuntimeBridgeError {
 struct StyleResources<'a> {
     sheet: &'a CompiledStyleSheet,
     tokens: &'a TokenSet,
+    theme: Option<&'a str>,
 }
 
 fn bridge_child(
@@ -293,12 +353,23 @@ fn runtime_styles(
     if element.style_refs().is_empty() {
         return Ok(None);
     }
-    RuntimeStyleTable::from_style_refs_with_tokens(
-        element.id().as_str(),
-        styles.sheet,
-        element.style_refs().iter().map(StyleRef::name),
-        styles.tokens,
-    )
+    let style_refs = element.style_refs().iter().map(StyleRef::name);
+    if let Some(theme) = styles.theme {
+        RuntimeStyleTable::from_style_refs_for_theme(
+            element.id().as_str(),
+            styles.sheet,
+            style_refs,
+            styles.tokens,
+            theme,
+        )
+    } else {
+        RuntimeStyleTable::from_style_refs_with_tokens(
+            element.id().as_str(),
+            styles.sheet,
+            style_refs,
+            styles.tokens,
+        )
+    }
     .map(Some)
     .map_err(Into::into)
 }

@@ -247,6 +247,41 @@ fn native_runtime_bridge_applies_compiled_style_refs_to_runtime_visuals() {
 }
 
 #[test]
+fn native_runtime_bridge_applies_theme_style_token_overrides() {
+    let sheet = compile_style_source(".surface { background-color: token(color.surface); }")
+        .expect("style source compiles");
+    let tokens = TokenSet::production()
+        .with_color("color.surface", 8, 10, 14, 255)
+        .with_theme(hawk2ui_style::ThemeVariant::new("light").with_token(
+            "color.surface",
+            hawk2ui_style::TokenValue::ColorRgba(245, 243, 238, 255),
+        ));
+    let mut runtime = NativeAuthoringRuntime::new("native-themed-runtime");
+    runtime.mount(
+        NativeAuthoringElement::new("root", ElementKind::View).with_style(StyleRef::new("surface")),
+    );
+    let artifact = runtime.finish().expect("authoring finalizes");
+
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact_with_theme(&artifact, &sheet, &tokens, "light")
+        .expect("themed artifact bridges");
+    let frame = RuntimeSceneBridge::new(Viewport::new(200.0, 100.0))
+        .build(bridged.runtime_tree())
+        .expect("runtime scene builds");
+
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Fill {
+                id,
+                color,
+                ..
+            } if id.as_str() == "root" && *color == Color::rgba(245, 243, 238, 255)
+        )
+    }));
+}
+
+#[test]
 fn native_runtime_bridge_rejects_invalid_styled_font_size() {
     let sheet = compile_style_source(".headline { font-size: 0px; }")
         .expect("style source compiles before runtime validation");

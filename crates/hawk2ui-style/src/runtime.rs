@@ -100,6 +100,25 @@ impl RuntimeStyleTable {
         })
     }
 
+    /// Resolves ordered style references and token-backed declarations for a theme variant.
+    ///
+    /// Theme token overrides are used first, with fallback to base tokens.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeStyleError`] when any referenced style rule, theme, or token is missing.
+    pub fn from_style_refs_for_theme(
+        node_id: impl Into<String>,
+        sheet: &CompiledStyleSheet,
+        refs: impl IntoIterator<Item = impl AsRef<str>>,
+        tokens: &TokenSet,
+        theme: &str,
+    ) -> Result<Self, RuntimeStyleError> {
+        Self::from_style_refs_with_value_map(node_id, sheet, refs, |value| {
+            resolve_runtime_value_for_theme(value, tokens, theme)
+        })
+    }
+
     fn from_style_refs_with_value_map(
         node_id: impl Into<String>,
         sheet: &CompiledStyleSheet,
@@ -211,17 +230,39 @@ fn resolve_runtime_value(
     let StyleValue::TokenRef(token_name) = value else {
         return Ok(value.clone());
     };
-    let token = tokens.resolve(token_name).map_err(|error| {
-        RuntimeStyleError::new(
-            "runtime-style.token.missing",
-            error.diagnostic().message().to_string(),
-        )
-    })?;
-    match token.value() {
-        TokenValue::ColorRgba(r, g, b, a) => Ok(StyleValue::ColorRgba(*r, *g, *b, *a)),
-        TokenValue::LengthPx(value) => Ok(StyleValue::LengthPx(*value)),
-        TokenValue::DurationMs(value) => Ok(StyleValue::DurationMs(*value)),
-        TokenValue::Typography { size_px, .. } => Ok(StyleValue::LengthPx(*size_px)),
-        TokenValue::PreferenceHook(target) => Ok(StyleValue::TokenRef(target.clone())),
+    let token = tokens
+        .resolve(token_name)
+        .map_err(|error| runtime_token_error(&error))?;
+    Ok(token_to_style_value(token.value()))
+}
+
+fn resolve_runtime_value_for_theme(
+    value: &StyleValue,
+    tokens: &TokenSet,
+    theme: &str,
+) -> Result<StyleValue, RuntimeStyleError> {
+    let StyleValue::TokenRef(token_name) = value else {
+        return Ok(value.clone());
+    };
+    let token = tokens
+        .resolve_for_theme(token_name, theme)
+        .map_err(|error| runtime_token_error(&error))?;
+    Ok(token_to_style_value(token.value()))
+}
+
+fn runtime_token_error(error: &crate::TokenError) -> RuntimeStyleError {
+    RuntimeStyleError::new(
+        "runtime-style.token.missing",
+        error.diagnostic().message().to_string(),
+    )
+}
+
+fn token_to_style_value(value: &TokenValue) -> StyleValue {
+    match value {
+        TokenValue::ColorRgba(r, g, b, a) => StyleValue::ColorRgba(*r, *g, *b, *a),
+        TokenValue::LengthPx(value) => StyleValue::LengthPx(*value),
+        TokenValue::DurationMs(value) => StyleValue::DurationMs(*value),
+        TokenValue::Typography { size_px, .. } => StyleValue::LengthPx(*size_px),
+        TokenValue::PreferenceHook(target) => StyleValue::TokenRef(target.clone()),
     }
 }

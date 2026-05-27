@@ -365,6 +365,33 @@ fn runtime_style_table_resolves_token_backed_declarations() {
 }
 
 #[test]
+fn runtime_style_table_resolves_theme_token_overrides() {
+    let sheet =
+        hawk2ui_style::compile_style_source(".surface { background-color: token(color.surface); }")
+            .expect("style source must compile");
+    let tokens = hawk2ui_style::TokenSet::production()
+        .with_color("color.surface", 8, 10, 14, 255)
+        .with_theme(hawk2ui_style::ThemeVariant::new("light").with_token(
+            "color.surface",
+            hawk2ui_style::TokenValue::ColorRgba(245, 243, 238, 255),
+        ));
+
+    let table = hawk2ui_style::RuntimeStyleTable::from_style_refs_for_theme(
+        "panel-1",
+        &sheet,
+        ["surface"],
+        &tokens,
+        "light",
+    )
+    .expect("theme style refs and tokens must resolve");
+
+    assert_eq!(
+        table.typed_value("panel-1", &PropertyId::new("background-color")),
+        Some(&StyleValue::ColorRgba(245, 243, 238, 255))
+    );
+}
+
+#[test]
 fn runtime_style_table_reports_missing_tokens() {
     let sheet =
         hawk2ui_style::compile_style_source(".surface { background-color: token(color.missing); }")
