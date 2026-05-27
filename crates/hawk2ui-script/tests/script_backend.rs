@@ -1,6 +1,7 @@
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_script::{
-    HostCallPolicy, ScriptBackend, ScriptExecutionLimits, ScriptModule, ScriptModuleKind,
-    StructuredValue, TimerPolicy,
+    HostCallPolicy, ScriptBackend, ScriptBackendError, ScriptExecutionLimits, ScriptModule,
+    ScriptModuleKind, StructuredValue, TimerPolicy,
 };
 
 #[test]
@@ -111,6 +112,16 @@ fn script_backend_denies_host_calls_interrupts_and_tears_down_safely() {
     backend.teardown();
     assert!(backend.torn_down());
     assert!(backend.timers().is_empty());
+}
+
+#[test]
+fn script_backend_error_converts_to_shared_diagnostic() {
+    let error = ScriptBackendError::new("script.denied", "script call denied");
+    let diagnostic = Diagnostic::from(error);
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.rule.as_str(), "script.denied");
+    assert_eq!(diagnostic.message, "script call denied");
 }
 
 #[test]

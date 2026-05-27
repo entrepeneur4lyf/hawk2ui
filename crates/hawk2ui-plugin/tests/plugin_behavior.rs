@@ -1,6 +1,26 @@
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_plugin::{
-    BundleOutput, FormatMetadata, PackageTarget, PluginFormat, PluginFormatTarget,
+    AutomationEvent, AutomationOrigin, AutomationSequence, BundleOutput, FormatMetadata,
+    PackageTarget, PluginFormat, PluginFormatTarget,
 };
+
+#[test]
+fn automation_event_error_converts_to_shared_diagnostic_with_parameter_context() {
+    let mut sequence = AutomationSequence::default();
+    let error = sequence
+        .push(AutomationEvent::end_gesture("gain", AutomationOrigin::Ui))
+        .expect_err("ending a missing gesture is rejected");
+    let diagnostic = Diagnostic::from(error);
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.rule.as_str(), "automation.gesture-not-open");
+    assert!(
+        diagnostic
+            .related
+            .iter()
+            .any(|context| context.label == "parameter" && context.value == "gain")
+    );
+}
 
 #[test]
 fn format_records_validate_target_metadata() {
@@ -189,10 +209,7 @@ fn parameter_model_supports_stepped_values_and_smoothing_metadata() {
     );
 }
 
-use hawk2ui_plugin::{
-    AutomationBindingKind, AutomationEvent, AutomationEventKind, AutomationOrigin,
-    AutomationSequence, ParameterBinding,
-};
+use hawk2ui_plugin::{AutomationBindingKind, AutomationEventKind, ParameterBinding};
 
 #[test]
 fn automation_events_accept_correct_gesture_ordering() {

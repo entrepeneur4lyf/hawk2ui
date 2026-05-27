@@ -1,5 +1,7 @@
 //! Source-to-authoring-record compilation entrypoint.
 
+use hawk2ui_api::Diagnostic;
+
 use crate::{
     ChildList, ComponentId, ComponentInstance, ElementId, ElementKind, ElementNode, EventBinding,
     EventKind, HandlerRef, PointerEventKind, PropValue,
@@ -37,6 +39,17 @@ impl AuthoringDiagnostic {
             severity,
             rule: rule.into(),
             message: message.into(),
+        }
+    }
+}
+
+impl From<AuthoringDiagnostic> for Diagnostic {
+    fn from(diagnostic: AuthoringDiagnostic) -> Self {
+        match diagnostic.severity {
+            AuthoringDiagnosticSeverity::Error => Self::error(diagnostic.rule, diagnostic.message),
+            AuthoringDiagnosticSeverity::Warning => {
+                Self::warning(diagnostic.rule, diagnostic.message)
+            }
         }
     }
 }

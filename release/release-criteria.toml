@@ -26,7 +26,7 @@ evidence = "target/release-evidence/ci-pass.txt"
 id = "dependency-health"
 title = "Dependency health"
 owner = "release"
-command = "rtk cargo deny check"
+command = "rtk cargo test -p xtask repository_dependency_policy_tracks_release_blocking_dependency_risks && rtk cargo deny check"
 blocking = "release"
 evidence = "target/release-evidence/dependency-health.txt"
 

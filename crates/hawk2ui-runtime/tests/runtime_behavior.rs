@@ -1,3 +1,4 @@
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_layout::{
     BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue, TestTextMeasurer, Viewport,
 };
@@ -18,6 +19,33 @@ use hawk2ui_runtime::{
 use serde::{Serialize, de::DeserializeOwned};
 
 fn assert_serde_contract<T: Serialize + DeserializeOwned>() {}
+
+#[test]
+fn host_binding_error_converts_to_shared_diagnostic_with_context() {
+    let registry = HostBindingRegistry::new([HostBindingRecord::new(
+        "clipboard.write",
+        BindingSchema::new("string", "null", "error"),
+    )
+    .requires(RuntimeCapability::ClipboardWrite)]);
+    let error = registry
+        .call(
+            "clipboard.write",
+            StructuredValue::String("copy".to_string()),
+            [],
+            LifecyclePhase::Mount,
+        )
+        .expect_err("capability denial is reported");
+    let diagnostic = Diagnostic::from(error);
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.rule.as_str(), "binding.capability-denied");
+    assert!(
+        diagnostic
+            .related
+            .iter()
+            .any(|context| context.label == "binding" && context.value == "clipboard.write")
+    );
+}
 
 fn runtime_scene_tree(invalidate_meter: bool) -> RuntimeViewTree {
     let tree = RuntimeViewTree::new(RuntimeViewNode::new(

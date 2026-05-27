@@ -8,6 +8,7 @@ use std::{
 };
 
 use boa_engine::{Context, JsValue, JsVariant, Source};
+use hawk2ui_api::Diagnostic;
 use oxc_allocator::Allocator;
 use oxc_codegen::Codegen;
 use oxc_parser::Parser;
@@ -253,6 +254,12 @@ impl ScriptDiagnostic {
     pub fn rule(&self) -> &str {
         &self.rule
     }
+
+    /// Returns the diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 /// Script backend error.
@@ -274,6 +281,12 @@ impl ScriptBackendError {
     #[must_use]
     pub const fn diagnostic(&self) -> &ScriptDiagnostic {
         &self.diagnostic
+    }
+}
+
+impl From<ScriptBackendError> for Diagnostic {
+    fn from(error: ScriptBackendError) -> Self {
+        Self::error(error.diagnostic.rule, error.diagnostic.message)
     }
 }
 

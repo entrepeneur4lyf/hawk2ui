@@ -1,5 +1,7 @@
 //! Build diagnostic records.
 
+use hawk2ui_api::{Diagnostic, RelatedContext};
+
 /// Build diagnostic severity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuildDiagnosticSeverity {
@@ -46,6 +48,24 @@ impl BuildDiagnostic {
             span,
         });
         self
+    }
+}
+
+impl From<BuildDiagnostic> for Diagnostic {
+    fn from(diagnostic: BuildDiagnostic) -> Self {
+        let mut shared = match diagnostic.severity {
+            BuildDiagnosticSeverity::Error => Self::error(diagnostic.rule, diagnostic.message),
+            BuildDiagnosticSeverity::Warning => Self::warning(diagnostic.rule, diagnostic.message),
+        };
+        if let Some(location) = diagnostic.location {
+            shared = shared
+                .with_related(RelatedContext::new("file", location.file_path))
+                .with_related(RelatedContext::new(
+                    "span",
+                    format!("{}..{}", location.span.start, location.span.end),
+                ));
+        }
+        shared
     }
 }
 

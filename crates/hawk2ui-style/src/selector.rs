@@ -1,5 +1,7 @@
 //! Supported selector subset and diagnostics.
 
+use hawk2ui_api::Diagnostic;
+
 /// Structured selector diagnostic.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SelectorDiagnostic {
@@ -49,6 +51,12 @@ impl SelectorParseError {
     #[must_use]
     pub const fn diagnostic(&self) -> &SelectorDiagnostic {
         &self.diagnostic
+    }
+}
+
+impl From<SelectorParseError> for Diagnostic {
+    fn from(error: SelectorParseError) -> Self {
+        Self::error(error.diagnostic.rule, error.diagnostic.message)
     }
 }
 

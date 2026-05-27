@@ -1,5 +1,6 @@
 //! Platform-native host handle records.
 
+use hawk2ui_api::Diagnostic;
 use serde::{Deserialize, Serialize};
 
 /// Linux window system represented by a platform handle.
@@ -39,6 +40,12 @@ impl PlatformHandleDiagnostic {
             code: "platform.handle-ownership-mismatch".into(),
             message: message.into(),
         }
+    }
+}
+
+impl From<PlatformHandleDiagnostic> for Diagnostic {
+    fn from(diagnostic: PlatformHandleDiagnostic) -> Self {
+        Self::error(diagnostic.code, diagnostic.message)
     }
 }
 

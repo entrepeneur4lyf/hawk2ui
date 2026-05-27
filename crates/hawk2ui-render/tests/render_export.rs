@@ -1,7 +1,8 @@
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_render::RendererBackend;
 use hawk2ui_render::{
-    AccessibilityRef, Geometry, HitTestGeometry, InvalidationReason, OpacityGroup, OpacityGroupId,
-    SceneEffectId, SceneGraph, SceneLayerId, SceneNode, SceneNodeId, Transform,
+    AccessibilityRef, BackendError, Geometry, HitTestGeometry, InvalidationReason, OpacityGroup,
+    OpacityGroupId, SceneEffectId, SceneGraph, SceneLayerId, SceneNode, SceneNodeId, Transform,
 };
 
 #[test]
@@ -37,6 +38,16 @@ fn scene_graph_preserves_parent_child_mutation_and_z_order() {
             .as_str(),
         "root"
     );
+}
+
+#[test]
+fn backend_error_converts_to_shared_diagnostic() {
+    let error = BackendError::new("backend.failed", "backend failed");
+    let diagnostic = Diagnostic::from(error);
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.rule.as_str(), "backend.failed");
+    assert_eq!(diagnostic.message, "backend failed");
 }
 
 #[test]

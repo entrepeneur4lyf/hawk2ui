@@ -1,5 +1,6 @@
 //! Product model records for supported `Hawk2UI` surfaces and targets.
 
+use hawk2ui_api::{Diagnostic, RelatedContext};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -125,6 +126,18 @@ pub enum ProductModelError {
     MissingSurface(SurfaceKind),
 }
 
+impl From<ProductModelError> for Diagnostic {
+    fn from(error: ProductModelError) -> Self {
+        match error {
+            ProductModelError::MissingSurface(surface) => Self::error(
+                "schema.product.surface.missing",
+                "product model is missing a required surface",
+            )
+            .with_related(RelatedContext::new("surface", format!("{surface:?}"))),
+        }
+    }
+}
+
 /// Schema validation error.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SchemaValidationError {
@@ -155,6 +168,12 @@ impl SchemaValidationError {
     }
 }
 
+impl From<SchemaValidationError> for Diagnostic {
+    fn from(error: SchemaValidationError) -> Self {
+        Self::error(error.rule, error.message)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,9 +200,20 @@ mod tests {
             .with_surface_kind(SurfaceKind::DesktopWindow)
             .with_capability(ProductCapability::NativeWindowing);
 
+        let error = model
+            .validate_required_surfaces()
+            .expect_err("missing plugin editor surface is rejected");
         assert_eq!(
-            model.validate_required_surfaces(),
-            Err(ProductModelError::MissingSurface(SurfaceKind::PluginEditor))
+            error,
+            ProductModelError::MissingSurface(SurfaceKind::PluginEditor)
+        );
+        let diagnostic = hawk2ui_api::Diagnostic::from(error);
+        assert_eq!(diagnostic.rule.as_str(), "schema.product.surface.missing");
+        assert!(
+            diagnostic
+                .related
+                .iter()
+                .any(|context| context.label == "surface" && context.value == "PluginEditor")
         );
     }
 
@@ -211,5 +241,7 @@ mod tests {
         let error = crate::validate_product_model_json(&invalid)
             .expect_err("unknown product model fields fail schema validation");
         assert_eq!(error.rule(), "schema.product.invalid");
+        let diagnostic = hawk2ui_api::Diagnostic::from(error);
+        assert_eq!(diagnostic.rule.as_str(), "schema.product.invalid");
     }
 }

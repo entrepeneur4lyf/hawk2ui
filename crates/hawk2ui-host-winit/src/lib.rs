@@ -4,6 +4,7 @@
 mod runtime;
 mod software_frame;
 
+use hawk2ui_api::Diagnostic;
 use hawk2ui_host::{
     ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
     HostPlatformHandle, KeyboardInput, LinuxWindowSystem, PointerInput, RepaintRequest,
@@ -190,6 +191,12 @@ impl WinitHostError {
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
+    }
+}
+
+impl From<WinitHostError> for Diagnostic {
+    fn from(error: WinitHostError) -> Self {
+        Self::error(error.rule, error.message)
     }
 }
 

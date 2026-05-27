@@ -1,4 +1,8 @@
-use hawk2ui_a11y::{A11yAction, A11yBounds, A11yNode, A11yRole, A11yTree, CheckedState};
+use hawk2ui_a11y::{
+    A11yAction, A11yActionDispatcher, A11yActionEvent, A11yBounds, A11yNode, A11yRole, A11yTree,
+    CheckedState,
+};
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use serde::{Serialize, de::DeserializeOwned};
 
 fn assert_serde<T: Serialize + DeserializeOwned>() {}
@@ -69,8 +73,6 @@ fn component_semantics_exist_independently_of_visual_styles() {
     assert_eq!(custom.accessible.role, A11yRole::Custom);
 }
 
-use hawk2ui_a11y::{A11yActionDispatcher, A11yActionEvent};
-
 #[test]
 fn actions_values_dispatch_focus_press_increment_decrement_set_value_and_custom() {
     let tree = A11yTree::new(
@@ -107,6 +109,20 @@ fn actions_values_dispatch_focus_press_increment_decrement_set_value_and_custom(
         Some("0.75")
     );
     assert_eq!(dispatcher.events().len(), 6);
+}
+
+#[test]
+fn a11y_action_dispatch_error_converts_to_shared_diagnostic() {
+    let tree = A11yTree::new(A11yNode::new("root", A11yRole::Window));
+    let mut dispatcher = A11yActionDispatcher::new(tree);
+    let error = dispatcher
+        .dispatch(A11yActionEvent::focus("missing"))
+        .expect_err("missing action target is rejected");
+    let diagnostic = Diagnostic::from(error);
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.rule.as_str(), "a11y.action-target-missing");
+    assert!(diagnostic.message.contains("missing"));
 }
 
 use hawk2ui_a11y::{A11yHostExporter, A11yHostSurfaceKind, LayoutGeometryUpdate};

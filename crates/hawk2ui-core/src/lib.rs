@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 //! Core public facade for `Hawk2UI` product records and runtime entry points.
 
+pub use hawk2ui_api::{
+    Diagnostic, DiagnosticSeverity, RelatedContext, RuleId, SourceSpan, SuggestedFix,
+};
 pub use hawk2ui_schema::{
     HostTarget, ProductCapability, ProductModel, ProductModelError, SurfaceKind,
 };
@@ -35,5 +38,12 @@ mod tests {
             ProductCapability::PluginEditorEmbedding,
             ProductCapability::PluginEditorEmbedding
         );
+    }
+
+    #[test]
+    fn diagnostic_contract_is_available_from_core_facade() {
+        let diagnostic = Diagnostic::error("runtime.failed", "runtime failed");
+
+        assert_eq!(diagnostic.rule.as_str(), "runtime.failed");
     }
 }

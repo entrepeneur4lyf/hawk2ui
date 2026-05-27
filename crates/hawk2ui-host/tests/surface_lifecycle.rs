@@ -1,10 +1,26 @@
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_host::{
     ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig, FramePresenter,
-    HostCapabilities, HostSurface, KeyboardInput, PluginEditorConfig, PluginHostAdapter,
-    PluginHostEvent, PluginParentHandle, PointerInput, RecordingDesktopAdapter,
+    HostCapabilities, HostPlatformHandle, HostSurface, KeyboardInput, PluginEditorConfig,
+    PluginHostAdapter, PluginHostEvent, PluginParentHandle, PointerInput, RecordingDesktopAdapter,
     RecordingFramePresenter, RecordingHostSurface, RecordingPluginAdapter, RepaintRequest,
-    SurfaceEvent, SurfaceMetrics, WindowMode,
+    SurfaceEvent, SurfaceMetrics, SurfaceOwnership, WindowMode,
 };
+
+#[test]
+fn platform_handle_diagnostic_converts_to_shared_diagnostic() {
+    let error = HostPlatformHandle::macos_ns_view(7)
+        .validate_for(SurfaceOwnership::DesktopWindow)
+        .expect_err("ownership mismatch is rejected");
+    let diagnostic = Diagnostic::from(error);
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(
+        diagnostic.rule.as_str(),
+        "platform.handle-ownership-mismatch"
+    );
+    assert!(diagnostic.message.contains("NSView"));
+}
 
 #[test]
 fn surface_contract_reports_logical_physical_size_dpi_and_focus() {

@@ -26,6 +26,7 @@ fn run_full_release_check() -> Result<(), String> {
     validate_repository_release_criteria()?;
     validate_repository_version_policy()?;
     validate_repository_package_targets()?;
+    validate_repository_dependency_policy()?;
     validate_repository_changelog()?;
     run_script("scripts/check.sh")
 }
@@ -46,6 +47,12 @@ fn validate_repository_package_targets() -> Result<(), String> {
     PackageTargets::parse(include_str!("../../release/package-targets.toml"))
         .map(|_| ())
         .map_err(|error| format!("package target validation failed: {error:?}"))
+}
+
+fn validate_repository_dependency_policy() -> Result<(), String> {
+    DependencyPolicy::parse(include_str!("../../release/dependency-policy.toml"))
+        .map(|_| ())
+        .map_err(|error| format!("dependency policy validation failed: {error:?}"))
 }
 
 fn validate_repository_changelog() -> Result<(), String> {
@@ -305,6 +312,95 @@ enum PackageTargetsError {
     MissingRequiredField { id: String, field: &'static str },
 }
 
+#[derive(Debug, Deserialize)]
+struct DependencyPolicy {
+    dependencies: Vec<DependencyPolicyEntry>,
+}
+
+impl DependencyPolicy {
+    fn parse(input: &str) -> Result<Self, DependencyPolicyError> {
+        let policy: Self = toml::from_str(input)
+            .map_err(|error| DependencyPolicyError::Parse(error.to_string()))?;
+        policy.validate()?;
+        Ok(policy)
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.dependencies
+            .iter()
+            .any(|dependency| dependency.name == name)
+    }
+
+    fn release_blockers(&self) -> impl Iterator<Item = &DependencyPolicyEntry> {
+        self.dependencies
+            .iter()
+            .filter(|dependency| dependency.release_blocker)
+    }
+
+    fn validate(&self) -> Result<(), DependencyPolicyError> {
+        let mut names = HashSet::new();
+        for dependency in &self.dependencies {
+            dependency.require_field("name", &dependency.name)?;
+            dependency.require_field("version", &dependency.version)?;
+            dependency.require_field("owner", &dependency.owner)?;
+            dependency.require_field("risk", &dependency.risk)?;
+            dependency.require_field("upgrade_gate", &dependency.upgrade_gate)?;
+
+            if !names.insert(dependency.name.clone()) {
+                return Err(DependencyPolicyError::DuplicateDependency(
+                    dependency.name.clone(),
+                ));
+            }
+
+            if dependency.source == DependencySource::Git && !dependency.release_blocker {
+                return Err(DependencyPolicyError::GitDependencyNotReleaseBlocked(
+                    dependency.name.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DependencyPolicyEntry {
+    name: String,
+    source: DependencySource,
+    version: String,
+    owner: String,
+    risk: String,
+    release_blocker: bool,
+    upgrade_gate: String,
+}
+
+impl DependencyPolicyEntry {
+    fn require_field(&self, field: &'static str, value: &str) -> Result<(), DependencyPolicyError> {
+        if value.trim().is_empty() {
+            Err(DependencyPolicyError::MissingRequiredField {
+                name: self.name.clone(),
+                field,
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum DependencySource {
+    CratesIo,
+    Git,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DependencyPolicyError {
+    Parse(String),
+    DuplicateDependency(String),
+    GitDependencyNotReleaseBlocked(String),
+    MissingRequiredField { name: String, field: &'static str },
+}
+
 #[derive(Debug)]
 struct Changelog<'a> {
     text: &'a str,
@@ -506,6 +602,30 @@ compatibility_notes_required = true
         }
 
         assert!(targets.release_blockers().all(|target| target.release_gate));
+    }
+
+    #[test]
+    fn repository_dependency_policy_tracks_release_blocking_dependency_risks() {
+        let policy = DependencyPolicy::parse(include_str!("../../release/dependency-policy.toml"))
+            .expect("repository dependency policy must parse");
+
+        for dependency in [
+            "boa_engine",
+            "oxc_allocator",
+            "lightningcss",
+            "taffy",
+            "skia-safe",
+        ] {
+            assert!(
+                policy.contains(dependency),
+                "missing dependency policy entry for {dependency}"
+            );
+        }
+        assert!(
+            policy.release_blockers().any(|entry| {
+                entry.name == "boa_engine" && entry.source == DependencySource::Git
+            })
+        );
     }
 
     #[test]

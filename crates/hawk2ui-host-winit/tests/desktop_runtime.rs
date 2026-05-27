@@ -1,5 +1,8 @@
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
-use hawk2ui_host_winit::{DesktopRuntimeEvent, SoftwareFrameRenderer, WinitDesktopRuntimeConfig};
+use hawk2ui_host_winit::{
+    DesktopRuntimeEvent, SoftwareFrameRenderer, WinitDesktopRuntimeConfig, WinitHostError,
+};
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_render::{Color, CustomSurfaceCategory, CustomSurfaceDataSnapshot};
 use hawk2ui_runtime::{
@@ -24,6 +27,16 @@ fn software_frame_renders_visible_pixels() {
             .iter()
             .any(|pixel| *pixel != pixels.pixels()[0])
     );
+}
+
+#[test]
+fn winit_host_error_converts_to_shared_diagnostic() {
+    let error = WinitHostError::new("desktop.failed", "desktop failed");
+    let diagnostic = Diagnostic::from(error);
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.rule.as_str(), "desktop.failed");
+    assert_eq!(diagnostic.message, "desktop failed");
 }
 
 #[test]

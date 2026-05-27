@@ -1,5 +1,6 @@
 //! Accessibility action dispatch records.
 
+use hawk2ui_api::Diagnostic;
 use serde::{Deserialize, Serialize};
 
 use crate::{A11yAction, A11yTree};
@@ -76,6 +77,12 @@ pub struct A11yActionDispatchError {
     pub code: String,
     /// Human-readable message.
     pub message: String,
+}
+
+impl From<A11yActionDispatchError> for Diagnostic {
+    fn from(error: A11yActionDispatchError) -> Self {
+        Self::error(error.code, error.message)
+    }
 }
 
 /// Accessibility action dispatcher.

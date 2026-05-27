@@ -17,4 +17,5 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
 lightningcss = { version = "1.0.0-alpha.71", default-features = false }

@@ -1,5 +1,7 @@
 //! Renderer backend boundary and recording test backend.
 
+use hawk2ui_api::Diagnostic;
+
 use crate::{Color, Geometry, Stroke, Transform};
 
 /// Renderer backend capabilities.
@@ -74,6 +76,12 @@ impl BackendDiagnostic {
     pub fn rule(&self) -> &str {
         &self.rule
     }
+
+    /// Returns the diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 /// Backend error.
@@ -95,6 +103,12 @@ impl BackendError {
     #[must_use]
     pub const fn diagnostic(&self) -> &BackendDiagnostic {
         &self.diagnostic
+    }
+}
+
+impl From<BackendError> for Diagnostic {
+    fn from(error: BackendError) -> Self {
+        Self::error(error.diagnostic.rule, error.diagnostic.message)
     }
 }
 

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use hawk2ui_api::{Diagnostic, RelatedContext};
 use serde::{Deserialize, Serialize};
 
 /// Automation event origin.
@@ -111,6 +112,13 @@ impl AutomationEventError {
             message: message.into(),
             parameter_id: parameter_id.into(),
         }
+    }
+}
+
+impl From<AutomationEventError> for Diagnostic {
+    fn from(error: AutomationEventError) -> Self {
+        Self::error(error.code, error.message)
+            .with_related(RelatedContext::new("parameter", error.parameter_id))
     }
 }
 

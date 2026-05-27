@@ -1,3 +1,4 @@
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_build::{
     ArtifactHash, ArtifactSchemaVersion, AssetCompilationError, AssetCompilationPlan,
     AssetDimensions, AssetKind, AssetManifestEntry, AssetSanitizationStatus, AssetSource,
@@ -11,6 +12,34 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[test]
+fn build_diagnostic_converts_to_shared_diagnostic_with_location_context() {
+    let diagnostic = Diagnostic::from(
+        BuildDiagnostic::new(
+            BuildDiagnosticSeverity::Warning,
+            "build.asset.large",
+            "asset is large",
+        )
+        .with_location("src/app.ts", SourceSpan::new(10, 25)),
+    );
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diagnostic.rule.as_str(), "build.asset.large");
+    assert_eq!(diagnostic.message, "asset is large");
+    assert!(
+        diagnostic
+            .related
+            .iter()
+            .any(|context| context.label == "file" && context.value == "src/app.ts")
+    );
+    assert!(
+        diagnostic
+            .related
+            .iter()
+            .any(|context| context.label == "span" && context.value == "10..25")
+    );
+}
 
 const VALID_MANIFEST: &str = r#"
 [identity]

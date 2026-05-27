@@ -1,5 +1,7 @@
 //! Security diagnostic records.
 
+use hawk2ui_api::Diagnostic;
+
 /// Security diagnostic severity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SecuritySeverity {
@@ -32,6 +34,15 @@ impl SecurityDiagnostic {
             severity,
             rule: rule.into(),
             message: message.into(),
+        }
+    }
+}
+
+impl From<SecurityDiagnostic> for Diagnostic {
+    fn from(diagnostic: SecurityDiagnostic) -> Self {
+        match diagnostic.severity {
+            SecuritySeverity::Error => Self::error(diagnostic.rule, diagnostic.message),
+            SecuritySeverity::Warning => Self::warning(diagnostic.rule, diagnostic.message),
         }
     }
 }

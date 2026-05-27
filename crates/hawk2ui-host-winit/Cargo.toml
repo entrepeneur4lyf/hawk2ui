@@ -17,6 +17,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }

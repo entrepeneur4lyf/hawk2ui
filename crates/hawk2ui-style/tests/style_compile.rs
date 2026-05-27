@@ -1,7 +1,18 @@
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_style::{
-    PropertyGroup, PropertyId, PropertyRegistry, PropertyRequirement, StyleValue, UnitHandling,
-    ValueType,
+    PropertyGroup, PropertyId, PropertyRegistry, PropertyRequirement, Selector, StyleValue,
+    UnitHandling, ValueType,
 };
+
+#[test]
+fn selector_parse_error_converts_to_shared_diagnostic() {
+    let error = Selector::parse("[disabled]").expect_err("attribute selector is unsupported");
+    let diagnostic = Diagnostic::from(error);
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.rule.as_str(), "selector.attribute.unsupported");
+    assert_eq!(diagnostic.message, "attribute selectors are not supported");
+}
 
 #[test]
 fn property_registry_exposes_required_property_families() {

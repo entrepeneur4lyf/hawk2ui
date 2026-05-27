@@ -1,0 +1,89 @@
+[[dependencies]]
+name = "boa_engine"
+source = "git"
+version = "8f5ef6542d641fd22320e51234e914b59e623717"
+owner = "runtime"
+risk = "Git dependency; not crates.io publishable; release blocker until replaced by a crates.io version or isolated from published crates."
+release_blocker = true
+upgrade_gate = "cargo test -p hawk2ui-script && cargo test -p hawk2ui-runtime script"
+
+[[dependencies]]
+name = "oxc_allocator"
+source = "crates-io"
+version = "0.133.0"
+owner = "runtime"
+risk = "Fast-moving compiler dependency family; upgrades must validate TypeScript transform diagnostics and emitted JavaScript semantics."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-script script_backend_compiles_typescript_with_interfaces_generics_and_assertions"
+
+[[dependencies]]
+name = "oxc_codegen"
+source = "crates-io"
+version = "0.133.0"
+owner = "runtime"
+risk = "Fast-moving compiler dependency family; must stay version-aligned with the other OXC crates."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-script script_backend_executes_javascript_and_typescript_modules"
+
+[[dependencies]]
+name = "oxc_parser"
+source = "crates-io"
+version = "0.133.0"
+owner = "runtime"
+risk = "Fast-moving parser dependency; upgrades must preserve supported TypeScript syntax and diagnostics."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-script"
+
+[[dependencies]]
+name = "oxc_semantic"
+source = "crates-io"
+version = "0.133.0"
+owner = "runtime"
+risk = "Fast-moving semantic analysis dependency; upgrades must validate transformed source behavior."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-script"
+
+[[dependencies]]
+name = "oxc_span"
+source = "crates-io"
+version = "0.133.0"
+owner = "runtime"
+risk = "Fast-moving source span dependency; upgrades must preserve diagnostic source mapping behavior."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-script"
+
+[[dependencies]]
+name = "oxc_transformer"
+source = "crates-io"
+version = "0.133.0"
+owner = "runtime"
+risk = "Fast-moving transformer dependency; upgrades must preserve TypeScript-to-JavaScript lowering."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-script"
+
+[[dependencies]]
+name = "lightningcss"
+source = "crates-io"
+version = "1.0.0-alpha.71"
+owner = "style"
+risk = "Alpha CSS parser; accepted only behind Hawk2UI typed style boundaries and exact subset tests."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-style"
+
+[[dependencies]]
+name = "taffy"
+source = "crates-io"
+version = "0.10.0"
+owner = "layout"
+risk = "Pre-1.0 layout engine; upgrades must preserve flex, absolute, text measurement, DPI, and plugin constraint behavior."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-layout"
+
+[[dependencies]]
+name = "skia-safe"
+source = "crates-io"
+version = "0.97.0"
+owner = "render"
+risk = "Native graphics binding with binary artifacts; upgrades must pass renderer, host software frame, and visual smoke tests."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-render-skia && cargo test -p hawk2ui-host-winit"

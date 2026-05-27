@@ -1478,6 +1478,7 @@ name = "hawk2ui-a11y"
 version = "0.1.0"
 dependencies = [
  "accesskit",
+ "hawk2ui-api",
  "serde",
 ]
 
@@ -1504,6 +1505,7 @@ dependencies = [
 name = "hawk2ui-authoring"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-api",
  "hawk2ui-layout",
  "hawk2ui-render",
  "hawk2ui-render-skia",
@@ -1515,6 +1517,7 @@ dependencies = [
 name = "hawk2ui-build"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-api",
  "jsonschema",
  "schemars",
  "serde",
@@ -1567,6 +1570,7 @@ dependencies = [
 name = "hawk2ui-core"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-api",
  "hawk2ui-schema",
 ]
 
@@ -1634,6 +1638,7 @@ dependencies = [
 name = "hawk2ui-host"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-api",
  "serde",
 ]
 
@@ -1649,6 +1654,7 @@ dependencies = [
 name = "hawk2ui-host-winit"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-api",
  "hawk2ui-host",
  "hawk2ui-layout",
  "hawk2ui-render",
@@ -1685,6 +1691,7 @@ dependencies = [
 name = "hawk2ui-plugin"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-api",
  "serde",
 ]
 
@@ -1699,6 +1706,9 @@ dependencies = [
 [[package]]
 name = "hawk2ui-render"
 version = "0.1.0"
+dependencies = [
+ "hawk2ui-api",
+]
 
 [[package]]
 name = "hawk2ui-render-skia"
@@ -1714,6 +1724,7 @@ dependencies = [
 name = "hawk2ui-runtime"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-api",
  "hawk2ui-layout",
  "hawk2ui-render",
  "hawk2ui-render-skia",
@@ -1724,6 +1735,7 @@ dependencies = [
 name = "hawk2ui-schema"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-api",
  "jsonschema",
  "schemars",
  "serde",
@@ -1735,6 +1747,7 @@ name = "hawk2ui-script"
 version = "0.1.0"
 dependencies = [
  "boa_engine",
+ "hawk2ui-api",
  "oxc_allocator",
  "oxc_codegen",
  "oxc_parser",
@@ -1746,6 +1759,9 @@ dependencies = [
 [[package]]
 name = "hawk2ui-security"
 version = "0.1.0"
+dependencies = [
+ "hawk2ui-api",
+]
 
 [[package]]
 name = "hawk2ui-security-model"
@@ -1772,6 +1788,7 @@ dependencies = [
 name = "hawk2ui-style"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-api",
  "lightningcss",
 ]
 

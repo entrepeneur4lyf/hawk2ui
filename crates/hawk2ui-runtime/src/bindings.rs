@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use hawk2ui_api::{Diagnostic, RelatedContext};
 use serde::{Deserialize, Serialize};
 
 use crate::{LifecyclePhase, RuntimeCapability, StructuredValue};
@@ -154,6 +155,18 @@ impl HostBindingError {
             binding_name: binding_name.into(),
             capability,
         }
+    }
+}
+
+impl From<HostBindingError> for Diagnostic {
+    fn from(error: HostBindingError) -> Self {
+        let mut diagnostic = Self::error(error.code, error.message)
+            .with_related(RelatedContext::new("binding", error.binding_name));
+        if let Some(capability) = error.capability {
+            diagnostic = diagnostic
+                .with_related(RelatedContext::new("capability", format!("{capability:?}")));
+        }
+        diagnostic
     }
 }
 

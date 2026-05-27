@@ -1,9 +1,23 @@
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_security::{
     AssetHashVerification, AssetImageMetadataStatus, AssetSecurityPolicy, AssetSecurityRule,
     ScriptSandboxOperation, ScriptSandboxPolicy, SecretDiagnostic, SecretScanFinding, SecretValue,
-    SecretVerificationReport, ShippedArtifactSecretCheck, SourceValidationPolicy,
-    SourceValidationRule, TrustBoundary, TrustRecord, VectorSafetyStatus,
+    SecretVerificationReport, SecurityDiagnostic, SecuritySeverity, ShippedArtifactSecretCheck,
+    SourceValidationPolicy, SourceValidationRule, TrustBoundary, TrustRecord, VectorSafetyStatus,
 };
+
+#[test]
+fn security_diagnostic_converts_to_shared_diagnostic() {
+    let diagnostic = Diagnostic::from(SecurityDiagnostic::new(
+        SecuritySeverity::Error,
+        "security.denied",
+        "operation denied",
+    ));
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.rule.as_str(), "security.denied");
+    assert_eq!(diagnostic.message, "operation denied");
+}
 
 #[test]
 fn trust_boundaries_classify_all_security_domains() {

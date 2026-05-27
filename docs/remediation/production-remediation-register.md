@@ -267,6 +267,22 @@ Acceptance:
 - Every accepted alpha/pre-1.0 dependency has an owner, compatibility gate, and rollback plan.
 - Dependency upgrades require targeted compatibility tests for parser, layout, renderer, host, script, and plugin behavior.
 
+Status:
+
+- Added `release/dependency-policy.toml` as the machine-readable dependency stability policy for
+  Boa, OXC, Lightning CSS, Taffy, and Skia.
+- Added xtask validation for dependency policy entries, duplicate detection, required fields, and
+  Git dependency release-blocker enforcement.
+- Full `xtask release-check` now validates the dependency policy before changelog and script gates.
+- Updated dependency hygiene documentation and release criteria so dependency health includes the
+  policy gate in addition to `cargo deny`.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this remediation slice for production readiness:
+  dependency risk is no longer tracked only in prose, the current Boa Git dependency is explicitly
+  release-blocked, and high-risk dependency upgrades have owner and test-gate metadata.
+
 ### REM-CRATE-008: Unify Diagnostic And Error Types
 
 Evidence:
@@ -287,6 +303,24 @@ Acceptance:
 - Public APIs can expose a common diagnostic envelope without losing domain-specific detail.
 - CLI, runtime, host, renderer, and script errors can be reported uniformly.
 - Tests prove conversion preserves rule/code and message data.
+
+Status:
+
+- `hawk2ui-core` now re-exports the shared `hawk2ui-api` diagnostic contract.
+- Added shared `Diagnostic` conversions for script backend errors, renderer backend errors, Winit
+  host errors, build diagnostics, security diagnostics, platform handle diagnostics, runtime host
+  binding errors, style selector errors, schema validation/product model errors, authoring
+  diagnostics, accessibility action dispatch errors, and plugin automation errors.
+- Added tests proving severity, rule/code, message, and related context preservation for the
+  converted public diagnostic producers.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this remediation slice for production readiness:
+  the common diagnostic envelope is now available from the core facade, the major public diagnostic
+  producers have explicit conversions, and the conversions are covered by tests. Follow-up work may
+  continue adding conversions for specialized package/performance/testkit errors, but the shared
+  public diagnostic boundary is now real and usable.
 
 ## Product Direction Remediation
 

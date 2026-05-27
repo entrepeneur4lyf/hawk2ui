@@ -1,8 +1,22 @@
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_authoring::{
-    AssetRef, ChildList, ElementId, ElementKind, ElementNode, EventKind, EventPayloadField,
-    FrameworkNativeNode, FrameworkNativeProgram, HandlerRef, KeyedChild, NativeLifecycleEvent,
-    NativeRef, PointerEventKind, PropValue, StyleRef,
+    AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ChildList, ElementId, ElementKind,
+    ElementNode, EventKind, EventPayloadField, FrameworkNativeNode, FrameworkNativeProgram,
+    HandlerRef, KeyedChild, NativeLifecycleEvent, NativeRef, PointerEventKind, PropValue, StyleRef,
 };
+
+#[test]
+fn authoring_diagnostic_converts_to_shared_diagnostic() {
+    let diagnostic = Diagnostic::from(AuthoringDiagnostic::new(
+        AuthoringDiagnosticSeverity::Warning,
+        "authoring.warn",
+        "authoring warning",
+    ));
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Warning);
+    assert_eq!(diagnostic.rule.as_str(), "authoring.warn");
+    assert_eq!(diagnostic.message, "authoring warning");
+}
 
 #[test]
 fn element_records_preserve_stable_node_identity() {
