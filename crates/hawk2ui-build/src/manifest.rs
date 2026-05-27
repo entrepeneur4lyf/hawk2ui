@@ -305,7 +305,12 @@ pub enum ManifestError {
     /// Invalid plugin metadata.
     InvalidPluginMetadata(&'static str),
     /// Manifest failed generated JSON Schema validation.
-    SchemaValidation,
+    SchemaValidation {
+        /// JSON pointer to the invalid manifest value.
+        path: String,
+        /// Validator-provided failure detail.
+        message: String,
+    },
 }
 
 fn validate_manifest_schema(input: &str) -> Result<(), ManifestError> {
@@ -318,5 +323,8 @@ fn validate_manifest_schema(input: &str) -> Result<(), ManifestError> {
         .map_err(|error| ManifestError::Parse(error.to_string()))?;
     validator
         .validate(&json_value)
-        .map_err(|_| ManifestError::SchemaValidation)
+        .map_err(|error| ManifestError::SchemaValidation {
+            path: error.instance_path().as_str().to_string(),
+            message: error.to_string(),
+        })
 }

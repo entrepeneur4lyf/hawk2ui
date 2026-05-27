@@ -233,8 +233,12 @@ Review check:
 Evidence:
 
 - `docs/technical/crate-selection.md` marks `schemars` and `jsonschema` as preferred.
-- `crates/hawk2ui-schema/Cargo.toml` has no schema dependencies.
-- `crates/hawk2ui-schema/src/lib.rs` exports typed records only.
+- `crates/hawk2ui-schema/Cargo.toml` depends on `schemars` and `jsonschema`.
+- `crates/hawk2ui-schema` generates and validates the product model schema.
+- `crates/hawk2ui-build` generates and validates the raw manifest schema before semantic
+  validation.
+- Manifest schema validation now preserves the JSON pointer and validator detail instead of
+  collapsing every schema failure into a generic error.
 
 Required remediation:
 
@@ -246,6 +250,20 @@ Acceptance:
 
 - CLI validation uses generated schemas.
 - Invalid manifests fail with source-specific diagnostics.
+
+Status:
+
+- Partially remediated: product model and raw manifest schema generation/validation are implemented,
+  and CLI manifest schema diagnostics now include a failing JSON pointer plus validator detail.
+- Remaining release blocker: artifact, capability, plugin metadata, and package metadata schemas must
+  be generated and validated through the shared schema/build boundary before this item can close.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this schema diagnostics slice for production
+  stability: invalid manifests no longer lose source-actionable schema failure detail. Further schema
+  surface expansion remains required before `REM-CRATE-005` is complete.
+
 
 ### REM-CRATE-006: Add Realtime And Plugin Format Crates Where Chosen
 
@@ -387,6 +405,8 @@ Evidence:
 
 - Product direction requires plugin identity, editor metadata, parameters, presets, and asset declarations to be manifest-first and validated before runtime.
 - Build/schema/plugin crates contain partial typed records and package scaffolding, but schema validation is not complete.
+- Raw manifest schema validation runs before semantic validation, and schema failures now carry
+  path/detail diagnostics through the CLI boundary.
 
 Required remediation:
 

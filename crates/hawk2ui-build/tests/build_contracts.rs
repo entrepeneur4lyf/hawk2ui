@@ -193,7 +193,13 @@ name = "desktop"
 
     let error = HawkManifest::parse(input).expect_err("unknown manifest sections must fail schema");
 
-    assert_eq!(error, ManifestError::SchemaValidation);
+    match error {
+        ManifestError::SchemaValidation { path, message } => {
+            assert_eq!(path, "");
+            assert!(message.contains("unknown"));
+        }
+        other => panic!("expected schema validation error, got {other:?}"),
+    }
 }
 
 #[test]
