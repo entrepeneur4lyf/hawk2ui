@@ -15,7 +15,10 @@ pub use property::{
     PropertyGroup, PropertyId, PropertyMetadata, PropertyRegistry, PropertyRequirement, StyleValue,
     UnitHandling, ValidationError, ValueType,
 };
-pub use runtime::{RuntimeStyleDiagnostic, RuntimeStyleError, RuntimeStyleTable};
+pub use runtime::{
+    RuntimeStyleDiagnostic, RuntimeStyleError, RuntimeStyleInvalidation, RuntimeStyleNode,
+    RuntimeStyleTable, RuntimeStyleTree, StyleRuntimeEnvironment,
+};
 pub use selector::{Selector, SelectorDiagnostic, SelectorParseError, SelectorPart};
 pub use token::{
     ThemeVariant, TokenDiagnostic, TokenError, TokenKind, TokenRecord, TokenSet, TokenValue,

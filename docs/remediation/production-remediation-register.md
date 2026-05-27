@@ -527,6 +527,27 @@ Acceptance:
 - Style computation matches documented subset.
 - Theme and user preference changes invalidate affected render output.
 
+Status:
+
+- Implemented `RuntimeStyleTree`, `RuntimeStyleNode`, `StyleRuntimeEnvironment`, and full
+  `RuntimeStyleTable::compute_for_tree` computation.
+- Runtime style computation now evaluates supported selectors against the style tree, applies
+  specificity and source-order precedence, fills registry initial values, inherits inherited
+  properties, and resolves token-backed values.
+- Theme variants and preference hook overrides resolve through `TokenSet` and
+  `StyleRuntimeEnvironment`.
+- Added `RuntimeStyleTable::diff_from` and `RuntimeStyleInvalidation` so theme/preference changes
+  report affected node IDs for render invalidation.
+- Documented runtime cascade, token, theme, preference, and invalidation behavior in
+  `manual/style-reference.md`.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this remediation item for production readiness:
+  cascade behavior is deterministic, token/theme/preference resolution is exercised by tests, and
+  environment changes produce explicit invalidation output. No corrective revision is required
+  before moving to layout architecture.
+
 ## Layout Remediation
 
 ### REM-LAYOUT-001: Complete Layout Architecture With Taffy

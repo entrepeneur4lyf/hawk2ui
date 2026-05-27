@@ -250,6 +250,12 @@ impl PropertyRegistry {
             .find(|metadata| metadata.id.as_str() == id.as_str())
     }
 
+    /// Returns all registered production properties in deterministic registry order.
+    #[must_use]
+    pub fn properties(&self) -> &[PropertyMetadata] {
+        &self.properties
+    }
+
     /// Validates a typed style value for a property.
     ///
     /// # Errors
@@ -431,7 +437,7 @@ const PROPERTY_SPECS: &[PropertySpec] = &[
         group: PropertyGroup::Custom,
         value_type: ValueType::TokenReference,
         default_value: DefaultValueSpec::TokenRef("color.accent"),
-        inherited: false,
+        inherited: true,
         unit_handling: UnitHandling::TokenOnly,
         requirements: RENDERER,
     },

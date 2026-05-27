@@ -52,4 +52,16 @@ The full user-facing subset is maintained in `manual/css-subset-reference.md`.
 
 Use the supported property subset for deterministic layout and rendering. Keep selectors simple, prefer explicit component classes or element identifiers, and move host-specific behavior into runtime or plugin contracts instead of style selectors.
 
+## Runtime Cascade
+
+Runtime style computation matches selectors against the `RuntimeStyleTree`, then applies specificity and source-order precedence. ID selectors outrank class and state selectors, class and `:hawk(...)` state selectors outrank element selectors, and later rules win when specificity ties.
+
+Each computed node receives every production property. Explicit declarations win first, inherited properties use the parent computed value when no declaration matches, and the remaining properties use registry initial values.
+
+## Tokens, Themes, And Preferences
+
+`token(...)` declarations resolve through `TokenSet` at runtime. Theme variants override base tokens when `StyleRuntimeEnvironment::with_theme(...)` is active, and missing theme tokens fall back to base tokens.
+
+Preference hook tokens can be redirected with `StyleRuntimeEnvironment::with_preference_override(...)`. A changed theme or preference environment is compared through `RuntimeStyleTable::diff_from(...)`, which returns affected node IDs for render invalidation.
+
 Use `examples/style-gallery/manifest.hawk.toml` as the repository-backed style fixture.

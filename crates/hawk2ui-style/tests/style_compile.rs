@@ -591,6 +591,156 @@ fn runtime_style_table_resolves_theme_token_overrides() {
 }
 
 #[test]
+fn runtime_style_computation_applies_cascade_inheritance_and_initial_values() {
+    let sheet = hawk2ui_style::compile_style_source(
+        r#"
+panel {
+  color: rgb(10, 20, 30);
+  font-size: 22px;
+}
+button {
+  opacity: 0.4;
+}
+.primary {
+  opacity: 0.6;
+  border-radius: 4px;
+}
+#submit {
+  opacity: 0.9;
+}
+panel button {
+  color: rgb(40, 50, 60);
+}
+panel > button {
+  font-size: 20px;
+}
+button:hawk(active) {
+  border-width: 2px;
+}
+"#,
+    )
+    .expect("style source must compile");
+    let tokens = hawk2ui_style::TokenSet::production()
+        .with_color("color.surface", 8, 10, 14, 255)
+        .with_color("color.accent", 180, 120, 255, 255);
+    let tree =
+        hawk2ui_style::RuntimeStyleTree::new(hawk2ui_style::RuntimeStyleNode::new("root", "panel"))
+            .with_child(
+                "root",
+                hawk2ui_style::RuntimeStyleNode::new("submit-node", "button")
+                    .with_selector_id("submit")
+                    .with_class("primary")
+                    .with_state("active"),
+            )
+            .expect("button child must attach")
+            .with_child(
+                "root",
+                hawk2ui_style::RuntimeStyleNode::new("label-node", "label"),
+            )
+            .expect("label child must attach");
+
+    let table = hawk2ui_style::RuntimeStyleTable::compute_for_tree(
+        &sheet,
+        &tree,
+        &tokens,
+        &hawk2ui_style::StyleRuntimeEnvironment::production(),
+    )
+    .expect("computed style tree must resolve");
+
+    assert_eq!(
+        table.typed_value("submit-node", &PropertyId::new("opacity")),
+        Some(&StyleValue::Number(0.9))
+    );
+    assert_eq!(
+        table.typed_value("submit-node", &PropertyId::new("font-size")),
+        Some(&StyleValue::LengthPx(20.0))
+    );
+    assert_eq!(
+        table.typed_value("submit-node", &PropertyId::new("color")),
+        Some(&StyleValue::ColorRgba(40, 50, 60, 255))
+    );
+    assert_eq!(
+        table.typed_value("submit-node", &PropertyId::new("border-width")),
+        Some(&StyleValue::LengthPx(2.0))
+    );
+    assert_eq!(
+        table.typed_value("submit-node", &PropertyId::new("overflow")),
+        Some(&StyleValue::Keyword("visible".to_string()))
+    );
+    assert_eq!(
+        table.typed_value("label-node", &PropertyId::new("color")),
+        Some(&StyleValue::ColorRgba(10, 20, 30, 255))
+    );
+    assert_eq!(
+        table.typed_value("label-node", &PropertyId::new("font-size")),
+        Some(&StyleValue::LengthPx(22.0))
+    );
+    assert_eq!(
+        table.typed_value("label-node", &PropertyId::new("opacity")),
+        Some(&StyleValue::Number(1.0))
+    );
+}
+
+#[test]
+fn runtime_style_computation_resolves_theme_preferences_and_reports_invalidation() {
+    let sheet = hawk2ui_style::compile_style_source(
+        r#"
+.surface {
+  background-color: token(preference.surface);
+  --accent-color: token(color.accent);
+}
+"#,
+    )
+    .expect("style source must compile");
+    let tokens = hawk2ui_style::TokenSet::production()
+        .with_color("color.surface", 8, 10, 14, 255)
+        .with_color("color.surface.high-contrast", 0, 0, 0, 255)
+        .with_color("color.accent", 180, 120, 255, 255)
+        .with_preference_hook("preference.surface", "color.surface")
+        .with_theme(hawk2ui_style::ThemeVariant::new("light").with_token(
+            "color.surface",
+            hawk2ui_style::TokenValue::ColorRgba(245, 243, 238, 255),
+        ));
+    let tree = hawk2ui_style::RuntimeStyleTree::new(
+        hawk2ui_style::RuntimeStyleNode::new("root", "panel").with_class("surface"),
+    );
+
+    let light = hawk2ui_style::RuntimeStyleTable::compute_for_tree(
+        &sheet,
+        &tree,
+        &tokens,
+        &hawk2ui_style::StyleRuntimeEnvironment::production().with_theme("light"),
+    )
+    .expect("theme style must resolve");
+    let high_contrast = hawk2ui_style::RuntimeStyleTable::compute_for_tree(
+        &sheet,
+        &tree,
+        &tokens,
+        &hawk2ui_style::StyleRuntimeEnvironment::production()
+            .with_theme("light")
+            .with_preference_override("preference.surface", "color.surface.high-contrast"),
+    )
+    .expect("preference style must resolve");
+
+    assert_eq!(
+        light.typed_value("root", &PropertyId::new("background-color")),
+        Some(&StyleValue::ColorRgba(245, 243, 238, 255))
+    );
+    assert_eq!(
+        high_contrast.typed_value("root", &PropertyId::new("background-color")),
+        Some(&StyleValue::ColorRgba(0, 0, 0, 255))
+    );
+    assert_eq!(
+        high_contrast.typed_value("root", &PropertyId::new("--accent-color")),
+        Some(&StyleValue::ColorRgba(180, 120, 255, 255))
+    );
+
+    let invalidation = high_contrast.diff_from(&light);
+    assert!(invalidation.requires_render_invalidation());
+    assert_eq!(invalidation.affected_node_ids(), &["root".to_string()]);
+}
+
+#[test]
 fn runtime_style_table_reports_missing_tokens() {
     let sheet =
         hawk2ui_style::compile_style_source(".surface { background-color: token(color.missing); }")
