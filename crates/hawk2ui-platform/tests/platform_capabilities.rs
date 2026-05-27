@@ -88,6 +88,32 @@ fn capability_table_records_schema_availability_and_operations() {
 }
 
 #[test]
+fn capability_table_preserves_first_duplicate_declaration() {
+    let table = CapabilityTable::new([
+        CapabilityRecord::new("filesystem.read")
+            .deny(PlatformOperation::FilesystemRead)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(true),
+        CapabilityRecord::new("filesystem.read")
+            .allow(PlatformOperation::FilesystemRead)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(true),
+    ]);
+
+    let error = table
+        .ensure_allowed(
+            "filesystem.read",
+            PlatformOperation::FilesystemRead,
+            PlatformContext::Desktop,
+        )
+        .expect_err("later duplicate capability declarations must not override the first");
+
+    assert_eq!(error.diagnostic.rule, "capability.operation-denied");
+}
+
+#[test]
 fn filesystem_scope_rejects_path_escaping() {
     let grant = FilesystemGrant::new(FilesystemScope::ProjectAssets, "/app/assets");
 

@@ -198,12 +198,11 @@ impl CapabilityTable {
     /// Creates a capability table.
     #[must_use]
     pub fn new(records: impl IntoIterator<Item = CapabilityRecord>) -> Self {
-        Self {
-            records: records
-                .into_iter()
-                .map(|record| (record.manifest_key.clone(), record))
-                .collect(),
+        let mut table = BTreeMap::new();
+        for record in records {
+            table.entry(record.manifest_key.clone()).or_insert(record);
         }
+        Self { records: table }
     }
 
     /// Ensures a capability permits an operation in the requested context.
