@@ -253,6 +253,16 @@ pub enum SceneGraphError {
     MissingNode(String),
     /// Node already exists.
     DuplicateNode(String),
+    /// Node ID is empty or contains unsupported characters.
+    InvalidNodeId(String),
+    /// Node geometry contains non-finite coordinates or negative dimensions.
+    InvalidGeometry(String),
+    /// Node transform contains non-finite coordinates.
+    InvalidTransform(String),
+    /// Node opacity is outside the renderable range.
+    InvalidOpacity(String),
+    /// Accessibility reference is empty.
+    InvalidAccessibilityRef(String),
 }
 
 /// Retained scene graph.
@@ -284,6 +294,8 @@ impl SceneGraph {
         parent_id: SceneNodeId,
         child: SceneNode,
     ) -> Result<Self, SceneGraphError> {
+        validate_node_id(&parent_id)?;
+        validate_scene_node(&child)?;
         if self.index_of(child.id()).is_some() {
             return Err(SceneGraphError::DuplicateNode(
                 child.id().as_str().to_string(),
@@ -302,6 +314,32 @@ impl SceneGraph {
             children: Vec::new(),
         });
         Ok(self)
+    }
+
+    /// Validates the graph structure and renderable node records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SceneGraphError`] when a node record, parent link, or child link is invalid.
+    pub fn validate(&self) -> Result<(), SceneGraphError> {
+        for entry in &self.entries {
+            validate_scene_node(&entry.node)?;
+            if let Some(parent_id) = entry.parent.as_ref() {
+                validate_node_id(parent_id)?;
+                if self.index_of(parent_id).is_none() {
+                    return Err(SceneGraphError::MissingParent(
+                        parent_id.as_str().to_string(),
+                    ));
+                }
+            }
+            for child_id in &entry.children {
+                validate_node_id(child_id)?;
+                if self.index_of(child_id).is_none() {
+                    return Err(SceneGraphError::MissingNode(child_id.as_str().to_string()));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Invalidates a node and all ancestors.
@@ -374,4 +412,70 @@ struct SceneEntry {
     node: SceneNode,
     parent: Option<SceneNodeId>,
     children: Vec<SceneNodeId>,
+}
+
+fn validate_scene_node(node: &SceneNode) -> Result<(), SceneGraphError> {
+    validate_node_id(node.id())?;
+    if let Some(layout) = node.layout() {
+        validate_geometry(node.id(), layout)?;
+    }
+    if let Some(clip) = node.clip() {
+        validate_geometry(node.id(), clip)?;
+    }
+    validate_transform(node.id(), node.transform())?;
+    if !node.opacity().is_finite() || !(0.0..=1.0).contains(&node.opacity()) {
+        return Err(SceneGraphError::InvalidOpacity(
+            node.id().as_str().to_string(),
+        ));
+    }
+    if let Some(hit_test) = node.hit_test() {
+        validate_geometry(node.id(), hit_test)?;
+    }
+    if let Some(accessibility_ref) = node.accessibility_ref()
+        && accessibility_ref.as_str().trim().is_empty()
+    {
+        return Err(SceneGraphError::InvalidAccessibilityRef(
+            node.id().as_str().to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_node_id(node_id: &SceneNodeId) -> Result<(), SceneGraphError> {
+    let value = node_id.as_str();
+    if !value.trim().is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+    {
+        Ok(())
+    } else {
+        Err(SceneGraphError::InvalidNodeId(value.to_string()))
+    }
+}
+
+fn validate_geometry(node_id: &SceneNodeId, geometry: Geometry) -> Result<(), SceneGraphError> {
+    if geometry.x.is_finite()
+        && geometry.y.is_finite()
+        && geometry.width.is_finite()
+        && geometry.height.is_finite()
+        && geometry.width >= 0.0
+        && geometry.height >= 0.0
+    {
+        Ok(())
+    } else {
+        Err(SceneGraphError::InvalidGeometry(
+            node_id.as_str().to_string(),
+        ))
+    }
+}
+
+fn validate_transform(node_id: &SceneNodeId, transform: Transform) -> Result<(), SceneGraphError> {
+    if transform.translate_x.is_finite() && transform.translate_y.is_finite() {
+        Ok(())
+    } else {
+        Err(SceneGraphError::InvalidTransform(
+            node_id.as_str().to_string(),
+        ))
+    }
 }

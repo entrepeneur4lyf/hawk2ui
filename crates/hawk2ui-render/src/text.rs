@@ -121,7 +121,33 @@ pub struct TextMeasureOutput {
 
 /// Text rendering error.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TextRenderTextError(String);
+pub struct TextRenderTextError {
+    rule: String,
+    message: String,
+}
+
+impl TextRenderTextError {
+    /// Creates a text rendering error.
+    #[must_use]
+    pub fn new(rule: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            rule: rule.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable diagnostic rule.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        &self.rule
+    }
+
+    /// Returns the diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
 
 /// Deterministic text measurer.
 #[derive(Clone, Debug, PartialEq)]
@@ -156,8 +182,12 @@ impl DeterministicTextMeasurer {
         &self,
         input: &TextRenderInput,
     ) -> Result<TextMeasureOutput, TextRenderTextError> {
+        validate_text_metrics(input, self.average_glyph_width)?;
         if !self.registry.contains_family(&input.font_family) {
-            return Err(TextRenderTextError(input.font_family.clone()));
+            return Err(TextRenderTextError::new(
+                "text.font.unavailable",
+                format!("font family '{}' is not registered", input.font_family),
+            ));
         }
         let glyph_count = input.text.chars().fold(0.0_f32, |count, _| count + 1.0);
         let intrinsic_width = glyph_count * self.average_glyph_width;
@@ -179,6 +209,44 @@ impl DeterministicTextMeasurer {
             shaped: true,
             bidi_resolved: input.bidi,
         })
+    }
+}
+
+fn validate_text_metrics(
+    input: &TextRenderInput,
+    average_glyph_width: f32,
+) -> Result<(), TextRenderTextError> {
+    if input.font_family.trim().is_empty() {
+        return Err(TextRenderTextError::new(
+            "text.font-family.invalid",
+            "font family must not be empty",
+        ));
+    }
+    if !input.size_px.is_finite() || input.size_px <= 0.0 {
+        return Err(TextRenderTextError::new(
+            "text.size.invalid",
+            "font size must be finite and greater than zero",
+        ));
+    }
+    if !input.dpi_scale.is_finite() || input.dpi_scale <= 0.0 {
+        return Err(TextRenderTextError::new(
+            "text.dpi.invalid",
+            "DPI scale must be finite and greater than zero",
+        ));
+    }
+    if !average_glyph_width.is_finite() || average_glyph_width <= 0.0 {
+        return Err(TextRenderTextError::new(
+            "text.average-glyph-width.invalid",
+            "average glyph width must be finite and greater than zero",
+        ));
+    }
+    match input.line_break {
+        LineBreakMode::None => Ok(()),
+        LineBreakMode::Wrap { max_width } if max_width.is_finite() && max_width > 0.0 => Ok(()),
+        LineBreakMode::Wrap { .. } => Err(TextRenderTextError::new(
+            "text.wrap-width.invalid",
+            "wrap width must be finite and greater than zero",
+        )),
     }
 }
 

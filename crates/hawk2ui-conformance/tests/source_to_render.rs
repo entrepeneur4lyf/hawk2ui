@@ -64,7 +64,7 @@ fn source_to_render_compiles_manifest_authoring_scene_runtime_and_plugin_paths()
             30,
             LayerKind::Text(TextLayer::new(component.component_name())),
         ));
-    let paint_commands = export_paint_commands(&layers);
+    let paint_commands = export_paint_commands(&layers).expect("layer stack is valid");
 
     assert_eq!(
         paint_commands.serialize_stable(),

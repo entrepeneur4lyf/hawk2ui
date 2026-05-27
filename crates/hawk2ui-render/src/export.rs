@@ -1,6 +1,6 @@
 //! Scene-to-paint command export.
 
-use crate::{GradientLayer, LayerKind, LayerStack};
+use crate::{GradientLayer, LayerKind, LayerStack, LayerValidationError};
 
 /// Stable paint command.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,15 +51,19 @@ impl PaintCommandList {
 }
 
 /// Exports paint commands from a prepared layer stack.
-#[must_use]
-pub fn export_paint_commands(stack: &LayerStack) -> PaintCommandList {
-    PaintCommandList::new(
+///
+/// # Errors
+///
+/// Returns [`LayerValidationError`] when the stack contains a non-renderable layer record.
+pub fn export_paint_commands(stack: &LayerStack) -> Result<PaintCommandList, LayerValidationError> {
+    stack.validate()?;
+    Ok(PaintCommandList::new(
         stack
             .ordered_layers()
             .into_iter()
             .map(|layer| PaintCommand::new(command_key(layer.key(), layer.kind())))
             .collect(),
-    )
+    ))
 }
 
 fn command_key(layer_key: &str, kind: &LayerKind) -> String {

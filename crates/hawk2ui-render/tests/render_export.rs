@@ -73,6 +73,51 @@ fn scene_graph_attaches_geometry_and_propagates_invalidation() {
 }
 
 #[test]
+fn scene_graph_rejects_invalid_node_records() {
+    let error = SceneGraph::new(SceneNode::new(SceneNodeId::new("")))
+        .validate()
+        .expect_err("empty root scene IDs must fail validation");
+    assert_eq!(
+        error,
+        hawk2ui_render::SceneGraphError::InvalidNodeId(String::new())
+    );
+
+    let error = SceneGraph::new(SceneNode::new(SceneNodeId::new("root")))
+        .with_child(
+            SceneNodeId::new("root"),
+            SceneNode::new(SceneNodeId::new("")),
+        )
+        .expect_err("empty child scene IDs must fail insertion");
+    assert_eq!(
+        error,
+        hawk2ui_render::SceneGraphError::InvalidNodeId(String::new())
+    );
+
+    let error = SceneGraph::new(
+        SceneNode::new(SceneNodeId::new("root")).with_layout(Geometry::new(
+            0.0,
+            0.0,
+            f32::NAN,
+            10.0,
+        )),
+    )
+    .validate()
+    .expect_err("non-finite scene geometry must fail validation");
+    assert_eq!(
+        error,
+        hawk2ui_render::SceneGraphError::InvalidGeometry("root".to_string())
+    );
+
+    let error = SceneGraph::new(SceneNode::new(SceneNodeId::new("root")).with_opacity(1.5))
+        .validate()
+        .expect_err("opacity outside the renderable range must fail validation");
+    assert_eq!(
+        error,
+        hawk2ui_render::SceneGraphError::InvalidOpacity("root".to_string())
+    );
+}
+
+#[test]
 fn layer_records_sort_deterministically_and_serialize_stably() {
     let stack = hawk2ui_render::LayerStack::new()
         .with_layer(hawk2ui_render::PaintLayer::new(
@@ -282,12 +327,45 @@ fn render_export_produces_stable_paint_commands() {
             hawk2ui_render::LayerKind::CustomSurface("scope".to_string()),
         ));
 
-    let commands = hawk2ui_render::export_paint_commands(&stack);
+    let commands = hawk2ui_render::export_paint_commands(&stack).expect("layer stack is valid");
 
     assert_eq!(
         commands.serialize_stable(),
         "draw-rounded-rect:shape:12|draw-gradient:gradient:linear|draw-text:text:Amount|draw-image:image:hero|draw-vector:vector:logo|draw-custom-surface:surface:scope"
     );
+}
+
+#[test]
+fn paint_export_rejects_invalid_layer_records() {
+    let error = hawk2ui_render::export_paint_commands(
+        &hawk2ui_render::LayerStack::new().with_layer(hawk2ui_render::PaintLayer::new(
+            "",
+            0,
+            hawk2ui_render::LayerKind::Fill(hawk2ui_render::Color::rgba(0, 0, 0, 255)),
+        )),
+    )
+    .expect_err("empty layer keys must fail");
+    assert_eq!(error.rule(), "layer.key.invalid");
+
+    let error = hawk2ui_render::export_paint_commands(
+        &hawk2ui_render::LayerStack::new().with_layer(hawk2ui_render::PaintLayer::new(
+            "stroke",
+            0,
+            hawk2ui_render::LayerKind::Stroke(hawk2ui_render::Stroke::new(f32::NAN)),
+        )),
+    )
+    .expect_err("non-finite stroke widths must fail");
+    assert_eq!(error.rule(), "layer.stroke.invalid");
+
+    let error = hawk2ui_render::export_paint_commands(
+        &hawk2ui_render::LayerStack::new().with_layer(hawk2ui_render::PaintLayer::new(
+            "image",
+            0,
+            hawk2ui_render::LayerKind::Image(String::new()),
+        )),
+    )
+    .expect_err("empty image asset IDs must fail");
+    assert_eq!(error.rule(), "layer.reference.invalid");
 }
 
 #[test]
@@ -309,6 +387,37 @@ fn text_contracts_measure_shape_linebreak_bidi_and_baseline() {
     assert_eq!(output.baseline, 28.8);
     assert!(output.shaped);
     assert!(output.bidi_resolved);
+}
+
+#[test]
+fn text_contracts_reject_invalid_measurement_inputs() {
+    let registry = hawk2ui_render::FontRegistry::new().with_system_font("Atkinson");
+    let measurer =
+        hawk2ui_render::DeterministicTextMeasurer::new(registry).with_average_glyph_width(7.0);
+
+    let error = measurer
+        .measure(&hawk2ui_render::TextRenderInput::new(
+            "Gain",
+            "Atkinson",
+            f32::NAN,
+        ))
+        .expect_err("non-finite font sizes must fail");
+    assert_eq!(error.rule(), "text.size.invalid");
+
+    let error = measurer
+        .measure(
+            &hawk2ui_render::TextRenderInput::new("Gain", "Atkinson", 18.0).with_dpi_scale(0.0),
+        )
+        .expect_err("non-positive DPI scales must fail");
+    assert_eq!(error.rule(), "text.dpi.invalid");
+
+    let error = measurer
+        .measure(
+            &hawk2ui_render::TextRenderInput::new("Gain", "Atkinson", 18.0)
+                .with_line_break(hawk2ui_render::LineBreakMode::Wrap { max_width: -1.0 }),
+        )
+        .expect_err("non-positive wrap widths must fail");
+    assert_eq!(error.rule(), "text.wrap-width.invalid");
 }
 
 #[test]
@@ -352,10 +461,38 @@ fn asset_records_reject_raw_draw_references() {
         .expect_err("raw asset paths must not render directly");
     let asset =
         hawk2ui_render::CompiledAsset::image("hero", "assets/hero.png", "sha256:hero", 1024, 512);
-    let draw = hawk2ui_render::AssetDrawRecord::from_compiled(&asset);
+    let draw =
+        hawk2ui_render::AssetDrawRecord::from_compiled(&asset).expect("compiled asset is valid");
 
     assert_eq!(error.diagnostic().rule(), "asset.raw-reference.rejected");
     assert_eq!(draw.asset_id(), "hero");
+}
+
+#[test]
+fn asset_records_reject_invalid_compiled_assets() {
+    let error = hawk2ui_render::AssetDrawRecord::from_compiled(
+        &hawk2ui_render::CompiledAsset::image("", "assets/hero.png", "sha256:hero", 1024, 512),
+    )
+    .expect_err("empty asset IDs must fail");
+    assert_eq!(error.diagnostic().rule(), "asset.id.invalid");
+
+    let error = hawk2ui_render::AssetDrawRecord::from_compiled(
+        &hawk2ui_render::CompiledAsset::image("hero", "", "sha256:hero", 1024, 512),
+    )
+    .expect_err("empty asset source paths must fail");
+    assert_eq!(error.diagnostic().rule(), "asset.source.invalid");
+
+    let error = hawk2ui_render::AssetDrawRecord::from_compiled(
+        &hawk2ui_render::CompiledAsset::image("hero", "assets/hero.png", "", 1024, 512),
+    )
+    .expect_err("empty asset hashes must fail");
+    assert_eq!(error.diagnostic().rule(), "asset.hash.invalid");
+
+    let error = hawk2ui_render::AssetDrawRecord::from_compiled(
+        &hawk2ui_render::CompiledAsset::image("hero", "assets/hero.png", "sha256:hero", 0, 512),
+    )
+    .expect_err("zero image dimensions must fail");
+    assert_eq!(error.diagnostic().rule(), "asset.dimensions.invalid");
 }
 
 #[test]

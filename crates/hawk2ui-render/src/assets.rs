@@ -174,6 +174,55 @@ impl CompiledAsset {
         )
     }
 
+    /// Validates that this asset record is safe to render.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssetError`] when required identity, provenance, hash, or dimension metadata is invalid.
+    pub fn validate(&self) -> Result<(), AssetError> {
+        if self.id.trim().is_empty() {
+            return Err(AssetError::new(
+                "asset.id.invalid",
+                "compiled asset ID must not be empty",
+            ));
+        }
+        if self.source_path.trim().is_empty() {
+            return Err(AssetError::new(
+                "asset.source.invalid",
+                "compiled asset source path must not be empty",
+            ));
+        }
+        if self.hash.trim().is_empty() {
+            return Err(AssetError::new(
+                "asset.hash.invalid",
+                "compiled asset hash must not be empty",
+            ));
+        }
+        if self.package_path.as_deref().is_some_and(str::is_empty) {
+            return Err(AssetError::new(
+                "asset.package-path.invalid",
+                "compiled asset package path must not be empty",
+            ));
+        }
+        match self.kind {
+            AssetKind::Image | AssetKind::Vector => {
+                let dimensions_are_valid = self
+                    .width
+                    .zip(self.height)
+                    .is_some_and(|(width, height)| width > 0 && height > 0);
+                if dimensions_are_valid {
+                    Ok(())
+                } else {
+                    Err(AssetError::new(
+                        "asset.dimensions.invalid",
+                        "image and vector assets must have non-zero dimensions",
+                    ))
+                }
+            }
+            AssetKind::Font => Ok(()),
+        }
+    }
+
     fn kind_key(&self) -> &'static str {
         match self.kind {
             AssetKind::Image => "image",
@@ -237,11 +286,15 @@ pub struct AssetDrawRecord {
 
 impl AssetDrawRecord {
     /// Creates an asset draw record from a compiled asset.
-    #[must_use]
-    pub fn from_compiled(asset: &CompiledAsset) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssetError`] when the compiled asset metadata is invalid.
+    pub fn from_compiled(asset: &CompiledAsset) -> Result<Self, AssetError> {
+        asset.validate()?;
+        Ok(Self {
             asset_id: asset.id.clone(),
-        }
+        })
     }
 
     /// Rejects raw path drawing.

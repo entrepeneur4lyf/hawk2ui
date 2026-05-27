@@ -134,6 +134,36 @@ impl TextLayer {
     }
 }
 
+/// Paint layer validation error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LayerValidationError {
+    rule: String,
+    message: String,
+}
+
+impl LayerValidationError {
+    /// Creates a layer validation error.
+    #[must_use]
+    pub fn new(rule: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            rule: rule.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable diagnostic rule.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        &self.rule
+    }
+
+    /// Returns the diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
 /// Paint layer kind.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerKind {
@@ -174,6 +204,82 @@ pub enum LayerKind {
 }
 
 impl LayerKind {
+    /// Validates layer-kind payloads before deterministic export.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayerValidationError`] when a layer contains non-renderable data.
+    pub fn validate(&self) -> Result<(), LayerValidationError> {
+        match self {
+            Self::Fill(_) | Self::Gradient(GradientLayer::Linear) | Self::Text(_) => Ok(()),
+            Self::Stroke(stroke) if stroke.width.is_finite() && stroke.width > 0.0 => Ok(()),
+            Self::Stroke(_) => Err(LayerValidationError::new(
+                "layer.stroke.invalid",
+                "stroke width must be finite and greater than zero",
+            )),
+            Self::RoundedRect(rect) if rect.radius.is_finite() && rect.radius >= 0.0 => Ok(()),
+            Self::RoundedRect(_) => Err(LayerValidationError::new(
+                "layer.rounded-rect.invalid",
+                "rounded rectangle radius must be finite and non-negative",
+            )),
+            Self::Path(path) if !path.stable_value().trim().is_empty() => Ok(()),
+            Self::Path(_) => Err(LayerValidationError::new(
+                "layer.path.invalid",
+                "path layer data must not be empty",
+            )),
+            Self::Shadow(shadow) if shadow.blur.is_finite() && shadow.blur >= 0.0 => Ok(()),
+            Self::Shadow(_) => Err(LayerValidationError::new(
+                "layer.shadow.invalid",
+                "shadow blur must be finite and non-negative",
+            )),
+            Self::Glow(glow) if glow.radius.is_finite() && glow.radius >= 0.0 => Ok(()),
+            Self::Glow(_) => Err(LayerValidationError::new(
+                "layer.glow.invalid",
+                "glow radius must be finite and non-negative",
+            )),
+            Self::OpacityGroup(opacity) if opacity.is_finite() && (0.0..=1.0).contains(opacity) => {
+                Ok(())
+            }
+            Self::OpacityGroup(_) => Err(LayerValidationError::new(
+                "layer.opacity.invalid",
+                "opacity must be finite and within 0.0..=1.0",
+            )),
+            Self::Clip(clip) if validate_geometry(*clip) => Ok(()),
+            Self::Clip(_) => Err(LayerValidationError::new(
+                "layer.clip.invalid",
+                "clip geometry must be finite with non-negative dimensions",
+            )),
+            Self::Transform(transform)
+                if transform.translate_x.is_finite() && transform.translate_y.is_finite() =>
+            {
+                Ok(())
+            }
+            Self::Transform(_) => Err(LayerValidationError::new(
+                "layer.transform.invalid",
+                "transform coordinates must be finite",
+            )),
+            Self::Image(id)
+            | Self::Vector(id)
+            | Self::Control(id)
+            | Self::CustomSurface(id)
+            | Self::StaticCache(id)
+            | Self::LiveLayer(id)
+                if !id.trim().is_empty() =>
+            {
+                Ok(())
+            }
+            Self::Image(_)
+            | Self::Vector(_)
+            | Self::Control(_)
+            | Self::CustomSurface(_)
+            | Self::StaticCache(_)
+            | Self::LiveLayer(_) => Err(LayerValidationError::new(
+                "layer.reference.invalid",
+                "layer references must not be empty",
+            )),
+        }
+    }
+
     /// Returns a stable key for deterministic export.
     #[must_use]
     pub fn stable_key(&self) -> String {
@@ -231,6 +337,22 @@ impl PaintLayer {
         format!("{}:{}:{}", self.order, self.key, self.kind.stable_key())
     }
 
+    /// Validates the paint layer before deterministic export.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayerValidationError`] when the layer key or payload is invalid.
+    pub fn validate(&self) -> Result<(), LayerValidationError> {
+        if is_valid_layer_key(&self.key) {
+            self.kind.validate()
+        } else {
+            Err(LayerValidationError::new(
+                "layer.key.invalid",
+                "paint layer key must be non-empty and stable",
+            ))
+        }
+    }
+
     /// Returns the paint layer key.
     #[must_use]
     pub fn key(&self) -> &str {
@@ -285,6 +407,18 @@ impl LayerStack {
             .collect()
     }
 
+    /// Validates all paint layers in insertion order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayerValidationError`] for the first invalid layer.
+    pub fn validate(&self) -> Result<(), LayerValidationError> {
+        for layer in &self.layers {
+            layer.validate()?;
+        }
+        Ok(())
+    }
+
     /// Serializes layers deterministically.
     #[must_use]
     pub fn serialize_stable(&self) -> String {
@@ -296,4 +430,20 @@ impl Default for LayerStack {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn is_valid_layer_key(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+}
+
+fn validate_geometry(geometry: Geometry) -> bool {
+    geometry.x.is_finite()
+        && geometry.y.is_finite()
+        && geometry.width.is_finite()
+        && geometry.height.is_finite()
+        && geometry.width >= 0.0
+        && geometry.height >= 0.0
 }

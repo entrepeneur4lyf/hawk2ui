@@ -16,8 +16,8 @@ pub use backend::{
 pub use custom_surface::{CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory};
 pub use export::{PaintCommand, PaintCommandList, export_paint_commands};
 pub use layer::{
-    Color, GlowLayer, GradientLayer, LayerKind, LayerStack, PaintLayer, PathLayer, RoundedRect,
-    ShadowLayer, Stroke, TextLayer,
+    Color, GlowLayer, GradientLayer, LayerKind, LayerStack, LayerValidationError, PaintLayer,
+    PathLayer, RoundedRect, ShadowLayer, Stroke, TextLayer,
 };
 pub use scene::{
     AccessibilityRef, Geometry, HitTestGeometry, InvalidationReason, SceneGraph, SceneGraphError,

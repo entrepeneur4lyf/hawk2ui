@@ -290,6 +290,10 @@ impl From<RuntimeSceneError> for NativeRuntimeBridgeError {
                 "native-runtime.tree.invalid-node",
                 format!("runtime node `{id}` contains invalid render data"),
             ),
+            RuntimeSceneError::InvalidLayer(rule) => Self::new(
+                "native-runtime.layer.invalid",
+                format!("runtime layer export failed validation rule `{rule}`"),
+            ),
         }
     }
 }

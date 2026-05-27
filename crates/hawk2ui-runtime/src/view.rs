@@ -5,8 +5,9 @@ use hawk2ui_layout::{
     LayoutTreeError, Viewport,
 };
 use hawk2ui_render::{
-    Color, Geometry, InvalidationReason, LayerKind, LayerStack, PaintCommandList, PaintLayer,
-    SceneGraph, SceneGraphError, SceneNode, SceneNodeId, TextLayer, export_paint_commands,
+    Color, Geometry, InvalidationReason, LayerKind, LayerStack, LayerValidationError,
+    PaintCommandList, PaintLayer, SceneGraph, SceneGraphError, SceneNode, SceneNodeId, TextLayer,
+    export_paint_commands,
 };
 
 /// Stable runtime view identifier.
@@ -125,6 +126,8 @@ pub enum RuntimeSceneError {
     DuplicateNode(String),
     /// Node contains invalid runtime data.
     InvalidNode(String),
+    /// Layer export failed because a paint record is invalid.
+    InvalidLayer(String),
 }
 
 impl From<LayoutTreeError> for RuntimeSceneError {
@@ -143,7 +146,18 @@ impl From<SceneGraphError> for RuntimeSceneError {
                 Self::MissingNode(id)
             }
             SceneGraphError::DuplicateNode(id) => Self::DuplicateNode(id),
+            SceneGraphError::InvalidNodeId(id)
+            | SceneGraphError::InvalidGeometry(id)
+            | SceneGraphError::InvalidTransform(id)
+            | SceneGraphError::InvalidOpacity(id)
+            | SceneGraphError::InvalidAccessibilityRef(id) => Self::InvalidNode(id),
         }
+    }
+}
+
+impl From<LayerValidationError> for RuntimeSceneError {
+    fn from(error: LayerValidationError) -> Self {
+        Self::InvalidLayer(error.rule().to_string())
     }
 }
 
@@ -217,7 +231,7 @@ impl RuntimeSceneBridge {
         let geometry = collect_geometry(tree, &layout)?;
         let scene = tree.to_scene_graph(&layout)?;
         let (layers, draw_commands) = tree.to_layers_and_draw_commands(&geometry);
-        let paint_commands = export_paint_commands(&layers);
+        let paint_commands = export_paint_commands(&layers)?;
 
         Ok(RuntimeSceneFrame {
             layout,
