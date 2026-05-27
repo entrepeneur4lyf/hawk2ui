@@ -1791,6 +1791,7 @@ name = "hawk2ui-security-model"
 version = "0.1.0"
 dependencies = [
  "hawk2ui-api",
+ "hawk2ui-build",
  "serde",
  "toml 0.8.23",
 ]

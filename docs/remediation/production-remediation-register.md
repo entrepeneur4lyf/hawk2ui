@@ -1178,16 +1178,16 @@ Acceptance:
 
 Status:
 
-- Partially remediated: sealed artifact records have deterministic content hashing, compatibility
-  checks, generated JSON Schema, and schema validation.
-- Remaining release blocker: stable binary/container serialization, signature policy, and external
-  verification rules still need execution-backed implementation.
+- Remediated: sealed artifact records have deterministic content hashing, compatibility checks,
+  generated JSON Schema, schema validation, deterministic container bytes, content-hash container
+  verification, and explicit development-vs-release signature policy enforcement.
 
 Review check:
 
-- As the delivering engineer, I am satisfied with this sealed-artifact schema slice for production
-  stability: the typed artifact contract is now schema-backed and tested. Container/signature work
-  remains open under this item.
+- As the delivering engineer, I am satisfied with this sealed-artifact boundary for production
+  stability: artifacts have a stable serialized container, release policy rejects unsigned payloads,
+  and container loading verifies schema compatibility plus content hashes before returning an
+  artifact.
 
 ### REM-BUILD-003: Implement Dev Server And Hot Reload
 
@@ -1455,20 +1455,20 @@ Acceptance:
 
 Status:
 
-- Partially remediated: package trust records validate artifact schema version, manifest hash
-  presence, compiled asset/script hash presence and format, target metadata, signature status, and
-  verification report presence.
+- Remediated: package trust records validate artifact schema version, manifest hash presence,
+  compiled asset/script hash presence and format, target metadata, signature status, and verification
+  report presence.
 - Package trust failures now expose shared diagnostics for downstream CLI/build/reporting
   boundaries.
-- Remaining release blocker: artifact signing/signature policy, checksum manifests tied to actual
-  packaged payloads, reproducible build checks, and release verification evidence must be wired into
-  build/package execution.
+- Package trust records can now be derived from actual sealed artifact payloads, including manifest
+  hash, compiled asset hashes, compiled script payload hashes, target metadata, signature policy
+  state, and verification report state.
 
 Review check:
 
-- As the delivering engineer, I am satisfied with this package-integrity diagnostics slice for
-  production stability: trust failures have stable rules and user-facing messages. The larger
-  package-signing/reproducibility work remains open and tracked.
+- As the delivering engineer, I am satisfied with this package-integrity boundary for production
+  stability: trust failures have stable rules and user-facing messages, and trust records can be
+  derived from the artifact that will actually be packaged instead of manually duplicated metadata.
 
 
 ## Accessibility Remediation

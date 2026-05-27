@@ -10,7 +10,8 @@ pub mod report;
 pub mod workspace;
 
 pub use artifact::{
-    ArtifactHash, ArtifactHashes, ArtifactSchemaVersion, AssetManifestEntry, BuildMetadata,
+    ArtifactHash, ArtifactHashes, ArtifactSchemaVersion, ArtifactSignature,
+    ArtifactSignaturePolicy, ArtifactSignatureStatus, AssetManifestEntry, BuildMetadata,
     CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord, SealedArtifact,
     SealedArtifactError, TargetArtifactMetadata,
 };

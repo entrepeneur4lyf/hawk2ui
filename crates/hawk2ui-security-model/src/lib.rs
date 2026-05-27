@@ -452,6 +452,57 @@ pub struct PackageTrustRecord {
     pub verification_report_status: VerificationReportStatus,
 }
 
+impl PackageTrustRecord {
+    /// Builds a trust record from an actual sealed artifact payload.
+    ///
+    /// The derived hashes are taken from the artifact manifest, compiled asset records, and compiled
+    /// script payload bytes so trust validation is tied to the produced artifact instead of a
+    /// handwritten metadata summary.
+    #[must_use]
+    pub fn from_sealed_artifact(
+        artifact: &hawk2ui_build::SealedArtifact,
+        verification_report_status: VerificationReportStatus,
+    ) -> Self {
+        let mut compiled_asset_hashes = artifact
+            .asset_manifest
+            .iter()
+            .map(|asset| asset.hash.0.clone())
+            .chain(
+                artifact
+                    .compiled_assets
+                    .iter()
+                    .map(|asset| asset.source_hash.0.clone()),
+            )
+            .collect::<Vec<_>>();
+        compiled_asset_hashes.sort();
+        compiled_asset_hashes.dedup();
+
+        let mut compiled_script_hashes = artifact
+            .compiled_scripts
+            .iter()
+            .map(|script| {
+                if script.compiled_source.is_empty() {
+                    script.source_hash.0.clone()
+                } else {
+                    hawk2ui_build::ArtifactHash::from_bytes(script.compiled_source.as_bytes()).0
+                }
+            })
+            .collect::<Vec<_>>();
+        compiled_script_hashes.sort();
+        compiled_script_hashes.dedup();
+
+        Self {
+            artifact_schema_version: artifact.schema_version.major,
+            manifest_snapshot_hash: artifact.manifest_snapshot_hash.0.clone(),
+            compiled_asset_hashes,
+            compiled_script_hashes,
+            target_metadata: artifact_target_metadata(artifact),
+            signature_status: package_signature_status(artifact),
+            verification_report_status,
+        }
+    }
+}
+
 /// Package trust validator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PackageTrustValidator {
@@ -552,6 +603,34 @@ fn is_supported_hash(hash: &str) -> bool {
         return false;
     };
     hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn package_signature_status(artifact: &hawk2ui_build::SealedArtifact) -> PackageSignatureStatus {
+    if artifact
+        .ensure_signature_policy(hawk2ui_build::ArtifactSignaturePolicy::RequireVerifiedSignature)
+        .is_ok()
+    {
+        PackageSignatureStatus::Verified
+    } else if artifact.signature.status == hawk2ui_build::ArtifactSignatureStatus::Unsigned {
+        PackageSignatureStatus::Missing
+    } else {
+        PackageSignatureStatus::Invalid
+    }
+}
+
+fn artifact_target_metadata(artifact: &hawk2ui_build::SealedArtifact) -> String {
+    artifact
+        .target_metadata
+        .iter()
+        .map(|target| {
+            let kind = match target.kind {
+                hawk2ui_build::PackageTarget::Desktop => "desktop",
+                hawk2ui_build::PackageTarget::Plugin => "plugin",
+            };
+            format!("{kind}:{}", target.name)
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Package trust validation failure.

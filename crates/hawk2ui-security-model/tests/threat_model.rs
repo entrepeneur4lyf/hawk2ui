@@ -1,4 +1,8 @@
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
+use hawk2ui_build::{
+    ArtifactHash, ArtifactSchemaVersion, ArtifactSignature, AssetManifestEntry,
+    CompiledAssetRecord, CompiledScriptRecord, HawkManifest, SealedArtifact,
+};
 use hawk2ui_security_model::{
     AttackFixtures, AttackFixturesError, CapabilityRejections, CapabilityRejectionsError,
     CapabilityVerdict, PackageSignatureStatus, PackageTrustRecord, PackageTrustValidator,
@@ -237,6 +241,74 @@ fn package_trust_accepts_complete_verified_record() {
         verification_report_status: VerificationReportStatus::Present,
     };
 
+    assert!(PackageTrustValidator::new(1).validate(&record).is_ok());
+}
+
+#[test]
+fn package_trust_record_is_derived_from_actual_sealed_artifact_payloads() {
+    let manifest = HawkManifest::parse(
+        r#"
+[identity]
+id = "com.hawk2ui.secure"
+name = "Secure"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+    )
+    .expect("manifest parses");
+    let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(
+            CompiledScriptRecord::new(
+                "main",
+                "src/main.ts",
+                "scripts/main.hawk.js",
+                ArtifactHash::from_bytes(b"script-source"),
+            )
+            .with_compiled_source("compiled script"),
+        )
+        .with_asset_manifest_entry(AssetManifestEntry::new(
+            "hero",
+            "image",
+            "assets/hero.pack",
+            ArtifactHash::from_bytes(b"asset-payload"),
+        ))
+        .with_compiled_asset(CompiledAssetRecord::new(
+            "hero",
+            "assets/hero.png",
+            "assets/hero.pack",
+            ArtifactHash::from_bytes(b"asset-source"),
+        ))
+        .with_signature(ArtifactSignature::verified(
+            "ed25519",
+            "release-key",
+            "signature",
+        ));
+
+    let record =
+        PackageTrustRecord::from_sealed_artifact(&artifact, VerificationReportStatus::Present);
+
+    assert_eq!(record.artifact_schema_version, 1);
+    assert_eq!(
+        record.manifest_snapshot_hash,
+        artifact.manifest_snapshot_hash.0
+    );
+    assert!(
+        record
+            .compiled_asset_hashes
+            .contains(&ArtifactHash::from_bytes(b"asset-source").0)
+    );
+    assert!(
+        record
+            .compiled_script_hashes
+            .contains(&ArtifactHash::from_bytes(b"compiled script").0)
+    );
+    assert_eq!(record.target_metadata, "desktop:linux-wayland");
     assert!(PackageTrustValidator::new(1).validate(&record).is_ok());
 }
 

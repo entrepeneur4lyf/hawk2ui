@@ -1,11 +1,12 @@
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_build::{
-    ArtifactHash, ArtifactSchemaVersion, AssetCompilationError, AssetCompilationPlan,
-    AssetDimensions, AssetKind, AssetManifestEntry, AssetSanitizationStatus, AssetSource,
-    AssetSourceIndex, BuildDiagnostic, BuildDiagnosticSeverity, BuildPhase, BuildPipeline,
-    BuildPipelineError, BuildWorkspace, BuildWorkspaceError, CompiledAssetRecord,
-    CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget,
-    PackageTargetRecord, SealedArtifact, SealedArtifactError, SourceSpan, VerificationReport,
+    ArtifactHash, ArtifactSchemaVersion, ArtifactSignature, ArtifactSignaturePolicy,
+    AssetCompilationError, AssetCompilationPlan, AssetDimensions, AssetKind, AssetManifestEntry,
+    AssetSanitizationStatus, AssetSource, AssetSourceIndex, BuildDiagnostic,
+    BuildDiagnosticSeverity, BuildPhase, BuildPipeline, BuildPipelineError, BuildWorkspace,
+    BuildWorkspaceError, CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord,
+    HawkManifest, ManifestError, PackageTarget, PackageTargetRecord, SealedArtifact,
+    SealedArtifactError, SourceSpan, VerificationReport,
 };
 use std::{
     fs,
@@ -346,6 +347,64 @@ fn sealed_artifact_content_hash_changes_when_compiled_payload_changes() {
 
     assert_eq!(first.content_hash(), second.content_hash());
     assert_ne!(first.content_hash(), changed.content_hash());
+}
+
+#[test]
+fn sealed_artifact_container_serializes_verifies_and_enforces_signature_policy() {
+    let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
+    let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(CompiledScriptRecord::new(
+            "main",
+            "src/main.ts",
+            "scripts/main.hawk.js",
+            ArtifactHash::from_bytes(b"script"),
+        ));
+
+    let first = artifact
+        .to_container_bytes(ArtifactSignaturePolicy::AllowUnsignedDevelopment)
+        .expect("development container serializes");
+    let second = artifact
+        .to_container_bytes(ArtifactSignaturePolicy::AllowUnsignedDevelopment)
+        .expect("development container serializes deterministically");
+    assert_eq!(first, second);
+
+    let restored = SealedArtifact::from_container_bytes(
+        &first,
+        ArtifactSchemaVersion::new(1, 0),
+        ArtifactSignaturePolicy::AllowUnsignedDevelopment,
+    )
+    .expect("container verifies and deserializes");
+    assert_eq!(restored, artifact);
+
+    let mut tampered = first.clone();
+    *tampered.last_mut().expect("container is non-empty") ^= 0x01;
+    let error = SealedArtifact::from_container_bytes(
+        &tampered,
+        ArtifactSchemaVersion::new(1, 0),
+        ArtifactSignaturePolicy::AllowUnsignedDevelopment,
+    )
+    .expect_err("tampered container fails verification");
+    assert!(matches!(
+        error,
+        SealedArtifactError::ContainerVerification { .. }
+    ));
+
+    let release_error = artifact
+        .to_container_bytes(ArtifactSignaturePolicy::RequireVerifiedSignature)
+        .expect_err("release policy rejects unsigned artifacts");
+    assert!(matches!(
+        release_error,
+        SealedArtifactError::SignaturePolicy { .. }
+    ));
+
+    let signed = artifact.with_signature(ArtifactSignature::verified(
+        "ed25519",
+        "release-key",
+        "signature-bytes",
+    ));
+    signed
+        .to_container_bytes(ArtifactSignaturePolicy::RequireVerifiedSignature)
+        .expect("release policy accepts verified signature metadata");
 }
 
 #[test]

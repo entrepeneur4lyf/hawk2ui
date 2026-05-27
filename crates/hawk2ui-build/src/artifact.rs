@@ -5,6 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+const SEALED_ARTIFACT_CONTAINER_MAGIC: &[u8] = b"HAWK2UI-ARTIFACT-V1\n";
+
 /// Artifact schema version.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -202,6 +204,74 @@ pub struct ArtifactHashes {
     pub content: ArtifactHash,
 }
 
+/// Artifact signature verification state.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub enum ArtifactSignatureStatus {
+    /// Artifact has no signature and is only acceptable for development policies.
+    Unsigned,
+    /// Artifact has signature metadata accepted by the release verification policy.
+    Verified,
+}
+
+/// Signature metadata attached to a sealed artifact.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactSignature {
+    /// Signature verification state.
+    pub status: ArtifactSignatureStatus,
+    /// Signature algorithm label.
+    pub algorithm: String,
+    /// Signing key identifier.
+    pub key_id: String,
+    /// Encoded signature payload.
+    pub signature: String,
+}
+
+impl ArtifactSignature {
+    /// Creates unsigned development-only signature metadata.
+    #[must_use]
+    pub fn unsigned() -> Self {
+        Self {
+            status: ArtifactSignatureStatus::Unsigned,
+            algorithm: "none".into(),
+            key_id: String::new(),
+            signature: String::new(),
+        }
+    }
+
+    /// Creates verified signature metadata recorded by an external signing step.
+    #[must_use]
+    pub fn verified(
+        algorithm: impl Into<String>,
+        key_id: impl Into<String>,
+        signature: impl Into<String>,
+    ) -> Self {
+        Self {
+            status: ArtifactSignatureStatus::Verified,
+            algorithm: algorithm.into(),
+            key_id: key_id.into(),
+            signature: signature.into(),
+        }
+    }
+
+    fn satisfies_release_policy(&self) -> bool {
+        self.status == ArtifactSignatureStatus::Verified
+            && !self.algorithm.trim().is_empty()
+            && self.algorithm != "none"
+            && !self.key_id.trim().is_empty()
+            && !self.signature.trim().is_empty()
+    }
+}
+
+/// Signature policy enforced when serializing or loading sealed artifact containers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArtifactSignaturePolicy {
+    /// Allows unsigned artifacts for local development and tests.
+    AllowUnsignedDevelopment,
+    /// Requires verified signature metadata for release artifacts.
+    RequireVerifiedSignature,
+}
+
 /// Build metadata embedded into a sealed artifact.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -253,6 +323,8 @@ pub struct SealedArtifact {
     pub capabilities: Vec<String>,
     /// Stable artifact hash summary.
     pub hashes: ArtifactHashes,
+    /// Artifact signature metadata.
+    pub signature: ArtifactSignature,
     /// Build metadata.
     pub build_metadata: BuildMetadata,
     /// Target metadata.
@@ -278,6 +350,7 @@ impl SealedArtifact {
                 manifest: manifest_snapshot_hash,
                 content: ArtifactHash::from_bytes(&[]),
             },
+            signature: ArtifactSignature::unsigned(),
             build_metadata: BuildMetadata::default(),
             target_metadata: manifest
                 .targets
@@ -324,6 +397,88 @@ impl SealedArtifact {
         self
     }
 
+    /// Sets artifact signature metadata and refreshes the content hash.
+    #[must_use]
+    pub fn with_signature(mut self, signature: ArtifactSignature) -> Self {
+        self.signature = signature;
+        self.hashes.content = self.content_hash();
+        self
+    }
+
+    /// Serializes the sealed artifact into deterministic container bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealedArtifactError`] when the signature policy fails or JSON serialization fails.
+    pub fn to_container_bytes(
+        &self,
+        policy: ArtifactSignaturePolicy,
+    ) -> Result<Vec<u8>, SealedArtifactError> {
+        self.ensure_signature_policy(policy)?;
+        let container = SealedArtifactContainer {
+            format: "hawk2ui-sealed-artifact".into(),
+            content_hash: self.content_hash(),
+            artifact: self.clone(),
+        };
+        let mut bytes = Vec::from(SEALED_ARTIFACT_CONTAINER_MAGIC);
+        let payload = serde_json::to_vec(&container).map_err(|error| {
+            SealedArtifactError::ContainerSerialization {
+                diagnostic: BuildDiagnostic::new(
+                    BuildDiagnosticSeverity::Error,
+                    "artifact.container.serialize-failed",
+                    format!("sealed artifact container could not be serialized: {error}"),
+                ),
+            }
+        })?;
+        bytes.extend(payload);
+        Ok(bytes)
+    }
+
+    /// Deserializes and verifies deterministic sealed artifact container bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealedArtifactError`] when the header, schema version, content hash, signature
+    /// policy, or JSON payload is invalid.
+    pub fn from_container_bytes(
+        bytes: &[u8],
+        expected_schema_version: ArtifactSchemaVersion,
+        policy: ArtifactSignaturePolicy,
+    ) -> Result<Self, SealedArtifactError> {
+        let Some(payload) = bytes.strip_prefix(SEALED_ARTIFACT_CONTAINER_MAGIC) else {
+            return Err(container_verification_error(
+                "artifact.container.invalid-header",
+                "sealed artifact container header is invalid",
+            ));
+        };
+        let container: SealedArtifactContainer =
+            serde_json::from_slice(payload).map_err(|error| {
+                container_verification_error(
+                    "artifact.container.parse-failed",
+                    format!("sealed artifact container payload could not be parsed: {error}"),
+                )
+            })?;
+        if container.format != "hawk2ui-sealed-artifact" {
+            return Err(container_verification_error(
+                "artifact.container.invalid-format",
+                "sealed artifact container format is invalid",
+            ));
+        }
+        container
+            .artifact
+            .ensure_compatible_with(expected_schema_version)?;
+        container.artifact.ensure_signature_policy(policy)?;
+        let actual_hash = container.artifact.content_hash();
+        if container.content_hash != actual_hash || container.artifact.hashes.content != actual_hash
+        {
+            return Err(container_verification_error(
+                "artifact.container.hash-mismatch",
+                "sealed artifact container content hash does not match payload",
+            ));
+        }
+        Ok(container.artifact)
+    }
+
     /// Computes the stable hash for all content-addressed artifact records.
     #[must_use]
     pub fn content_hash(&self) -> ArtifactHash {
@@ -334,6 +489,34 @@ impl SealedArtifact {
     #[must_use]
     pub const fn is_compatible_with(&self, expected: ArtifactSchemaVersion) -> bool {
         self.schema_version.is_compatible_with(expected)
+    }
+
+    /// Ensures the artifact satisfies the requested signature policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealedArtifactError`] when release policy requires a verified signature and the
+    /// artifact does not carry one.
+    pub fn ensure_signature_policy(
+        &self,
+        policy: ArtifactSignaturePolicy,
+    ) -> Result<(), SealedArtifactError> {
+        match policy {
+            ArtifactSignaturePolicy::AllowUnsignedDevelopment => Ok(()),
+            ArtifactSignaturePolicy::RequireVerifiedSignature => {
+                if self.signature.satisfies_release_policy() {
+                    Ok(())
+                } else {
+                    Err(SealedArtifactError::SignaturePolicy {
+                        diagnostic: BuildDiagnostic::new(
+                            BuildDiagnosticSeverity::Error,
+                            "artifact.signature.required",
+                            "release artifacts require verified signature metadata",
+                        ),
+                    })
+                }
+            }
+        }
     }
 
     /// Ensures the artifact schema is compatible with an expected schema.
@@ -477,8 +660,28 @@ impl SealedArtifact {
             payload.push_str(&asset.source_hash.0);
             payload.push(';');
         }
+        payload.push_str("signature=");
+        payload.push_str(match self.signature.status {
+            ArtifactSignatureStatus::Unsigned => "unsigned",
+            ArtifactSignatureStatus::Verified => "verified",
+        });
+        payload.push(':');
+        payload.push_str(&self.signature.algorithm);
+        payload.push(':');
+        payload.push_str(&self.signature.key_id);
+        payload.push(':');
+        payload.push_str(&self.signature.signature);
+        payload.push(';');
         payload
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SealedArtifactContainer {
+    format: String,
+    content_hash: ArtifactHash,
+    artifact: SealedArtifact,
 }
 
 /// Sealed artifact validation error.
@@ -503,4 +706,28 @@ pub enum SealedArtifactError {
         /// Structured diagnostic.
         diagnostic: BuildDiagnostic,
     },
+    /// Container serialization failed.
+    ContainerSerialization {
+        /// Structured diagnostic.
+        diagnostic: BuildDiagnostic,
+    },
+    /// Container verification failed.
+    ContainerVerification {
+        /// Structured diagnostic.
+        diagnostic: BuildDiagnostic,
+    },
+    /// Signature policy failed.
+    SignaturePolicy {
+        /// Structured diagnostic.
+        diagnostic: BuildDiagnostic,
+    },
+}
+
+fn container_verification_error(
+    rule: impl Into<String>,
+    message: impl Into<String>,
+) -> SealedArtifactError {
+    SealedArtifactError::ContainerVerification {
+        diagnostic: BuildDiagnostic::new(BuildDiagnosticSeverity::Error, rule, message),
+    }
 }
