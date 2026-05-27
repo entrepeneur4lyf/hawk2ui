@@ -1,6 +1,6 @@
 use hawk2ui_host::{
-    KeyboardInput, PluginEditorConfig, PluginHostAdapter, PluginHostEvent, PluginParentHandle,
-    PointerInput, RendererResizeBridge, SurfaceMetrics,
+    HostPlatformHandle, KeyboardInput, PluginEditorConfig, PluginHostAdapter, PluginHostEvent,
+    PluginParentHandle, PointerInput, RendererResizeBridge, SurfaceMetrics,
 };
 use hawk2ui_host_baseview::{BaseviewParentFixture, BaseviewPluginAdapter};
 
@@ -21,6 +21,24 @@ fn baseview_adapter_attaches_editor_to_daw_owned_parent() {
 }
 
 #[test]
+fn baseview_parent_fixture_can_wrap_real_host_platform_handle_records() {
+    let parent = BaseviewParentFixture::from_platform_handle(
+        "host-xcb-parent",
+        HostPlatformHandle::linux_xcb(100, 200),
+    );
+    let config = PluginEditorConfig::new(
+        "editor",
+        PluginParentHandle::opaque("daw-parent"),
+        SurfaceMetrics::new(640.0, 360.0, 1.0),
+    );
+
+    let adapter = BaseviewPluginAdapter::attach(config, parent)
+        .expect("baseview editor attaches to XCB-compatible parent record");
+
+    assert_eq!(adapter.parent_fixture().id(), "host-xcb-parent");
+}
+
+#[test]
 fn baseview_adapter_routes_resize_dpi_repaint_focus_keyboard_and_pointer() {
     let mut adapter = BaseviewPluginAdapter::attach(
         PluginEditorConfig::new(
@@ -28,7 +46,7 @@ fn baseview_adapter_routes_resize_dpi_repaint_focus_keyboard_and_pointer() {
             PluginParentHandle::opaque("parent"),
             SurfaceMetrics::new(320.0, 180.0, 1.0),
         ),
-        BaseviewParentFixture::wayland(),
+        BaseviewParentFixture::linux_xwayland(),
     )
     .expect("baseview editor attaches");
     let bridge = RendererResizeBridge;
@@ -92,7 +110,7 @@ fn baseview_adapter_ignores_host_events_after_destroy() {
             PluginParentHandle::opaque("parent"),
             SurfaceMetrics::new(320.0, 180.0, 1.0),
         ),
-        BaseviewParentFixture::wayland(),
+        BaseviewParentFixture::linux_xwayland(),
     )
     .expect("baseview editor attaches");
     adapter.drain_events();
@@ -109,4 +127,19 @@ fn baseview_adapter_ignores_host_events_after_destroy() {
     assert_eq!(adapter.metrics(), SurfaceMetrics::new(320.0, 180.0, 1.0));
     assert!(adapter.repaint_reasons().is_empty());
     assert!(adapter.drain_events().is_empty());
+}
+
+#[test]
+fn baseview_adapter_rejects_native_wayland_parent_handles() {
+    let error = BaseviewPluginAdapter::attach(
+        PluginEditorConfig::new(
+            "editor",
+            PluginParentHandle::opaque("parent"),
+            SurfaceMetrics::new(320.0, 180.0, 1.0),
+        ),
+        BaseviewParentFixture::wayland(),
+    )
+    .expect_err("baseview 0.1 Linux backend cannot attach native Wayland parents");
+
+    assert_eq!(error.rule(), "baseview.platform.unsupported");
 }

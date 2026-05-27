@@ -24,6 +24,12 @@ pub struct BaseviewParentFixture {
 }
 
 impl BaseviewParentFixture {
+    /// Creates a parent record from a host-provided platform handle.
+    #[must_use]
+    pub const fn from_platform_handle(id: &'static str, handle: HostPlatformHandle) -> Self {
+        Self { id, handle }
+    }
+
     /// Creates a Linux X11 parent fixture.
     #[must_use]
     pub const fn linux_x11() -> Self {
@@ -39,6 +45,15 @@ impl BaseviewParentFixture {
         Self {
             id: "linux-wayland-parent",
             handle: HostPlatformHandle::linux_wayland(3, 4),
+        }
+    }
+
+    /// Creates a Linux `XWayland` parent fixture.
+    #[must_use]
+    pub const fn linux_xwayland() -> Self {
+        Self {
+            id: "linux-xwayland-parent",
+            handle: HostPlatformHandle::linux_xwayland(5, 6),
         }
     }
 
@@ -151,6 +166,7 @@ impl BaseviewPluginAdapter {
         config: PluginEditorConfig,
         parent_fixture: BaseviewParentFixture,
     ) -> Result<Self, BaseviewHostError> {
+        validate_baseview_parent(parent_fixture.handle())?;
         parent_fixture
             .handle()
             .validate_for(SurfaceOwnership::PluginEditor)
@@ -218,6 +234,21 @@ impl BaseviewPluginAdapter {
 
     fn accepts_host_event(&self) -> bool {
         !self.destroyed
+    }
+}
+
+fn validate_baseview_parent(handle: HostPlatformHandle) -> Result<(), BaseviewHostError> {
+    match handle {
+        HostPlatformHandle::LinuxWayland { .. } => Err(BaseviewHostError::new(
+            "baseview.platform.unsupported",
+            "baseview 0.1 Linux backend attaches through X11/XCB/XWayland parent handles, not native Wayland surfaces",
+        )),
+        HostPlatformHandle::WindowsHwnd { .. }
+        | HostPlatformHandle::MacOsNsView { .. }
+        | HostPlatformHandle::MacOsNsWindow { .. }
+        | HostPlatformHandle::LinuxX11 { .. }
+        | HostPlatformHandle::LinuxXcb { .. }
+        | HostPlatformHandle::LinuxXWayland { .. } => Ok(()),
     }
 }
 
