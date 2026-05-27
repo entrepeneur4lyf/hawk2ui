@@ -48,6 +48,8 @@ The runtime API surface is the public contract between application code, host ad
 
 Applications and framework adapters should communicate with the host through these records instead of relying on backend-specific window or plugin handles. Host capabilities should be declared through manifest capability keys and represented with `CapabilityKey` at runtime.
 
+Runtime event handlers that change visible output should update `RuntimeViewTree` through typed tree operations. `RuntimeViewTree::update_visual(...)` replaces a node visual and invalidates that node so the next `RuntimeSceneBridge` frame carries repaint evidence and updated draw commands.
+
 ## Custom Renderer Protocol
 
 Framework integrations should emit native records through `CustomRendererProtocol` and `CustomRendererOperation`. The protocol validates node identity and records deterministic operation keys before native runtime bridging.

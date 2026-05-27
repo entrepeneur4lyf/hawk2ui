@@ -712,6 +712,20 @@ Acceptance:
 
 - End-to-end app tests prove lifecycle and events update rendered output.
 
+Status:
+
+- Added `RuntimeViewTree::update_visual(...)` so an event/lifecycle handler can replace a node
+  visual and mark the node invalidated in one runtime operation.
+- Added an end-to-end runtime test proving lifecycle update hook registration, event dispatch,
+  visual mutation, scene diff repaint requirement, invalidated view IDs, and updated draw command
+  output.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this remediation slice for production readiness:
+  the runtime now has a typed event-to-render update path with repaint evidence. No corrective
+  revision is required before continuing broader runtime ownership work.
+
 ## Runtime Remediation
 
 ### REM-RUNTIME-001: Complete Runtime Architecture

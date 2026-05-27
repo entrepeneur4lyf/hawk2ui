@@ -640,6 +640,24 @@ impl RuntimeViewTree {
         Ok(self)
     }
 
+    /// Replaces a runtime node visual and marks that node for repaint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when the node is missing.
+    pub fn update_visual(
+        mut self,
+        node_id: &RuntimeViewId,
+        visual: RuntimeVisual,
+    ) -> Result<Self, RuntimeSceneError> {
+        let Some(index) = self.index_of(node_id) else {
+            return Err(RuntimeSceneError::MissingNode(node_id.as_str().to_string()));
+        };
+        self.entries[index].node.visual = visual;
+        self.entries[index].invalidated = true;
+        Ok(self)
+    }
+
     fn invalidated_view_ids(&self) -> Vec<RuntimeViewId> {
         self.entries
             .iter()

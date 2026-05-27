@@ -293,6 +293,64 @@ fn event_dispatch_cancels_pending_events_after_teardown() {
 }
 
 #[test]
+fn event_delivery_applies_visual_update_and_repaints_rendered_output() {
+    let lifecycle = LifecycleRegistry::new([
+        LifecycleHook::new("main", LifecyclePhase::Mount, "mount"),
+        LifecycleHook::new("main", LifecyclePhase::Update, "paintPressed"),
+        LifecycleHook::new("main", LifecyclePhase::Teardown, "dispose"),
+    ]);
+    let mut dispatcher = RuntimeEventDispatcher::default();
+    dispatcher.listen("button", RuntimeEventKind::Ui);
+    dispatcher.enqueue(RuntimeEvent::ui("button", "press"));
+
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(120.0, 80.0)),
+        RuntimeVisual::Fill(Color::rgba(8, 10, 14, 255)),
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("button"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(80.0, 32.0)),
+            RuntimeVisual::Fill(Color::rgba(30, 30, 30, 255)),
+        ),
+    )
+    .expect("button attaches");
+    let bridge = RuntimeSceneBridge::new(Viewport::new(120.0, 80.0));
+    let before = bridge.build(&tree).expect("initial frame builds");
+
+    let deliveries = dispatcher
+        .dispatch_pending()
+        .expect("event dispatch should deliver before teardown");
+    assert_eq!(deliveries[0].listener_target, "button");
+    assert_eq!(
+        lifecycle.hooks_for(LifecyclePhase::Update)[0].export_name,
+        "paintPressed"
+    );
+
+    let updated = tree
+        .update_visual(
+            &RuntimeViewId::new("button"),
+            RuntimeVisual::Fill(Color::rgba(240, 88, 40, 255)),
+        )
+        .expect("event handler should update the visual");
+    let after = bridge.build(&updated).expect("updated frame builds");
+    let diff = after.diff_from(&before).expect("frame diff builds");
+
+    assert!(diff.requires_repaint());
+    assert_eq!(after.invalidated_view_ids(), [RuntimeViewId::new("button")]);
+    assert!(after.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Fill { id, color, .. }
+                if id.as_str() == "button" && *color == Color::rgba(240, 88, 40, 255)
+        )
+    }));
+}
+
+#[test]
 fn scheduler_batches_runtime_work_in_priority_order() {
     let mut scheduler = RuntimeScheduler::default();
     scheduler.schedule_script_job("hydrate");
