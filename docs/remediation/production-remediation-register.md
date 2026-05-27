@@ -759,6 +759,8 @@ Review check:
 
 ### REM-LAYOUT-003: Enable And Implement Taffy Grid Support
 
+Status: Remediated in source.
+
 Evidence:
 
 - `docs/specs/grid-support.md` is listed as a required domain spec.
@@ -777,6 +779,19 @@ Acceptance:
 - Grid containers and children compute through Taffy in layout tests.
 - CSS/style grid declarations lower into typed layout records.
 - Unsupported grid syntax fails with structured diagnostics instead of silently degrading.
+
+Remediation delivered:
+
+- Enabled Taffy `grid` in `hawk2ui-layout`.
+- Added Hawk2UI-owned grid records for explicit tracks, implicit tracks, auto-flow, row/column placement, line placement, spans, and min/max-content track sizing.
+- Mapped Hawk2UI grid records into Taffy `Display::Grid`, template rows/columns, auto rows/columns, auto-flow, and item row/column placement.
+- Added layout coverage for grid template tracks, gaps, spanning placement, auto-flow, and min/max-content implicit tracks.
+- Added typed style compiler support for the accepted longhand grid subset: template rows/columns, auto rows/columns, auto-flow, and row/column start/end placement.
+- Added structured diagnostics for unsupported grid functions such as `repeat(...)` instead of silent fallback.
+
+Review check:
+
+- As the implementer delivering this product, I am satisfied with this remediation for production stability of the first grid layout surface. The implemented subset is explicit, typed, tested, and intentionally rejects unsupported syntax. Future expansion to named areas or `repeat()` should be an additive spec change, not an undocumented fallback.
 
 ## Authoring And Framework Remediation
 

@@ -66,6 +66,12 @@ pub enum ValueType {
     Duration,
     /// Token reference value.
     TokenReference,
+    /// Grid track list value.
+    GridTrackList,
+    /// Grid line placement value.
+    GridPlacement,
+    /// Grid auto-flow value.
+    GridAutoFlow,
 }
 
 /// Unit handling policy.
@@ -111,6 +117,12 @@ pub enum StyleValue {
     DurationMs(u32),
     /// Token reference by stable token path.
     TokenRef(String),
+    /// Grid track list expression in the accepted `Hawk2UI` subset.
+    GridTrackList(String),
+    /// Grid line placement expression in the accepted `Hawk2UI` subset.
+    GridPlacement(String),
+    /// Grid auto-flow expression in the accepted `Hawk2UI` subset.
+    GridAutoFlow(String),
 }
 
 impl StyleValue {
@@ -124,6 +136,9 @@ impl StyleValue {
             Self::Transform(_) => ValueType::Transform,
             Self::DurationMs(_) => ValueType::Duration,
             Self::TokenRef(_) => ValueType::TokenReference,
+            Self::GridTrackList(_) => ValueType::GridTrackList,
+            Self::GridPlacement(_) => ValueType::GridPlacement,
+            Self::GridAutoFlow(_) => ValueType::GridAutoFlow,
         }
     }
 }
@@ -303,6 +318,9 @@ enum DefaultValueSpec {
     Transform(&'static str),
     DurationMs(u32),
     TokenRef(&'static str),
+    GridTrackList(&'static str),
+    GridPlacement(&'static str),
+    GridAutoFlow(&'static str),
 }
 
 impl From<DefaultValueSpec> for StyleValue {
@@ -316,6 +334,9 @@ impl From<DefaultValueSpec> for StyleValue {
             DefaultValueSpec::Transform(value) => Self::Transform(value.to_string()),
             DefaultValueSpec::DurationMs(value) => Self::DurationMs(value),
             DefaultValueSpec::TokenRef(value) => Self::TokenRef(value.to_string()),
+            DefaultValueSpec::GridTrackList(value) => Self::GridTrackList(value.to_string()),
+            DefaultValueSpec::GridPlacement(value) => Self::GridPlacement(value.to_string()),
+            DefaultValueSpec::GridAutoFlow(value) => Self::GridAutoFlow(value.to_string()),
         }
     }
 }
@@ -458,5 +479,86 @@ const PROPERTY_SPECS: &[PropertySpec] = &[
         inherited: false,
         unit_handling: UnitHandling::TokenOnly,
         requirements: RENDERER,
+    },
+    PropertySpec {
+        name: "grid-template-columns",
+        group: PropertyGroup::Layout,
+        value_type: ValueType::GridTrackList,
+        default_value: DefaultValueSpec::GridTrackList("none"),
+        inherited: false,
+        unit_handling: UnitHandling::NotApplicable,
+        requirements: LAYOUT,
+    },
+    PropertySpec {
+        name: "grid-template-rows",
+        group: PropertyGroup::Layout,
+        value_type: ValueType::GridTrackList,
+        default_value: DefaultValueSpec::GridTrackList("none"),
+        inherited: false,
+        unit_handling: UnitHandling::NotApplicable,
+        requirements: LAYOUT,
+    },
+    PropertySpec {
+        name: "grid-auto-columns",
+        group: PropertyGroup::Layout,
+        value_type: ValueType::GridTrackList,
+        default_value: DefaultValueSpec::GridTrackList("auto"),
+        inherited: false,
+        unit_handling: UnitHandling::NotApplicable,
+        requirements: LAYOUT,
+    },
+    PropertySpec {
+        name: "grid-auto-rows",
+        group: PropertyGroup::Layout,
+        value_type: ValueType::GridTrackList,
+        default_value: DefaultValueSpec::GridTrackList("auto"),
+        inherited: false,
+        unit_handling: UnitHandling::NotApplicable,
+        requirements: LAYOUT,
+    },
+    PropertySpec {
+        name: "grid-auto-flow",
+        group: PropertyGroup::Layout,
+        value_type: ValueType::GridAutoFlow,
+        default_value: DefaultValueSpec::GridAutoFlow("row"),
+        inherited: false,
+        unit_handling: UnitHandling::NotApplicable,
+        requirements: LAYOUT,
+    },
+    PropertySpec {
+        name: "grid-column-start",
+        group: PropertyGroup::Layout,
+        value_type: ValueType::GridPlacement,
+        default_value: DefaultValueSpec::GridPlacement("auto"),
+        inherited: false,
+        unit_handling: UnitHandling::NotApplicable,
+        requirements: LAYOUT,
+    },
+    PropertySpec {
+        name: "grid-column-end",
+        group: PropertyGroup::Layout,
+        value_type: ValueType::GridPlacement,
+        default_value: DefaultValueSpec::GridPlacement("auto"),
+        inherited: false,
+        unit_handling: UnitHandling::NotApplicable,
+        requirements: LAYOUT,
+    },
+    PropertySpec {
+        name: "grid-row-start",
+        group: PropertyGroup::Layout,
+        value_type: ValueType::GridPlacement,
+        default_value: DefaultValueSpec::GridPlacement("auto"),
+        inherited: false,
+        unit_handling: UnitHandling::NotApplicable,
+        requirements: LAYOUT,
+    },
+    PropertySpec {
+        name: "grid-row-end",
+        group: PropertyGroup::Layout,
+        value_type: ValueType::GridPlacement,
+        default_value: DefaultValueSpec::GridPlacement("auto"),
+        inherited: false,
+        unit_handling: UnitHandling::NotApplicable,
+        requirements: LAYOUT,
     },
 ];

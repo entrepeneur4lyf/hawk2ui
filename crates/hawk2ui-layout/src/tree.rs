@@ -167,6 +167,193 @@ pub enum LayoutJustifyContent {
     SpaceEvenly,
 }
 
+/// Grid track sizing function.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LayoutGridTrack {
+    /// Fixed pixel track.
+    Px(f32),
+    /// Fractional track.
+    Fr(f32),
+    /// Automatic track.
+    Auto,
+    /// Minimum-content track.
+    MinContent,
+    /// Maximum-content track.
+    MaxContent,
+}
+
+impl LayoutGridTrack {
+    /// Creates a fixed pixel track.
+    #[must_use]
+    pub const fn px(value: f32) -> Self {
+        Self::Px(value)
+    }
+
+    /// Creates a fractional track.
+    #[must_use]
+    pub const fn fr(value: f32) -> Self {
+        Self::Fr(value)
+    }
+}
+
+/// Grid auto-placement direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LayoutGridAutoFlow {
+    /// Fill each row before adding rows.
+    Row,
+    /// Fill each column before adding columns.
+    Column,
+    /// Fill rows and back-fill holes.
+    RowDense,
+    /// Fill columns and back-fill holes.
+    ColumnDense,
+}
+
+/// Grid line placement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LayoutGridPlacement {
+    /// Auto-placement.
+    Auto,
+    /// Explicit grid line number.
+    Line(i16),
+    /// Span track count.
+    Span(u16),
+}
+
+impl LayoutGridPlacement {
+    /// Places at a concrete grid line.
+    #[must_use]
+    pub const fn line(value: i16) -> Self {
+        Self::Line(value)
+    }
+
+    /// Spans the provided number of grid tracks.
+    #[must_use]
+    pub const fn span(value: u16) -> Self {
+        Self::Span(value)
+    }
+}
+
+/// Grid axis placement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LayoutGridLine {
+    start: LayoutGridPlacement,
+    end: LayoutGridPlacement,
+}
+
+impl LayoutGridLine {
+    /// Creates a grid line placement from explicit start and end placements.
+    #[must_use]
+    pub const fn new(start: LayoutGridPlacement, end: LayoutGridPlacement) -> Self {
+        Self { start, end }
+    }
+
+    /// Creates an automatic grid line placement.
+    #[must_use]
+    pub const fn auto() -> Self {
+        Self::new(LayoutGridPlacement::Auto, LayoutGridPlacement::Auto)
+    }
+
+    /// Creates a placement starting at a line.
+    #[must_use]
+    pub const fn line(start: i16) -> Self {
+        Self::new(LayoutGridPlacement::Line(start), LayoutGridPlacement::Auto)
+    }
+
+    /// Creates a spanning placement.
+    #[must_use]
+    pub const fn span(span: u16) -> Self {
+        Self::new(LayoutGridPlacement::Span(span), LayoutGridPlacement::Auto)
+    }
+
+    /// Returns the start placement.
+    #[must_use]
+    pub const fn start(&self) -> LayoutGridPlacement {
+        self.start
+    }
+
+    /// Returns the end placement.
+    #[must_use]
+    pub const fn end(&self) -> LayoutGridPlacement {
+        self.end
+    }
+}
+
+/// Grid container style.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayoutGridStyle {
+    columns: Vec<LayoutGridTrack>,
+    rows: Vec<LayoutGridTrack>,
+    auto_columns: Vec<LayoutGridTrack>,
+    auto_rows: Vec<LayoutGridTrack>,
+    auto_flow: LayoutGridAutoFlow,
+}
+
+impl LayoutGridStyle {
+    /// Creates grid container tracks.
+    #[must_use]
+    pub fn new(columns: Vec<LayoutGridTrack>, rows: Vec<LayoutGridTrack>) -> Self {
+        Self {
+            columns,
+            rows,
+            auto_columns: vec![LayoutGridTrack::Auto],
+            auto_rows: vec![LayoutGridTrack::Auto],
+            auto_flow: LayoutGridAutoFlow::Row,
+        }
+    }
+
+    /// Sets implicit column tracks.
+    #[must_use]
+    pub fn with_auto_columns(mut self, auto_columns: Vec<LayoutGridTrack>) -> Self {
+        self.auto_columns = auto_columns;
+        self
+    }
+
+    /// Sets implicit row tracks.
+    #[must_use]
+    pub fn with_auto_rows(mut self, auto_rows: Vec<LayoutGridTrack>) -> Self {
+        self.auto_rows = auto_rows;
+        self
+    }
+
+    /// Sets auto-placement flow.
+    #[must_use]
+    pub const fn with_auto_flow(mut self, auto_flow: LayoutGridAutoFlow) -> Self {
+        self.auto_flow = auto_flow;
+        self
+    }
+
+    /// Returns explicit column tracks.
+    #[must_use]
+    pub fn columns(&self) -> &[LayoutGridTrack] {
+        &self.columns
+    }
+
+    /// Returns explicit row tracks.
+    #[must_use]
+    pub fn rows(&self) -> &[LayoutGridTrack] {
+        &self.rows
+    }
+
+    /// Returns implicit column tracks.
+    #[must_use]
+    pub fn auto_columns(&self) -> &[LayoutGridTrack] {
+        &self.auto_columns
+    }
+
+    /// Returns implicit row tracks.
+    #[must_use]
+    pub fn auto_rows(&self) -> &[LayoutGridTrack] {
+        &self.auto_rows
+    }
+
+    /// Returns auto-placement flow.
+    #[must_use]
+    pub const fn auto_flow(&self) -> LayoutGridAutoFlow {
+        self.auto_flow
+    }
+}
+
 /// Layout style record.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutStyle {
@@ -182,6 +369,9 @@ pub struct LayoutStyle {
     flex_shrink: f32,
     align_items: Option<LayoutAlignItems>,
     justify_content: Option<LayoutJustifyContent>,
+    grid: Option<LayoutGridStyle>,
+    grid_row: LayoutGridLine,
+    grid_column: LayoutGridLine,
     inset: BoxEdges,
     scroll_container: bool,
     absolute: bool,
@@ -191,7 +381,7 @@ pub struct LayoutStyle {
 impl LayoutStyle {
     /// Creates a flex container style.
     #[must_use]
-    pub const fn flex_container(direction: FlexDirection) -> Self {
+    pub fn flex_container(direction: FlexDirection) -> Self {
         Self {
             flex_direction: Some(direction),
             ..Self::base()
@@ -200,7 +390,7 @@ impl LayoutStyle {
 
     /// Creates a scroll container style.
     #[must_use]
-    pub const fn scroll_container() -> Self {
+    pub fn scroll_container() -> Self {
         Self {
             scroll_container: true,
             ..Self::base()
@@ -209,7 +399,7 @@ impl LayoutStyle {
 
     /// Creates an absolute region style.
     #[must_use]
-    pub const fn absolute_region() -> Self {
+    pub fn absolute_region() -> Self {
         Self {
             absolute: true,
             ..Self::base()
@@ -218,14 +408,23 @@ impl LayoutStyle {
 
     /// Creates a custom measured node style.
     #[must_use]
-    pub const fn custom_measured() -> Self {
+    pub fn custom_measured() -> Self {
         Self {
             custom_measured: true,
             ..Self::base()
         }
     }
 
-    const fn base() -> Self {
+    /// Creates a grid container style.
+    #[must_use]
+    pub fn grid_container(columns: Vec<LayoutGridTrack>, rows: Vec<LayoutGridTrack>) -> Self {
+        Self {
+            grid: Some(LayoutGridStyle::new(columns, rows)),
+            ..Self::base()
+        }
+    }
+
+    fn base() -> Self {
         Self {
             size: LayoutSizing::auto(),
             min_size: LayoutSizing::auto(),
@@ -239,6 +438,9 @@ impl LayoutStyle {
             flex_shrink: 0.0,
             align_items: None,
             justify_content: None,
+            grid: None,
+            grid_row: LayoutGridLine::auto(),
+            grid_column: LayoutGridLine::auto(),
             inset: BoxEdges::all(LayoutValue::Auto),
             scroll_container: false,
             absolute: false,
@@ -323,6 +525,27 @@ impl LayoutStyle {
         self
     }
 
+    /// Sets grid container details.
+    #[must_use]
+    pub fn with_grid(mut self, grid: LayoutGridStyle) -> Self {
+        self.grid = Some(grid);
+        self
+    }
+
+    /// Sets grid row placement for this item.
+    #[must_use]
+    pub const fn with_grid_row(mut self, grid_row: LayoutGridLine) -> Self {
+        self.grid_row = grid_row;
+        self
+    }
+
+    /// Sets grid column placement for this item.
+    #[must_use]
+    pub const fn with_grid_column(mut self, grid_column: LayoutGridLine) -> Self {
+        self.grid_column = grid_column;
+        self
+    }
+
     /// Sets absolute/relative inset offsets.
     #[must_use]
     pub const fn with_inset(mut self, inset: BoxEdges) -> Self {
@@ -400,6 +623,24 @@ impl LayoutStyle {
     #[must_use]
     pub const fn justify_content(&self) -> Option<LayoutJustifyContent> {
         self.justify_content
+    }
+
+    /// Returns grid container style, if any.
+    #[must_use]
+    pub const fn grid(&self) -> Option<&LayoutGridStyle> {
+        self.grid.as_ref()
+    }
+
+    /// Returns grid row placement.
+    #[must_use]
+    pub const fn grid_row(&self) -> LayoutGridLine {
+        self.grid_row
+    }
+
+    /// Returns grid column placement.
+    #[must_use]
+    pub const fn grid_column(&self) -> LayoutGridLine {
+        self.grid_column
     }
 
     /// Returns absolute/relative inset offsets.

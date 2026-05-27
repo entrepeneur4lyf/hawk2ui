@@ -1,13 +1,17 @@
 //! Deterministic layout calculation backend.
 
 use crate::{
-    BoxEdges, FlexDirection, LayoutAlignItems, LayoutJustifyContent, LayoutNodeId, LayoutStyle,
+    BoxEdges, FlexDirection, LayoutAlignItems, LayoutGridAutoFlow, LayoutGridLine,
+    LayoutGridPlacement, LayoutGridTrack, LayoutJustifyContent, LayoutNodeId, LayoutStyle,
     LayoutTextMeasurer, LayoutTree, LayoutTreeError, LayoutValue, TextMeasureError,
     TextMeasureInput,
 };
+use taffy::prelude::{auto, fr, length, line, max_content, min_content, span};
 use taffy::{
-    AlignContent, AlignItems, AvailableSpace, Dimension, Display, LengthPercentage,
-    LengthPercentageAuto, NodeId, Overflow, Point, Position, Rect, Size, Style, TaffyTree,
+    AlignContent, AlignItems, AvailableSpace, Dimension, Display,
+    GridAutoFlow as TaffyGridAutoFlow, GridPlacement as TaffyGridPlacement, GridTemplateComponent,
+    LengthPercentage, LengthPercentageAuto, Line, NodeId, Overflow, Point, Position, Rect, Size,
+    Style, TaffyTree, TrackSizingFunction,
 };
 
 /// Viewport size used as the root layout constraint.
@@ -264,7 +268,11 @@ fn measure_text_leaf(
 
 fn taffy_style(style: &LayoutStyle, root_viewport: Option<Viewport>) -> Style {
     let mut taffy_style = Style {
-        display: Display::Flex,
+        display: if style.grid().is_some() {
+            Display::Grid
+        } else {
+            Display::Flex
+        },
         position: if style.absolute() {
             Position::Absolute
         } else {
@@ -311,6 +319,7 @@ fn taffy_style(style: &LayoutStyle, root_viewport: Option<Viewport>) -> Style {
         flex_shrink: style.flex_shrink(),
         ..Style::default()
     };
+    apply_grid_style(&mut taffy_style, style);
     if let Some(viewport) = root_viewport {
         if matches!(style.size().width(), LayoutValue::Auto) {
             taffy_style.size.width = Dimension::length(viewport.width);
@@ -320,6 +329,76 @@ fn taffy_style(style: &LayoutStyle, root_viewport: Option<Viewport>) -> Style {
         }
     }
     taffy_style
+}
+
+fn apply_grid_style(taffy_style: &mut Style, style: &LayoutStyle) {
+    if let Some(grid) = style.grid() {
+        taffy_style.grid_template_columns = grid
+            .columns()
+            .iter()
+            .copied()
+            .map(taffy_grid_template_track)
+            .collect();
+        taffy_style.grid_template_rows = grid
+            .rows()
+            .iter()
+            .copied()
+            .map(taffy_grid_template_track)
+            .collect();
+        taffy_style.grid_auto_columns = grid
+            .auto_columns()
+            .iter()
+            .copied()
+            .map(taffy_grid_track)
+            .collect();
+        taffy_style.grid_auto_rows = grid
+            .auto_rows()
+            .iter()
+            .copied()
+            .map(taffy_grid_track)
+            .collect();
+        taffy_style.grid_auto_flow = taffy_grid_auto_flow(grid.auto_flow());
+    }
+    taffy_style.grid_row = taffy_grid_line(style.grid_row());
+    taffy_style.grid_column = taffy_grid_line(style.grid_column());
+}
+
+fn taffy_grid_template_track(track: LayoutGridTrack) -> GridTemplateComponent<String> {
+    GridTemplateComponent::Single(taffy_grid_track(track))
+}
+
+fn taffy_grid_track(track: LayoutGridTrack) -> TrackSizingFunction {
+    match track {
+        LayoutGridTrack::Px(value) => length(value),
+        LayoutGridTrack::Fr(value) => fr(value),
+        LayoutGridTrack::Auto => auto(),
+        LayoutGridTrack::MinContent => min_content(),
+        LayoutGridTrack::MaxContent => max_content(),
+    }
+}
+
+fn taffy_grid_auto_flow(value: LayoutGridAutoFlow) -> TaffyGridAutoFlow {
+    match value {
+        LayoutGridAutoFlow::Row => TaffyGridAutoFlow::Row,
+        LayoutGridAutoFlow::Column => TaffyGridAutoFlow::Column,
+        LayoutGridAutoFlow::RowDense => TaffyGridAutoFlow::RowDense,
+        LayoutGridAutoFlow::ColumnDense => TaffyGridAutoFlow::ColumnDense,
+    }
+}
+
+fn taffy_grid_line(value: LayoutGridLine) -> Line<TaffyGridPlacement> {
+    Line {
+        start: taffy_grid_placement(value.start()),
+        end: taffy_grid_placement(value.end()),
+    }
+}
+
+fn taffy_grid_placement(value: LayoutGridPlacement) -> TaffyGridPlacement {
+    match value {
+        LayoutGridPlacement::Auto => TaffyGridPlacement::Auto,
+        LayoutGridPlacement::Line(value) => line(value),
+        LayoutGridPlacement::Span(value) => span(value),
+    }
 }
 
 fn align_items(value: LayoutAlignItems) -> AlignItems {

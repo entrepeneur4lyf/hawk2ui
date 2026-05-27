@@ -1,9 +1,10 @@
 use hawk2ui_layout::{
     AnalyzerRegion, BoxEdges, FlexDirection, GeneratedParameterLayout, GraphRegion,
-    HawkTextMeasurer, LayoutAlignItems, LayoutJustifyContent, LayoutNode, LayoutNodeId,
-    LayoutSizing, LayoutStyle, LayoutTextMeasurer, LayoutTree, LayoutValue,
-    PluginEditorConstraints, PluginEditorSize, SceneGeometryAttachment, TestTextMeasurer,
-    TextMeasureInput, TextMeasureKey, TextMeasureMode, TextMeasureResult, Viewport,
+    HawkTextMeasurer, LayoutAlignItems, LayoutGridAutoFlow, LayoutGridLine, LayoutGridStyle,
+    LayoutGridTrack, LayoutJustifyContent, LayoutNode, LayoutNodeId, LayoutSizing, LayoutStyle,
+    LayoutTextMeasurer, LayoutTree, LayoutValue, PluginEditorConstraints, PluginEditorSize,
+    SceneGeometryAttachment, TestTextMeasurer, TextMeasureInput, TextMeasureKey, TextMeasureMode,
+    TextMeasureResult, Viewport,
 };
 use hawk2ui_text::{FontCatalog, TextBackend};
 
@@ -359,6 +360,71 @@ fn layout_compute_supports_flex_growth_alignment_basis_and_absolute_insets() {
         centered.geometry(&LayoutNodeId::new("centered")).unwrap().x,
         100.0
     );
+}
+
+#[test]
+fn grid_layout_computes_template_tracks_gaps_spans_and_auto_flow() {
+    let tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::grid_container(
+            vec![
+                LayoutGridTrack::px(80.0),
+                LayoutGridTrack::fr(1.0),
+                LayoutGridTrack::px(40.0),
+            ],
+            vec![LayoutGridTrack::px(30.0), LayoutGridTrack::fr(1.0)],
+        )
+        .with_grid(
+            LayoutGridStyle::new(
+                vec![
+                    LayoutGridTrack::px(80.0),
+                    LayoutGridTrack::fr(1.0),
+                    LayoutGridTrack::px(40.0),
+                ],
+                vec![LayoutGridTrack::px(30.0), LayoutGridTrack::fr(1.0)],
+            )
+            .with_auto_columns(vec![LayoutGridTrack::MaxContent])
+            .with_auto_rows(vec![LayoutGridTrack::MinContent])
+            .with_auto_flow(LayoutGridAutoFlow::RowDense),
+        )
+        .with_size(LayoutSizing::fixed(240.0, 120.0))
+        .with_gap(LayoutValue::px(10.0)),
+    ))
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new("header"),
+            LayoutStyle::custom_measured()
+                .with_grid_column(LayoutGridLine::span(3))
+                .with_grid_row(LayoutGridLine::line(1)),
+        ),
+    )
+    .expect("header child insertion should succeed")
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new("content"),
+            LayoutStyle::custom_measured()
+                .with_grid_column(LayoutGridLine::line(2))
+                .with_grid_row(LayoutGridLine::line(2)),
+        ),
+    )
+    .expect("content child insertion should succeed");
+
+    let output = tree
+        .try_compute_layout(Viewport::new(240.0, 120.0))
+        .expect("grid layout should compute");
+    let header = output.geometry(&LayoutNodeId::new("header")).unwrap();
+    let content = output.geometry(&LayoutNodeId::new("content")).unwrap();
+
+    assert_eq!(header.x, 0.0);
+    assert_eq!(header.y, 0.0);
+    assert_eq!(header.width, 240.0);
+    assert_eq!(header.height, 30.0);
+    assert_eq!(content.x, 90.0);
+    assert_eq!(content.y, 40.0);
+    assert_eq!(content.width, 100.0);
+    assert_eq!(content.height, 80.0);
 }
 
 #[test]

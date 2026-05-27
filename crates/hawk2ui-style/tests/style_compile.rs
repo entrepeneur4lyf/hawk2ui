@@ -31,6 +31,15 @@ fn property_registry_exposes_required_property_families() {
         ("--accent-color", PropertyGroup::Custom),
         ("transition-duration", PropertyGroup::Transition),
         ("background-color", PropertyGroup::TokenReference),
+        ("grid-template-columns", PropertyGroup::Layout),
+        ("grid-template-rows", PropertyGroup::Layout),
+        ("grid-auto-columns", PropertyGroup::Layout),
+        ("grid-auto-rows", PropertyGroup::Layout),
+        ("grid-auto-flow", PropertyGroup::Layout),
+        ("grid-column-start", PropertyGroup::Layout),
+        ("grid-column-end", PropertyGroup::Layout),
+        ("grid-row-start", PropertyGroup::Layout),
+        ("grid-row-end", PropertyGroup::Layout),
     ] {
         let metadata = registry
             .metadata(&PropertyId::new(name))
@@ -108,7 +117,7 @@ fn style_subset_reference_lists_exact_supported_css_surface() {
     );
     assert_eq!(
         reference.units(),
-        &["px", "unitless-zero", "unitless-number", "ms", "s"]
+        &["px", "fr", "unitless-zero", "unitless-number", "ms", "s"]
     );
     assert_eq!(reference.functions(), &["rgb()", "rgba()", "token()"]);
     assert_eq!(
@@ -425,6 +434,62 @@ fn style_compile_accepts_exact_units_functions_tokens_and_transitions() {
 }
 
 #[test]
+fn style_compile_lowers_supported_grid_longhands_to_typed_records() {
+    let sheet = hawk2ui_style::compile_style_source(
+        r#"
+.dashboard {
+  display: grid;
+  grid-template-columns: 80px 1fr max-content;
+  grid-template-rows: 32px min-content;
+  grid-auto-columns: auto;
+  grid-auto-rows: 24px;
+  grid-auto-flow: row dense;
+}
+.meter {
+  grid-column-start: 2;
+  grid-column-end: span 2;
+  grid-row-start: 1;
+  grid-row-end: auto;
+}
+"#,
+    )
+    .expect("supported grid CSS subset must compile");
+    let dashboard = sheet
+        .rule("class(dashboard)")
+        .expect("dashboard rule exists");
+    let meter = sheet.rule("class(meter)").expect("meter rule exists");
+
+    assert_eq!(
+        dashboard
+            .declaration(&PropertyId::new("display"))
+            .unwrap()
+            .value(),
+        &StyleValue::Keyword("grid".to_string())
+    );
+    assert_eq!(
+        dashboard
+            .declaration(&PropertyId::new("grid-template-columns"))
+            .unwrap()
+            .value(),
+        &StyleValue::GridTrackList("80px 1fr max-content".to_string())
+    );
+    assert_eq!(
+        dashboard
+            .declaration(&PropertyId::new("grid-auto-flow"))
+            .unwrap()
+            .value(),
+        &StyleValue::GridAutoFlow("row dense".to_string())
+    );
+    assert_eq!(
+        meter
+            .declaration(&PropertyId::new("grid-column-end"))
+            .unwrap()
+            .value(),
+        &StyleValue::GridPlacement("span 2".to_string())
+    );
+}
+
+#[test]
 fn style_compile_rejects_every_documented_unsupported_css_class() {
     for (source, rule) in [
         (".card { margin: 8px; }", "style.shorthand.unsupported"),
@@ -475,6 +540,12 @@ fn style_compile_rejects_unsupported_syntax_with_diagnostics() {
         .expect_err("negative lengths must fail");
 
     assert_eq!(error.diagnostics()[0].rule(), "style.value.range");
+
+    let error =
+        hawk2ui_style::compile_style_source(".card { grid-template-columns: repeat(3, 1fr); }")
+            .expect_err("unsupported grid syntax must fail");
+
+    assert_eq!(error.diagnostics()[0].rule(), "style.function.unsupported");
 }
 
 #[test]

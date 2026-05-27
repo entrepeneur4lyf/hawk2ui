@@ -99,13 +99,22 @@ impl StyleSubsetReference {
             "--accent-color",
             "transition-duration",
             "background-color",
+            "grid-template-columns",
+            "grid-template-rows",
+            "grid-auto-columns",
+            "grid-auto-rows",
+            "grid-auto-flow",
+            "grid-column-start",
+            "grid-column-end",
+            "grid-row-start",
+            "grid-row-end",
         ]
     }
 
     /// Returns supported unit forms.
     #[must_use]
     pub const fn units(&self) -> &'static [&'static str] {
-        &["px", "unitless-zero", "unitless-number", "ms", "s"]
+        &["px", "fr", "unitless-zero", "unitless-number", "ms", "s"]
     }
 
     /// Returns supported CSS function forms.
@@ -425,6 +434,9 @@ fn parse_value(raw_value: &str, value_type: ValueType) -> Option<StyleValue> {
         ValueType::Transform => parse_expression(raw_value).map(StyleValue::Transform),
         ValueType::Duration => parse_duration(raw_value).map(StyleValue::DurationMs),
         ValueType::TokenReference => parse_token_ref(raw_value).map(StyleValue::TokenRef),
+        ValueType::GridTrackList => parse_grid_track_list(raw_value).map(StyleValue::GridTrackList),
+        ValueType::GridPlacement => parse_grid_placement(raw_value).map(StyleValue::GridPlacement),
+        ValueType::GridAutoFlow => parse_grid_auto_flow(raw_value).map(StyleValue::GridAutoFlow),
     }
 }
 
@@ -449,6 +461,57 @@ fn parse_px(raw_value: &str) -> Option<f32> {
     } else {
         raw_value.strip_suffix("px")?.parse::<f32>().ok()
     }
+}
+
+fn parse_grid_track_list(raw_value: &str) -> Option<String> {
+    if raw_value == "none" {
+        return Some(raw_value.to_string());
+    }
+    let tracks: Vec<_> = raw_value.split_whitespace().collect();
+    if tracks.is_empty() || tracks.iter().any(|track| !is_grid_track(track)) {
+        None
+    } else {
+        Some(tracks.join(" "))
+    }
+}
+
+fn is_grid_track(raw_value: &str) -> bool {
+    matches!(raw_value, "auto" | "min-content" | "max-content")
+        || parse_non_negative_unit(raw_value, "px").is_some()
+        || parse_non_negative_unit(raw_value, "fr").is_some()
+}
+
+fn parse_grid_placement(raw_value: &str) -> Option<String> {
+    if raw_value == "auto" {
+        return Some(raw_value.to_string());
+    }
+    if parse_positive_i16(raw_value).is_some() {
+        return Some(raw_value.to_string());
+    }
+    let span = raw_value.strip_prefix("span ").map(str::trim)?;
+    parse_positive_u16(span).map(|_| format!("span {span}"))
+}
+
+fn parse_grid_auto_flow(raw_value: &str) -> Option<String> {
+    match raw_value {
+        "row" | "column" | "row dense" | "column dense" | "dense" => Some(raw_value.to_string()),
+        _ => None,
+    }
+}
+
+fn parse_non_negative_unit(raw_value: &str, suffix: &str) -> Option<f32> {
+    let value = raw_value.strip_suffix(suffix)?.parse::<f32>().ok()?;
+    (value.is_finite() && value >= 0.0).then_some(value)
+}
+
+fn parse_positive_i16(raw_value: &str) -> Option<i16> {
+    let value = raw_value.parse::<i16>().ok()?;
+    (value > 0).then_some(value)
+}
+
+fn parse_positive_u16(raw_value: &str) -> Option<u16> {
+    let value = raw_value.parse::<u16>().ok()?;
+    (value > 0).then_some(value)
 }
 
 fn parse_duration(raw_value: &str) -> Option<u32> {

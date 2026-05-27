@@ -18,8 +18,9 @@ pub use text::{
     TextMeasureKey, TextMeasureMode, TextMeasureResult,
 };
 pub use tree::{
-    BoxEdges, FlexDirection, LayoutAlignItems, LayoutJustifyContent, LayoutNode, LayoutNodeId,
-    LayoutSizing, LayoutStyle, LayoutTree, LayoutTreeError, LayoutValue,
+    BoxEdges, FlexDirection, LayoutAlignItems, LayoutGridAutoFlow, LayoutGridLine,
+    LayoutGridPlacement, LayoutGridStyle, LayoutGridTrack, LayoutJustifyContent, LayoutNode,
+    LayoutNodeId, LayoutSizing, LayoutStyle, LayoutTree, LayoutTreeError, LayoutValue,
 };
 
 /// The canonical Cargo package name for this crate.
