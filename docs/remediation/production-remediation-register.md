@@ -318,23 +318,25 @@ Acceptance:
 
 ### REM-RENDER-003: Complete Scene Graph Semantics
 
-Status: In progress; full affine transforms and dirty-bounds invalidation are remediated in source.
+Status: In progress; full affine transforms, dirty-bounds invalidation, and deterministic scene diffing are remediated in source.
 
 Evidence:
 
 - `SceneNode` has layout, clip, affine transform, opacity, hit-test, accessibility refs, and invalidation flags.
-- Full effects, opacity group semantics, layer attachment, and scene diffing remain incomplete.
+- Full effects, opacity group semantics, layer attachment, renderer cache eviction, and host repaint scheduling remain incomplete.
 - Dirty bounds, invalidation reasons, and cache invalidation state are now recorded on scene nodes.
+- Scene diffs now report added, removed, changed, repaint bounds, and cache-invalidated node IDs.
 
 Required remediation:
 
-- Add opacity group semantics, effect references, layer membership, scene diffing, and deterministic z-order traversal.
+- Add opacity group semantics, effect references, layer membership, and remaining deterministic z-order traversal coverage.
 - Wire remaining invalidation consumers to renderer cache eviction and host repaint scheduling.
 
 Acceptance:
 
 - `crates/hawk2ui-render/tests/render_export.rs` covers full affine transform storage, point application, validation, and stable serialization.
 - `crates/hawk2ui-render/tests/render_export.rs` covers invalidation reasons, transformed dirty bounds, ancestor dirty-bound propagation, and cache invalidation flags.
+- `crates/hawk2ui-render/tests/render_export.rs` covers deterministic scene diffs for added, removed, changed, repaint bounds, and cache invalidation IDs.
 - `crates/hawk2ui-render-skia/tests/skia_backend.rs` proves affine transforms affect rendered pixels.
 - Remaining scene graph tests must cover clips, z-order, opacity groups, effects, layer attachment, hit testing, renderer cache eviction, host repaint scheduling, and accessibility geometry.
 

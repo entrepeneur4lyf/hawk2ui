@@ -104,6 +104,55 @@ fn scene_graph_records_dirty_bounds_reasons_and_cache_invalidation() {
 }
 
 #[test]
+fn scene_graph_diff_reports_changes_repaint_bounds_and_cache_invalidations() {
+    let before = SceneGraph::new(
+        SceneNode::new(SceneNodeId::new("root")).with_layout(Geometry::new(0.0, 0.0, 320.0, 200.0)),
+    )
+    .with_child(
+        SceneNodeId::new("root"),
+        SceneNode::new(SceneNodeId::new("meter"))
+            .with_layout(Geometry::new(10.0, 20.0, 120.0, 48.0)),
+    )
+    .expect("before meter child insertion succeeds")
+    .with_child(
+        SceneNodeId::new("root"),
+        SceneNode::new(SceneNodeId::new("removed")).with_layout(Geometry::new(4.0, 4.0, 8.0, 8.0)),
+    )
+    .expect("before removed child insertion succeeds");
+    let after = SceneGraph::new(
+        SceneNode::new(SceneNodeId::new("root")).with_layout(Geometry::new(0.0, 0.0, 320.0, 200.0)),
+    )
+    .with_child(
+        SceneNodeId::new("root"),
+        SceneNode::new(SceneNodeId::new("meter"))
+            .with_layout(Geometry::new(20.0, 28.0, 120.0, 48.0)),
+    )
+    .expect("after meter child insertion succeeds")
+    .with_child(
+        SceneNodeId::new("root"),
+        SceneNode::new(SceneNodeId::new("added"))
+            .with_layout(Geometry::new(200.0, 40.0, 24.0, 24.0)),
+    )
+    .expect("after added child insertion succeeds")
+    .invalidate(&SceneNodeId::new("meter"), InvalidationReason::Paint)
+    .expect("after meter invalidation succeeds");
+
+    let diff = before.diff(&after).expect("scene diff succeeds");
+
+    assert_eq!(diff.added_node_ids(), &[SceneNodeId::new("added")]);
+    assert_eq!(diff.removed_node_ids(), &[SceneNodeId::new("removed")]);
+    assert_eq!(diff.changed_node_ids(), &[SceneNodeId::new("meter")]);
+    assert_eq!(
+        diff.repaint_bounds(),
+        Some(Geometry::new(4.0, 4.0, 220.0, 72.0))
+    );
+    assert_eq!(
+        diff.cache_invalidated_node_ids(),
+        &[SceneNodeId::new("meter"), SceneNodeId::new("root")]
+    );
+}
+
+#[test]
 fn scene_graph_preserves_full_affine_transforms_and_serializes_them_stably() {
     let transform = Transform::affine(1.25, 0.5, -0.25, 0.75, 12.0, 18.0);
     let graph = SceneGraph::new(SceneNode::new(SceneNodeId::new("root")).with_transform(transform));

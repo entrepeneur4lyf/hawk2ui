@@ -354,6 +354,37 @@ impl SceneNode {
             self.cache_invalidated = true;
         }
     }
+
+    fn render_bounds(&self) -> Option<Geometry> {
+        self.dirty_bounds.or_else(|| {
+            self.layout
+                .map(|layout| transform_geometry(layout, self.transform))
+        })
+    }
+
+    fn has_same_render_record(&self, other: &Self) -> bool {
+        let self_render_record = (
+            &self.id,
+            self.z_order,
+            self.layout,
+            self.clip,
+            self.transform,
+            self.opacity.to_bits(),
+            self.hit_test,
+            &self.accessibility_ref,
+        );
+        let other_render_record = (
+            &other.id,
+            other.z_order,
+            other.layout,
+            other.clip,
+            other.transform,
+            other.opacity.to_bits(),
+            other.hit_test,
+            &other.accessibility_ref,
+        );
+        self_render_record == other_render_record
+    }
 }
 
 impl InvalidationReason {
@@ -381,6 +412,75 @@ pub enum SceneGraphError {
     InvalidOpacity(String),
     /// Accessibility reference is empty.
     InvalidAccessibilityRef(String),
+}
+
+/// Deterministic retained-scene diff used for repaint and cache decisions.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneGraphDiff {
+    added_node_ids: Vec<SceneNodeId>,
+    removed_node_ids: Vec<SceneNodeId>,
+    changed_node_ids: Vec<SceneNodeId>,
+    repaint_bounds: Option<Geometry>,
+    cache_invalidated_node_ids: Vec<SceneNodeId>,
+}
+
+impl SceneGraphDiff {
+    /// Creates an empty scene graph diff.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            added_node_ids: Vec::new(),
+            removed_node_ids: Vec::new(),
+            changed_node_ids: Vec::new(),
+            repaint_bounds: None,
+            cache_invalidated_node_ids: Vec::new(),
+        }
+    }
+
+    /// Returns node IDs present only in the next graph.
+    #[must_use]
+    pub fn added_node_ids(&self) -> &[SceneNodeId] {
+        &self.added_node_ids
+    }
+
+    /// Returns node IDs present only in the previous graph.
+    #[must_use]
+    pub fn removed_node_ids(&self) -> &[SceneNodeId] {
+        &self.removed_node_ids
+    }
+
+    /// Returns node IDs whose scene records changed between graphs.
+    #[must_use]
+    pub fn changed_node_ids(&self) -> &[SceneNodeId] {
+        &self.changed_node_ids
+    }
+
+    /// Returns aggregate repaint bounds covering added, removed, changed, and invalidated nodes.
+    #[must_use]
+    pub const fn repaint_bounds(&self) -> Option<Geometry> {
+        self.repaint_bounds
+    }
+
+    /// Returns node IDs whose cached layer content must be invalidated.
+    #[must_use]
+    pub fn cache_invalidated_node_ids(&self) -> &[SceneNodeId] {
+        &self.cache_invalidated_node_ids
+    }
+
+    fn add_repaint_bounds(&mut self, bounds: Option<Geometry>) {
+        if let Some(bounds) = bounds {
+            self.repaint_bounds = Some(match self.repaint_bounds {
+                Some(existing) => existing.union(bounds),
+                None => bounds,
+            });
+        }
+    }
+}
+
+impl Default for SceneGraphDiff {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Retained scene graph.
@@ -522,6 +622,48 @@ impl SceneGraph {
             });
         children.sort_by_key(|node| node.z_order());
         children
+    }
+
+    /// Computes deterministic scene changes needed for repaint and cache invalidation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SceneGraphError`] when either graph contains invalid scene records.
+    pub fn diff(&self, next: &Self) -> Result<SceneGraphDiff, SceneGraphError> {
+        self.validate()?;
+        next.validate()?;
+        let mut diff = SceneGraphDiff::new();
+
+        for entry in &next.entries {
+            if let Some(previous) = self.node(entry.node.id()) {
+                if !previous.has_same_render_record(&entry.node) {
+                    diff.changed_node_ids.push(entry.node.id().clone());
+                    diff.add_repaint_bounds(previous.render_bounds());
+                    diff.add_repaint_bounds(entry.node.render_bounds());
+                }
+            } else {
+                diff.added_node_ids.push(entry.node.id().clone());
+                diff.add_repaint_bounds(entry.node.render_bounds());
+            }
+            if entry.node.cache_invalidated() {
+                diff.cache_invalidated_node_ids
+                    .push(entry.node.id().clone());
+                diff.add_repaint_bounds(entry.node.dirty_bounds());
+            }
+        }
+
+        for entry in &self.entries {
+            if next.node(entry.node.id()).is_none() {
+                diff.removed_node_ids.push(entry.node.id().clone());
+                diff.add_repaint_bounds(entry.node.render_bounds());
+            }
+        }
+
+        diff.added_node_ids.sort();
+        diff.removed_node_ids.sort();
+        diff.changed_node_ids.sort();
+        diff.cache_invalidated_node_ids.sort();
+        Ok(diff)
     }
 
     fn index_of(&self, node_id: &SceneNodeId) -> Option<usize> {
