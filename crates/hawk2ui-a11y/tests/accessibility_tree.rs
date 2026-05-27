@@ -154,6 +154,34 @@ fn host_export_updates_bounds_from_layout_geometry() {
 }
 
 #[test]
+fn host_export_errors_convert_to_shared_diagnostics() {
+    let tree = A11yTree::new(A11yNode::new("button", A11yRole::Button).name("Render"));
+    let mut exporter = A11yHostExporter::desktop(tree);
+
+    let missing_geometry = exporter
+        .apply_geometry(LayoutGeometryUpdate::new(
+            "missing",
+            A11yBounds::new(10.0, 12.0, 80.0, 24.0),
+        ))
+        .expect_err("missing accessibility geometry target must fail");
+    let diagnostic = Diagnostic::from(missing_geometry);
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.rule.as_str(), "a11y.geometry-node-missing");
+    assert!(diagnostic.message.contains("missing"));
+
+    let invalid_bounds = A11yHostExporter::desktop(A11yTree::new(
+        A11yNode::new("root", A11yRole::Window).bounds(A11yBounds::new(0.0, 0.0, -1.0, 1.0)),
+    ))
+    .export_accesskit_update()
+    .expect_err("negative accessibility bounds must fail");
+    let diagnostic = Diagnostic::from(invalid_bounds);
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.rule.as_str(), "a11y.accesskit.invalid-bounds");
+}
+
+#[test]
 fn host_export_records_plugin_editor_accessibility_availability() {
     let tree = A11yTree::new(A11yNode::new("editor", A11yRole::Panel).name("Plugin Editor"));
     let exporter = A11yHostExporter::plugin_editor(tree, true);

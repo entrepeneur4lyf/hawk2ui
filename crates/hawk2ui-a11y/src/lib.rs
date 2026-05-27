@@ -10,7 +10,8 @@ pub mod tree;
 pub use actions::{A11yActionDispatchError, A11yActionDispatcher, A11yActionEvent};
 pub use component::{ComponentKind, ComponentSemantics, VisualStyleSemantics};
 pub use host::{
-    A11yHostExportSnapshot, A11yHostExporter, A11yHostSurfaceKind, LayoutGeometryUpdate,
+    A11yHostExportSnapshot, A11yHostExporter, A11yHostSurfaceKind, AccessKitExport,
+    AccessKitExportError, LayoutGeometryUpdate,
 };
 pub use plugin::{A11yPluginDenial, A11yPluginGuard, A11yPluginOperation, A11yThreadContext};
 pub use tree::{A11yAction, A11yBounds, A11yNode, A11yRole, A11yTree, CheckedState};

@@ -188,12 +188,17 @@ Status:
 
 ### REM-CRATE-004: Add AccessKit Host Bridge
 
+Status: Remediated at accessibility export boundary.
+
 Evidence:
 
 - `docs/technical/crate-selection.md` marks `accesskit` as preferred.
 - `docs/specs/rendering-architecture.md` requires accessibility geometry references.
-- `crates/hawk2ui-a11y/Cargo.toml` has no `accesskit` dependency.
-- `crates/hawk2ui-a11y/src/lib.rs` exports typed accessibility records only.
+- `crates/hawk2ui-a11y/Cargo.toml` depends on `accesskit = "0.24.0"`.
+- `crates/hawk2ui-a11y` exports typed accessibility records, host snapshots, and AccessKit
+  tree updates.
+- AccessKit export maps roles, labels, values, checked state, disabled state, bounds, actions,
+  child order, focus, duplicate IDs, and invalid geometry into explicit output or diagnostics.
 
 Required remediation:
 
@@ -205,6 +210,23 @@ Acceptance:
 
 - Desktop host can export an AccessKit tree.
 - Plugin host behavior is explicit for supported and unsupported accessibility cells.
+
+Remediation delivered:
+
+- Added crate-root exports for `AccessKitExport` and `AccessKitExportError` so host adapters can use
+  the production AccessKit boundary without reaching into private modules.
+- Added shared `Diagnostic` conversion for AccessKit/host export errors.
+- Replaced raw string geometry failures with structured accessibility diagnostics.
+- Added tests proving AccessKit tree export, focus validation, layout geometry updates, plugin editor
+  availability records, invalid bounds diagnostics, and shared diagnostic conversion.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this accessibility export boundary for production
+  stability: AccessKit integration is real, host-facing errors are structured, and plugin
+  availability is explicit. Native OS adapter attachment remains tracked by host/platform backend
+  remediation, not by the accessibility model.
+
 
 ### REM-CRATE-005: Add Schema Generation And Validation
 
@@ -1385,10 +1407,13 @@ Acceptance:
 
 ### REM-A11Y-001: Complete Accessibility Architecture
 
+Status: Remediated at model/export/action-dispatch layer.
+
 Evidence:
 
 - A11y records exist for roles, actions, tree, host export snapshots, and plugin guards.
-- AccessKit and OS bridge are absent.
+- AccessKit export is implemented in `hawk2ui-a11y` and covered by tests.
+- OS-specific attachment is still owned by native host backends.
 
 Required remediation:
 
@@ -1400,6 +1425,25 @@ Required remediation:
 Acceptance:
 
 - Accessible names, roles, focus, bounds, and actions update with scene changes.
+
+Remediation delivered:
+
+- Component semantics produce accessibility nodes independently from visual styling.
+- Layout geometry updates mutate host-exported accessibility bounds.
+- AccessKit export produces native tree updates with roles, labels, values, focus, actions, bounds,
+  checked/disabled state, and deterministic child order.
+- Accessibility action dispatch supports focus, press, increment, decrement, set value, and custom
+  actions with shared diagnostic conversion for failures.
+- Plugin accessibility guards deny audio-thread and unstable host operations while allowing safe UI
+  thread updates.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this accessibility architecture layer for
+  production stability: the model, action dispatch, AccessKit export, and plugin safety boundary are
+  implemented and tested. Remaining OS attachment work belongs to Winit/Baseview/native host
+  remediation.
+
 
 ## Testing And Release Remediation
 

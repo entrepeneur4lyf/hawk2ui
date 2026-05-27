@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use accesskit::{Action, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate};
+use hawk2ui_api::Diagnostic;
 use serde::{Deserialize, Serialize};
 
 use crate::{A11yAction, A11yBounds, A11yNode, A11yRole, A11yTree, CheckedState};
@@ -63,7 +64,7 @@ impl AccessKitExport {
 }
 
 /// AccessKit export failure.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AccessKitExportError {
     /// Stable diagnostic rule.
     pub rule: String,
@@ -77,6 +78,12 @@ impl AccessKitExportError {
             rule: rule.into(),
             message: message.into(),
         }
+    }
+}
+
+impl From<AccessKitExportError> for Diagnostic {
+    fn from(error: AccessKitExportError) -> Self {
+        Self::error(error.rule, error.message)
     }
 }
 
@@ -114,10 +121,16 @@ impl A11yHostExporter {
     ///
     /// # Errors
     ///
-    /// Returns a message when the target node does not exist.
-    pub fn apply_geometry(&mut self, update: LayoutGeometryUpdate) -> Result<(), String> {
+    /// Returns [`AccessKitExportError`] when the target node does not exist.
+    pub fn apply_geometry(
+        &mut self,
+        update: LayoutGeometryUpdate,
+    ) -> Result<(), AccessKitExportError> {
         let Some(node) = self.tree.find_mut(update.node_id) else {
-            return Err(format!("accessibility node is missing: {}", update.node_id));
+            return Err(AccessKitExportError::new(
+                "a11y.geometry-node-missing",
+                format!("accessibility node is missing: {}", update.node_id),
+            ));
         };
         node.bounds = Some(update.bounds);
         Ok(())
