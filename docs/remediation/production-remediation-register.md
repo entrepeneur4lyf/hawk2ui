@@ -1414,6 +1414,7 @@ Evidence:
 
 - `hawk2ui-security-model` validates trust records.
 - Artifact signing, checksums, lockfile policy, reproducibility, and verification evidence are not complete.
+- Package trust violations now convert into the shared diagnostic envelope with stable security rules.
 
 Required remediation:
 
@@ -1422,6 +1423,24 @@ Required remediation:
 Acceptance:
 
 - Tampered packages are rejected before execution.
+
+Status:
+
+- Partially remediated: package trust records validate artifact schema version, manifest hash
+  presence, compiled asset/script hash presence and format, target metadata, signature status, and
+  verification report presence.
+- Package trust failures now expose shared diagnostics for downstream CLI/build/reporting
+  boundaries.
+- Remaining release blocker: artifact signing/signature policy, checksum manifests tied to actual
+  packaged payloads, reproducible build checks, and release verification evidence must be wired into
+  build/package execution.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this package-integrity diagnostics slice for
+  production stability: trust failures have stable rules and user-facing messages. The larger
+  package-signing/reproducibility work remains open and tracked.
+
 
 ## Accessibility Remediation
 

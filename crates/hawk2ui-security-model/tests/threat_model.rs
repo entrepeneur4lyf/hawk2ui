@@ -1,3 +1,4 @@
+use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_security_model::{
     AttackFixtures, AttackFixturesError, CapabilityRejections, CapabilityRejectionsError,
     CapabilityVerdict, PackageSignatureStatus, PackageTrustRecord, PackageTrustValidator,
@@ -334,6 +335,17 @@ fn package_trust_rejects_malformed_hashes() {
             }
         );
     }
+}
+
+#[test]
+fn package_trust_violation_converts_to_shared_diagnostic() {
+    let diagnostic = Diagnostic::from(PackageTrustViolation::InvalidHash {
+        field: "compiled_script_hashes".into(),
+    });
+
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    assert_eq!(diagnostic.rule.as_str(), "security.package.hash-invalid");
+    assert!(diagnostic.message.contains("compiled_script_hashes"));
 }
 
 fn valid_hash(label: &str) -> String {

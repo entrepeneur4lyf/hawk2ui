@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 
+use hawk2ui_api::Diagnostic;
 use serde::Deserialize;
 
 /// The canonical Cargo package name for this crate.
@@ -582,6 +583,49 @@ pub enum PackageTrustViolation {
         /// Field that carried the invalid hash.
         field: String,
     },
+}
+
+impl From<PackageTrustViolation> for Diagnostic {
+    fn from(violation: PackageTrustViolation) -> Self {
+        match violation {
+            PackageTrustViolation::ArtifactSchemaMismatch { expected, actual } => Self::error(
+                "security.package.schema-mismatch",
+                format!("artifact schema version mismatch: expected {expected}, actual {actual}"),
+            ),
+            PackageTrustViolation::MissingManifestSnapshotHash => Self::error(
+                "security.package.manifest-hash-missing",
+                "package trust record is missing the manifest snapshot hash",
+            ),
+            PackageTrustViolation::MissingCompiledAssetHashes => Self::error(
+                "security.package.asset-hashes-missing",
+                "package trust record is missing compiled asset hashes",
+            ),
+            PackageTrustViolation::MissingCompiledScriptHashes => Self::error(
+                "security.package.script-hashes-missing",
+                "package trust record is missing compiled script hashes",
+            ),
+            PackageTrustViolation::MissingTargetMetadata => Self::error(
+                "security.package.target-metadata-missing",
+                "package trust record is missing target metadata",
+            ),
+            PackageTrustViolation::MissingSignature => Self::error(
+                "security.package.signature-missing",
+                "package signature is missing",
+            ),
+            PackageTrustViolation::InvalidSignature => Self::error(
+                "security.package.signature-invalid",
+                "package signature is invalid",
+            ),
+            PackageTrustViolation::MissingVerificationReport => Self::error(
+                "security.package.verification-report-missing",
+                "package verification report is missing",
+            ),
+            PackageTrustViolation::InvalidHash { field } => Self::error(
+                "security.package.hash-invalid",
+                format!("package trust hash is invalid: {field}"),
+            ),
+        }
+    }
 }
 
 #[cfg(test)]
