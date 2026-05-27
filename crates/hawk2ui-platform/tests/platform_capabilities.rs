@@ -309,3 +309,21 @@ fn secrets_database_enforces_migration_ordering_and_safe_storage_paths() {
     assert_eq!(ordering_error.diagnostic.rule, "database.migration.order");
     assert_eq!(storage_error.diagnostic.rule, "database.storage.unsafe");
 }
+
+#[test]
+fn database_migrations_require_stable_unique_ids() {
+    for migrations in [
+        vec![DatabaseMigration::new(1, "")],
+        vec![DatabaseMigration::new(1, "create settings")],
+        vec![DatabaseMigration::new(1, "create/settings")],
+        vec![
+            DatabaseMigration::new(1, "create_settings"),
+            DatabaseMigration::new(2, "create_settings"),
+        ],
+    ] {
+        let error = DatabasePolicy::validate_migrations(&migrations)
+            .expect_err("invalid migration IDs must fail");
+
+        assert_eq!(error.diagnostic.rule, "database.migration.id-invalid");
+    }
+}

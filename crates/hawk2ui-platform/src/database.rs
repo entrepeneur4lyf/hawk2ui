@@ -1,5 +1,7 @@
 //! Capability-scoped database API records.
 
+use std::collections::BTreeSet;
+
 use crate::{FilesystemGrant, FilesystemPolicy, PlatformDiagnostic};
 
 /// Database migration record.
@@ -39,6 +41,17 @@ impl DatabasePolicy {
     ///
     /// Returns [`DatabaseDenied`] when migration versions are not strictly increasing.
     pub fn validate_migrations(migrations: &[DatabaseMigration]) -> Result<(), DatabaseDenied> {
+        let mut ids = BTreeSet::new();
+        for migration in migrations {
+            if !is_valid_migration_id(&migration.id) || !ids.insert(migration.id.as_str()) {
+                return Err(DatabaseDenied {
+                    diagnostic: PlatformDiagnostic::error(
+                        "database.migration.id-invalid",
+                        "database migration IDs must be unique stable identifiers",
+                    ),
+                });
+            }
+        }
         for window in migrations.windows(2) {
             if window[0].version >= window[1].version {
                 return Err(DatabaseDenied {
@@ -70,4 +83,11 @@ impl DatabasePolicy {
                 ),
             })
     }
+}
+
+fn is_valid_migration_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }
