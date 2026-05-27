@@ -4,6 +4,7 @@ use hawk2ui_layout::Viewport;
 use hawk2ui_render::{Color, Geometry, RendererBackend};
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend};
 use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId};
+use hawk2ui_style::{TokenSet, compile_style_source};
 
 #[test]
 fn svelte_5_compile_maps_lifecycle_keyed_children_events_refs_styles_assets_and_source_maps() {
@@ -184,6 +185,35 @@ fn svelte_5_runtime_bridge_renders_visible_skia_pixels() {
             frame.geometry_for(&RuntimeViewId::new("title")).unwrap()
         ) > 0
     );
+}
+
+#[test]
+fn svelte_5_compile_to_runtime_with_styles_applies_compiled_root_background() {
+    let source = SvelteComponentSource::new(
+        "examples/frameworks/svelte-basic/src/App.svelte",
+        r#"<hawk-view id="root" class="surface"></hawk-view>"#,
+    );
+    let sheet = compile_style_source(".surface { background-color: token(color.surface); }")
+        .expect("style source compiles");
+    let tokens = TokenSet::production().with_color("color.surface", 240, 88, 40, 255);
+
+    let artifact = SvelteIntegration::new()
+        .compile_to_runtime_with_styles(source, &sheet, &tokens)
+        .expect("valid Svelte source should bridge with styles");
+    let frame = RuntimeSceneBridge::new(Viewport::new(160.0, 80.0))
+        .build(artifact.runtime_tree())
+        .expect("runtime scene builds");
+
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Fill {
+                id,
+                color,
+                ..
+            } if id.as_str() == "root" && *color == Color::rgba(240, 88, 40, 255)
+        )
+    }));
 }
 
 fn render_runtime_frame_with_skia(frame: &RuntimeSceneFrame, backend: &mut SkiaRendererBackend) {

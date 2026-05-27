@@ -981,6 +981,7 @@ dependencies = [
  "hawk2ui-render",
  "hawk2ui-render-skia",
  "hawk2ui-runtime",
+ "hawk2ui-style",
 ]
 
 [[package]]

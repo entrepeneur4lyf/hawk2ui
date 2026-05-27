@@ -9,6 +9,7 @@ use hawk2ui_authoring::{
     PropValue, StyleRef,
 };
 use hawk2ui_runtime::RuntimeViewTree;
+use hawk2ui_style::{CompiledStyleSheet, TokenSet};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-framework-svelte";
@@ -309,6 +310,33 @@ impl SvelteIntegration {
             .map_err(|error| bridge_error(author_file.as_str(), &error))?;
         Ok(SvelteRuntimeArtifact { compiled, runtime })
     }
+
+    /// Compiles Svelte author source into a runtime artifact with compiled style references applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SvelteCompileError`] when source validation, native authoring finalization, style
+    /// resolution, or runtime bridging fails.
+    pub fn compile_to_runtime_with_styles(
+        self,
+        source: SvelteComponentSource,
+        sheet: &CompiledStyleSheet,
+        tokens: &TokenSet,
+    ) -> Result<SvelteRuntimeArtifact, SvelteCompileError> {
+        let author_file = source.author_file.clone();
+        let source_text = source.source.clone();
+        let compiled = self.compile(source)?;
+        let native_artifact = native_artifact_from_svelte_with_defaults(
+            author_file.as_str(),
+            source_text.as_str(),
+            &compiled,
+            false,
+        )?;
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact_with_styles(&native_artifact, sheet, tokens)
+            .map_err(|error| bridge_error(author_file.as_str(), &error))?;
+        Ok(SvelteRuntimeArtifact { compiled, runtime })
+    }
 }
 
 fn native_artifact_from_svelte(
@@ -316,9 +344,20 @@ fn native_artifact_from_svelte(
     source_text: &str,
     compiled: &SvelteCompiledArtifact,
 ) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, SvelteCompileError> {
+    native_artifact_from_svelte_with_defaults(author_file, source_text, compiled, true)
+}
+
+fn native_artifact_from_svelte_with_defaults(
+    author_file: &str,
+    source_text: &str,
+    compiled: &SvelteCompiledArtifact,
+    include_default_visual_props: bool,
+) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, SvelteCompileError> {
     let mut runtime = NativeAuthoringRuntime::new(author_file);
-    let mut root = NativeAuthoringElement::new(compiled.root().id().as_str(), ElementKind::View)
-        .with_prop("background", PropValue::String("#080a0e".to_string()));
+    let mut root = NativeAuthoringElement::new(compiled.root().id().as_str(), ElementKind::View);
+    if include_default_visual_props {
+        root = root.with_prop("background", PropValue::String("#080a0e".to_string()));
+    }
     for reference in compiled.refs() {
         root = root.with_ref(NativeRef::new(reference));
     }
