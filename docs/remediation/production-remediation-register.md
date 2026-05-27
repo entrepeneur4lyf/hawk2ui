@@ -1351,8 +1351,8 @@ Status:
 
 - CLAP adapter metadata now depends on `clap-sys` and emits a CLAP entry plan containing the CLAP ABI version, `clap_entry` symbol, plugin factory ID, plugin ID, vendor/name/version, descriptor ABI marker, and CLAP feature list.
 - CLAP package materialization now writes `Contents/Resources/clap-entry.toml` and includes it in required file and hash verification coverage.
-- CLAP `cdylib` scaffold generation now writes a Cargo project with a `clap_entry` export, plugin descriptor, plugin factory callbacks, and minimal create-plugin path; tests compile it to a release dynamic library.
-- Full audio processing callbacks, editor attachment, and host loading remain open under this item.
+- CLAP `cdylib` scaffold generation now writes a Cargo project with a `clap_entry` export, plugin descriptor, plugin factory callbacks, and minimal create-plugin path; tests compile it to a release dynamic library and host-load it through a generated external checker that resolves the entry, obtains the factory, reads the descriptor, and creates a plugin instance.
+- Full audio processing callbacks and editor attachment remain open under this item.
 
 Required remediation:
 

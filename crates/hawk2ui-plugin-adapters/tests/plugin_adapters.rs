@@ -299,6 +299,95 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
             .windows("com.hawk2ui.loadable".len())
             .any(|window| window == b"com.hawk2ui.loadable")
     );
+
+    let host_check_root = output_root.join("host-check");
+    write_generated_clap_host_check(&host_check_root, &library_path);
+    let host_target_dir = output_root.join("host-check-target");
+    let status = std::process::Command::new("cargo")
+        .arg("run")
+        .arg("--release")
+        .arg("--manifest-path")
+        .arg(host_check_root.join("Cargo.toml"))
+        .arg("--")
+        .arg(&library_path)
+        .env("CARGO_TARGET_DIR", &host_target_dir)
+        .status()
+        .expect("generated CLAP host check should launch");
+    assert!(
+        status.success(),
+        "generated CLAP host check should load the compiled library"
+    );
+}
+
+fn write_generated_clap_host_check(root: &Path, library_path: &Path) {
+    assert!(
+        library_path.is_file(),
+        "host checker requires an already-built CLAP library"
+    );
+    std::fs::create_dir_all(root.join("src")).expect("host checker src directory writes");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        generated_clap_host_check_manifest(),
+    )
+    .expect("host checker manifest writes");
+    std::fs::write(
+        root.join("src").join("main.rs"),
+        generated_clap_host_check_source(),
+    )
+    .expect("host checker source writes");
+}
+
+fn generated_clap_host_check_manifest() -> &'static str {
+    r#"[package]
+name = "hawk2ui-clap-host-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+clap-sys = "0.5.0"
+libloading = "0.8.9"
+"#
+}
+
+fn generated_clap_host_check_source() -> &'static str {
+    r#"use std::{env, ffi::CStr, ptr};
+
+fn main() {
+    let library_path = env::args().nth(1).expect("library path argument");
+
+    unsafe {
+        let library = libloading::Library::new(library_path).expect("library loads");
+        let entry_symbol: libloading::Symbol<*const clap_sys::entry::clap_plugin_entry> =
+            library.get(b"clap_entry\0").expect("clap_entry resolves");
+        let entry = &**entry_symbol;
+        assert!((entry.init.expect("entry init"))(ptr::null()));
+
+        let factory = (entry.get_factory.expect("factory"))(
+            b"clap.plugin-factory\0".as_ptr().cast(),
+        );
+        assert!(!factory.is_null());
+        let factory = &*(factory as *const clap_sys::factory::plugin_factory::clap_plugin_factory);
+        assert_eq!((factory.get_plugin_count.expect("count"))(factory), 1);
+
+        let descriptor = (factory.get_plugin_descriptor.expect("descriptor"))(factory, 0);
+        assert!(!descriptor.is_null());
+        let descriptor = &*descriptor;
+        assert_eq!(
+            CStr::from_ptr(descriptor.id).to_string_lossy(),
+            "com.hawk2ui.loadable"
+        );
+
+        let plugin = (factory.create_plugin.expect("create"))(
+            factory,
+            ptr::null(),
+            descriptor.id,
+        );
+        assert!(!plugin.is_null());
+        assert_eq!((*plugin).desc, descriptor as *const _);
+    }
+}
+"#
 }
 
 #[test]
