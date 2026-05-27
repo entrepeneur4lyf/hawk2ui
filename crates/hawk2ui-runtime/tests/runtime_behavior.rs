@@ -193,6 +193,65 @@ fn host_bindings_deny_missing_capability() {
 }
 
 #[test]
+fn host_bindings_enforce_every_platform_runtime_capability_domain() {
+    let domains = [
+        (
+            "platform.filesystem.read",
+            RuntimeCapability::FilesystemAccess,
+        ),
+        ("platform.network.fetch", RuntimeCapability::NetworkRequest),
+        ("platform.clipboard.read", RuntimeCapability::ClipboardRead),
+        (
+            "platform.clipboard.write",
+            RuntimeCapability::ClipboardWrite,
+        ),
+        ("platform.database.query", RuntimeCapability::DatabaseAccess),
+        ("platform.audio.playback", RuntimeCapability::AudioPlayback),
+        ("platform.secrets.read", RuntimeCapability::SecretRead),
+        ("platform.ai.request", RuntimeCapability::AiProvider),
+        ("platform.mcp.call", RuntimeCapability::Mcp),
+        ("platform.dialog.open", RuntimeCapability::Dialogs),
+        (
+            "platform.notification.send",
+            RuntimeCapability::Notifications,
+        ),
+        (
+            "platform.shortcut.register",
+            RuntimeCapability::GlobalShortcuts,
+        ),
+    ];
+
+    for (binding_name, capability) in domains {
+        let registry = HostBindingRegistry::new([HostBindingRecord::new(
+            binding_name,
+            BindingSchema::new("object", "object", "PlatformError"),
+        )
+        .requires(capability)]);
+
+        let denied = registry
+            .call(
+                binding_name,
+                StructuredValue::Object(Default::default()),
+                [],
+                LifecyclePhase::Update,
+            )
+            .expect_err("missing declared capability must deny platform host binding");
+        assert_eq!(denied.code, "binding.capability-denied");
+        assert_eq!(denied.capability, Some(capability));
+
+        let allowed = registry
+            .call(
+                binding_name,
+                StructuredValue::Object(Default::default()),
+                [capability],
+                LifecyclePhase::Update,
+            )
+            .expect("declared capability must allow platform host binding");
+        assert_eq!(allowed.required_capability, Some(capability));
+    }
+}
+
+#[test]
 fn host_bindings_preserve_first_declaration_for_duplicate_names() {
     let registry = HostBindingRegistry::new([
         HostBindingRecord::new(

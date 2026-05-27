@@ -23,6 +23,20 @@ pub enum RuntimeCapability {
     FilesystemAccess,
     /// Reads runtime secrets.
     SecretRead,
+    /// Accesses application database APIs.
+    DatabaseAccess,
+    /// Uses host-managed audio playback APIs.
+    AudioPlayback,
+    /// Calls a configured AI provider.
+    AiProvider,
+    /// Calls configured MCP tools or servers.
+    Mcp,
+    /// Opens host dialogs or file pickers.
+    Dialogs,
+    /// Sends host notifications.
+    Notifications,
+    /// Registers or handles global shortcuts.
+    GlobalShortcuts,
     /// Uses plugin parameter APIs.
     PluginParameters,
 }

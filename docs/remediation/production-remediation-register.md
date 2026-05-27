@@ -1010,10 +1010,18 @@ Review check:
 
 ### REM-RUNTIME-002: Capability Policy Enforcement
 
+Status: Remediated in runtime binding layer.
+
 Evidence:
 
 - Security/platform crates have capability records.
-- Real script/runtime host API enforcement is incomplete because real JS runtime is absent.
+- `ScriptBackend` now runs real Boa-backed JavaScript/TypeScript execution and projects host
+  promises/timers through Boa jobs.
+- `HostBindingRegistry::call` denies unavailable lifecycle phases, schema mismatches, duplicate
+  downgrade attempts, and missing declared capabilities with structured diagnostics.
+- `RuntimeCapability` now covers filesystem, network, clipboard read/write, database, audio,
+  secrets, AI providers, MCP, dialogs, notifications, global shortcuts, render invalidation, UI
+  events, and plugin parameters.
 
 Required remediation:
 
@@ -1022,6 +1030,22 @@ Required remediation:
 Acceptance:
 
 - Denied operations fail with structured diagnostics in real runtime execution.
+
+Remediation delivered:
+
+- Added missing runtime capability variants for database, audio playback, AI providers, MCP,
+  dialogs, notifications, and global shortcuts.
+- Added runtime host-binding coverage that proves every platform capability domain denies missing
+  capability declarations and allows explicitly declared capability calls.
+- Kept concrete OS/API behavior separate under `REM-API-001`; this item now covers the runtime
+  enforcement boundary that script-host calls must pass before any platform API executes.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with the runtime capability enforcement boundary:
+  host binding execution is denied by default, capability declarations are explicit, and denials
+  are structured. No corrective revision is required for this runtime layer before implementing
+  the concrete platform APIs.
 
 ### REM-RUNTIME-003: State Persistence
 
