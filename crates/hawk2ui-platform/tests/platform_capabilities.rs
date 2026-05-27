@@ -1,8 +1,11 @@
 use hawk2ui_platform::{
-    CapabilityRecord, CapabilitySchema, CapabilityTable, ClipboardDataType, ClipboardManifest,
-    ClipboardPolicy, DatabaseMigration, DatabasePolicy, FilesystemGrant, FilesystemPolicy,
-    FilesystemScope, NetworkManifest, NetworkPolicy, PlatformContext, PlatformDiagnostic,
-    PlatformOperation, PlatformSecretManifest, PlatformSecretPolicy, RuntimeAvailability,
+    AiManifest, AiPolicy, AudioManifest, AudioPolicy, CapabilityRecord, CapabilitySchema,
+    CapabilityTable, ClipboardDataType, ClipboardManifest, ClipboardPolicy, DatabaseMigration,
+    DatabasePolicy, DialogKind, DialogManifest, DialogPolicy, FilesystemGrant, FilesystemPolicy,
+    FilesystemScope, LocalizationManifest, LocalizationPolicy, McpManifest, McpPolicy,
+    NetworkManifest, NetworkPolicy, NotificationManifest, NotificationPolicy, PlatformContext,
+    PlatformDiagnostic, PlatformOperation, PlatformSecretManifest, PlatformSecretPolicy,
+    RuntimeAvailability, ShortcutManifest, ShortcutPolicy,
 };
 
 #[test]
@@ -415,4 +418,238 @@ fn database_migrations_require_stable_unique_ids() {
 
         assert_eq!(error.diagnostic.rule, "database.migration.id-invalid");
     }
+}
+
+#[test]
+fn extended_platform_domains_enforce_capabilities_and_manifest_allowlists() {
+    let capabilities = CapabilityTable::new([
+        CapabilityRecord::new("audio.playback")
+            .allow(PlatformOperation::AudioPlayback)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(true),
+        CapabilityRecord::new("ai.provider")
+            .allow(PlatformOperation::AiProviderRequest)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("mcp.call")
+            .allow(PlatformOperation::McpToolCall)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("notifications.send")
+            .allow(PlatformOperation::NotificationSend)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("shortcuts.register")
+            .allow(PlatformOperation::GlobalShortcutRegister)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("localization.load")
+            .allow(PlatformOperation::LocalizationRead)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(true),
+        CapabilityRecord::new("dialogs.open")
+            .allow(PlatformOperation::DialogOpen)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("files.pick")
+            .allow(PlatformOperation::FilePickerOpen)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+    ]);
+
+    assert_eq!(
+        AudioPolicy::request(
+            &capabilities,
+            &AudioManifest::new("audio.playback", ["meter-click"]),
+            "meter-click",
+            PlatformContext::Plugin,
+        )
+        .expect("declared plugin-safe cue should be allowed")
+        .cue_id,
+        "meter-click"
+    );
+    assert_eq!(
+        AiPolicy::request(
+            &capabilities,
+            &AiManifest::new("ai.provider", ["openai"], ["summarize"]),
+            "openai",
+            "summarize",
+            PlatformContext::Desktop,
+        )
+        .expect("declared AI provider operation should be allowed")
+        .provider_id,
+        "openai"
+    );
+    assert_eq!(
+        McpPolicy::call(
+            &capabilities,
+            &McpManifest::new("mcp.call", ["design-server"], ["snapshot"]),
+            "design-server",
+            "snapshot",
+            PlatformContext::Desktop,
+        )
+        .expect("declared MCP server tool should be allowed")
+        .tool_name,
+        "snapshot"
+    );
+    assert_eq!(
+        NotificationPolicy::send(
+            &capabilities,
+            &NotificationManifest::new("notifications.send", ["build"]),
+            "build",
+            PlatformContext::Desktop,
+        )
+        .expect("declared notification channel should be allowed")
+        .channel,
+        "build"
+    );
+    assert_eq!(
+        ShortcutPolicy::register(
+            &capabilities,
+            &ShortcutManifest::new("shortcuts.register", ["CommandOrControl+K"]),
+            "CommandOrControl+K",
+            PlatformContext::Desktop,
+        )
+        .expect("declared shortcut should be allowed")
+        .accelerator,
+        "CommandOrControl+K"
+    );
+    assert_eq!(
+        LocalizationPolicy::load(
+            &capabilities,
+            &LocalizationManifest::new("localization.load", ["en-US", "fr-FR"]),
+            "fr-FR",
+            PlatformContext::Plugin,
+        )
+        .expect("declared locale should be allowed")
+        .locale,
+        "fr-FR"
+    );
+    assert_eq!(
+        DialogPolicy::open(
+            &capabilities,
+            &DialogManifest::new("dialogs.open", [DialogKind::Message]),
+            DialogKind::Message,
+            PlatformContext::Desktop,
+        )
+        .expect("declared dialog kind should be allowed")
+        .kind,
+        DialogKind::Message
+    );
+    assert_eq!(
+        DialogPolicy::file_picker(
+            &capabilities,
+            &DialogManifest::new("files.pick", [DialogKind::FilePicker]),
+            PlatformContext::Desktop,
+        )
+        .expect("declared file picker should be allowed")
+        .kind,
+        DialogKind::FilePicker
+    );
+
+    assert_eq!(
+        AudioPolicy::request(
+            &capabilities,
+            &AudioManifest::new("audio.playback", ["meter-click"]),
+            "explosion",
+            PlatformContext::Plugin,
+        )
+        .expect_err("undeclared audio cue must be denied")
+        .diagnostic
+        .rule,
+        "audio.cue.denied"
+    );
+    assert_eq!(
+        AiPolicy::request(
+            &capabilities,
+            &AiManifest::new("ai.provider", ["openai"], ["summarize"]),
+            "evil-ai",
+            "summarize",
+            PlatformContext::Desktop,
+        )
+        .expect_err("undeclared AI provider must be denied")
+        .diagnostic
+        .rule,
+        "ai.provider.denied"
+    );
+    assert_eq!(
+        McpPolicy::call(
+            &capabilities,
+            &McpManifest::new("mcp.call", ["design-server"], ["snapshot"]),
+            "design-server",
+            "delete_all",
+            PlatformContext::Desktop,
+        )
+        .expect_err("undeclared MCP tool must be denied")
+        .diagnostic
+        .rule,
+        "mcp.tool.denied"
+    );
+    assert_eq!(
+        NotificationPolicy::send(
+            &capabilities,
+            &NotificationManifest::new("notifications.send", ["build"]),
+            "marketing",
+            PlatformContext::Desktop,
+        )
+        .expect_err("undeclared notification channel must be denied")
+        .diagnostic
+        .rule,
+        "notification.channel.denied"
+    );
+    assert_eq!(
+        ShortcutPolicy::register(
+            &capabilities,
+            &ShortcutManifest::new("shortcuts.register", ["CommandOrControl+K"]),
+            "CommandOrControl+Q",
+            PlatformContext::Desktop,
+        )
+        .expect_err("undeclared shortcut accelerator must be denied")
+        .diagnostic
+        .rule,
+        "shortcut.accelerator.denied"
+    );
+    assert_eq!(
+        LocalizationPolicy::load(
+            &capabilities,
+            &LocalizationManifest::new("localization.load", ["en-US", "fr-FR"]),
+            "de-DE",
+            PlatformContext::Plugin,
+        )
+        .expect_err("undeclared locale must be denied")
+        .diagnostic
+        .rule,
+        "localization.locale.denied"
+    );
+    assert_eq!(
+        DialogPolicy::open(
+            &capabilities,
+            &DialogManifest::new("dialogs.open", [DialogKind::Message]),
+            DialogKind::FilePicker,
+            PlatformContext::Desktop,
+        )
+        .expect_err("undeclared dialog kind must be denied")
+        .diagnostic
+        .rule,
+        "dialog.kind.denied"
+    );
+    assert_eq!(
+        DialogPolicy::file_picker(
+            &CapabilityTable::new([]),
+            &DialogManifest::new("files.pick", [DialogKind::FilePicker]),
+            PlatformContext::Desktop,
+        )
+        .expect_err("missing file picker capability must be denied")
+        .diagnostic
+        .rule,
+        "capability.missing"
+    );
 }

@@ -1286,10 +1286,18 @@ Acceptance:
 
 ### REM-API-001: Complete Capability-Gated Platform APIs
 
+Status: Remediated at policy/record layer.
+
 Evidence:
 
 - `hawk2ui-platform` contains capability/filesystem/network/database/clipboard/secrets records.
-- Real runtime binding and OS behavior are incomplete.
+- `hawk2ui-platform` now contains capability-gated records and policies for filesystem, network,
+  clipboard, database, secrets, audio playback, AI providers, MCP tools, notifications, global
+  shortcuts, localization, dialogs, and file pickers.
+- The policy layer validates manifest allowlists before platform API execution and returns
+  structured diagnostics for missing capabilities or undeclared operations.
+- Runtime host bindings enforce the corresponding runtime capability domains before calls can
+  reach platform policies.
 
 Required remediation:
 
@@ -1298,6 +1306,21 @@ Required remediation:
 Acceptance:
 
 - Every platform API has allow/deny tests and user-facing diagnostics.
+
+Remediation delivered:
+
+- Added `AudioPolicy`, `AiPolicy`, `McpPolicy`, `NotificationPolicy`, `ShortcutPolicy`,
+  `LocalizationPolicy`, and `DialogPolicy`.
+- Added platform operations for audio playback, AI provider requests, MCP tool calls,
+  notifications, shortcut registration, localization reads, dialogs, and file pickers.
+- Added allow/deny coverage for every extended platform domain in `hawk2ui-platform` tests.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this policy/record layer for production
+  stability: all platform domains are denied by default, explicit manifest allowlists are required,
+  and denials are structured. Native OS execution backends remain a separate host/platform
+  integration concern, not a gap in this capability policy layer.
 
 ## Security Remediation
 

@@ -21,6 +21,22 @@ pub enum PlatformOperation {
     DatabaseQuery,
     /// Database migration operation.
     DatabaseMigration,
+    /// Host-managed audio playback operation.
+    AudioPlayback,
+    /// AI provider request operation.
+    AiProviderRequest,
+    /// MCP tool call operation.
+    McpToolCall,
+    /// Notification send operation.
+    NotificationSend,
+    /// Global shortcut registration operation.
+    GlobalShortcutRegister,
+    /// Localization bundle read operation.
+    LocalizationRead,
+    /// Dialog open operation.
+    DialogOpen,
+    /// File picker open operation.
+    FilePickerOpen,
 }
 
 /// Platform execution context.
