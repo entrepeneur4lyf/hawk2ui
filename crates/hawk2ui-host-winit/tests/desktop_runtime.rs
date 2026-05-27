@@ -97,6 +97,48 @@ fn software_frame_renders_runtime_custom_surface_commands() {
 }
 
 #[test]
+fn software_frame_uses_renderer_custom_surface_semantics() {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(128.0, 64.0)),
+        RuntimeVisual::None,
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("analyzer"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(96.0, 32.0)),
+            RuntimeVisual::CustomSurface(
+                RuntimeCustomSurfaceVisual::new(CustomSurfaceCategory::Analyzer)
+                    .with_data_snapshot(
+                        CustomSurfaceDataSnapshot::new([0.0, 0.25, 1.0, 0.4])
+                            .expect("valid samples"),
+                    ),
+            ),
+        ),
+    )
+    .expect("custom surface attaches");
+    let frame = RuntimeSceneBridge::new(Viewport::new(128.0, 64.0))
+        .build(&tree)
+        .expect("runtime scene frame should build");
+
+    let pixels = SoftwareFrameRenderer::default()
+        .render_scene_frame(&frame, 128, 64, 1.0)
+        .expect("runtime custom surface should render to software frame");
+
+    assert!(
+        pixels.pixels().iter().any(|pixel| {
+            let red = (pixel >> 16) & 0xff;
+            let green = (pixel >> 8) & 0xff;
+            let blue = pixel & 0xff;
+            blue >= 200 && green >= 120 && red <= 120
+        }),
+        "software host frames must use the Skia renderer's analyzer custom-surface styling"
+    );
+}
+
+#[test]
 fn software_frame_degrades_missing_runtime_assets_to_visible_placeholders() {
     let tree = RuntimeViewTree::new(RuntimeViewNode::new(
         RuntimeViewId::new("root"),

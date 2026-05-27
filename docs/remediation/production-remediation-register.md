@@ -578,6 +578,8 @@ Review check:
 
 ### REM-RENDER-009: Remove Duplicate Custom Surface Drawing Implementations
 
+Status: Remediated in source.
+
 Evidence:
 
 - `hawk2ui-render-skia` implements custom surface drawing for meter-style and curve-style categories.
@@ -594,6 +596,17 @@ Acceptance:
 
 - Custom surface drawing semantics have one renderer-owned implementation path.
 - Host code delegates custom drawing and does not duplicate meter/curve rendering rules.
+
+Remediation delivered:
+
+- `hawk2ui-host-winit` now depends on `hawk2ui-render-skia` and replays runtime scene frames through `SkiaRendererBackend`.
+- Winit software frames delegate custom surface commands to `SkiaRendererBackend::draw_custom_surface` using `CustomSurfaceDrawRequest` and `CustomSurfaceFrameContext`.
+- The Winit-local meter/curve custom surface drawing implementation was removed; host-owned code now handles frame presentation, scaling, and missing-asset placeholders only.
+- Regression coverage proves analyzer custom surface styling reaches Winit software frames through the renderer-owned path.
+
+Review check:
+
+- As the implementer delivering this product, I am satisfied with this remediation for production stability. The host no longer owns custom surface shape semantics; further renderer completeness work remains tracked under the asset and frame presentation remediation items.
 
 ## Style System Remediation
 

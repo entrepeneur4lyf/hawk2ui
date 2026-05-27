@@ -1,13 +1,19 @@
 //! Skia-backed software frame generation for native host presentation.
 
 use hawk2ui_host::SurfaceMetrics;
-use hawk2ui_render::{CustomSurfaceCategory, Geometry};
+use hawk2ui_render::{
+    BackendError, Color, CustomSurfaceDrawRequest, CustomSurfaceError, CustomSurfaceFrameContext,
+    Geometry, RendererBackend, Stroke, Transform,
+};
+use hawk2ui_render_skia::{SkiaRendererBackend, SkiaSurfaceConfig};
 use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneFrame};
 use skia_safe::{
     AlphaType, Color as SkiaColor, ColorType, Font, ImageInfo, Paint, PaintStyle, Rect, surfaces,
 };
 
 use crate::WinitHostError;
+
+const SOFTWARE_FRAME_SURFACE_ID: &str = "software-frame";
 
 /// Fully-rendered software frame in the `softbuffer` presentation format.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -122,39 +128,32 @@ impl SoftwareFrameRenderer {
     ) -> Result<SoftwareFrame, WinitHostError> {
         validate_pixel_size(width, height)?;
         let scale = scale_factor_to_f32(scale_factor)?;
-        let skia_width = i32::try_from(width).map_err(|_| {
-            WinitHostError::new(
-                "desktop.frame.size-overflow",
-                "frame width exceeds Skia raster limits",
-            )
-        })?;
-        let skia_height = i32::try_from(height).map_err(|_| {
-            WinitHostError::new(
-                "desktop.frame.size-overflow",
-                "frame height exceeds Skia raster limits",
-            )
-        })?;
-        let mut surface =
-            surfaces::raster_n32_premul((skia_width, skia_height)).ok_or_else(|| {
-                WinitHostError::new(
-                    "desktop.frame.skia-allocation-failed",
-                    "failed to allocate Skia CPU raster surface",
-                )
-            })?;
-        surface.canvas().clear(SkiaColor::TRANSPARENT);
+        let mut backend = SkiaRendererBackend::new();
+        backend
+            .create_surface_with_config(SkiaSurfaceConfig::cpu_raster(
+                SOFTWARE_FRAME_SURFACE_ID,
+                width,
+                height,
+            ))
+            .map_err(|error| map_backend_error(&error))?;
+        backend
+            .begin_frame(SOFTWARE_FRAME_SURFACE_ID)
+            .map_err(|error| map_backend_error(&error))?;
+        backend
+            .clear(Color::rgba(0, 0, 0, 0))
+            .map_err(|error| map_backend_error(&error))?;
+        backend
+            .push_transform(Transform::affine(scale, 0.0, 0.0, scale, 0.0, 0.0))
+            .map_err(|error| map_backend_error(&error))?;
 
         for command in scene.draw_commands() {
             match command {
                 RuntimeDrawCommand::Fill {
                     geometry, color, ..
                 } => {
-                    let mut paint = Paint::default();
-                    paint.set_style(PaintStyle::Fill);
-                    paint.set_anti_alias(true);
-                    paint.set_color(to_skia_color(*color));
-                    surface
-                        .canvas()
-                        .draw_rect(scaled_rect(*geometry, scale), &paint);
+                    backend
+                        .fill(*geometry, *color)
+                        .map_err(|error| map_backend_error(&error))?;
                 }
                 RuntimeDrawCommand::Text {
                     geometry,
@@ -169,49 +168,60 @@ impl SoftwareFrameRenderer {
                             "runtime text font size must be finite and greater than zero",
                         ));
                     }
-                    let mut paint = Paint::default();
-                    paint.set_style(PaintStyle::Fill);
-                    paint.set_anti_alias(true);
-                    paint.set_color(to_skia_color(*color));
-                    let mut font = Font::default();
-                    font.set_size((*font_size * scale.max(1.0)).max(1.0));
-                    surface.canvas().draw_str(
-                        text,
-                        (geometry.x * scale, (geometry.y + *font_size) * scale),
-                        &font,
-                        &paint,
-                    );
+                    backend
+                        .draw_text_at(
+                            text,
+                            geometry.x,
+                            geometry.y + *font_size,
+                            *font_size,
+                            *color,
+                        )
+                        .map_err(|error| map_backend_error(&error))?;
                 }
                 RuntimeDrawCommand::ImageAsset { geometry, .. } => {
                     draw_asset_placeholder(
-                        surface.canvas(),
-                        scaled_rect(*geometry, scale),
-                        SkiaColor::from_argb(255, 80, 180, 255),
-                    );
+                        &mut backend,
+                        *geometry,
+                        Color::rgba(80, 180, 255, 255),
+                    )?;
                 }
                 RuntimeDrawCommand::VectorAsset { geometry, .. } => {
                     draw_asset_placeholder(
-                        surface.canvas(),
-                        scaled_rect(*geometry, scale),
-                        SkiaColor::from_argb(255, 255, 198, 74),
-                    );
+                        &mut backend,
+                        *geometry,
+                        Color::rgba(255, 198, 74, 255),
+                    )?;
                 }
                 RuntimeDrawCommand::CustomSurface {
                     surface: custom_surface,
                     data,
                     ..
                 } => {
-                    draw_custom_surface(
-                        surface.canvas(),
-                        custom_surface.category(),
-                        scale_geometry(custom_surface.reserved_layout(), scale),
-                        data.samples(),
-                    );
+                    let request = CustomSurfaceDrawRequest::new(
+                        custom_surface.clone(),
+                        CustomSurfaceFrameContext::new(0, scale)
+                            .map_err(|error| map_custom_surface_error(&error))?,
+                        data.clone(),
+                    )
+                    .map_err(|error| map_custom_surface_error(&error))?;
+                    backend
+                        .draw_custom_surface(&request)
+                        .map_err(|error| map_backend_error(&error))?;
                 }
             }
         }
 
-        surface_to_frame(surface, width, height, skia_width, skia_height)
+        backend
+            .end_frame(SOFTWARE_FRAME_SURFACE_ID)
+            .map_err(|error| map_backend_error(&error))?;
+        let snapshot = backend
+            .frame_snapshot(SOFTWARE_FRAME_SURFACE_ID)
+            .map_err(|error| map_backend_error(&error))?;
+        SoftwareFrame::new(
+            snapshot.width(),
+            snapshot.height(),
+            snapshot.pixels().to_vec(),
+        )
     }
 }
 
@@ -321,94 +331,30 @@ fn surface_to_frame(
     SoftwareFrame::new(width, height, pixels)
 }
 
-fn scaled_rect(geometry: hawk2ui_render::Geometry, scale: f32) -> Rect {
-    Rect::from_xywh(
-        geometry.x * scale,
-        geometry.y * scale,
-        geometry.width * scale,
-        geometry.height * scale,
-    )
-}
-
-fn scale_geometry(geometry: Geometry, scale: f32) -> Geometry {
-    Geometry::new(
-        geometry.x * scale,
-        geometry.y * scale,
-        geometry.width * scale,
-        geometry.height * scale,
-    )
-}
-
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn draw_custom_surface(
-    canvas: &skia_safe::Canvas,
-    category: CustomSurfaceCategory,
+fn draw_asset_placeholder(
+    backend: &mut SkiaRendererBackend,
     geometry: Geometry,
-    samples: &[f32],
-) {
-    let mut background = Paint::default();
-    background.set_style(PaintStyle::Fill);
-    background.set_anti_alias(true);
-    background.set_color(SkiaColor::from_argb(220, 12, 15, 22));
-    canvas.draw_rect(scaled_rect(geometry, 1.0), &background);
-
-    match category {
-        CustomSurfaceCategory::Meter
-        | CustomSurfaceCategory::Slider
-        | CustomSurfaceCategory::Knob => {
-            let values = if samples.is_empty() {
-                &[0.0][..]
-            } else {
-                samples
-            };
-            let bar_count = values.len().max(1);
-            let gap = 2.0_f32.min(geometry.width / bar_count as f32 / 3.0);
-            let bar_width = ((geometry.width - gap * (bar_count.saturating_sub(1) as f32))
-                / bar_count as f32)
-                .max(1.0);
-            let mut fill = Paint::default();
-            fill.set_style(PaintStyle::Fill);
-            fill.set_anti_alias(true);
-            fill.set_color(SkiaColor::from_argb(255, 70, 222, 142));
-            for (index, sample) in values.iter().enumerate() {
-                let normalized = sample.clamp(0.0, 1.0);
-                let height = (geometry.height * normalized).max(1.0);
-                let x = geometry.x + index as f32 * (bar_width + gap);
-                let y = geometry.y + geometry.height - height;
-                canvas.draw_rect(Rect::from_xywh(x, y, bar_width, height), &fill);
-            }
-        }
-        _ => {
-            let mut stroke = Paint::default();
-            stroke.set_style(PaintStyle::Stroke);
-            stroke.set_anti_alias(true);
-            stroke.set_stroke_width(2.0);
-            stroke.set_color(SkiaColor::from_argb(255, 70, 222, 142));
-            let y = geometry.y + geometry.height / 2.0;
-            canvas.draw_line((geometry.x, y), (geometry.x + geometry.width, y), &stroke);
-        }
-    }
-}
-
-fn draw_asset_placeholder(canvas: &skia_safe::Canvas, rect: Rect, accent: SkiaColor) {
-    let mut fill = Paint::default();
-    fill.set_style(PaintStyle::Fill);
-    fill.set_anti_alias(true);
-    fill.set_color(SkiaColor::from_argb(120, 18, 24, 34));
-    canvas.draw_rect(rect, &fill);
-
-    let mut stroke = Paint::default();
-    stroke.set_style(PaintStyle::Stroke);
-    stroke.set_anti_alias(true);
-    stroke.set_stroke_width(2.0);
-    stroke.set_color(accent);
-    canvas.draw_rect(rect, &stroke);
-    canvas.draw_line((rect.left, rect.top), (rect.right, rect.bottom), &stroke);
-    canvas.draw_line((rect.right, rect.top), (rect.left, rect.bottom), &stroke);
-}
-
-fn to_skia_color(color: hawk2ui_render::Color) -> SkiaColor {
-    SkiaColor::from_argb(color.a, color.r, color.g, color.b)
+    accent: Color,
+) -> Result<(), WinitHostError> {
+    backend
+        .fill(geometry, Color::rgba(18, 24, 34, 120))
+        .map_err(|error| map_backend_error(&error))?;
+    backend
+        .stroke(geometry, Stroke::new(2.0))
+        .map_err(|error| map_backend_error(&error))?;
+    backend
+        .fill(
+            Geometry::new(geometry.x, geometry.y, geometry.width.max(1.0), 2.0),
+            accent,
+        )
+        .map_err(|error| map_backend_error(&error))?;
+    backend
+        .fill(
+            Geometry::new(geometry.x, geometry.y, 2.0, geometry.height.max(1.0)),
+            accent,
+        )
+        .map_err(|error| map_backend_error(&error))?;
+    Ok(())
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -439,4 +385,15 @@ fn validate_pixel_size(width: u32, height: u32) -> Result<(), WinitHostError> {
     } else {
         Ok(())
     }
+}
+
+fn map_backend_error(error: &BackendError) -> WinitHostError {
+    WinitHostError::new(
+        error.diagnostic().rule(),
+        error.diagnostic().message().to_string(),
+    )
+}
+
+fn map_custom_surface_error(error: &CustomSurfaceError) -> WinitHostError {
+    WinitHostError::new(error.rule(), error.message().to_string())
 }

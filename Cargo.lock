@@ -1658,6 +1658,7 @@ dependencies = [
  "hawk2ui-host",
  "hawk2ui-layout",
  "hawk2ui-render",
+ "hawk2ui-render-skia",
  "hawk2ui-runtime",
  "skia-safe",
  "softbuffer",
