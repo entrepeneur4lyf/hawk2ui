@@ -452,6 +452,27 @@ Acceptance:
 - Animation fixtures produce deterministic frame sequences.
 - Plugin meter/analyzer updates never block audio processing.
 
+Status:
+
+- Implemented `AnimationCadencePolicy`, `AnimationFrameScheduler`, and `AnimationFrameTick` in
+  `hawk2ui-runtime`.
+- Added deterministic frame stepping with max frame-rate caps, reduced-rate surface cadence, forced
+  headless steps, and reduced-motion suppression of automatic ticks.
+- Extended scheduler batches with rich animation frame ticks while preserving existing timestamp
+  tick compatibility.
+- Wired Winit desktop runtime config to carry animation cadence policy.
+- Wired Winit runtime application to request animation redraws from cadence state and count accepted
+  animation ticks in runtime summaries.
+- Added tests proving deterministic primary/reduced-rate frame sequences, reduced-motion forced
+  stepping, Winit policy configuration, and lifecycle tick accounting.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this slice for production readiness: animation
+  cadence is deterministic, host redraw policy is explicit, reduced motion does not silently animate,
+  and no sleeps/blocking behavior was introduced. No corrective revision is required for this
+  remediation item before moving to style remediation.
+
 ## Style System Remediation
 
 ### REM-STYLE-001: Define And Enforce Exact CSS Subset

@@ -357,6 +357,44 @@ fn scheduler_consumes_scene_update_for_repaint_and_cache_eviction() {
 }
 
 #[test]
+fn animation_frame_scheduler_produces_deterministic_primary_and_reduced_rate_ticks() {
+    let policy = hawk2ui_runtime::AnimationCadencePolicy::new(60)
+        .expect("60hz policy is valid")
+        .with_reduced_rate_divisor(4)
+        .expect("reduced-rate divisor is valid");
+    let mut scheduler = hawk2ui_runtime::AnimationFrameScheduler::new(policy);
+
+    assert_eq!(
+        scheduler.step_at(0),
+        Some(hawk2ui_runtime::AnimationFrameTick::new(0, 0, true))
+    );
+    assert_eq!(scheduler.step_at(15), None);
+    assert_eq!(
+        scheduler.step_at(17),
+        Some(hawk2ui_runtime::AnimationFrameTick::new(1, 17, false))
+    );
+    assert_eq!(
+        scheduler.step_at(68),
+        Some(hawk2ui_runtime::AnimationFrameTick::new(2, 68, true))
+    );
+}
+
+#[test]
+fn animation_frame_scheduler_honors_reduced_motion_without_losing_forced_steps() {
+    let policy = hawk2ui_runtime::AnimationCadencePolicy::new(60)
+        .expect("60hz policy is valid")
+        .with_reduced_motion(true);
+    let mut scheduler = hawk2ui_runtime::AnimationFrameScheduler::new(policy);
+
+    assert_eq!(scheduler.step_at(1_000), None);
+    assert_eq!(
+        scheduler.force_step(1_000),
+        hawk2ui_runtime::AnimationFrameTick::new(0, 1_000, true)
+    );
+    assert_eq!(scheduler.step_at(1_017), None);
+}
+
+#[test]
 fn scene_update_evicts_backend_caches_before_frame_replay() {
     let bridge = RuntimeSceneBridge::new(Viewport::new(100.0, 100.0));
     let previous = bridge

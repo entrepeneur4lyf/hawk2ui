@@ -21,7 +21,10 @@ pub use lifecycle::{LifecycleHook, LifecyclePhase, LifecycleRegistry};
 pub use safety::{
     RuntimeExecutionContext, RuntimeGuardDenial, RuntimeGuardOperation, RuntimeSafetyGuard,
 };
-pub use scheduler::{RuntimeScheduleBatch, RuntimeScheduleError, RuntimeScheduler, TimerJob};
+pub use scheduler::{
+    AnimationCadencePolicy, AnimationFrameScheduler, AnimationFrameTick, RuntimeScheduleBatch,
+    RuntimeScheduleError, RuntimeScheduler, TimerJob,
+};
 pub use script::{
     HostCallRecord, PromiseId, RecordingScriptEngine, RuntimeCapability, RuntimeError,
     ScriptEngine, ScriptEngineError, ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord,

@@ -1,10 +1,12 @@
 //! Production `winit` desktop event-loop runtime.
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::{num::NonZeroU32, sync::Arc, time::Instant};
 
 use hawk2ui_host::DesktopWindowConfig;
 use hawk2ui_layout::Viewport;
-use hawk2ui_runtime::{RuntimeSceneBridge, RuntimeViewTree};
+use hawk2ui_runtime::{
+    AnimationCadencePolicy, AnimationFrameScheduler, RuntimeSceneBridge, RuntimeViewTree,
+};
 use softbuffer::{Context, Surface};
 use winit::{
     application::ApplicationHandler,
@@ -22,6 +24,7 @@ pub struct WinitDesktopRuntimeConfig {
     window: DesktopWindowConfig,
     exit_after_first_frame: bool,
     runtime_tree: Option<RuntimeViewTree>,
+    animation_policy: AnimationCadencePolicy,
 }
 
 impl WinitDesktopRuntimeConfig {
@@ -32,6 +35,7 @@ impl WinitDesktopRuntimeConfig {
             window,
             exit_after_first_frame: false,
             runtime_tree: None,
+            animation_policy: AnimationCadencePolicy::disabled(),
         }
     }
 
@@ -46,6 +50,13 @@ impl WinitDesktopRuntimeConfig {
     #[must_use]
     pub fn with_runtime_tree(mut self, runtime_tree: RuntimeViewTree) -> Self {
         self.runtime_tree = Some(runtime_tree);
+        self
+    }
+
+    /// Sets the animation cadence policy used by the desktop host.
+    #[must_use]
+    pub const fn with_animation_policy(mut self, animation_policy: AnimationCadencePolicy) -> Self {
+        self.animation_policy = animation_policy;
         self
     }
 
@@ -65,6 +76,12 @@ impl WinitDesktopRuntimeConfig {
     #[must_use]
     pub const fn runtime_tree(&self) -> Option<&RuntimeViewTree> {
         self.runtime_tree.as_ref()
+    }
+
+    /// Returns the animation cadence policy.
+    #[must_use]
+    pub const fn animation_policy(&self) -> AnimationCadencePolicy {
+        self.animation_policy
     }
 
     /// Validates runtime configuration before entering the native event loop.
@@ -109,6 +126,8 @@ pub struct WinitDesktopRuntimeSummary {
     pub dpi_changes: u64,
     /// Number of input or focus events processed.
     pub input_events: u64,
+    /// Number of animation ticks accepted before presentation.
+    pub animation_ticks: u64,
     /// Whether a close request was received.
     pub close_requested: bool,
 }
@@ -196,11 +215,14 @@ struct RuntimeApplication {
     context: Option<Context<Arc<Window>>>,
     surface: Option<Surface<Arc<Window>, Arc<Window>>>,
     lifecycle: RuntimeLifecycle,
+    animation: AnimationFrameScheduler,
+    started_at: Instant,
     last_error: Option<WinitHostError>,
 }
 
 impl RuntimeApplication {
     fn new(config: WinitDesktopRuntimeConfig, renderer: SoftwareFrameRenderer) -> Self {
+        let animation = AnimationFrameScheduler::new(config.animation_policy());
         Self {
             config,
             renderer,
@@ -208,6 +230,8 @@ impl RuntimeApplication {
             context: None,
             surface: None,
             lifecycle: RuntimeLifecycle::default(),
+            animation,
+            started_at: Instant::now(),
             last_error: None,
         }
     }
@@ -342,10 +366,20 @@ impl RuntimeApplication {
             )
         })?;
         self.lifecycle.record_frame_presented();
+        if let Some(tick) = self.animation.step_at(self.elapsed_ms()) {
+            self.lifecycle.record_animation_tick();
+            if tick.reduced_rate_due {
+                self.request_redraw();
+            }
+        }
         if self.config.exit_after_first_frame {
             event_loop.exit();
         }
         Ok(())
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
     fn request_redraw(&self) {
@@ -434,6 +468,12 @@ impl RuntimeLifecycle {
         }
     }
 
+    fn record_animation_tick(&mut self) {
+        if self.accepts_frame_presentation() {
+            self.summary.animation_ticks += 1;
+        }
+    }
+
     fn request_close(&mut self) -> bool {
         if self.summary.close_requested {
             false
@@ -470,6 +510,19 @@ mod tests {
         assert_eq!(lifecycle.summary().dpi_changes, 0);
         assert_eq!(lifecycle.summary().input_events, 0);
         assert_eq!(lifecycle.summary().frames_presented, 1);
+    }
+
+    #[test]
+    fn runtime_lifecycle_counts_animation_ticks_before_close() {
+        let mut lifecycle = RuntimeLifecycle::default();
+
+        lifecycle.record_animation_tick();
+        lifecycle.record_animation_tick();
+        assert_eq!(lifecycle.summary().animation_ticks, 2);
+
+        lifecycle.request_close();
+        lifecycle.record_animation_tick();
+        assert_eq!(lifecycle.summary().animation_ticks, 2);
     }
 }
 
@@ -519,6 +572,14 @@ impl ApplicationHandler for RuntimeApplication {
         };
         if let Err(error) = result {
             self.fail(event_loop, error);
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.animation.should_request_frame(self.elapsed_ms())
+            && self.lifecycle.accepts_frame_presentation()
+        {
+            self.request_redraw();
         }
     }
 

@@ -116,6 +116,23 @@ fn runtime_config_accepts_first_frame_smoke_mode() {
 }
 
 #[test]
+fn runtime_config_accepts_animation_cadence_policy() {
+    let policy = hawk2ui_runtime::AnimationCadencePolicy::new(30)
+        .expect("30hz animation policy is valid")
+        .with_reduced_rate_divisor(2)
+        .expect("reduced-rate divisor is valid");
+    let config = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+        "app",
+        SurfaceMetrics::new(640.0, 480.0, 1.0),
+    ))
+    .with_animation_policy(policy);
+
+    config.validate().expect("valid runtime config");
+    assert_eq!(config.animation_policy().max_frame_rate_hz(), Some(30));
+    assert_eq!(config.animation_policy().reduced_rate_divisor(), 2);
+}
+
+#[test]
 fn runtime_events_request_repaint_after_resize() {
     assert!(
         DesktopRuntimeEvent::Resized {
