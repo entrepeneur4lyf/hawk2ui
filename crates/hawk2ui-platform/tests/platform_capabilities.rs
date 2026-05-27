@@ -198,6 +198,32 @@ fn network_capabilities_deny_undeclared_host_malformed_url_and_missing_capabilit
 }
 
 #[test]
+fn network_capabilities_reject_invalid_manifest_hosts() {
+    let table = CapabilityTable::new([CapabilityRecord::new("network.fetch")
+        .allow(PlatformOperation::NetworkRequest)
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)
+        .plugin(true)]);
+
+    for allowed_hosts in [
+        vec![],
+        vec!["api.hawk2ui.dev", "bad host"],
+        vec!["api.hawk2ui.dev", "API.HAWK2UI.DEV"],
+    ] {
+        let manifest = NetworkManifest::new("network.fetch", allowed_hosts);
+        let error = NetworkPolicy::request(
+            &table,
+            &manifest,
+            "https://api.hawk2ui.dev/v1/status",
+            PlatformContext::Desktop,
+        )
+        .expect_err("invalid network manifest hosts must be rejected");
+
+        assert_eq!(error.diagnostic.rule, "network.manifest.invalid-hosts");
+    }
+}
+
+#[test]
 fn clipboard_capabilities_allow_text() {
     let table = CapabilityTable::new([CapabilityRecord::new("clipboard.write")
         .allow(PlatformOperation::ClipboardWrite)

@@ -1,5 +1,7 @@
 //! Capability-scoped network API records.
 
+use std::collections::BTreeSet;
+
 use crate::{CapabilityTable, PlatformContext, PlatformDiagnostic, PlatformOperation};
 use url::Url;
 
@@ -69,6 +71,13 @@ impl NetworkPolicy {
                 url: url.into(),
                 diagnostic: denial.diagnostic,
             })?;
+        let allowed_hosts = validate_allowed_hosts(manifest).ok_or_else(|| NetworkDenied {
+            url: url.into(),
+            diagnostic: PlatformDiagnostic::error(
+                "network.manifest.invalid-hosts",
+                "network manifest hosts must be non-empty, unique, and structurally valid",
+            ),
+        })?;
         let host = parse_host(url).ok_or_else(|| NetworkDenied {
             url: url.into(),
             diagnostic: PlatformDiagnostic::error(
@@ -76,12 +85,7 @@ impl NetworkPolicy {
                 "network URL is malformed or uses an unsupported scheme",
             ),
         })?;
-        if !manifest
-            .allowed_hosts
-            .iter()
-            .filter_map(|allowed| canonical_host(allowed))
-            .any(|allowed| allowed == host)
-        {
+        if !allowed_hosts.contains(&host) {
             return Err(NetworkDenied {
                 url: url.into(),
                 diagnostic: PlatformDiagnostic::error(
@@ -95,6 +99,20 @@ impl NetworkPolicy {
             host,
         })
     }
+}
+
+fn validate_allowed_hosts(manifest: &NetworkManifest) -> Option<BTreeSet<String>> {
+    if manifest.allowed_hosts.is_empty() {
+        return None;
+    }
+    let mut hosts = BTreeSet::new();
+    for allowed in &manifest.allowed_hosts {
+        let host = canonical_host(allowed)?;
+        if !hosts.insert(host) {
+            return None;
+        }
+    }
+    Some(hosts)
 }
 
 fn parse_host(url: &str) -> Option<String> {
