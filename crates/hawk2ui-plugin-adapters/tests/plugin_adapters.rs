@@ -211,6 +211,43 @@ fn plugin_adapters_materialize_format_specific_layouts_and_hash_manifest() {
 }
 
 #[test]
+fn plugin_adapters_materialize_removes_stale_output_payloads() {
+    let metadata = FormatMetadata::new("com.hawk2ui.clean", "Clean", "Hawk2UI").version("1.0.0");
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-plugin-clean-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Clean"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan
+        .materialize()
+        .expect("initial materialization succeeds");
+    let stale_path = Path::new(&outputs[0].output_path).join("Contents/Resources/stale.bin");
+    std::fs::write(&stale_path, "stale payload").expect("stale payload should be writable");
+
+    let outputs = plan
+        .materialize()
+        .expect("repeat materialization should succeed");
+
+    assert!(!stale_path.exists());
+    assert_eq!(
+        plan.verify_materialized(&outputs).status(),
+        VerificationStatus::Passed
+    );
+}
+
+#[test]
 fn plugin_adapters_verify_materialized_rejects_tampered_package_payloads() {
     let metadata = FormatMetadata::new("com.hawk2ui.tamper", "Tamper", "Hawk2UI").version("3.0.0");
     let output_root = std::env::temp_dir().join(format!(

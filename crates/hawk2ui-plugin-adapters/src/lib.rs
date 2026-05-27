@@ -126,6 +126,17 @@ impl PackageTargetPlan {
 
     fn materialize(&self) -> Result<MaterializedPackageOutput, PackageMaterializationError> {
         let output_path = Path::new(&self.output_path);
+        if output_path.exists() {
+            fs::remove_dir_all(output_path).map_err(|error| {
+                materialization_error(
+                    "package.output.clean-failed",
+                    format!(
+                        "failed to clean package output {}: {error}",
+                        self.output_path
+                    ),
+                )
+            })?;
+        }
         fs::create_dir_all(output_path).map_err(|error| {
             materialization_error(
                 "package.output.create-failed",
