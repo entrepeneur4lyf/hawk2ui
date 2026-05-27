@@ -17,6 +17,7 @@ use hawk2ui_plugin::{
 };
 use hawk2ui_plugin_adapters::{
     PackageAdapterSet, PackageFormat, PackageMaterializationError, PackageRequest,
+    VerificationStatus,
 };
 use hawk2ui_render::Color;
 use hawk2ui_runtime::{
@@ -296,12 +297,20 @@ impl WorkspaceCommandRunner {
                 );
             }
         };
+        let verification = plan.verify_materialized(&outputs);
+        if verification.status() == VerificationStatus::Failed {
+            return CommandExecution::failure(
+                CliExitCode::Verification,
+                vec![package_verification_diagnostic()],
+            );
+        }
         let mut stdout = String::from("materialized plugin package outputs:\n");
         for target in &outputs {
             stdout.push_str("- ");
             stdout.push_str(&target.output_path);
             stdout.push('\n');
         }
+        stdout.push_str("verification-status: passed\n");
         CommandExecution::success(stdout)
     }
 
@@ -452,6 +461,13 @@ fn package_materialization_diagnostic(error: &PackageMaterializationError) -> Cl
     CliDiagnostic::error(
         error.diagnostic().rule(),
         "plugin package materialization failed",
+    )
+}
+
+fn package_verification_diagnostic() -> CliDiagnostic {
+    CliDiagnostic::error(
+        "plugin.package.verification-failed",
+        "plugin package verification failed",
     )
 }
 

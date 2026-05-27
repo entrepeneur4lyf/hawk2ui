@@ -288,6 +288,7 @@ default = 0.5
             .stdout
             .contains("materialized plugin package outputs")
     );
+    assert!(execution.stdout.contains("verification-status: passed"));
     for extension in ["clap", "vst3", "component", "app"] {
         let package_root = root
             .join("target/hawk2ui")
