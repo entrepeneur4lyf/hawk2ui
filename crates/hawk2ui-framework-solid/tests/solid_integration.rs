@@ -116,6 +116,29 @@ fn solid_renderer_bridges_to_runtime_tree() {
 }
 
 #[test]
+fn solid_renderer_preserves_static_text_children() {
+    let source = SolidComponentSource::new(
+        "examples/frameworks/solid-basic/src/App.tsx",
+        r#"<hawk-view id="root"><hawk-text id="title">Static Title</hawk-text></hawk-view>"#,
+    );
+
+    let artifact = SolidIntegration::new()
+        .render_to_runtime(source)
+        .expect("valid Solid source should bridge to runtime");
+
+    assert_eq!(artifact.rendered().keyed_children(), ["title"]);
+    assert_eq!(
+        artifact
+            .runtime_tree()
+            .children_of(&RuntimeViewId::new("root"))
+            .iter()
+            .map(RuntimeViewId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["title"]
+    );
+}
+
+#[test]
 fn solid_render_to_runtime_with_styles_applies_compiled_root_background() {
     let source = SolidComponentSource::new(
         "examples/frameworks/solid-basic/src/App.tsx",

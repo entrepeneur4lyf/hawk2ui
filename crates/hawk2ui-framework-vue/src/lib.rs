@@ -479,11 +479,32 @@ fn unsupported_vue_events(source: &str) -> Vec<String> {
 }
 
 fn keyed_children(source: &str) -> Vec<String> {
-    if source.contains(":key=\"item.id\"") {
+    let mut ids = if source.contains(":key=\"item.id\"") {
         declared_item_ids(source)
     } else {
         Vec::new()
+    };
+    for id in static_hawk_text_ids(source) {
+        push_unique(&mut ids, id);
     }
+    ids
+}
+
+fn static_hawk_text_ids(source: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = source;
+    while let Some(index) = rest.find("<hawk-text") {
+        let after = &rest[index..];
+        let segment = after.split('>').next().unwrap_or(after);
+        if !segment.contains(":id=")
+            && !segment.contains("v-bind:id=")
+            && let Some(id) = extract_attribute(segment, "id")
+        {
+            push_unique(&mut ids, id);
+        }
+        rest = &after["<hawk-text".len()..];
+    }
+    ids
 }
 
 fn declared_item_ids(source: &str) -> Vec<String> {
@@ -504,12 +525,16 @@ fn declared_item_ids(source: &str) -> Vec<String> {
             break;
         };
         let id = &value[..end];
-        if !id.is_empty() && !ids.iter().any(|existing| existing == id) {
-            ids.push(id.to_string());
-        }
+        push_unique(&mut ids, id.to_string());
         rest = &value[end + quote.len_utf8()..];
     }
     ids
+}
+
+fn push_unique(ids: &mut Vec<String>, id: String) {
+    if !id.is_empty() && !ids.iter().any(|existing| existing == &id) {
+        ids.push(id);
+    }
 }
 
 #[cfg(test)]

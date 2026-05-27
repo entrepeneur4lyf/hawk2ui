@@ -124,6 +124,29 @@ fn vue_35_renderer_bridges_to_runtime_tree() {
 }
 
 #[test]
+fn vue_35_renderer_preserves_static_text_children() {
+    let source = VueSingleFileComponent::new(
+        "examples/frameworks/vue-basic/src/App.vue",
+        r#"<template><hawk-view id="root"><hawk-text id="title">Static Title</hawk-text></hawk-view></template>"#,
+    );
+
+    let artifact = VueIntegration::new()
+        .render_to_runtime(source)
+        .expect("valid Vue source should bridge to runtime");
+
+    assert_eq!(artifact.rendered().keyed_children(), ["title"]);
+    assert_eq!(
+        artifact
+            .runtime_tree()
+            .children_of(&RuntimeViewId::new("root"))
+            .iter()
+            .map(RuntimeViewId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["title"]
+    );
+}
+
+#[test]
 fn vue_35_render_to_runtime_with_styles_applies_compiled_root_background() {
     let source = VueSingleFileComponent::new(
         "examples/frameworks/vue-basic/src/App.vue",

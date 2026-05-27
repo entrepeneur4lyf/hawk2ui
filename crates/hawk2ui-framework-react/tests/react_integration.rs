@@ -122,6 +122,29 @@ fn react_19_renderer_bridges_to_runtime_tree() {
 }
 
 #[test]
+fn react_19_renderer_preserves_static_text_children() {
+    let source = ReactElementTree::new(
+        "examples/frameworks/react-basic/src/App.tsx",
+        r#"<hawk-view id="root"><hawk-text id="title">Static Title</hawk-text></hawk-view>"#,
+    );
+
+    let artifact = ReactIntegration::new()
+        .render_to_runtime(source)
+        .expect("valid React source should bridge to runtime");
+
+    assert_eq!(artifact.rendered().keyed_children(), ["title"]);
+    assert_eq!(
+        artifact
+            .runtime_tree()
+            .children_of(&RuntimeViewId::new("root"))
+            .iter()
+            .map(RuntimeViewId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["title"]
+    );
+}
+
+#[test]
 fn react_19_render_to_runtime_with_styles_applies_compiled_root_background() {
     let source = ReactElementTree::new(
         "examples/frameworks/react-basic/src/App.tsx",

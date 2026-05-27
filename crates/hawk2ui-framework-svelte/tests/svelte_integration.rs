@@ -153,6 +153,29 @@ fn svelte_5_compile_to_runtime_uses_native_bridge_contract() {
 }
 
 #[test]
+fn svelte_5_compile_to_runtime_preserves_static_text_children() {
+    let source = SvelteComponentSource::new(
+        "examples/frameworks/svelte-basic/src/App.svelte",
+        r#"<hawk-view id="root"><hawk-text id="title">Static Title</hawk-text></hawk-view>"#,
+    );
+
+    let artifact = SvelteIntegration::new()
+        .compile_to_runtime(source)
+        .expect("valid Svelte source should bridge to runtime");
+
+    assert_eq!(artifact.compiled().keyed_children(), ["title"]);
+    assert_eq!(
+        artifact
+            .runtime_tree()
+            .children_of(&RuntimeViewId::new("root"))
+            .iter()
+            .map(RuntimeViewId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["title"]
+    );
+}
+
+#[test]
 fn svelte_5_runtime_bridge_renders_visible_skia_pixels() {
     let source = SvelteComponentSource::new(
         "examples/frameworks/svelte-basic/src/App.svelte",
