@@ -2,10 +2,11 @@
 
 use std::collections::BTreeSet;
 
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// Supported package target class.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PackageTarget {
     /// Desktop package target.
@@ -15,7 +16,8 @@ pub enum PackageTarget {
 }
 
 /// Validated Hawk manifest.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HawkManifest {
     /// App identity.
     pub identity: ManifestIdentity,
@@ -39,7 +41,8 @@ pub struct HawkManifest {
     pub presets: Vec<PresetDeclaration>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
 struct RawManifest {
     identity: Option<ManifestIdentity>,
     package: Option<PackageMetadata>,
@@ -58,7 +61,8 @@ struct RawManifest {
 }
 
 /// App identity metadata.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ManifestIdentity {
     /// Stable product ID.
     pub id: String,
@@ -69,7 +73,8 @@ pub struct ManifestIdentity {
 }
 
 /// Source entrypoint declaration.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceEntrypoint {
     /// Source entry path.
     pub entry: String,
@@ -80,7 +85,8 @@ pub struct SourceEntrypoint {
 }
 
 /// Package metadata.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageMetadata {
     /// Package name.
     pub name: String,
@@ -88,13 +94,15 @@ pub struct PackageMetadata {
     pub bundle_id: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct CapabilityDeclaration {
     keys: Vec<String>,
 }
 
 /// Target declaration.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TargetDeclaration {
     /// Target kind.
     pub kind: PackageTarget,
@@ -103,7 +111,8 @@ pub struct TargetDeclaration {
 }
 
 /// Plugin identity metadata.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PluginIdentity {
     /// Plugin ID.
     pub id: String,
@@ -112,7 +121,8 @@ pub struct PluginIdentity {
 }
 
 /// Editor metadata.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EditorMetadata {
     /// Initial editor width.
     pub width: u32,
@@ -121,7 +131,8 @@ pub struct EditorMetadata {
 }
 
 /// Plugin parameter metadata.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PluginParameter {
     /// Parameter ID.
     pub id: String,
@@ -132,7 +143,8 @@ pub struct PluginParameter {
 }
 
 /// Asset declaration.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AssetDeclaration {
     /// Stable asset ID.
     pub id: String,
@@ -143,7 +155,8 @@ pub struct AssetDeclaration {
 }
 
 /// Preset declaration.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PresetDeclaration {
     /// Stable preset ID.
     pub id: String,
@@ -158,6 +171,7 @@ impl HawkManifest {
     ///
     /// Returns [`ManifestError`] when parsing fails or validation rejects the manifest.
     pub fn parse(input: &str) -> Result<Self, ManifestError> {
+        validate_manifest_schema(input)?;
         let raw: RawManifest =
             toml::from_str(input).map_err(|error| ManifestError::Parse(error.to_string()))?;
         let manifest = Self {
@@ -176,6 +190,16 @@ impl HawkManifest {
         };
         manifest.validate()?;
         Ok(manifest)
+    }
+
+    /// Generates the JSON Schema used to validate raw manifest documents.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ManifestError`] when the generated schema cannot be represented as JSON.
+    pub fn json_schema() -> Result<serde_json::Value, ManifestError> {
+        serde_json::to_value(schemars::schema_for!(RawManifest))
+            .map_err(|error| ManifestError::Parse(error.to_string()))
     }
 
     /// Returns true when the manifest declares a capability key.
@@ -280,4 +304,19 @@ pub enum ManifestError {
     InvalidCapability(String),
     /// Invalid plugin metadata.
     InvalidPluginMetadata(&'static str),
+    /// Manifest failed generated JSON Schema validation.
+    SchemaValidation,
+}
+
+fn validate_manifest_schema(input: &str) -> Result<(), ManifestError> {
+    let toml_value: toml::Value =
+        toml::from_str(input).map_err(|error| ManifestError::Parse(error.to_string()))?;
+    let json_value = serde_json::to_value(toml_value)
+        .map_err(|error| ManifestError::Parse(error.to_string()))?;
+    let schema = HawkManifest::json_schema()?;
+    let validator = jsonschema::Validator::new(&schema)
+        .map_err(|error| ManifestError::Parse(error.to_string()))?;
+    validator
+        .validate(&json_value)
+        .map_err(|_| ManifestError::SchemaValidation)
 }

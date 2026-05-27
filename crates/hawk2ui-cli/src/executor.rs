@@ -396,6 +396,10 @@ fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {
         ManifestError::InvalidPluginMetadata(message) => {
             CliDiagnostic::error("manifest.plugin.invalid", message)
         }
+        ManifestError::SchemaValidation => CliDiagnostic::error(
+            "manifest.schema.invalid",
+            "manifest does not match the generated Hawk2UI manifest schema",
+        ),
     }
 }
 

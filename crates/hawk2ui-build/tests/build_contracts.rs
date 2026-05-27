@@ -145,6 +145,29 @@ entry = "src/main.ts"
 }
 
 #[test]
+fn manifest_validation_rejects_schema_invalid_unknown_fields() {
+    let input = r#"[identity]
+id = "com.example.schema-invalid"
+name = "Schema Invalid"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[unknown]
+enabled = true
+
+[[targets]]
+kind = "desktop"
+name = "desktop"
+"#;
+
+    let error = HawkManifest::parse(input).expect_err("unknown manifest sections must fail schema");
+
+    assert_eq!(error, ManifestError::SchemaValidation);
+}
+
+#[test]
 fn manifest_validation_rejects_duplicate_targets() {
     let input = r#"
 [identity]

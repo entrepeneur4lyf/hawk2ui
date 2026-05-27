@@ -1,7 +1,10 @@
 //! Product model records for supported `Hawk2UI` surfaces and targets.
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 /// Supported host target.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum HostTarget {
     /// Owned desktop window on native Wayland Linux.
     LinuxWayland,
@@ -14,7 +17,7 @@ pub enum HostTarget {
 }
 
 /// Product surface kind.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum SurfaceKind {
     /// Owned desktop application window.
     DesktopWindow,
@@ -23,7 +26,7 @@ pub enum SurfaceKind {
 }
 
 /// Product capability advertised by a `Hawk2UI` product model.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum ProductCapability {
     /// Native desktop windowing.
     NativeWindowing,
@@ -36,7 +39,8 @@ pub enum ProductCapability {
 }
 
 /// Product conformance model for supported targets, surfaces, and capabilities.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProductModel {
     /// Product identifier.
     pub id: String,
@@ -121,6 +125,36 @@ pub enum ProductModelError {
     MissingSurface(SurfaceKind),
 }
 
+/// Schema validation error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SchemaValidationError {
+    rule: String,
+    message: String,
+}
+
+impl SchemaValidationError {
+    /// Creates a schema validation error.
+    #[must_use]
+    pub fn new(rule: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            rule: rule.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable diagnostic rule.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        &self.rule
+    }
+
+    /// Returns the diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +185,31 @@ mod tests {
             model.validate_required_surfaces(),
             Err(ProductModelError::MissingSurface(SurfaceKind::PluginEditor))
         );
+    }
+
+    #[test]
+    fn product_model_generates_and_validates_json_schema() {
+        let model = ProductModel::new("hawk2ui")
+            .with_host_target(HostTarget::LinuxWayland)
+            .with_surface_kind(SurfaceKind::DesktopWindow)
+            .with_surface_kind(SurfaceKind::PluginEditor)
+            .with_capability(ProductCapability::NativeWindowing);
+        let schema = crate::product_model_json_schema().expect("product model schema generates");
+        let value = serde_json::to_value(&model).expect("product model serializes");
+
+        crate::validate_product_model_json(&value).expect("valid product model passes schema");
+        assert_eq!(schema["title"], "ProductModel");
+        assert!(schema["properties"]["surface_kinds"].is_object());
+
+        let invalid = serde_json::json!({
+            "id": "broken",
+            "host_targets": ["LinuxWayland"],
+            "surface_kinds": ["DesktopWindow"],
+            "capabilities": ["NativeWindowing"],
+            "unexpected": true
+        });
+        let error = crate::validate_product_model_json(&invalid)
+            .expect_err("unknown product model fields fail schema validation");
+        assert_eq!(error.rule(), "schema.product.invalid");
     }
 }
