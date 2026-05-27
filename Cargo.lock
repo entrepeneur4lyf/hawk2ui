@@ -994,8 +994,11 @@ dependencies = [
  "hawk2ui-build",
  "hawk2ui-host",
  "hawk2ui-host-winit",
+ "hawk2ui-layout",
  "hawk2ui-plugin",
  "hawk2ui-plugin-adapters",
+ "hawk2ui-render",
+ "hawk2ui-runtime",
  "serde",
 ]
 

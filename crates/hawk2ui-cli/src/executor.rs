@@ -11,11 +11,17 @@ use hawk2ui_build::{
 };
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{WinitDesktopRuntime, WinitDesktopRuntimeConfig};
+use hawk2ui_layout::{BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue};
 use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRange, ParameterRecord,
 };
 use hawk2ui_plugin_adapters::{
     PackageAdapterSet, PackageFormat, PackageMaterializationError, PackageRequest,
+};
+use hawk2ui_render::Color;
+use hawk2ui_runtime::{
+    RuntimeSceneError, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
+    RuntimeVisual,
 };
 
 use crate::{CliCommand, CliDiagnostic, CliExitCode};
@@ -190,7 +196,12 @@ impl WorkspaceCommandRunner {
             );
         }
         let exit_after_first_frame = std::env::var_os("HAWK2UI_EXIT_AFTER_FIRST_FRAME").is_some();
-        let config = desktop_runtime_config_from_manifest(&manifest, exit_after_first_frame);
+        let config = match desktop_runtime_config_from_manifest(&manifest, exit_after_first_frame) {
+            Ok(config) => config,
+            Err(diagnostic) => {
+                return CommandExecution::failure(CliExitCode::Runtime, vec![*diagnostic]);
+            }
+        };
         match WinitDesktopRuntime::new().run_blocking(config) {
             Ok(summary) => CommandExecution::success(format!(
                 "desktop runtime exited cleanly\nframes-presented: {}\nresizes: {}\ndpi-changes: {}\ninput-events: {}\nclose-requested: {}\n",
@@ -472,15 +483,95 @@ fn bundle_name(identity_id: &str) -> String {
 fn desktop_runtime_config_from_manifest(
     manifest: &HawkManifest,
     exit_after_first_frame: bool,
-) -> WinitDesktopRuntimeConfig {
+) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
     let (width, height) = manifest.editor.as_ref().map_or((960.0, 540.0), |editor| {
         (f64::from(editor.width), f64::from(editor.height))
     });
-    WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+    let runtime_tree = runtime_tree_from_manifest(manifest, width, height)?;
+    Ok(WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
         manifest.identity.name.clone(),
         SurfaceMetrics::new(width, height, 1.0),
     ))
-    .with_exit_after_first_frame(exit_after_first_frame)
+    .with_runtime_tree(runtime_tree)
+    .with_exit_after_first_frame(exit_after_first_frame))
+}
+
+fn runtime_tree_from_manifest(
+    manifest: &HawkManifest,
+    width: f64,
+    height: f64,
+) -> Result<RuntimeViewTree, Box<CliDiagnostic>> {
+    let width = runtime_dimension_to_f32(width)?;
+    let height = runtime_dimension_to_f32(height)?;
+    let root_id = RuntimeViewId::new("root");
+    let title_id = RuntimeViewId::new("title");
+    let status_id = RuntimeViewId::new("status");
+    let content_width = (width - 48.0).max(1.0);
+    let root = RuntimeViewNode::new(
+        root_id.clone(),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(width, height))
+            .with_padding(BoxEdges::all(LayoutValue::px(24.0)))
+            .with_gap(LayoutValue::px(12.0)),
+        RuntimeVisual::Fill(Color::rgba(11, 12, 18, 255)),
+    );
+    let title = RuntimeViewNode::new(
+        title_id,
+        LayoutStyle::flex_container(FlexDirection::Row)
+            .with_size(LayoutSizing::fixed(content_width, 32.0)),
+        RuntimeVisual::Text(RuntimeTextVisual::new(
+            manifest.identity.name.clone(),
+            20.0,
+            Color::rgba(241, 245, 249, 255),
+        )),
+    );
+    let status = RuntimeViewNode::new(
+        status_id,
+        LayoutStyle::flex_container(FlexDirection::Row)
+            .with_size(LayoutSizing::fixed(content_width, 24.0)),
+        RuntimeVisual::Text(RuntimeTextVisual::new(
+            format!(
+                "{} {} - native desktop runtime",
+                manifest.identity.id, manifest.identity.version
+            ),
+            13.0,
+            Color::rgba(166, 173, 186, 255),
+        )),
+    );
+    RuntimeViewTree::new(root)
+        .with_child(&root_id, title)
+        .and_then(|tree| tree.with_child(&root_id, status))
+        .map_err(|error| runtime_scene_diagnostic(&error))
+}
+
+fn runtime_dimension_to_f32(value: f64) -> Result<f32, Box<CliDiagnostic>> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(Box::new(CliDiagnostic::error(
+            "desktop.runtime-scene.invalid-dimension",
+            "runtime scene dimensions must be finite and greater than zero",
+        )));
+    }
+    let value = value.to_string().parse::<f32>().map_err(|_| {
+        Box::new(CliDiagnostic::error(
+            "desktop.runtime-scene.invalid-dimension",
+            "runtime scene dimension cannot be represented by the layout engine",
+        ))
+    })?;
+    if value.is_finite() && value > 0.0 {
+        Ok(value)
+    } else {
+        Err(Box::new(CliDiagnostic::error(
+            "desktop.runtime-scene.invalid-dimension",
+            "runtime scene dimensions must be finite and greater than zero",
+        )))
+    }
+}
+
+fn runtime_scene_diagnostic(error: &RuntimeSceneError) -> Box<CliDiagnostic> {
+    Box::new(CliDiagnostic::error(
+        "desktop.runtime-scene.invalid-tree",
+        format!("manifest desktop scene could not be constructed: {error:?}"),
+    ))
 }
 
 fn default_manifest() -> &'static str {
@@ -504,6 +595,8 @@ name = "local-desktop"
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hawk2ui_layout::Viewport;
+    use hawk2ui_runtime::RuntimeSceneBridge;
 
     #[test]
     fn desktop_runtime_config_from_manifest_uses_editor_size_and_title() {
@@ -527,11 +620,30 @@ name = "linux-wayland"
         )
         .expect("manifest parses");
 
-        let config = desktop_runtime_config_from_manifest(&manifest, true);
+        let config =
+            desktop_runtime_config_from_manifest(&manifest, true).expect("runtime config builds");
 
         assert_eq!(config.window().title, "Desktop Smoke");
         assert_eq!(config.window().metrics.logical_width, 1280.0);
         assert_eq!(config.window().metrics.logical_height, 720.0);
         assert!(config.exit_after_first_frame());
+
+        let scene = RuntimeSceneBridge::new(Viewport::new(1280.0, 720.0))
+            .build(
+                config
+                    .runtime_tree()
+                    .expect("desktop config carries runtime tree"),
+            )
+            .expect("manifest runtime tree builds a scene");
+        assert!(
+            scene
+                .draw_commands()
+                .iter()
+                .any(|command| matches!(command, hawk2ui_runtime::RuntimeDrawCommand::Fill { .. }))
+        );
+        assert!(scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Desktop Smoke"
+        )));
     }
 }
