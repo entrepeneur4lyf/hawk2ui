@@ -217,6 +217,7 @@ impl WinitDesktopAdapter {
         config: DesktopWindowConfig,
         platform: WinitPlatformFixture,
     ) -> Result<Self, WinitHostError> {
+        validate_desktop_metrics(config.metrics)?;
         platform
             .handle()
             .validate_for(SurfaceOwnership::DesktopWindow)
@@ -274,6 +275,9 @@ impl WinitDesktopAdapter {
 
     /// Handles Winit resize events.
     pub fn handle_resize(&mut self, metrics: SurfaceMetrics) {
+        if validate_desktop_metrics(metrics).is_err() {
+            return;
+        }
         self.config.metrics = metrics;
         self.logical_size = LogicalSize::new(metrics.logical_width, metrics.logical_height);
         self.events
@@ -356,10 +360,35 @@ impl DesktopHostAdapter for WinitDesktopAdapter {
     }
 
     fn dpi_changed(&mut self, scale_factor: f64) {
+        let metrics = SurfaceMetrics::new(
+            self.config.metrics.logical_width,
+            self.config.metrics.logical_height,
+            scale_factor,
+        );
+        if validate_desktop_metrics(metrics).is_err() {
+            return;
+        }
         self.config.metrics.scale_factor = scale_factor;
         self.events.push(DesktopHostEvent::DpiChanged(scale_factor));
         self.events
             .push(DesktopHostEvent::RendererTargetRecreateRequested);
+    }
+}
+
+fn validate_desktop_metrics(metrics: SurfaceMetrics) -> Result<(), WinitHostError> {
+    if metrics.logical_width.is_finite()
+        && metrics.logical_height.is_finite()
+        && metrics.scale_factor.is_finite()
+        && metrics.logical_width > 0.0
+        && metrics.logical_height > 0.0
+        && metrics.scale_factor > 0.0
+    {
+        Ok(())
+    } else {
+        Err(WinitHostError::new(
+            "desktop.window.invalid-size",
+            "desktop window dimensions and scale factor must be finite and greater than zero",
+        ))
     }
 }
 

@@ -37,6 +37,47 @@ fn winit_adapter_owns_desktop_window_and_maps_window_controls() {
 }
 
 #[test]
+fn winit_adapter_rejects_invalid_initial_metrics() {
+    let invalid_metrics = [
+        SurfaceMetrics::new(0.0, 300.0, 1.0),
+        SurfaceMetrics::new(400.0, 0.0, 1.0),
+        SurfaceMetrics::new(f64::NAN, 300.0, 1.0),
+        SurfaceMetrics::new(400.0, f64::INFINITY, 1.0),
+        SurfaceMetrics::new(400.0, 300.0, 0.0),
+        SurfaceMetrics::new(400.0, 300.0, f64::INFINITY),
+    ];
+
+    for metrics in invalid_metrics {
+        let error = WinitDesktopAdapter::create_window(
+            DesktopWindowConfig::new("app", metrics),
+            WinitPlatformFixture::linux(LinuxWindowSystem::Wayland),
+        )
+        .expect_err("invalid metrics must not reach Winit logical size");
+
+        assert_eq!(error.rule(), "desktop.window.invalid-size");
+    }
+}
+
+#[test]
+fn winit_adapter_ignores_invalid_live_resize_and_dpi_metrics() {
+    let initial_metrics = SurfaceMetrics::new(400.0, 300.0, 1.0);
+    let mut adapter = WinitDesktopAdapter::create_window(
+        DesktopWindowConfig::new("app", initial_metrics),
+        WinitPlatformFixture::linux(LinuxWindowSystem::Wayland),
+    )
+    .expect("window fixture creates");
+    adapter.drain_events();
+
+    adapter.handle_resize(SurfaceMetrics::new(0.0, 600.0, 2.0));
+    adapter.handle_resize(SurfaceMetrics::new(800.0, f64::NAN, 2.0));
+    adapter.dpi_changed(0.0);
+    adapter.dpi_changed(f64::INFINITY);
+
+    assert_eq!(adapter.metrics(), initial_metrics);
+    assert!(adapter.drain_events().is_empty());
+}
+
+#[test]
 fn winit_adapter_routes_focus_keyboard_pointer_clipboard_and_repaint() {
     let mut adapter = WinitDesktopAdapter::create_window(
         DesktopWindowConfig::new("app", SurfaceMetrics::new(400.0, 300.0, 1.0)),
