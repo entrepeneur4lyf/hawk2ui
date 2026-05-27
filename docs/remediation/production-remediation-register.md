@@ -1049,10 +1049,19 @@ Review check:
 
 ### REM-RUNTIME-003: State Persistence
 
+Status: Remediated in runtime persistence layer.
+
 Evidence:
 
 - Plugin state records and platform records exist.
-- App state, plugin state, UI preferences, presets, migrations, and OS storage paths are not fully wired.
+- Runtime now exposes versioned state snapshots with app, UI preference, plugin parameter,
+  plugin non-parameter, and user preset scopes.
+- Runtime persistence records include host-specific opaque state chunks for plugin host save/load
+  cycles.
+- Runtime storage roots and user preset paths are validated before state save/restore path
+  materialization.
+- Runtime migrations apply deterministically and fail with structured diagnostics when migration
+  source versions do not match the snapshot version.
 
 Required remediation:
 
@@ -1061,6 +1070,23 @@ Required remediation:
 Acceptance:
 
 - State survives restart and host save/load cycles.
+
+Remediation delivered:
+
+- Added `RuntimeStateSnapshot`, `RuntimeStateEntry`, `RuntimeStateScope`,
+  `RuntimeHostStateChunk`, `RuntimeStateMigration`, `RuntimeStoragePath`, and
+  `RuntimePersistenceStore`.
+- Added deterministic save/restore behavior for runtime snapshots by stable identity.
+- Added user preset path materialization under validated OS storage roots.
+- Added tests proving scoped state separation, host chunk preservation, migrations, restart
+  restore, user preset paths, unsafe path rejection, and migration mismatch diagnostics.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this runtime persistence layer for production
+  stability: state scopes are explicit, restore is deterministic, storage paths are validated, and
+  migration failures are structured. Native OS storage backends can now be implemented behind this
+  contract without changing app/plugin state semantics.
 
 ## Build And Packaging Remediation
 

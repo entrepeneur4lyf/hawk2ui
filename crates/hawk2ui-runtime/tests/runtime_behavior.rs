@@ -11,10 +11,12 @@ use hawk2ui_runtime::{
     HostBindingRegistry, HostCallRecord, LifecycleHook, LifecyclePhase, LifecycleRegistry,
     PromiseId, RecordingScriptEngine, RuntimeCapability, RuntimeDrawCommand, RuntimeError,
     RuntimeEvent, RuntimeEventDispatcher, RuntimeEventKind, RuntimeEventPayload,
-    RuntimeEventPropagation, RuntimeExecutionContext, RuntimeGuardOperation, RuntimeSafetyGuard,
-    RuntimeSceneBridge, RuntimeSceneError, RuntimeSceneFrame, RuntimeScheduler, RuntimeTextVisual,
-    RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual, ScriptEngine,
-    ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord, StructuredValue, TimerJob,
+    RuntimeEventPropagation, RuntimeExecutionContext, RuntimeGuardOperation,
+    RuntimePersistenceStore, RuntimeSafetyGuard, RuntimeSceneBridge, RuntimeSceneError,
+    RuntimeSceneFrame, RuntimeScheduler, RuntimeStateEntry, RuntimeStateMigration,
+    RuntimeStateScope, RuntimeStateSnapshot, RuntimeStoragePath, RuntimeTextVisual, RuntimeViewId,
+    RuntimeViewNode, RuntimeViewTree, RuntimeVisual, ScriptEngine, ScriptEngineOperation,
+    ScriptModuleKind, ScriptModuleRecord, StructuredValue, TimerJob,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -649,6 +651,93 @@ fn script_adapter_records_module_calls_promises_timers_and_host_calls() {
             ScriptEngineOperation::HostCall(host_call),
         ]
     );
+}
+
+#[test]
+fn runtime_state_persistence_saves_restores_and_migrates_scoped_state() {
+    let snapshot = RuntimeStateSnapshot::new(1)
+        .with_entry(RuntimeStateEntry::new(
+            RuntimeStateScope::App,
+            "theme",
+            StructuredValue::string("graphite"),
+        ))
+        .with_entry(RuntimeStateEntry::new(
+            RuntimeStateScope::UiPreferences,
+            "window.width",
+            StructuredValue::Number(1280.0),
+        ))
+        .with_entry(RuntimeStateEntry::new(
+            RuntimeStateScope::PluginParameter,
+            "gain",
+            StructuredValue::Number(0.5),
+        ))
+        .with_entry(RuntimeStateEntry::new(
+            RuntimeStateScope::PluginNonParameter,
+            "oversampling",
+            StructuredValue::Bool(true),
+        ))
+        .with_entry(RuntimeStateEntry::new(
+            RuntimeStateScope::UserPreset,
+            "preset.user.wide",
+            StructuredValue::string("wide"),
+        ))
+        .with_host_chunk("vst3", [1, 2, 3]);
+    let migrated = snapshot
+        .migrate([RuntimeStateMigration::rename_key(
+            1,
+            2,
+            RuntimeStateScope::PluginParameter,
+            "gain",
+            "input.gain",
+        )])
+        .expect("migration should apply");
+
+    let storage_path = RuntimeStoragePath::user_data("/home/user/.local/share/hawk2ui")
+        .expect("storage path should be valid");
+    let mut store = RuntimePersistenceStore::new(storage_path);
+    store
+        .save("plugin.delay", migrated.clone())
+        .expect("snapshot should save");
+    let restored = store
+        .restore("plugin.delay")
+        .expect("state should restore after restart");
+
+    assert_eq!(restored.schema_version, 2);
+    assert_eq!(
+        restored.entry(RuntimeStateScope::PluginParameter, "input.gain"),
+        Some(&StructuredValue::Number(0.5))
+    );
+    assert_eq!(
+        restored.entry(RuntimeStateScope::UiPreferences, "window.width"),
+        Some(&StructuredValue::Number(1280.0))
+    );
+    assert_eq!(restored.host_chunks()[0].format, "vst3");
+    assert!(
+        restored
+            .entry(RuntimeStateScope::PluginParameter, "gain")
+            .is_none()
+    );
+    assert!(store.user_preset_path("plugin.delay", "wide").is_ok());
+}
+
+#[test]
+fn runtime_state_persistence_rejects_unsafe_paths_and_bad_migrations() {
+    assert!(RuntimeStoragePath::user_data("relative/path").is_err());
+    assert!(RuntimeStoragePath::user_data("/home/user/../secrets").is_err());
+    assert!(RuntimeStoragePath::user_data("/home/user/./state").is_err());
+
+    let snapshot = RuntimeStateSnapshot::new(3);
+    let error = snapshot
+        .migrate([RuntimeStateMigration::rename_key(
+            1,
+            2,
+            RuntimeStateScope::App,
+            "old",
+            "new",
+        )])
+        .expect_err("migration source version mismatch must fail");
+
+    assert_eq!(error.code, "state.migration-version-mismatch");
 }
 
 #[test]
