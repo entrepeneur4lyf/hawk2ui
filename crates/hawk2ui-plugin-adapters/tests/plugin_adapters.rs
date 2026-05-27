@@ -1,5 +1,6 @@
 use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterFlags, ParameterModel, ParameterRange, ParameterRecord,
+    PluginEditor, PluginEditorSize,
 };
 use hawk2ui_plugin_adapters::{
     ClapCdylibScaffold, ClapPluginEntryPlan, MaterializedPackageOutput, PackageAdapterSet,
@@ -221,6 +222,76 @@ fn plugin_adapters_materialize_package_metadata_outputs() {
 }
 
 #[test]
+fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources() {
+    let metadata =
+        FormatMetadata::new("com.hawk2ui.runtime", "Runtime", "Hawk2UI").feature("audio-effect");
+    let runtime_artifact = serde_json::json!({
+        "schema_version": { "major": 1, "minor": 0 },
+        "manifest_snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "asset_manifest": [
+            { "id": "logo", "kind": "image", "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+        ],
+        "compiled_assets": [
+            { "id": "logo", "kind": "image", "bytes": 128 }
+        ],
+        "compiled_styles": [],
+        "compiled_scripts": [],
+        "capabilities": ["plugin-editor"],
+    });
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-plugin-runtime-artifact-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Runtime"),
+        ParameterModel::new([]),
+    )
+    .with_runtime_artifact(runtime_artifact.clone())
+    .with_format(PackageFormat::Clap);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+    let root = Path::new(&outputs[0].output_path);
+    let runtime_artifact_path = root
+        .join("Contents")
+        .join("Resources")
+        .join("hawk2ui-runtime-artifact.json");
+
+    assert!(runtime_artifact_path.is_file());
+    let materialized_artifact: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&runtime_artifact_path).expect("runtime artifact reads"),
+    )
+    .expect("runtime artifact is JSON");
+    assert_eq!(materialized_artifact, runtime_artifact);
+
+    let artifact_descriptor = std::fs::read_to_string(&outputs[0].artifact_descriptor_path)
+        .expect("artifact descriptor reads");
+    assert!(
+        artifact_descriptor
+            .contains("runtime_artifact = \"Contents/Resources/hawk2ui-runtime-artifact.json\"")
+    );
+
+    let hashes =
+        std::fs::read_to_string(&outputs[0].hash_manifest_path).expect("hash manifest reads");
+    assert!(hashes.contains("Contents/Resources/hawk2ui-runtime-artifact.json"));
+    assert_eq!(
+        plan.verify_materialized(&outputs).status(),
+        VerificationStatus::Passed
+    );
+    std::fs::remove_file(runtime_artifact_path).expect("runtime artifact should be removable");
+    assert_eq!(
+        plan.verify_materialized(&outputs).status(),
+        VerificationStatus::Failed
+    );
+}
+
+#[test]
 fn plugin_adapters_build_clap_entry_plan_from_clap_sys_contract() {
     let metadata = FormatMetadata::new("com.hawk2ui.clap", "Clap", "Hawk2UI")
         .version("1.0.0")
@@ -241,6 +312,7 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     let metadata = FormatMetadata::new("com.hawk2ui.loadable", "Loadable", "Hawk2UI")
         .version("1.0.0")
         .feature("audio-effect");
+    let editor = PluginEditor::custom("main", PluginEditorSize::new(1024.0, 640.0, 1.0));
     let parameters = ParameterModel::new([ParameterRecord::numeric(
         "gain",
         "Gain",
@@ -256,7 +328,9 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
             .as_nanos()
     ));
 
-    let scaffold = ClapCdylibScaffold::from_metadata(&metadata).with_parameters(&parameters);
+    let scaffold = ClapCdylibScaffold::from_metadata(&metadata)
+        .with_editor(&editor)
+        .with_parameters(&parameters);
     let output = scaffold
         .write_to(&output_root)
         .expect("CLAP scaffold should write");
@@ -273,6 +347,7 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     assert!(source.contains("plugin_process"));
     assert!(source.contains("clap_plugin_audio_ports"));
     assert!(source.contains("clap_plugin_gui"));
+    assert!(source.contains("EDITOR_ATTACHED"));
     assert!(source.contains("clap_plugin_params"));
     assert!(source.contains("clap_plugin_state"));
     assert!(source.contains("PARAMETERS"));
@@ -441,7 +516,29 @@ fn main() {
         let mut width = 0;
         let mut height = 0;
         assert!((gui.get_size.expect("gui size"))(plugin, &mut width, &mut height));
-        assert_eq!((width, height), (800, 600));
+        assert_eq!((width, height), (1024, 640));
+        let mut preferred_api = ptr::null();
+        let mut is_floating = true;
+        assert!((gui.get_preferred_api.expect("preferred gui api"))(
+            plugin,
+            &mut preferred_api,
+            &mut is_floating,
+        ));
+        assert!(!preferred_api.is_null());
+        assert!(!is_floating);
+        assert!((gui.create.expect("gui create"))(plugin, preferred_api, false));
+        assert!(!(gui.show.expect("gui show before parent"))(plugin));
+        let parent = clap_sys::ext::gui::clap_window {
+            api: preferred_api,
+            specific: clap_sys::ext::gui::clap_window_handle {
+                ptr: 0x1usize as *mut c_void,
+            },
+        };
+        assert!((gui.set_parent.expect("gui set parent"))(plugin, &parent));
+        assert!((gui.set_size.expect("gui set size"))(plugin, 1200, 720));
+        assert!((gui.show.expect("gui show"))(plugin));
+        assert!((gui.hide.expect("gui hide"))(plugin));
+        (gui.destroy.expect("gui destroy"))(plugin);
 
         let params = ((*plugin).get_extension.expect("params extension"))(
             plugin,
