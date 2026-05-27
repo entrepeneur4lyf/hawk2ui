@@ -128,7 +128,7 @@ Acceptance:
 Status:
 
 - Implemented Lightning CSS-backed parsing in `hawk2ui-style`.
-- Remaining release blocker is covered by `REM-CRATE-007`: alpha dependency pinning must be governed by a workspace compatibility policy, upgrade cadence, and release gate.
+- Dependency stability for the accepted Lightning CSS alpha line is governed by `REM-CRATE-007`.
 
 ### REM-CRATE-002: Adopt Taffy For Layout
 
@@ -184,7 +184,8 @@ Acceptance:
 Status:
 
 - Implemented real Boa-backed JavaScript evaluation and OXC-backed TypeScript transform.
-- Remaining release blockers are covered by `REM-CRATE-007` and `REM-RUNTIME-001A`: the Boa Git dependency must move to a release-grade dependency contract, OXC upgrades must be governed, and promise/timer sidecars must be connected to the JavaScript runtime.
+- Dependency stability is governed by `REM-CRATE-007`; JavaScript promise/timer integration is
+  remediated under `REM-RUNTIME-001A`.
 
 ### REM-CRATE-004: Add AccessKit Host Bridge
 
