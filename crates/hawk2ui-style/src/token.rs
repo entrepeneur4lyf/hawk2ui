@@ -286,10 +286,13 @@ impl TokenSet {
     ///
     /// Returns [`TokenError`] when the token is missing.
     pub fn resolve(&self, name: &str) -> Result<&TokenRecord, TokenError> {
-        self.tokens
+        let token = self
+            .tokens
             .iter()
             .find(|token| token.name == name)
-            .ok_or_else(|| missing_token(name))
+            .ok_or_else(|| missing_token(name))?;
+        validate_token_record(token)?;
+        Ok(token)
     }
 
     /// Resolves a token by name for a theme variant, falling back to base tokens.
@@ -305,11 +308,17 @@ impl TokenSet {
             .ok_or_else(|| {
                 TokenError::new("theme.missing", format!("theme `{theme}` is missing"))
             })?;
-        variant
-            .tokens
-            .iter()
-            .find(|token| token.name == name)
-            .map_or_else(|| self.resolve(name), Ok)
+        if !is_valid_identifier(theme) {
+            return Err(TokenError::new(
+                "theme.name.invalid",
+                format!("theme `{theme}` has an invalid name"),
+            ));
+        }
+        let Some(token) = variant.tokens.iter().find(|token| token.name == name) else {
+            return self.resolve(name);
+        };
+        validate_token_record(token)?;
+        Ok(token)
     }
 }
 
@@ -340,4 +349,51 @@ fn infer_kind(name: &str, value: &TokenValue) -> TokenKind {
 
 fn missing_token(name: &str) -> TokenError {
     TokenError::new("token.missing", format!("token `{name}` is missing"))
+}
+
+fn validate_token_record(token: &TokenRecord) -> Result<(), TokenError> {
+    if !is_valid_token_name(&token.name) {
+        return Err(TokenError::new(
+            "token.name.invalid",
+            format!("token `{}` has an invalid name", token.name),
+        ));
+    }
+    match &token.value {
+        TokenValue::LengthPx(value) if !value.is_finite() || *value < 0.0 => {
+            Err(invalid_token_value(&token.name))
+        }
+        TokenValue::Typography { family, size_px }
+            if family.trim().is_empty() || !size_px.is_finite() || *size_px <= 0.0 =>
+        {
+            Err(invalid_token_value(&token.name))
+        }
+        TokenValue::PreferenceHook(target) if !is_valid_token_name(target) => {
+            Err(invalid_token_value(&token.name))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn invalid_token_value(name: &str) -> TokenError {
+    TokenError::new(
+        "token.value.invalid",
+        format!("token `{name}` has an invalid value"),
+    )
+}
+
+fn is_valid_token_name(name: &str) -> bool {
+    let mut segments = name.split('.');
+    let Some(first) = segments.next() else {
+        return false;
+    };
+    is_valid_identifier(first)
+        && segments.clone().next().is_some()
+        && segments.all(is_valid_identifier)
+}
+
+fn is_valid_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
 }

@@ -138,6 +138,26 @@ fn token_records_resolve_supported_token_families() {
         tokens.resolve("preference.reduced-motion").unwrap().kind(),
         hawk2ui_style::TokenKind::PreferenceHook
     );
+
+    let invalid_name = hawk2ui_style::TokenSet::production().with_spacing("space bad", 8.0);
+    assert_eq!(
+        invalid_name
+            .resolve("space bad")
+            .expect_err("invalid token name must fail")
+            .diagnostic()
+            .rule(),
+        "token.name.invalid"
+    );
+
+    let invalid_length = hawk2ui_style::TokenSet::production().with_spacing("space.bad", -8.0);
+    assert_eq!(
+        invalid_length
+            .resolve("space.bad")
+            .expect_err("invalid token length must fail")
+            .diagnostic()
+            .rule(),
+        "token.value.invalid"
+    );
 }
 
 #[test]
