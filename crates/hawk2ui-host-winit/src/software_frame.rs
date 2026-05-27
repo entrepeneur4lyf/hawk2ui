@@ -1,6 +1,7 @@
 //! Skia-backed software frame generation for native host presentation.
 
 use hawk2ui_host::SurfaceMetrics;
+use hawk2ui_render::{CustomSurfaceCategory, Geometry};
 use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneFrame};
 use skia_safe::{
     AlphaType, Color as SkiaColor, ColorType, Font, ImageInfo, Paint, PaintStyle, Rect, surfaces,
@@ -187,6 +188,18 @@ impl SoftwareFrameRenderer {
                         "runtime asset draw commands require registered compiled asset payloads",
                     ));
                 }
+                RuntimeDrawCommand::CustomSurface {
+                    surface: custom_surface,
+                    data,
+                    ..
+                } => {
+                    draw_custom_surface(
+                        surface.canvas(),
+                        custom_surface.category(),
+                        scale_geometry(custom_surface.reserved_layout(), scale),
+                        data.samples(),
+                    );
+                }
             }
         }
 
@@ -307,6 +320,66 @@ fn scaled_rect(geometry: hawk2ui_render::Geometry, scale: f32) -> Rect {
         geometry.width * scale,
         geometry.height * scale,
     )
+}
+
+fn scale_geometry(geometry: Geometry, scale: f32) -> Geometry {
+    Geometry::new(
+        geometry.x * scale,
+        geometry.y * scale,
+        geometry.width * scale,
+        geometry.height * scale,
+    )
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn draw_custom_surface(
+    canvas: &skia_safe::Canvas,
+    category: CustomSurfaceCategory,
+    geometry: Geometry,
+    samples: &[f32],
+) {
+    let mut background = Paint::default();
+    background.set_style(PaintStyle::Fill);
+    background.set_anti_alias(true);
+    background.set_color(SkiaColor::from_argb(220, 12, 15, 22));
+    canvas.draw_rect(scaled_rect(geometry, 1.0), &background);
+
+    match category {
+        CustomSurfaceCategory::Meter
+        | CustomSurfaceCategory::Slider
+        | CustomSurfaceCategory::Knob => {
+            let values = if samples.is_empty() {
+                &[0.0][..]
+            } else {
+                samples
+            };
+            let bar_count = values.len().max(1);
+            let gap = 2.0_f32.min(geometry.width / bar_count as f32 / 3.0);
+            let bar_width = ((geometry.width - gap * (bar_count.saturating_sub(1) as f32))
+                / bar_count as f32)
+                .max(1.0);
+            let mut fill = Paint::default();
+            fill.set_style(PaintStyle::Fill);
+            fill.set_anti_alias(true);
+            fill.set_color(SkiaColor::from_argb(255, 70, 222, 142));
+            for (index, sample) in values.iter().enumerate() {
+                let normalized = sample.clamp(0.0, 1.0);
+                let height = (geometry.height * normalized).max(1.0);
+                let x = geometry.x + index as f32 * (bar_width + gap);
+                let y = geometry.y + geometry.height - height;
+                canvas.draw_rect(Rect::from_xywh(x, y, bar_width, height), &fill);
+            }
+        }
+        _ => {
+            let mut stroke = Paint::default();
+            stroke.set_style(PaintStyle::Stroke);
+            stroke.set_anti_alias(true);
+            stroke.set_stroke_width(2.0);
+            stroke.set_color(SkiaColor::from_argb(255, 70, 222, 142));
+            let y = geometry.y + geometry.height / 2.0;
+            canvas.draw_line((geometry.x, y), (geometry.x + geometry.width, y), &stroke);
+        }
+    }
 }
 
 fn to_skia_color(color: hawk2ui_render::Color) -> SkiaColor {

@@ -96,6 +96,7 @@ pub struct CustomDrawSurface {
     capabilities: Vec<CustomSurfaceCapability>,
     invalidated: bool,
     next_frame: Option<u64>,
+    frame_interval: Option<u64>,
 }
 
 impl CustomDrawSurface {
@@ -113,7 +114,20 @@ impl CustomDrawSurface {
             capabilities: Vec::new(),
             invalidated: false,
             next_frame: None,
+            frame_interval: None,
         }
+    }
+
+    /// Returns the stable surface identifier.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the declared surface category.
+    #[must_use]
+    pub const fn category(&self) -> CustomSurfaceCategory {
+        self.category
     }
 
     /// Adds a capability report.
@@ -137,6 +151,37 @@ impl CustomDrawSurface {
     pub const fn schedule_frame(mut self, frame: u64) -> Self {
         self.next_frame = Some(frame);
         self
+    }
+
+    /// Sets the minimum host-frame interval between custom draws.
+    ///
+    /// A value of `1` allows drawing on every frame. Values larger than `1` are useful for
+    /// meters, analyzers, scopes, timelines, and inspectors that should update independently from
+    /// the host window's maximum frame rate.
+    #[must_use]
+    pub const fn with_frame_interval(mut self, frame_interval: u64) -> Self {
+        self.frame_interval = Some(if frame_interval == 0 {
+            1
+        } else {
+            frame_interval
+        });
+        self
+    }
+
+    /// Returns the minimum host-frame interval between custom draws.
+    #[must_use]
+    pub const fn frame_interval(&self) -> Option<u64> {
+        self.frame_interval
+    }
+
+    /// Returns whether this surface is due to draw on the supplied host frame index.
+    #[must_use]
+    pub fn is_frame_due(&self, frame_index: u64) -> bool {
+        let scheduled = self
+            .next_frame
+            .is_none_or(|next_frame| frame_index >= next_frame);
+        let interval = self.frame_interval.unwrap_or(1);
+        scheduled && frame_index.is_multiple_of(interval)
     }
 
     /// Returns whether a point hits the reserved layout.
@@ -204,6 +249,125 @@ impl CustomDrawSurface {
     pub fn stable_key(&self) -> Result<String, CustomSurfaceError> {
         self.validate()?;
         Ok(format!("{}:{}", self.id, self.category.stable_key()))
+    }
+}
+
+/// Plugin-safe realtime data snapshot for a custom draw surface.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CustomSurfaceDataSnapshot {
+    samples: Vec<f32>,
+}
+
+impl CustomSurfaceDataSnapshot {
+    /// Creates a bounded realtime data snapshot from finite scalar samples.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CustomSurfaceError`] when a sample is non-finite or the snapshot is too large for
+    /// deterministic UI-thread drawing.
+    pub fn new<I>(samples: I) -> Result<Self, CustomSurfaceError>
+    where
+        I: IntoIterator<Item = f32>,
+    {
+        let samples: Vec<f32> = samples.into_iter().collect();
+        if samples.len() > 4096 || samples.iter().any(|sample| !sample.is_finite()) {
+            return Err(CustomSurfaceError::new(
+                "custom-surface.data.invalid",
+                "custom surface data samples must be finite and contain at most 4096 values",
+            ));
+        }
+        Ok(Self { samples })
+    }
+
+    /// Returns the immutable realtime sample payload.
+    #[must_use]
+    pub fn samples(&self) -> &[f32] {
+        &self.samples
+    }
+}
+
+/// Host frame metadata supplied to a custom draw hook.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CustomSurfaceFrameContext {
+    frame_index: u64,
+    dpi_scale: f32,
+}
+
+impl CustomSurfaceFrameContext {
+    /// Creates custom surface frame context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CustomSurfaceError`] when DPI scale is non-finite or not greater than zero.
+    pub fn new(frame_index: u64, dpi_scale: f32) -> Result<Self, CustomSurfaceError> {
+        if !dpi_scale.is_finite() || dpi_scale <= 0.0 {
+            return Err(CustomSurfaceError::new(
+                "custom-surface.frame-context.invalid",
+                "custom surface DPI scale must be finite and greater than zero",
+            ));
+        }
+        Ok(Self {
+            frame_index,
+            dpi_scale,
+        })
+    }
+
+    /// Returns the host frame index.
+    #[must_use]
+    pub const fn frame_index(&self) -> u64 {
+        self.frame_index
+    }
+
+    /// Returns the host DPI scale.
+    #[must_use]
+    pub const fn dpi_scale(&self) -> f32 {
+        self.dpi_scale
+    }
+}
+
+/// Complete input passed to a renderer-specific custom draw hook.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CustomSurfaceDrawRequest {
+    surface: CustomDrawSurface,
+    context: CustomSurfaceFrameContext,
+    data: CustomSurfaceDataSnapshot,
+}
+
+impl CustomSurfaceDrawRequest {
+    /// Creates a custom draw request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CustomSurfaceError`] when the surface cannot be safely rendered.
+    pub fn new(
+        surface: CustomDrawSurface,
+        context: CustomSurfaceFrameContext,
+        data: CustomSurfaceDataSnapshot,
+    ) -> Result<Self, CustomSurfaceError> {
+        surface.validate()?;
+        Ok(Self {
+            surface,
+            context,
+            data,
+        })
+    }
+
+    /// Returns the custom surface metadata and geometry.
+    #[must_use]
+    pub const fn surface(&self) -> &CustomDrawSurface {
+        &self.surface
+    }
+
+    /// Returns frame metadata for the draw.
+    #[must_use]
+    pub const fn context(&self) -> CustomSurfaceFrameContext {
+        self.context
+    }
+
+    /// Returns plugin-safe realtime data for the draw.
+    #[must_use]
+    pub const fn data(&self) -> &CustomSurfaceDataSnapshot {
+        &self.data
     }
 }
 

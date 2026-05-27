@@ -14,7 +14,8 @@ pub use backend::{
     RendererBackend, RendererCacheInvalidator,
 };
 pub use custom_surface::{
-    CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory, CustomSurfaceError,
+    CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory, CustomSurfaceDataSnapshot,
+    CustomSurfaceDrawRequest, CustomSurfaceError, CustomSurfaceFrameContext,
 };
 pub use export::{PaintCommand, PaintCommandKind, PaintCommandList, export_paint_commands};
 pub use layer::{

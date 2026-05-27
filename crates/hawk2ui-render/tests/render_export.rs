@@ -787,6 +787,37 @@ fn custom_surface_records_cover_categories_capabilities_and_frame_scheduling() {
 }
 
 #[test]
+fn custom_surface_draw_requests_validate_data_and_frame_limits() {
+    let surface = hawk2ui_render::CustomDrawSurface::new(
+        "meter",
+        hawk2ui_render::CustomSurfaceCategory::Meter,
+        Geometry::new(8.0, 12.0, 96.0, 24.0),
+    )
+    .with_capability(hawk2ui_render::CustomSurfaceCapability::RealtimeData)
+    .with_frame_interval(2)
+    .schedule_frame(10);
+    let data = hawk2ui_render::CustomSurfaceDataSnapshot::new([0.0, 0.25, 0.75, 1.0])
+        .expect("finite realtime samples are accepted");
+    let request = hawk2ui_render::CustomSurfaceDrawRequest::new(
+        surface.clone(),
+        hawk2ui_render::CustomSurfaceFrameContext::new(10, 1.0).expect("valid frame context"),
+        data.clone(),
+    )
+    .expect("draw request is valid");
+
+    assert!(!surface.is_frame_due(9));
+    assert!(surface.is_frame_due(10));
+    assert!(surface.is_frame_due(12));
+    assert_eq!(request.surface().stable_key().unwrap(), "meter:meter");
+    assert_eq!(request.data().samples(), data.samples());
+    assert_eq!(request.context().frame_index(), 10);
+
+    let error = hawk2ui_render::CustomSurfaceDataSnapshot::new([0.0, f32::NAN])
+        .expect_err("non-finite samples must be rejected before crossing the render boundary");
+    assert_eq!(error.rule(), "custom-surface.data.invalid");
+}
+
+#[test]
 fn custom_surface_records_reject_invalid_identity_and_geometry() {
     let error = hawk2ui_render::CustomDrawSurface::new(
         "",

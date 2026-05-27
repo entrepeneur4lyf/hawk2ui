@@ -415,6 +415,25 @@ Acceptance:
 
 - A custom graph/meter surface renders and updates independently under frame-rate limits.
 
+Status:
+
+- Implemented render-level `CustomSurfaceDataSnapshot`, `CustomSurfaceFrameContext`, and
+  `CustomSurfaceDrawRequest` records with finite, bounded realtime data validation.
+- Implemented frame-interval scheduling on `CustomDrawSurface`.
+- Implemented `RuntimeCustomSurfaceVisual` and `RuntimeDrawCommand::CustomSurface` so runtime
+  view trees produce executable custom draw commands with resolved layout geometry.
+- Implemented Skia custom-surface hooks for meter-style and curve-style categories.
+- Implemented software desktop frame replay for runtime custom surfaces.
+- Added tests proving validated custom-surface requests, runtime command emission, Skia pixel
+  output, and desktop software-frame pixel output.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this slice for production readiness: the draw
+  boundary is typed, data is bounded and finite, frame-rate gating is deterministic, and the
+  runtime-to-Skia-to-host path is covered by tests. No corrective revision is required for this
+  remediation item before moving to animation/frame scheduling.
+
 ### REM-RENDER-008: Implement Animation And Frame Scheduling
 
 Evidence:

@@ -5,13 +5,14 @@ use std::collections::BTreeMap;
 
 use hawk2ui_assets::{AssetKind as CompiledAssetKind, AssetRecord};
 use hawk2ui_render::{
-    BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, Color, Geometry,
-    RendererBackend, RendererCacheInvalidator, Stroke, Transform,
+    BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, Color,
+    CustomSurfaceCategory, CustomSurfaceDrawRequest, Geometry, RendererBackend,
+    RendererCacheInvalidator, Stroke, Transform,
 };
 use skia_safe::{
     AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
-    FontMgr, FontStyle, IRect, Image, ImageInfo, MaskFilter, Matrix, Paint, PaintStyle, Path, Rect,
-    Surface, TileMode, Typeface, gradient, images, surfaces,
+    FontMgr, FontStyle, IRect, Image, ImageInfo, MaskFilter, Matrix, Paint, PaintStyle, Path,
+    PathBuilder, Rect, Surface, TileMode, Typeface, gradient, images, surfaces,
 };
 
 /// The canonical Cargo package name for this crate.
@@ -1103,6 +1104,58 @@ impl SkiaRendererBackend {
         Ok(())
     }
 
+    /// Executes a custom draw surface hook into the active Skia frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, the surface request is invalid, or
+    /// the destination geometry cannot be drawn safely.
+    pub fn draw_custom_surface(
+        &mut self,
+        request: &CustomSurfaceDrawRequest,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        let surface = request.surface();
+        surface.validate().map_err(|error| {
+            BackendError::new(error.rule().to_string(), error.message().to_string())
+        })?;
+        let geometry = surface.reserved_layout();
+        validate_geometry("skia.custom-surface.invalid-geometry", geometry).inspect_err(
+            |error| {
+                self.diagnostics.push(error.diagnostic().clone());
+            },
+        )?;
+        if !surface.is_frame_due(request.context().frame_index()) {
+            self.commands.push(format!(
+                "custom-surface-skip:{}:{}:frame={}",
+                surface.id(),
+                surface.category().stable_key(),
+                request.context().frame_index()
+            ));
+            return Ok(());
+        }
+        if surface.invalidated() {
+            self.mark_dirty(geometry)?;
+        }
+
+        self.with_active_surface(|surface_frame| {
+            draw_custom_surface(
+                surface_frame.canvas(),
+                surface.category(),
+                geometry,
+                request.data().samples(),
+            );
+        })?;
+        self.commands.push(format!(
+            "custom-surface:{}:{}:frame={}:samples={}",
+            surface.id(),
+            surface.category().stable_key(),
+            request.context().frame_index(),
+            request.data().samples().len()
+        ));
+        Ok(())
+    }
+
     fn fail<T>(&mut self, rule: &str, message: &str) -> Result<T, BackendError> {
         let diagnostic = BackendDiagnostic::new(rule, message);
         self.diagnostics.push(diagnostic);
@@ -1877,6 +1930,98 @@ fn paint(color: Color, style: PaintStyle) -> Paint {
     paint.set_style(style);
     paint.set_color(to_skia_color(color));
     paint
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn draw_custom_surface(
+    canvas: &Canvas,
+    category: CustomSurfaceCategory,
+    geometry: Geometry,
+    samples: &[f32],
+) {
+    let mut background = paint(Color::rgba(12, 15, 22, 220), PaintStyle::Fill);
+    background.set_anti_alias(true);
+    canvas.draw_rect(rect(geometry), &background);
+
+    let mut outline = paint(Color::rgba(62, 72, 92, 255), PaintStyle::Stroke);
+    outline.set_anti_alias(true);
+    outline.set_stroke_width(1.0);
+    canvas.draw_rect(rect(geometry), &outline);
+
+    match category {
+        CustomSurfaceCategory::Meter
+        | CustomSurfaceCategory::Slider
+        | CustomSurfaceCategory::Knob => {
+            draw_meter_surface(canvas, geometry, samples);
+        }
+        CustomSurfaceCategory::Scope
+        | CustomSurfaceCategory::Analyzer
+        | CustomSurfaceCategory::EqCurve
+        | CustomSurfaceCategory::Modulation
+        | CustomSurfaceCategory::Timeline
+        | CustomSurfaceCategory::GraphEditor
+        | CustomSurfaceCategory::InspectorPanel => {
+            draw_curve_surface(canvas, geometry, samples, category);
+        }
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn draw_meter_surface(canvas: &Canvas, geometry: Geometry, samples: &[f32]) {
+    let values = if samples.is_empty() {
+        &[0.0][..]
+    } else {
+        samples
+    };
+    let bar_count = values.len().max(1);
+    let gap = 2.0_f32.min(geometry.width / bar_count as f32 / 3.0);
+    let bar_width =
+        ((geometry.width - gap * (bar_count.saturating_sub(1) as f32)) / bar_count as f32).max(1.0);
+    let mut fill = paint(Color::rgba(70, 222, 142, 255), PaintStyle::Fill);
+    fill.set_anti_alias(true);
+    for (index, sample) in values.iter().enumerate() {
+        let normalized = sample.clamp(0.0, 1.0);
+        let height = (geometry.height * normalized).max(1.0);
+        let x = geometry.x + index as f32 * (bar_width + gap);
+        let y = geometry.y + geometry.height - height;
+        canvas.draw_rect(Rect::from_xywh(x, y, bar_width, height), &fill);
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn draw_curve_surface(
+    canvas: &Canvas,
+    geometry: Geometry,
+    samples: &[f32],
+    category: CustomSurfaceCategory,
+) {
+    let accent = match category {
+        CustomSurfaceCategory::Analyzer => Color::rgba(80, 180, 255, 255),
+        CustomSurfaceCategory::EqCurve => Color::rgba(255, 198, 74, 255),
+        CustomSurfaceCategory::Timeline => Color::rgba(255, 118, 96, 255),
+        CustomSurfaceCategory::GraphEditor => Color::rgba(188, 132, 255, 255),
+        _ => Color::rgba(70, 222, 142, 255),
+    };
+    let mut stroke = paint(accent, PaintStyle::Stroke);
+    stroke.set_anti_alias(true);
+    stroke.set_stroke_width(2.0);
+    if samples.len() < 2 {
+        let y = geometry.y + geometry.height / 2.0;
+        canvas.draw_line((geometry.x, y), (geometry.x + geometry.width, y), &stroke);
+        return;
+    }
+    let step = geometry.width / (samples.len() - 1) as f32;
+    let mut path = PathBuilder::new();
+    for (index, sample) in samples.iter().enumerate() {
+        let x = geometry.x + index as f32 * step;
+        let y = geometry.y + geometry.height - geometry.height * sample.clamp(0.0, 1.0);
+        if index == 0 {
+            path.move_to((x, y));
+        } else {
+            path.line_to((x, y));
+        }
+    }
+    canvas.draw_path(&path.detach(), &stroke);
 }
 
 fn rect(geometry: Geometry) -> Rect {

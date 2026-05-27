@@ -1,7 +1,9 @@
 use hawk2ui_layout::{
     BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue, TestTextMeasurer, Viewport,
 };
-use hawk2ui_render::{Color, Geometry, RendererBackend, SceneNodeId};
+use hawk2ui_render::{
+    Color, CustomSurfaceCategory, CustomSurfaceDataSnapshot, Geometry, RendererBackend, SceneNodeId,
+};
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend};
 use hawk2ui_runtime::{
     BindingExecution, BindingLifecycleAvailability, BindingSchema, HostBindingRecord,
@@ -738,6 +740,62 @@ fn runtime_scene_bridge_emits_compiled_asset_draw_commands_and_rejects_raw_paths
 }
 
 #[test]
+fn runtime_scene_bridge_emits_custom_surface_draw_commands_with_realtime_data() {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(160.0, 64.0)),
+        RuntimeVisual::None,
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("meter"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(96.0, 24.0)),
+            RuntimeVisual::CustomSurface(
+                hawk2ui_runtime::RuntimeCustomSurfaceVisual::new(CustomSurfaceCategory::Meter)
+                    .with_data_snapshot(
+                        CustomSurfaceDataSnapshot::new([0.0, 0.5, 1.0])
+                            .expect("valid realtime samples"),
+                    )
+                    .with_frame_interval(2)
+                    .schedule_frame(4),
+            ),
+        ),
+    )
+    .expect("custom surface attaches")
+    .invalidate(&RuntimeViewId::new("meter"))
+    .expect("custom surface invalidates independently");
+
+    let frame = RuntimeSceneBridge::new(Viewport::new(160.0, 64.0))
+        .build(&tree)
+        .expect("custom surface bridges into draw commands");
+
+    let command = frame
+        .draw_commands()
+        .iter()
+        .find_map(|command| match command {
+            RuntimeDrawCommand::CustomSurface { surface, data, .. } => Some((surface, data)),
+            _ => None,
+        })
+        .expect("custom surface command exists");
+    assert_eq!(
+        command.0.reserved_layout(),
+        Geometry::new(0.0, 0.0, 96.0, 24.0)
+    );
+    assert!(command.0.is_frame_due(4));
+    assert_eq!(command.1.samples(), &[0.0, 0.5, 1.0]);
+    assert_eq!(
+        frame
+            .invalidated_view_ids()
+            .iter()
+            .map(RuntimeViewId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["meter"]
+    );
+}
+
+#[test]
 fn runtime_scene_bridge_rejects_invalid_view_records_before_rendering() {
     let invalid_root = RuntimeViewTree::new(RuntimeViewNode::new(
         RuntimeViewId::new(""),
@@ -899,7 +957,9 @@ fn render_frame_with_skia(frame: &RuntimeSceneFrame, backend: &mut SkiaRendererB
                     *color,
                 )
                 .expect("text command renders"),
-            RuntimeDrawCommand::ImageAsset { .. } | RuntimeDrawCommand::VectorAsset { .. } => {}
+            RuntimeDrawCommand::ImageAsset { .. }
+            | RuntimeDrawCommand::VectorAsset { .. }
+            | RuntimeDrawCommand::CustomSurface { .. } => {}
         }
     }
 }

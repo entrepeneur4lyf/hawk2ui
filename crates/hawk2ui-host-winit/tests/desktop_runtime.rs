@@ -1,9 +1,10 @@
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{DesktopRuntimeEvent, SoftwareFrameRenderer, WinitDesktopRuntimeConfig};
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
-use hawk2ui_render::Color;
+use hawk2ui_render::{Color, CustomSurfaceCategory, CustomSurfaceDataSnapshot};
 use hawk2ui_runtime::{
-    RuntimeSceneBridge, RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
+    RuntimeCustomSurfaceVisual, RuntimeSceneBridge, RuntimeViewId, RuntimeViewNode,
+    RuntimeViewTree, RuntimeVisual,
 };
 
 #[test]
@@ -45,6 +46,41 @@ fn software_frame_renders_runtime_scene_commands() {
     assert_eq!(pixels.height(), 24);
     assert_eq!(pixels.pixels()[0], 0x00ff0000);
     assert!(pixels.pixels().iter().all(|pixel| *pixel == 0x00ff0000));
+}
+
+#[test]
+fn software_frame_renders_runtime_custom_surface_commands() {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(128.0, 64.0)),
+        RuntimeVisual::None,
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("meter"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(96.0, 24.0)),
+            RuntimeVisual::CustomSurface(
+                RuntimeCustomSurfaceVisual::new(CustomSurfaceCategory::Meter).with_data_snapshot(
+                    CustomSurfaceDataSnapshot::new([0.0, 0.5, 1.0]).expect("valid samples"),
+                ),
+            ),
+        ),
+    )
+    .expect("custom surface attaches");
+    let frame = RuntimeSceneBridge::new(Viewport::new(128.0, 64.0))
+        .build(&tree)
+        .expect("runtime scene frame should build");
+
+    let pixels = SoftwareFrameRenderer::default()
+        .render_scene_frame(&frame, 128, 64, 1.0)
+        .expect("runtime custom surface should render to software frame");
+
+    assert!(
+        pixels.pixels().iter().any(|pixel| *pixel != 0x00000000),
+        "custom surface should draw visible non-transparent pixels"
+    );
 }
 
 #[test]

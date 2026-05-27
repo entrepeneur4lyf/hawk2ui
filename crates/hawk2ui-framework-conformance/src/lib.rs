@@ -11,7 +11,9 @@ use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
 use hawk2ui_framework_svelte::{SvelteComponentSource, SvelteIntegration};
 use hawk2ui_framework_vue::{VueIntegration, VueSingleFileComponent};
 use hawk2ui_layout::Viewport;
-use hawk2ui_render::{Color, Geometry, RendererBackend};
+use hawk2ui_render::{
+    Color, CustomSurfaceDrawRequest, CustomSurfaceFrameContext, Geometry, RendererBackend,
+};
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend};
 use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId};
 
@@ -798,6 +800,19 @@ fn render_runtime_frame_with_skia(
                 return Err(
                     "asset draw commands require registered compiled asset payloads".to_string(),
                 );
+            }
+            RuntimeDrawCommand::CustomSurface { surface, data, .. } => {
+                let request = CustomSurfaceDrawRequest::new(
+                    surface.clone(),
+                    CustomSurfaceFrameContext::new(0, 1.0).map_err(|error| {
+                        format!("custom surface frame context failed: {}", error.rule())
+                    })?,
+                    data.clone(),
+                )
+                .map_err(|error| format!("custom surface request failed: {}", error.rule()))?;
+                backend
+                    .draw_custom_surface(&request)
+                    .map_err(|error| format!("{error:?}"))?;
             }
         }
     }

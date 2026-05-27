@@ -1,5 +1,9 @@
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits};
-use hawk2ui_render::{BackendCapabilities, Color, Geometry, RendererBackend, Transform};
+use hawk2ui_render::{
+    BackendCapabilities, Color, CustomDrawSurface, CustomSurfaceCategory,
+    CustomSurfaceDataSnapshot, CustomSurfaceDrawRequest, CustomSurfaceFrameContext, Geometry,
+    RendererBackend, Transform,
+};
 use hawk2ui_render_skia::{SkiaRendererBackend, SkiaSurfaceConfig};
 use image::{ColorType, ImageEncoder};
 
@@ -410,6 +414,43 @@ fn cache_lifecycle_tracks_generation_and_invalidation() {
     assert!(
         count_changed_pixels(snapshot, 0x080a0e, Geometry::new(56.0, 8.0, 18.0, 18.0)) > 0,
         "cache replay before invalidation must draw real cached pixels"
+    );
+}
+
+#[test]
+fn custom_meter_surface_renders_pixels_and_records_frame_limited_draw() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 128, 64).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(8, 10, 14, 255)).unwrap();
+
+    let surface = CustomDrawSurface::new(
+        "meter",
+        CustomSurfaceCategory::Meter,
+        Geometry::new(16.0, 20.0, 96.0, 24.0),
+    )
+    .with_frame_interval(2)
+    .schedule_frame(4);
+    let request = CustomSurfaceDrawRequest::new(
+        surface,
+        CustomSurfaceFrameContext::new(4, 1.0).unwrap(),
+        CustomSurfaceDataSnapshot::new([0.1, 0.4, 0.8, 1.0]).unwrap(),
+    )
+    .unwrap();
+
+    backend.draw_custom_surface(&request).unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 20.0, 96.0, 24.0)) > 0,
+        "custom meter draw hook must produce visible pixels"
+    );
+    assert!(
+        backend
+            .command_keys()
+            .iter()
+            .any(|key| { key == "custom-surface:meter:meter:frame=4:samples=4" })
     );
 }
 

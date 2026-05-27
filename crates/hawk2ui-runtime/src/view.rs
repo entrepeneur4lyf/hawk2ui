@@ -7,9 +7,10 @@ use hawk2ui_layout::{
     LayoutTree, LayoutTreeError, TextMeasureInput, TextMeasureMode, Viewport,
 };
 use hawk2ui_render::{
-    BackendError, Color, Geometry, InvalidationReason, LayerKind, LayerStack, LayerValidationError,
-    PaintCommandList, PaintLayer, RendererCacheInvalidator, SceneGraph, SceneGraphDiff,
-    SceneGraphError, SceneNode, SceneNodeId, TextLayer, export_paint_commands,
+    BackendError, Color, CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory,
+    CustomSurfaceDataSnapshot, Geometry, InvalidationReason, LayerKind, LayerStack,
+    LayerValidationError, PaintCommandList, PaintLayer, RendererCacheInvalidator, SceneGraph,
+    SceneGraphDiff, SceneGraphError, SceneNode, SceneNodeId, TextLayer, export_paint_commands,
 };
 
 /// Stable runtime view identifier.
@@ -83,6 +84,82 @@ impl RuntimeTextVisual {
     }
 }
 
+/// Custom draw surface visual attached to a runtime view node.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RuntimeCustomSurfaceVisual {
+    category: CustomSurfaceCategory,
+    capabilities: Vec<CustomSurfaceCapability>,
+    data: CustomSurfaceDataSnapshot,
+    next_frame: Option<u64>,
+    frame_interval: Option<u64>,
+}
+
+impl RuntimeCustomSurfaceVisual {
+    /// Creates a custom surface visual for category-specific renderer hooks.
+    #[must_use]
+    pub fn new(category: CustomSurfaceCategory) -> Self {
+        Self {
+            category,
+            capabilities: Vec::new(),
+            data: CustomSurfaceDataSnapshot::default(),
+            next_frame: None,
+            frame_interval: None,
+        }
+    }
+
+    /// Adds a renderer capability requirement for the custom surface.
+    #[must_use]
+    pub fn with_capability(mut self, capability: CustomSurfaceCapability) -> Self {
+        if !self.capabilities.contains(&capability) {
+            self.capabilities.push(capability);
+        }
+        self
+    }
+
+    /// Attaches a plugin-safe realtime data snapshot.
+    #[must_use]
+    pub fn with_data_snapshot(mut self, data: CustomSurfaceDataSnapshot) -> Self {
+        self.data = data;
+        self
+    }
+
+    /// Schedules the next host frame at which this surface may draw.
+    #[must_use]
+    pub const fn schedule_frame(mut self, frame: u64) -> Self {
+        self.next_frame = Some(frame);
+        self
+    }
+
+    /// Sets the minimum host-frame interval between draws.
+    #[must_use]
+    pub const fn with_frame_interval(mut self, frame_interval: u64) -> Self {
+        self.frame_interval = Some(if frame_interval == 0 {
+            1
+        } else {
+            frame_interval
+        });
+        self
+    }
+
+    fn to_surface(&self, id: &RuntimeViewId, geometry: Geometry) -> CustomDrawSurface {
+        let mut surface = CustomDrawSurface::new(id.as_str(), self.category, geometry);
+        for capability in &self.capabilities {
+            surface = surface.with_capability(*capability);
+        }
+        if let Some(next_frame) = self.next_frame {
+            surface = surface.schedule_frame(next_frame);
+        }
+        if let Some(frame_interval) = self.frame_interval {
+            surface = surface.with_frame_interval(frame_interval);
+        }
+        surface
+    }
+
+    fn data(&self) -> CustomSurfaceDataSnapshot {
+        self.data.clone()
+    }
+}
+
 /// Visual payload attached to a runtime view node.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeVisual {
@@ -96,6 +173,8 @@ pub enum RuntimeVisual {
     ImageAsset(String),
     /// Compiled vector asset visual.
     VectorAsset(String),
+    /// Custom renderer-owned draw surface visual.
+    CustomSurface(RuntimeCustomSurfaceVisual),
 }
 
 /// Retained runtime view node.
@@ -232,6 +311,17 @@ pub enum RuntimeDrawCommand {
         /// Compiled asset identifier.
         asset_id: String,
     },
+    /// Custom renderer-owned draw surface command.
+    CustomSurface {
+        /// View node that produced this command.
+        id: RuntimeViewId,
+        /// Resolved layout geometry.
+        geometry: Geometry,
+        /// Surface metadata and scheduling information.
+        surface: CustomDrawSurface,
+        /// Plugin-safe realtime data snapshot.
+        data: CustomSurfaceDataSnapshot,
+    },
 }
 
 impl RuntimeDrawCommand {
@@ -242,7 +332,8 @@ impl RuntimeDrawCommand {
             Self::Fill { id, .. }
             | Self::Text { id, .. }
             | Self::ImageAsset { id, .. }
-            | Self::VectorAsset { id, .. } => id,
+            | Self::VectorAsset { id, .. }
+            | Self::CustomSurface { id, .. } => id,
         }
     }
 
@@ -253,7 +344,8 @@ impl RuntimeDrawCommand {
             Self::Fill { geometry, .. }
             | Self::Text { geometry, .. }
             | Self::ImageAsset { geometry, .. }
-            | Self::VectorAsset { geometry, .. } => *geometry,
+            | Self::VectorAsset { geometry, .. }
+            | Self::CustomSurface { geometry, .. } => *geometry,
         }
     }
 }
@@ -673,6 +765,14 @@ impl RuntimeViewTree {
                         asset_id: asset_id.clone(),
                     });
                 }
+                RuntimeVisual::CustomSurface(surface) => {
+                    draw_commands.push(RuntimeDrawCommand::CustomSurface {
+                        id: entry.node.id().clone(),
+                        geometry,
+                        surface: surface.to_surface(entry.node.id(), geometry),
+                        data: surface.data(),
+                    });
+                }
             }
         }
         (layers, draw_commands)
@@ -791,7 +891,10 @@ fn validate_runtime_node(node: &RuntimeViewNode) -> Result<(), RuntimeSceneError
                 ));
             }
         }
-        RuntimeVisual::None | RuntimeVisual::Fill(_) | RuntimeVisual::Text(_) => {}
+        RuntimeVisual::None
+        | RuntimeVisual::Fill(_)
+        | RuntimeVisual::Text(_)
+        | RuntimeVisual::CustomSurface(_) => {}
     }
     Ok(())
 }

@@ -28,9 +28,9 @@ pub use script::{
     StructuredValue,
 };
 pub use view::{
-    RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneError, RuntimeSceneFrame,
-    RuntimeSceneUpdate, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
-    RuntimeVisual,
+    RuntimeCustomSurfaceVisual, RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneError,
+    RuntimeSceneFrame, RuntimeSceneUpdate, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode,
+    RuntimeViewTree, RuntimeVisual,
 };
 
 /// The canonical Cargo package name for this crate.
