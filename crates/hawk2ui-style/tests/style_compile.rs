@@ -98,6 +98,9 @@ fn selector_subset_rejects_unsupported_forms_with_diagnostics() {
         ("button:hover", "selector.state.unsupported"),
         ("[aria-label]", "selector.attribute.unsupported"),
         ("button, label", "selector.list.unsupported"),
+        (".", "selector.syntax.invalid"),
+        ("#", "selector.syntax.invalid"),
+        ("button:hawk()", "selector.state.invalid"),
     ] {
         let error = hawk2ui_style::Selector::parse(source).expect_err("selector must be rejected");
         assert_eq!(error.diagnostic().rule(), rule);

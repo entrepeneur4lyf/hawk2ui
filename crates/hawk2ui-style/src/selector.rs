@@ -176,16 +176,21 @@ fn reject_unsupported(source: &str) -> Result<(), SelectorParseError> {
 fn parse_simple(source: &str) -> Result<SelectorPart, SelectorParseError> {
     let source = source.trim();
     if let Some(class_name) = source.strip_prefix('.') {
-        Ok(SelectorPart::Class(class_name.to_string()))
+        if is_valid_name(class_name) {
+            Ok(SelectorPart::Class(class_name.to_string()))
+        } else {
+            Err(invalid_selector_syntax())
+        }
     } else if let Some(id) = source.strip_prefix('#') {
-        Ok(SelectorPart::Id(id.to_string()))
-    } else if !source.is_empty() && source.chars().all(is_name_char) {
+        if is_valid_name(id) {
+            Ok(SelectorPart::Id(id.to_string()))
+        } else {
+            Err(invalid_selector_syntax())
+        }
+    } else if is_valid_name(source) {
         Ok(SelectorPart::Element(source.to_string()))
     } else {
-        Err(SelectorParseError::new(
-            "selector.syntax.invalid",
-            "selector syntax is invalid",
-        ))
+        Err(invalid_selector_syntax())
     }
 }
 
@@ -199,7 +204,21 @@ fn split_hawk_state(source: &str) -> Result<(&str, Option<&str>), SelectorParseE
             "hawk state selector must close with ')'",
         ));
     };
+    if !is_valid_name(state) {
+        return Err(SelectorParseError::new(
+            "selector.state.invalid",
+            "hawk state selector must contain a supported state name",
+        ));
+    }
     Ok((base, Some(state)))
+}
+
+fn invalid_selector_syntax() -> SelectorParseError {
+    SelectorParseError::new("selector.syntax.invalid", "selector syntax is invalid")
+}
+
+fn is_valid_name(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(is_name_char)
 }
 
 fn is_name_char(character: char) -> bool {
