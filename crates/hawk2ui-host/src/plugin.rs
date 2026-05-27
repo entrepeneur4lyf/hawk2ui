@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{KeyboardInput, PointerInput, SurfaceMetrics};
+use crate::{
+    HostCapabilities, HostSurface, KeyboardInput, PointerInput, RepaintRequest,
+    SurfaceClipboardRequest, SurfaceMetrics, SurfaceWindowCommand,
+};
 
 /// Plugin parent handle record.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -69,6 +72,17 @@ pub enum PluginHostEvent {
     EditorDestroyed(String),
     /// Safe teardown completed.
     SafeTeardownComplete,
+    /// Window command was rejected because plugin editors cannot own top-level windows.
+    WindowCommandRejected(SurfaceWindowCommand),
+    /// Clipboard operation was requested through the plugin host.
+    ClipboardRequested(SurfaceClipboardRequest),
+    /// Frame was presented to the plugin editor surface.
+    FramePresented {
+        /// Monotonic frame identifier.
+        frame_id: u64,
+        /// Surface metrics used for presentation.
+        metrics: SurfaceMetrics,
+    },
 }
 
 /// Plugin host adapter contract.
@@ -102,6 +116,8 @@ pub trait PluginHostAdapter {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct RecordingPluginAdapter {
     config: PluginEditorConfig,
+    capabilities: HostCapabilities,
+    focused: bool,
     requested_process_quit: bool,
     destroyed: bool,
     events: Vec<PluginHostEvent>,
@@ -117,6 +133,8 @@ impl RecordingPluginAdapter {
                 PluginHostEvent::EditorCreated(config.editor_id.clone()),
             ],
             config,
+            capabilities: HostCapabilities::plugin(),
+            focused: false,
             requested_process_quit: false,
             destroyed: false,
         }
@@ -133,14 +151,76 @@ impl RecordingPluginAdapter {
         std::mem::take(&mut self.events)
     }
 
+    /// Returns current editor metrics.
+    #[must_use]
+    pub const fn metrics(&self) -> SurfaceMetrics {
+        self.config.metrics
+    }
+
     fn accepts_host_event(&self) -> bool {
         !self.destroyed
     }
 }
 
-impl PluginHostAdapter for RecordingPluginAdapter {
+impl HostSurface for RecordingPluginAdapter {
     fn metrics(&self) -> SurfaceMetrics {
         self.config.metrics
+    }
+
+    fn capabilities(&self) -> &HostCapabilities {
+        &self.capabilities
+    }
+
+    fn has_focus(&self) -> bool {
+        self.focused
+    }
+
+    fn set_focus(&mut self, focused: bool) {
+        self.route_focus(focused);
+    }
+
+    fn request_repaint(&mut self, request: RepaintRequest) {
+        self.schedule_repaint(request.reason);
+    }
+
+    fn resize(&mut self, metrics: SurfaceMetrics) {
+        self.host_resize(metrics);
+    }
+
+    fn request_window_command(&mut self, command: SurfaceWindowCommand) {
+        match command {
+            SurfaceWindowCommand::Close(reason) => self.destroy_editor(reason),
+            SurfaceWindowCommand::SetMode(mode) if self.accepts_host_event() => self.events.push(
+                PluginHostEvent::WindowCommandRejected(SurfaceWindowCommand::SetMode(mode)),
+            ),
+            SurfaceWindowCommand::SetMode(_) => {}
+        }
+    }
+
+    fn request_clipboard(&mut self, request: SurfaceClipboardRequest) {
+        if self.accepts_host_event() {
+            self.events
+                .push(PluginHostEvent::ClipboardRequested(request));
+        }
+    }
+
+    fn record_presented_frame(&mut self, frame_id: u64) {
+        if self.accepts_host_event() {
+            self.events.push(PluginHostEvent::FramePresented {
+                frame_id,
+                metrics: self.config.metrics,
+            });
+        }
+    }
+
+    fn teardown(&mut self, reason: impl Into<String>) {
+        self.destroy_editor(reason);
+    }
+}
+
+impl PluginHostAdapter for RecordingPluginAdapter {
+    fn metrics(&self) -> SurfaceMetrics {
+        self.metrics()
     }
 
     fn host_resize(&mut self, metrics: SurfaceMetrics) {
@@ -171,6 +251,7 @@ impl PluginHostAdapter for RecordingPluginAdapter {
         if !self.accepts_host_event() {
             return;
         }
+        self.focused = focused;
         self.events.push(PluginHostEvent::FocusRouted(focused));
     }
 

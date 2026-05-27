@@ -86,6 +86,9 @@ impl RendererResizeBridge {
             }
             SurfaceEvent::FocusChanged(_)
             | SurfaceEvent::RepaintRequested(_)
+            | SurfaceEvent::WindowCommandRequested(_)
+            | SurfaceEvent::ClipboardRequested(_)
+            | SurfaceEvent::FramePresented { .. }
             | SurfaceEvent::TeardownRequested(_) => None,
         }
     }
@@ -128,13 +131,20 @@ impl RendererResizeBridge {
                     "desktop requested target recreation",
                 ))
             }
+            DesktopHostEvent::Resized(metrics) => Some(RendererTargetRequest::recreate(
+                *metrics,
+                "desktop surface resized",
+            )),
             DesktopHostEvent::WindowCreated(_)
             | DesktopHostEvent::CloseRequested(_)
             | DesktopHostEvent::ModeChanged(_)
             | DesktopHostEvent::FocusChanged(_)
             | DesktopHostEvent::KeyboardInput(_)
             | DesktopHostEvent::PointerInput(_)
-            | DesktopHostEvent::ClipboardCapabilityChanged(_) => None,
+            | DesktopHostEvent::ClipboardCapabilityChanged(_)
+            | DesktopHostEvent::RepaintRequested(_)
+            | DesktopHostEvent::ClipboardRequested(_)
+            | DesktopHostEvent::FramePresented { .. } => None,
         }
     }
 
@@ -176,7 +186,10 @@ impl RendererResizeBridge {
             | PluginHostEvent::KeyboardRouted(_)
             | PluginHostEvent::PointerRouted(_)
             | PluginHostEvent::EditorDestroyed(_)
-            | PluginHostEvent::SafeTeardownComplete => None,
+            | PluginHostEvent::SafeTeardownComplete
+            | PluginHostEvent::WindowCommandRejected(_)
+            | PluginHostEvent::ClipboardRequested(_)
+            | PluginHostEvent::FramePresented { .. } => None,
         }
     }
 

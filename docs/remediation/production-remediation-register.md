@@ -1089,10 +1089,18 @@ Acceptance:
 
 ### REM-HOST-001: Complete Host Abstraction
 
+Status: Remediated in source.
+
 Evidence:
 
 - Host contracts exist for surfaces, platform handles, resize, desktop/plugin adapters.
-- Rendering and runtime ownership are not fully separated from host code.
+- `HostSurface` now defines a common lifecycle for metrics, DPI/resize, focus, repaint,
+  window commands, clipboard requests, teardown, and frame-presentation timing.
+- `RecordingDesktopAdapter` and `RecordingPluginAdapter` both implement the common
+  `HostSurface` contract while preserving their desktop/plugin-specific host event APIs.
+- Renderer command replay is owned by `hawk2ui-render-skia`; `hawk2ui-host-winit`
+  delegates runtime scene drawing through renderer replay options instead of owning draw-command
+  semantics.
 
 Required remediation:
 
@@ -1101,6 +1109,24 @@ Required remediation:
 Acceptance:
 
 - Desktop and plugin hosts implement the same surface contract without owning rendering semantics.
+
+Remediation delivered:
+
+- Added common `SurfaceWindowCommand`, `SurfaceWindowMode`, and `SurfaceClipboardRequest`
+  records.
+- Added common host-surface event coverage for window commands, clipboard requests, and frame
+  presentation records.
+- Extended desktop and plugin recording adapters to implement `HostSurface` so common lifecycle
+  tests exercise both host classes through the same trait.
+- Extended resize/update bridging to classify new common host events without accidentally forcing
+  renderer target recreation for non-size-affecting events.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this host abstraction slice for production
+  readiness: common lifecycle ownership is explicit, desktop/plugin adapters share the same
+  contract, and rendering semantics remain in the renderer layer. No corrective revision is
+  required before continuing deeper Winit platform coverage.
 
 ### REM-HOST-002: Complete Winit Desktop Backend
 
@@ -1122,7 +1148,18 @@ Acceptance:
 Status:
 
 - `scale_factor_to_f32` now validates finite/positive input and then performs a direct `f64 as f32` conversion with post-cast validation.
+- `logical_size_to_f32` now uses the same checked direct numeric conversion pattern for runtime
+  scene viewport dimensions instead of a string round-trip.
 - Winit software frame rendering now accepts runtime scene image/vector asset commands and paints visible missing-asset placeholders instead of aborting frame presentation.
+- `REM-RENDER-001` connected Winit runtime scene frames to renderer-owned Skia replay, so desktop
+  frames now render the runtime tree through the production renderer path.
+
+Review check:
+
+- This remains partially open for production stability: close, resize, maximize, DPI, input, and
+  runtime scene presentation are covered by automated and manual smoke paths, but menus, tray,
+  dialogs, drag/drop, IME, and complete OS clipboard behavior still need platform-backed
+  implementation before `REM-HOST-002` can be closed.
 
 ### REM-HOST-003: Complete Baseview Plugin Backend
 

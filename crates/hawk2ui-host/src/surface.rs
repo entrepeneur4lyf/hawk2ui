@@ -63,6 +63,12 @@ pub enum HostCapability {
     Resize,
     /// Host supports focus requests.
     Focus,
+    /// Host supports input routing.
+    InputRouting,
+    /// Host supports window state requests such as minimize, maximize, and fullscreen.
+    WindowState,
+    /// Host reports frame presentation timing.
+    PresentationTiming,
 }
 
 /// Host surface capabilities.
@@ -83,6 +89,9 @@ impl HostCapabilities {
                 HostCapability::ClipboardWrite,
                 HostCapability::Resize,
                 HostCapability::Focus,
+                HostCapability::InputRouting,
+                HostCapability::WindowState,
+                HostCapability::PresentationTiming,
             ]),
         }
     }
@@ -91,7 +100,12 @@ impl HostCapabilities {
     #[must_use]
     pub fn plugin() -> Self {
         Self {
-            capabilities: BTreeSet::from([HostCapability::Focus]),
+            capabilities: BTreeSet::from([
+                HostCapability::Resize,
+                HostCapability::Focus,
+                HostCapability::InputRouting,
+                HostCapability::PresentationTiming,
+            ]),
         }
     }
 
@@ -128,6 +142,39 @@ impl RepaintRequest {
     }
 }
 
+/// Common host window mode request.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SurfaceWindowMode {
+    /// Normal restored window.
+    Normal,
+    /// Minimized window.
+    Minimized,
+    /// Maximized window.
+    Maximized,
+    /// Fullscreen window.
+    Fullscreen,
+}
+
+/// Common host window command.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SurfaceWindowCommand {
+    /// Request a host-owned window mode change.
+    SetMode(SurfaceWindowMode),
+    /// Request host surface close or editor destruction.
+    Close(String),
+}
+
+/// Common clipboard operation requested through a host surface.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SurfaceClipboardRequest {
+    /// Read the host clipboard.
+    Read,
+    /// Write text to the host clipboard.
+    Write(String),
+    /// Clear host clipboard text owned by the app when supported.
+    Clear,
+}
+
 /// Host surface event.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum SurfaceEvent {
@@ -137,6 +184,17 @@ pub enum SurfaceEvent {
     RepaintRequested(RepaintRequest),
     /// Surface resized.
     Resized(SurfaceMetrics),
+    /// Window command was requested.
+    WindowCommandRequested(SurfaceWindowCommand),
+    /// Clipboard operation was requested.
+    ClipboardRequested(SurfaceClipboardRequest),
+    /// Frame presentation completed for the current metrics.
+    FramePresented {
+        /// Monotonic frame identifier.
+        frame_id: u64,
+        /// Surface metrics used for presentation.
+        metrics: SurfaceMetrics,
+    },
     /// Surface teardown requested.
     TeardownRequested(String),
 }
@@ -160,6 +218,15 @@ pub trait HostSurface {
 
     /// Updates surface metrics after resize or DPI change.
     fn resize(&mut self, metrics: SurfaceMetrics);
+
+    /// Requests a host window command.
+    fn request_window_command(&mut self, command: SurfaceWindowCommand);
+
+    /// Requests a clipboard operation through the host.
+    fn request_clipboard(&mut self, request: SurfaceClipboardRequest);
+
+    /// Records frame presentation for the current surface metrics.
+    fn record_presented_frame(&mut self, frame_id: u64);
 
     /// Requests teardown.
     fn teardown(&mut self, reason: impl Into<String>);
@@ -217,6 +284,22 @@ impl HostSurface for RecordingHostSurface {
     fn resize(&mut self, metrics: SurfaceMetrics) {
         self.metrics = metrics;
         self.events.push(SurfaceEvent::Resized(metrics));
+    }
+
+    fn request_window_command(&mut self, command: SurfaceWindowCommand) {
+        self.events
+            .push(SurfaceEvent::WindowCommandRequested(command));
+    }
+
+    fn request_clipboard(&mut self, request: SurfaceClipboardRequest) {
+        self.events.push(SurfaceEvent::ClipboardRequested(request));
+    }
+
+    fn record_presented_frame(&mut self, frame_id: u64) {
+        self.events.push(SurfaceEvent::FramePresented {
+            frame_id,
+            metrics: self.metrics,
+        });
     }
 
     fn teardown(&mut self, reason: impl Into<String>) {

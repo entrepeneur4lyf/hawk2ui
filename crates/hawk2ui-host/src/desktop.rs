@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::SurfaceMetrics;
+use crate::{
+    HostCapabilities, HostSurface, RepaintRequest, SurfaceClipboardRequest, SurfaceMetrics,
+    SurfaceWindowCommand, SurfaceWindowMode,
+};
 
 /// Clipboard capability exposed by a desktop host.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -124,6 +127,19 @@ pub enum DesktopHostEvent {
     DpiChanged(f64),
     /// Renderer target must be recreated.
     RendererTargetRecreateRequested,
+    /// Explicit repaint was requested.
+    RepaintRequested(RepaintRequest),
+    /// Surface metrics changed.
+    Resized(SurfaceMetrics),
+    /// Clipboard operation was requested.
+    ClipboardRequested(SurfaceClipboardRequest),
+    /// Frame was presented to the host surface.
+    FramePresented {
+        /// Monotonic frame identifier.
+        frame_id: u64,
+        /// Surface metrics used for presentation.
+        metrics: SurfaceMetrics,
+    },
 }
 
 /// Desktop host adapter contract.
@@ -166,6 +182,7 @@ pub trait DesktopHostAdapter {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct RecordingDesktopAdapter {
     config: DesktopWindowConfig,
+    capabilities: HostCapabilities,
     mode: WindowMode,
     focused: bool,
     events: Vec<DesktopHostEvent>,
@@ -177,6 +194,7 @@ impl RecordingDesktopAdapter {
     pub fn create_window(config: DesktopWindowConfig) -> Self {
         Self {
             config: config.clone(),
+            capabilities: HostCapabilities::desktop(),
             mode: WindowMode::Normal,
             focused: false,
             events: vec![DesktopHostEvent::WindowCreated(config)],
@@ -188,9 +206,87 @@ impl RecordingDesktopAdapter {
         std::mem::take(&mut self.events)
     }
 
+    /// Returns current surface metrics.
+    #[must_use]
+    pub const fn metrics(&self) -> SurfaceMetrics {
+        self.config.metrics
+    }
+
+    /// Sets focus.
+    pub fn set_focus(&mut self, focused: bool) {
+        self.focused = focused;
+        self.events.push(DesktopHostEvent::FocusChanged(focused));
+    }
+
     fn set_mode(&mut self, mode: WindowMode) {
         self.mode = mode;
         self.events.push(DesktopHostEvent::ModeChanged(mode));
+    }
+}
+
+impl HostSurface for RecordingDesktopAdapter {
+    fn metrics(&self) -> SurfaceMetrics {
+        self.config.metrics
+    }
+
+    fn capabilities(&self) -> &HostCapabilities {
+        &self.capabilities
+    }
+
+    fn has_focus(&self) -> bool {
+        self.focused
+    }
+
+    fn set_focus(&mut self, focused: bool) {
+        DesktopHostAdapter::set_focus(self, focused);
+    }
+
+    fn request_repaint(&mut self, request: RepaintRequest) {
+        self.events
+            .push(DesktopHostEvent::RepaintRequested(request));
+    }
+
+    fn resize(&mut self, metrics: SurfaceMetrics) {
+        self.config.metrics = metrics;
+        self.events.push(DesktopHostEvent::Resized(metrics));
+        self.events
+            .push(DesktopHostEvent::RendererTargetRecreateRequested);
+    }
+
+    fn request_window_command(&mut self, command: SurfaceWindowCommand) {
+        match command {
+            SurfaceWindowCommand::SetMode(SurfaceWindowMode::Normal) => {
+                self.set_mode(WindowMode::Normal);
+            }
+            SurfaceWindowCommand::SetMode(SurfaceWindowMode::Minimized) => {
+                self.set_mode(WindowMode::Minimized);
+            }
+            SurfaceWindowCommand::SetMode(SurfaceWindowMode::Maximized) => {
+                self.set_mode(WindowMode::Maximized);
+            }
+            SurfaceWindowCommand::SetMode(SurfaceWindowMode::Fullscreen) => {
+                self.set_mode(WindowMode::Fullscreen);
+            }
+            SurfaceWindowCommand::Close(reason) => {
+                DesktopHostAdapter::request_close(self, reason);
+            }
+        }
+    }
+
+    fn request_clipboard(&mut self, request: SurfaceClipboardRequest) {
+        self.events
+            .push(DesktopHostEvent::ClipboardRequested(request));
+    }
+
+    fn record_presented_frame(&mut self, frame_id: u64) {
+        self.events.push(DesktopHostEvent::FramePresented {
+            frame_id,
+            metrics: self.config.metrics,
+        });
+    }
+
+    fn teardown(&mut self, reason: impl Into<String>) {
+        DesktopHostAdapter::request_close(self, reason);
     }
 }
 
@@ -200,7 +296,7 @@ impl DesktopHostAdapter for RecordingDesktopAdapter {
     }
 
     fn metrics(&self) -> SurfaceMetrics {
-        self.config.metrics
+        self.metrics()
     }
 
     fn request_minimize(&mut self, minimized: bool) {
@@ -233,8 +329,7 @@ impl DesktopHostAdapter for RecordingDesktopAdapter {
     }
 
     fn set_focus(&mut self, focused: bool) {
-        self.focused = focused;
-        self.events.push(DesktopHostEvent::FocusChanged(focused));
+        self.set_focus(focused);
     }
 
     fn keyboard_input(&mut self, input: KeyboardInput) {

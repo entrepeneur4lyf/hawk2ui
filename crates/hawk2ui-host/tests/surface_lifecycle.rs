@@ -1,10 +1,11 @@
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_host::{
     ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig, FramePresenter,
-    HostCapabilities, HostPlatformHandle, HostSurface, KeyboardInput, PluginEditorConfig,
-    PluginHostAdapter, PluginHostEvent, PluginParentHandle, PointerInput, RecordingDesktopAdapter,
-    RecordingFramePresenter, RecordingHostSurface, RecordingPluginAdapter, RepaintRequest,
-    SurfaceEvent, SurfaceMetrics, SurfaceOwnership, WindowMode,
+    HostCapabilities, HostCapability, HostPlatformHandle, HostSurface, KeyboardInput,
+    PluginEditorConfig, PluginHostAdapter, PluginHostEvent, PluginParentHandle, PointerInput,
+    RecordingDesktopAdapter, RecordingFramePresenter, RecordingHostSurface, RecordingPluginAdapter,
+    RepaintRequest, SurfaceClipboardRequest, SurfaceEvent, SurfaceMetrics, SurfaceOwnership,
+    SurfaceWindowCommand, SurfaceWindowMode, WindowMode,
 };
 
 #[test]
@@ -60,6 +61,87 @@ fn surface_contract_reports_repaint_resize_and_teardown_events() {
             SurfaceEvent::RepaintRequested(RepaintRequest::full_surface("initial paint")),
             SurfaceEvent::Resized(SurfaceMetrics::new(800.0, 600.0, 1.5)),
             SurfaceEvent::TeardownRequested("window closed".into()),
+        ]
+    );
+}
+
+#[test]
+fn surface_contract_records_window_clipboard_and_presentation_events() {
+    let mut surface = RecordingHostSurface::new(
+        SurfaceMetrics::new(400.0, 300.0, 1.0),
+        HostCapabilities::desktop(),
+    );
+
+    surface.request_window_command(SurfaceWindowCommand::SetMode(SurfaceWindowMode::Maximized));
+    surface.request_clipboard(SurfaceClipboardRequest::Write("hello".into()));
+    surface.record_presented_frame(42);
+
+    assert_eq!(
+        surface.drain_events(),
+        vec![
+            SurfaceEvent::WindowCommandRequested(SurfaceWindowCommand::SetMode(
+                SurfaceWindowMode::Maximized,
+            )),
+            SurfaceEvent::ClipboardRequested(SurfaceClipboardRequest::Write("hello".into())),
+            SurfaceEvent::FramePresented {
+                frame_id: 42,
+                metrics: SurfaceMetrics::new(400.0, 300.0, 1.0),
+            },
+        ]
+    );
+}
+
+#[test]
+fn desktop_and_plugin_adapters_implement_common_surface_contract() {
+    let mut desktop = RecordingDesktopAdapter::create_window(DesktopWindowConfig::new(
+        "Hawk2UI",
+        SurfaceMetrics::new(1024.0, 768.0, 1.0),
+    ));
+    desktop.drain_events();
+
+    desktop.request_repaint(RepaintRequest::full_surface("explicit repaint"));
+    desktop.resize(SurfaceMetrics::new(1440.0, 900.0, 2.0));
+    desktop.request_window_command(SurfaceWindowCommand::SetMode(SurfaceWindowMode::Fullscreen));
+    desktop.request_clipboard(SurfaceClipboardRequest::Read);
+    desktop.record_presented_frame(7);
+
+    assert!(desktop.capabilities().supports(HostCapability::OwnsWindow));
+    assert_eq!(desktop.metrics().physical_size(), (2880, 1800));
+    assert_eq!(
+        desktop.drain_events(),
+        vec![
+            DesktopHostEvent::RepaintRequested(RepaintRequest::full_surface("explicit repaint",)),
+            DesktopHostEvent::Resized(SurfaceMetrics::new(1440.0, 900.0, 2.0)),
+            DesktopHostEvent::RendererTargetRecreateRequested,
+            DesktopHostEvent::ModeChanged(WindowMode::Fullscreen),
+            DesktopHostEvent::ClipboardRequested(SurfaceClipboardRequest::Read),
+            DesktopHostEvent::FramePresented {
+                frame_id: 7,
+                metrics: SurfaceMetrics::new(1440.0, 900.0, 2.0),
+            },
+        ]
+    );
+
+    let mut plugin = RecordingPluginAdapter::attach(PluginEditorConfig::new(
+        "editor",
+        PluginParentHandle::opaque("vst3-parent"),
+        SurfaceMetrics::new(640.0, 360.0, 1.0),
+    ));
+    plugin.drain_events();
+
+    plugin.resize(SurfaceMetrics::new(800.0, 500.0, 1.5));
+    plugin.request_repaint(RepaintRequest::full_surface("meter update"));
+    plugin.request_window_command(SurfaceWindowCommand::Close("host closed editor".into()));
+    plugin.record_presented_frame(3);
+
+    assert!(!plugin.capabilities().supports(HostCapability::OwnsWindow));
+    assert_eq!(
+        plugin.drain_events(),
+        vec![
+            PluginHostEvent::HostResize(SurfaceMetrics::new(800.0, 500.0, 1.5)),
+            PluginHostEvent::RepaintScheduled("meter update".into()),
+            PluginHostEvent::EditorDestroyed("host closed editor".into()),
+            PluginHostEvent::SafeTeardownComplete,
         ]
     );
 }

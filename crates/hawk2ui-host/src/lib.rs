@@ -21,7 +21,8 @@ pub use plugin::{
 pub use resize_bridge::{HostSurfaceUpdateRequest, RendererResizeBridge, RendererTargetRequest};
 pub use surface::{
     FramePresenter, HostCapabilities, HostCapability, HostSurface, PresentedFrame,
-    RecordingFramePresenter, RecordingHostSurface, RepaintRequest, SurfaceEvent, SurfaceMetrics,
+    RecordingFramePresenter, RecordingHostSurface, RepaintRequest, SurfaceClipboardRequest,
+    SurfaceEvent, SurfaceMetrics, SurfaceWindowCommand, SurfaceWindowMode,
 };
 
 /// The canonical Cargo package name for this crate.

@@ -418,12 +418,8 @@ fn logical_size_to_f32(value: f64) -> Result<f32, WinitHostError> {
             "runtime scene viewport dimensions must be finite and greater than zero",
         ));
     }
-    let value = value.to_string().parse::<f32>().map_err(|_| {
-        WinitHostError::new(
-            "desktop.runtime-scene.invalid-viewport",
-            "runtime scene viewport dimension is invalid",
-        )
-    })?;
+    #[allow(clippy::cast_possible_truncation)]
+    let value = value as f32;
     if value.is_finite() && value > 0.0 {
         Ok(value)
     } else {
@@ -503,7 +499,7 @@ impl RuntimeLifecycle {
 
 #[cfg(test)]
 mod tests {
-    use super::RuntimeLifecycle;
+    use super::{RuntimeLifecycle, logical_size_to_f32};
 
     #[test]
     fn runtime_lifecycle_stops_presenting_frames_after_close() {
@@ -540,6 +536,14 @@ mod tests {
         lifecycle.request_close();
         lifecycle.record_animation_tick();
         assert_eq!(lifecycle.summary().animation_ticks, 2);
+    }
+
+    #[test]
+    fn logical_size_to_f32_rejects_invalid_viewport_values() {
+        assert_eq!(logical_size_to_f32(1280.0).expect("valid size"), 1280.0);
+        assert!(logical_size_to_f32(0.0).is_err());
+        assert!(logical_size_to_f32(f64::INFINITY).is_err());
+        assert!(logical_size_to_f32(f64::MAX).is_err());
     }
 }
 
