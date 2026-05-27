@@ -1,6 +1,9 @@
 use hawk2ui_authoring::{ElementKind, EventPayloadField};
 use hawk2ui_framework_vue::{VueIntegration, VueSingleFileComponent};
-use hawk2ui_runtime::RuntimeViewId;
+use hawk2ui_layout::Viewport;
+use hawk2ui_render::Color;
+use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeViewId};
+use hawk2ui_style::{TokenSet, compile_style_source};
 
 #[test]
 fn vue_35_renderer_maps_lifecycle_keyed_children_events_refs_styles_assets_and_source_maps() {
@@ -118,6 +121,35 @@ fn vue_35_renderer_bridges_to_runtime_tree() {
             .operation_keys()
             .contains(&"bind-event:root:pointer.press".to_string())
     );
+}
+
+#[test]
+fn vue_35_render_to_runtime_with_styles_applies_compiled_root_background() {
+    let source = VueSingleFileComponent::new(
+        "examples/frameworks/vue-basic/src/App.vue",
+        r#"<template><hawk-view id="root" class="surface"></hawk-view></template>"#,
+    );
+    let sheet = compile_style_source(".surface { background-color: token(color.surface); }")
+        .expect("style source compiles");
+    let tokens = TokenSet::production().with_color("color.surface", 240, 88, 40, 255);
+
+    let artifact = VueIntegration::new()
+        .render_to_runtime_with_styles(source, &sheet, &tokens)
+        .expect("valid Vue source should bridge with styles");
+    let frame = RuntimeSceneBridge::new(Viewport::new(160.0, 80.0))
+        .build(artifact.runtime_tree())
+        .expect("runtime scene builds");
+
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Fill {
+                id,
+                color,
+                ..
+            } if id.as_str() == "root" && *color == Color::rgba(240, 88, 40, 255)
+        )
+    }));
 }
 
 #[test]

@@ -9,6 +9,7 @@ use hawk2ui_authoring::{
     PropValue, StyleRef,
 };
 use hawk2ui_runtime::RuntimeViewTree;
+use hawk2ui_style::{CompiledStyleSheet, TokenSet};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-framework-react";
@@ -310,6 +311,33 @@ impl ReactIntegration {
             .map_err(|error| bridge_error(author_file.as_str(), &error))?;
         Ok(ReactRuntimeArtifact { rendered, runtime })
     }
+
+    /// Renders a React element tree into a runtime artifact with compiled style references applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReactRenderError`] when source validation, native authoring finalization, style
+    /// resolution, or runtime bridging fails.
+    pub fn render_to_runtime_with_styles(
+        self,
+        tree: ReactElementTree,
+        sheet: &CompiledStyleSheet,
+        tokens: &TokenSet,
+    ) -> Result<ReactRuntimeArtifact, ReactRenderError> {
+        let author_file = tree.author_file.clone();
+        let source_text = tree.source.clone();
+        let rendered = self.render(tree)?;
+        let native_artifact = native_artifact_from_react_with_defaults(
+            author_file.as_str(),
+            source_text.as_str(),
+            &rendered,
+            false,
+        )?;
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact_with_styles(&native_artifact, sheet, tokens)
+            .map_err(|error| bridge_error(author_file.as_str(), &error))?;
+        Ok(ReactRuntimeArtifact { rendered, runtime })
+    }
 }
 
 fn native_artifact_from_react(
@@ -317,9 +345,20 @@ fn native_artifact_from_react(
     source_text: &str,
     rendered: &ReactRenderedArtifact,
 ) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, ReactRenderError> {
+    native_artifact_from_react_with_defaults(author_file, source_text, rendered, true)
+}
+
+fn native_artifact_from_react_with_defaults(
+    author_file: &str,
+    source_text: &str,
+    rendered: &ReactRenderedArtifact,
+    include_default_visual_props: bool,
+) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, ReactRenderError> {
     let mut runtime = NativeAuthoringRuntime::new(author_file);
-    let mut root = NativeAuthoringElement::new(rendered.root().id().as_str(), ElementKind::View)
-        .with_prop("background", PropValue::String("#080a0e".to_string()));
+    let mut root = NativeAuthoringElement::new(rendered.root().id().as_str(), ElementKind::View);
+    if include_default_visual_props {
+        root = root.with_prop("background", PropValue::String("#080a0e".to_string()));
+    }
     for reference in rendered.refs() {
         root = root.with_ref(NativeRef::new(reference));
     }

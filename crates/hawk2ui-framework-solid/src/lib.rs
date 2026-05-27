@@ -9,6 +9,7 @@ use hawk2ui_authoring::{
     PropValue, StyleRef,
 };
 use hawk2ui_runtime::RuntimeViewTree;
+use hawk2ui_style::{CompiledStyleSheet, TokenSet};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-framework-solid";
@@ -316,6 +317,33 @@ impl SolidIntegration {
             .map_err(|error| bridge_error(author_file.as_str(), &error))?;
         Ok(SolidRuntimeArtifact { rendered, runtime })
     }
+
+    /// Renders a Solid component into a runtime artifact with compiled style references applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SolidRenderError`] when source validation, native authoring finalization, style
+    /// resolution, or runtime bridging fails.
+    pub fn render_to_runtime_with_styles(
+        self,
+        component: SolidComponentSource,
+        sheet: &CompiledStyleSheet,
+        tokens: &TokenSet,
+    ) -> Result<SolidRuntimeArtifact, SolidRenderError> {
+        let author_file = component.author_file.clone();
+        let source_text = component.source.clone();
+        let rendered = self.render(component)?;
+        let native_artifact = native_artifact_from_solid_with_defaults(
+            author_file.as_str(),
+            source_text.as_str(),
+            &rendered,
+            false,
+        )?;
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact_with_styles(&native_artifact, sheet, tokens)
+            .map_err(|error| bridge_error(author_file.as_str(), &error))?;
+        Ok(SolidRuntimeArtifact { rendered, runtime })
+    }
 }
 
 fn native_artifact_from_solid(
@@ -323,9 +351,20 @@ fn native_artifact_from_solid(
     source_text: &str,
     rendered: &SolidRenderedArtifact,
 ) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, SolidRenderError> {
+    native_artifact_from_solid_with_defaults(author_file, source_text, rendered, true)
+}
+
+fn native_artifact_from_solid_with_defaults(
+    author_file: &str,
+    source_text: &str,
+    rendered: &SolidRenderedArtifact,
+    include_default_visual_props: bool,
+) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, SolidRenderError> {
     let mut runtime = NativeAuthoringRuntime::new(author_file);
-    let mut root = NativeAuthoringElement::new(rendered.root().id().as_str(), ElementKind::View)
-        .with_prop("background", PropValue::String("#080a0e".to_string()));
+    let mut root = NativeAuthoringElement::new(rendered.root().id().as_str(), ElementKind::View);
+    if include_default_visual_props {
+        root = root.with_prop("background", PropValue::String("#080a0e".to_string()));
+    }
     for reference in rendered.refs() {
         root = root.with_ref(NativeRef::new(reference));
     }

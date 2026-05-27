@@ -1,6 +1,9 @@
 use hawk2ui_authoring::{ElementKind, EventPayloadField};
 use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
-use hawk2ui_runtime::RuntimeViewId;
+use hawk2ui_layout::Viewport;
+use hawk2ui_render::Color;
+use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeViewId};
+use hawk2ui_style::{TokenSet, compile_style_source};
 
 #[test]
 fn solid_renderer_maps_fine_grained_updates_lifecycle_keyed_children_events_refs_styles_assets_and_source_maps()
@@ -110,6 +113,35 @@ fn solid_renderer_bridges_to_runtime_tree() {
             .operation_keys()
             .contains(&"bind-event:root:pointer.press".to_string())
     );
+}
+
+#[test]
+fn solid_render_to_runtime_with_styles_applies_compiled_root_background() {
+    let source = SolidComponentSource::new(
+        "examples/frameworks/solid-basic/src/App.tsx",
+        r#"<hawk-view id="root" class="surface"></hawk-view>"#,
+    );
+    let sheet = compile_style_source(".surface { background-color: token(color.surface); }")
+        .expect("style source compiles");
+    let tokens = TokenSet::production().with_color("color.surface", 240, 88, 40, 255);
+
+    let artifact = SolidIntegration::new()
+        .render_to_runtime_with_styles(source, &sheet, &tokens)
+        .expect("valid Solid source should bridge with styles");
+    let frame = RuntimeSceneBridge::new(Viewport::new(160.0, 80.0))
+        .build(artifact.runtime_tree())
+        .expect("runtime scene builds");
+
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Fill {
+                id,
+                color,
+                ..
+            } if id.as_str() == "root" && *color == Color::rgba(240, 88, 40, 255)
+        )
+    }));
 }
 
 #[test]

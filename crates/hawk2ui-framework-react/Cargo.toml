@@ -19,3 +19,8 @@ workspace = true
 [dependencies]
 hawk2ui-authoring = { version = "0.1.0", path = "../hawk2ui-authoring" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
+hawk2ui-style = { version = "0.1.0", path = "../hawk2ui-style" }
+
+[dev-dependencies]
+hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
+hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
