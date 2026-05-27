@@ -47,6 +47,14 @@ blocking = "release"
 evidence = "target/release-evidence/performance-budgets.txt"
 
 [[criteria]]
+id = "plugin-realtime-safety"
+title = "Plugin realtime safety"
+owner = "plugin"
+command = "rtk cargo test -p hawk2ui-perf realtime_guard && rtk cargo test -p hawk2ui-plugin realtime_visual_data"
+blocking = "release"
+evidence = "target/release-evidence/plugin-realtime-safety.txt"
+
+[[criteria]]
 id = "security-gates"
 title = "Security gates"
 owner = "security"

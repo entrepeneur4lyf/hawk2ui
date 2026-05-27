@@ -476,6 +476,7 @@ evidence = "target/release-evidence/manuals.txt"
             "dependency-health",
             "compatibility-matrix",
             "performance-budgets",
+            "plugin-realtime-safety",
             "security-gates",
             "smoke-apps",
             "manuals",

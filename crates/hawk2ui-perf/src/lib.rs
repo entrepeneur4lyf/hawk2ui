@@ -12,7 +12,10 @@ pub use budgets::{
 pub use harness::{
     BenchmarkCase, BenchmarkError, BenchmarkKind, BenchmarkMeasurement, BenchmarkSuite,
 };
-pub use realtime::{RealtimeContext, RealtimeGuard, RealtimeGuardError, RealtimeOperation};
+pub use realtime::{
+    RealtimeContext, RealtimeGuard, RealtimeGuardError, RealtimeLockPolicy, RealtimeOperation,
+    RealtimeSafetyReport, RealtimeSafetyTelemetry,
+};
 pub use stability::{RuntimeStabilityFixture, StabilityError};
 
 #[cfg(test)]
@@ -196,5 +199,34 @@ mod tests {
             })
         );
         assert!(guard.check(RealtimeOperation::PreallocatedWrite).is_ok());
+    }
+
+    #[test]
+    fn realtime_guard_reports_audio_thread_policy_and_telemetry() {
+        let guard = RealtimeGuard::audio_thread();
+        let report = guard.audit([
+            RealtimeOperation::PreallocatedWrite,
+            RealtimeOperation::Allocation,
+            RealtimeOperation::BlockingWait,
+        ]);
+
+        assert_eq!(guard.lock_policy(), RealtimeLockPolicy::NoBlockingLocks);
+        assert_eq!(report.context, RealtimeContext::AudioThread);
+        assert_eq!(report.allowed_count(), 1);
+        assert_eq!(report.denied_count(), 2);
+        assert_eq!(report.telemetry.allocation_attempts, 1);
+        assert_eq!(report.telemetry.blocking_wait_attempts, 1);
+        assert!(
+            report
+                .denied_operations
+                .contains(&RealtimeOperation::Allocation)
+        );
+        assert!(
+            report
+                .denied_operations
+                .contains(&RealtimeOperation::BlockingWait)
+        );
+        assert!(RealtimeOperation::Allocation.is_denied_on_audio_thread());
+        assert!(!RealtimeOperation::PreallocatedWrite.is_denied_on_audio_thread());
     }
 }

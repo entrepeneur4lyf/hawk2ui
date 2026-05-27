@@ -1380,12 +1380,17 @@ Acceptance:
 Evidence:
 
 - Product direction requires no audio-thread blocking.
-- Enforcement is not complete.
+- `hawk2ui-perf::RealtimeGuard` defines forbidden realtime operations, lock policy, and audit telemetry.
+- `release/release-criteria.toml` includes `plugin-realtime-safety` as a release-blocking criterion.
+
+Status:
+
+- Remediated at release-gated policy/report layer.
+- Tests cover denied allocation/blocking operations, allowed preallocated writes, explicit no-blocking-lock policy, telemetry counters, and release criterion coverage.
 
 Required remediation:
 
-- Define forbidden operations, allocation checks, lock policy, telemetry, and tests.
-- Add static/dynamic checks where possible.
+- Carry the realtime guard into real plugin format adapter callbacks when `REM-PLUGIN-002` lands.
 
 Acceptance:
 
