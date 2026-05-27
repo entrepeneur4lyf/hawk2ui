@@ -318,22 +318,22 @@ Acceptance:
 
 ### REM-RENDER-003: Complete Scene Graph Semantics
 
-Status: In progress; full affine transforms, dirty-bounds invalidation, deterministic scene diffing, retained scene metadata semantics, and runtime repaint scheduling are remediated in source.
+Status: In progress; full affine transforms, dirty-bounds invalidation, deterministic scene diffing, retained scene metadata semantics, runtime repaint scheduling, and backend cache eviction application are remediated in source.
 
 Evidence:
 
 - `SceneNode` has layout, clip, affine transform, opacity, hit-test, accessibility refs, and invalidation flags.
-- Full renderer effect execution, backend-specific cache eviction application, and opacity-group compositing remain incomplete.
+- Full renderer effect execution and opacity-group compositing remain incomplete.
 - Dirty bounds, invalidation reasons, and cache invalidation state are now recorded on scene nodes.
 - Scene diffs now report added, removed, changed, repaint bounds, and cache-invalidated node IDs.
 - Scene nodes now record typed layer membership, opacity groups, and effect references.
 - Scene graphs now expose deterministic paint-order traversal and effective opacity resolution.
 - Runtime scene frames now produce update plans with repaint bounds and cache-invalidation targets.
 - Runtime scheduler now consumes scene updates into coalesced render invalidations and host repaint callbacks.
+- Runtime scene updates now apply explicit cache evictions through the render backend cache-invalidation contract.
 
 Required remediation:
 
-- Wire runtime scene update plans to backend-specific cache eviction during frame presentation.
 - Complete renderer-side effect execution and opacity-group compositing.
 
 Acceptance:
@@ -343,8 +343,9 @@ Acceptance:
 - `crates/hawk2ui-render/tests/render_export.rs` covers deterministic scene diffs for added, removed, changed, repaint bounds, and cache invalidation IDs.
 - `crates/hawk2ui-render/tests/render_export.rs` covers layer membership, effect references, opacity groups, deterministic paint order, and effective opacity.
 - `crates/hawk2ui-runtime/tests/runtime_behavior.rs` covers runtime scene update planning, cache invalidation target propagation, and host repaint scheduling.
+- `crates/hawk2ui-runtime/tests/runtime_behavior.rs` covers applying runtime scene update cache evictions to the Skia backend before frame replay.
 - `crates/hawk2ui-render-skia/tests/skia_backend.rs` proves affine transforms affect rendered pixels.
-- Remaining scene graph and presentation tests must cover backend-specific cache eviction application and accessibility geometry.
+- Remaining scene graph and presentation tests must cover accessibility geometry.
 
 ### REM-RENDER-004: Complete Skia Backend Execution
 

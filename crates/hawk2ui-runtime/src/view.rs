@@ -7,9 +7,9 @@ use hawk2ui_layout::{
     LayoutTreeError, Viewport,
 };
 use hawk2ui_render::{
-    Color, Geometry, InvalidationReason, LayerKind, LayerStack, LayerValidationError,
-    PaintCommandList, PaintLayer, SceneGraph, SceneGraphDiff, SceneGraphError, SceneNode,
-    SceneNodeId, TextLayer, export_paint_commands,
+    BackendError, Color, Geometry, InvalidationReason, LayerKind, LayerStack, LayerValidationError,
+    PaintCommandList, PaintLayer, RendererCacheInvalidator, SceneGraph, SceneGraphDiff,
+    SceneGraphError, SceneNode, SceneNodeId, TextLayer, export_paint_commands,
 };
 
 /// Stable runtime view identifier.
@@ -372,6 +372,21 @@ impl RuntimeSceneUpdate {
     #[must_use]
     pub fn cache_invalidated_view_ids(&self) -> &[RuntimeViewId] {
         &self.cache_invalidated_view_ids
+    }
+
+    /// Applies explicit cache evictions to a renderer backend before frame replay.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when the backend cannot invalidate a required cache entry.
+    pub fn evict_backend_caches(
+        &self,
+        backend: &mut impl RendererCacheInvalidator,
+    ) -> Result<(), BackendError> {
+        for view_id in &self.cache_invalidated_view_ids {
+            backend.invalidate_backend_cache(view_id.as_str())?;
+        }
+        Ok(())
     }
 }
 

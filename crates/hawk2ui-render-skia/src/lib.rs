@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use hawk2ui_render::{
     BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, Color, Geometry,
-    RendererBackend, Stroke, Transform,
+    RendererBackend, RendererCacheInvalidator, Stroke, Transform,
 };
 use skia_safe::{
     AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
@@ -409,6 +409,7 @@ pub struct SkiaRendererBackend {
     skia_capabilities: SkiaRendererCapabilities,
     image_assets: BTreeMap<String, Image>,
     layer_caches: BTreeMap<String, SkiaLayerCacheEntry>,
+    cache_invalidation_keys: Vec<String>,
     default_typeface: Option<Typeface>,
 }
 
@@ -429,6 +430,7 @@ impl SkiaRendererBackend {
             skia_capabilities: SkiaRendererCapabilities::cpu_raster(),
             image_assets: BTreeMap::new(),
             layer_caches: BTreeMap::new(),
+            cache_invalidation_keys: Vec::new(),
             default_typeface: FontMgr::new().legacy_make_typeface(None, FontStyle::normal()),
         }
     }
@@ -488,6 +490,12 @@ impl SkiaRendererBackend {
     #[must_use]
     pub fn layer_cache(&self, id: &str) -> Option<&SkiaLayerCacheEntry> {
         self.layer_caches.get(id)
+    }
+
+    /// Returns cache IDs invalidated explicitly through the cache invalidator extension.
+    #[must_use]
+    pub fn cache_invalidation_keys(&self) -> &[String] {
+        &self.cache_invalidation_keys
     }
 
     /// Returns detailed Skia-specific capabilities without exposing `skia-safe` types.
@@ -900,6 +908,7 @@ impl SkiaRendererBackend {
             return self.fail("skia.cache.missing", "layer cache entry does not exist");
         };
         cache.invalidate();
+        self.cache_invalidation_keys.push(id.to_string());
         self.commands.push(format!("invalidate-cache:{id}"));
         Ok(())
     }
@@ -1246,6 +1255,12 @@ impl SkiaRendererBackend {
                 cache.invalidate();
             }
         }
+    }
+}
+
+impl RendererCacheInvalidator for SkiaRendererBackend {
+    fn invalidate_backend_cache(&mut self, id: &str) -> Result<(), BackendError> {
+        self.invalidate_cache(id)
     }
 }
 

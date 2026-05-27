@@ -224,12 +224,24 @@ pub trait RendererBackend {
     fn capabilities(&self) -> BackendCapabilities;
 }
 
+/// Renderer backend extension for explicit cache invalidation.
+pub trait RendererCacheInvalidator {
+    /// Invalidates a backend cache entry by stable cache ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when the cache ID is invalid or the backend cannot invalidate the
+    /// entry.
+    fn invalidate_backend_cache(&mut self, id: &str) -> Result<(), BackendError>;
+}
+
 /// Recording renderer backend used by tests.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecordingBackend {
     capabilities: BackendCapabilities,
     commands: Vec<String>,
     dirty_regions: Vec<Geometry>,
+    cache_invalidation_keys: Vec<String>,
 }
 
 impl RecordingBackend {
@@ -240,6 +252,7 @@ impl RecordingBackend {
             capabilities,
             commands: Vec::new(),
             dirty_regions: Vec::new(),
+            cache_invalidation_keys: Vec::new(),
         }
     }
 
@@ -253,6 +266,12 @@ impl RecordingBackend {
     #[must_use]
     pub fn dirty_regions(&self) -> &[Geometry] {
         &self.dirty_regions
+    }
+
+    /// Returns cache IDs invalidated explicitly through the cache invalidator extension.
+    #[must_use]
+    pub fn cache_invalidation_keys(&self) -> &[String] {
+        &self.cache_invalidation_keys
     }
 
     /// Returns backend capabilities.
@@ -405,6 +424,15 @@ impl RendererBackend for RecordingBackend {
 
     fn capabilities(&self) -> BackendCapabilities {
         self.capabilities
+    }
+}
+
+impl RendererCacheInvalidator for RecordingBackend {
+    fn invalidate_backend_cache(&mut self, id: &str) -> Result<(), BackendError> {
+        validate_surface_id(id)?;
+        self.commands.push(format!("invalidate-cache:{id}"));
+        self.cache_invalidation_keys.push(id.to_string());
+        Ok(())
     }
 }
 

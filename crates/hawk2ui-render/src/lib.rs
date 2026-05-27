@@ -11,7 +11,7 @@ pub mod text;
 
 pub use backend::{
     BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, RecordingBackend,
-    RendererBackend,
+    RendererBackend, RendererCacheInvalidator,
 };
 pub use custom_surface::{
     CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory, CustomSurfaceError,

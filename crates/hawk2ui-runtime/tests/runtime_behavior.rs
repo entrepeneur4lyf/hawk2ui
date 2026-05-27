@@ -353,6 +353,56 @@ fn scheduler_consumes_scene_update_for_repaint_and_cache_eviction() {
 }
 
 #[test]
+fn scene_update_evicts_backend_caches_before_frame_replay() {
+    let bridge = RuntimeSceneBridge::new(Viewport::new(100.0, 100.0));
+    let previous = bridge
+        .build(&runtime_scene_tree(false))
+        .expect("previous frame builds");
+    let next = bridge
+        .build(&runtime_scene_tree(true))
+        .expect("next frame builds");
+    let update = next
+        .diff_from(&previous)
+        .expect("scene update diff succeeds");
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 100, 100).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend
+        .clear(Color::rgba(8, 10, 14, 255))
+        .expect("surface clears");
+    backend
+        .fill(
+            Geometry::new(0.0, 0.0, 100.0, 100.0),
+            Color::rgba(16, 20, 28, 255),
+        )
+        .expect("root pixels draw");
+    backend
+        .cache_current_frame_region("root", Geometry::new(0.0, 0.0, 100.0, 100.0))
+        .expect("root cache captures");
+    backend
+        .fill(
+            Geometry::new(0.0, 0.0, 80.0, 20.0),
+            Color::rgba(0, 200, 120, 255),
+        )
+        .expect("meter pixels draw");
+    backend
+        .cache_current_frame_region("meter", Geometry::new(0.0, 0.0, 80.0, 20.0))
+        .expect("meter cache captures");
+    backend.end_frame("main").unwrap();
+
+    update
+        .evict_backend_caches(&mut backend)
+        .expect("cache evictions apply");
+
+    assert!(!backend.layer_cache("root").unwrap().valid());
+    assert!(!backend.layer_cache("meter").unwrap().valid());
+    assert_eq!(
+        backend.cache_invalidation_keys(),
+        &[String::from("meter"), String::from("root")]
+    );
+}
+
+#[test]
 fn scheduler_cancels_pending_work_during_shutdown() {
     let mut scheduler = RuntimeScheduler::default();
     scheduler.schedule_script_job("hydrate");
