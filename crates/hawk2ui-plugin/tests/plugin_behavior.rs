@@ -344,7 +344,8 @@ fn state_presets_keep_factory_and_user_presets_separate() {
 }
 
 use hawk2ui_plugin::{
-    FrameDropPolicy, RealtimeChannelKind, RealtimeVisualPacket, RealtimeVisualTransport,
+    FrameDropPolicy, RealtimeChannelKind, RealtimeVisualFrameGate, RealtimeVisualPacket,
+    RealtimeVisualTransport,
 };
 
 #[test]
@@ -431,4 +432,40 @@ fn realtime_visual_data_split_transport_moves_audio_writer_across_threads() {
     assert_eq!(packets.len(), 2);
     assert_eq!(packets[0].values, vec![0.1]);
     assert_eq!(packets[1].values, vec![0.2]);
+}
+
+#[test]
+fn realtime_visual_data_ui_frame_gate_reduces_drain_cadence() {
+    let (mut audio_writer, mut ui_reader) =
+        RealtimeVisualTransport::split_preallocated(4, FrameDropPolicy::DropNewest);
+    let mut frame_gate = RealtimeVisualFrameGate::new(30).expect("30hz visual gate is valid");
+
+    assert_eq!(frame_gate.target_hz(), 30);
+    assert_eq!(frame_gate.minimum_interval_ms(), 34);
+
+    assert!(
+        audio_writer
+            .audio_thread_push(RealtimeVisualPacket::meter("out", 0.1))
+            .accepted
+    );
+    let first_frame = ui_reader
+        .ui_drain_due(0, &mut frame_gate)
+        .expect("first frame should always be due");
+
+    assert_eq!(first_frame.len(), 1);
+    assert!(
+        audio_writer
+            .audio_thread_push(RealtimeVisualPacket::meter("out", 0.2))
+            .accepted
+    );
+    assert!(ui_reader.ui_drain_due(16, &mut frame_gate).is_none());
+    assert_eq!(ui_reader.pending_len(), 1);
+
+    let reduced_frame = ui_reader
+        .ui_drain_due(34, &mut frame_gate)
+        .expect("30hz gate should present after the reduced interval");
+
+    assert_eq!(reduced_frame.len(), 1);
+    assert_eq!(reduced_frame[0].values, vec![0.2]);
+    assert!(RealtimeVisualFrameGate::new(0).is_err());
 }

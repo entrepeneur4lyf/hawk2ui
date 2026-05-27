@@ -26,7 +26,8 @@ pub use parameter::{
 };
 pub use realtime::{
     FrameDropPolicy, RealtimeChannelKind, RealtimePushResult, RealtimeVisualAudioWriter,
-    RealtimeVisualPacket, RealtimeVisualTransport, RealtimeVisualUiReader,
+    RealtimeVisualFrameGate, RealtimeVisualFrameRateError, RealtimeVisualPacket,
+    RealtimeVisualTransport, RealtimeVisualUiReader,
 };
 pub use state::{
     HostStateChunk, PluginPreset, PluginStateEnvelope, PresetKind, PresetMetadata, StateMigration,

@@ -87,6 +87,96 @@ pub struct RealtimePushResult {
     pub dropped_frames: usize,
 }
 
+/// Validation error for realtime visual frame-rate gates.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RealtimeVisualFrameRateError {
+    /// Stable validation code.
+    pub code: String,
+    /// Human-readable message.
+    pub message: String,
+}
+
+impl RealtimeVisualFrameRateError {
+    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
+/// UI-side frame gate for reducing realtime visual drain cadence.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RealtimeVisualFrameGate {
+    target_hz: u16,
+    minimum_interval_ms: u64,
+    last_presented_ms: Option<u64>,
+}
+
+impl RealtimeVisualFrameGate {
+    /// Maximum accepted realtime visual presentation rate.
+    pub const MAX_TARGET_HZ: u16 = 240;
+
+    /// Creates a validated frame gate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RealtimeVisualFrameRateError`] when `target_hz` is zero or above
+    /// [`Self::MAX_TARGET_HZ`].
+    pub fn new(target_hz: u16) -> Result<Self, RealtimeVisualFrameRateError> {
+        if target_hz == 0 || target_hz > Self::MAX_TARGET_HZ {
+            return Err(RealtimeVisualFrameRateError::new(
+                "realtime.frame-rate.invalid",
+                format!(
+                    "realtime visual target_hz must be between 1 and {}",
+                    Self::MAX_TARGET_HZ
+                ),
+            ));
+        }
+
+        Ok(Self {
+            target_hz,
+            minimum_interval_ms: ceil_milliseconds_per_frame(target_hz),
+            last_presented_ms: None,
+        })
+    }
+
+    /// Returns the target presentation rate in Hz.
+    #[must_use]
+    pub const fn target_hz(&self) -> u16 {
+        self.target_hz
+    }
+
+    /// Returns the minimum interval between presented visual frames.
+    #[must_use]
+    pub const fn minimum_interval_ms(&self) -> u64 {
+        self.minimum_interval_ms
+    }
+
+    /// Returns the last accepted presentation timestamp.
+    #[must_use]
+    pub const fn last_presented_ms(&self) -> Option<u64> {
+        self.last_presented_ms
+    }
+
+    /// Returns whether a UI drain should present at `timestamp_ms` and updates the gate state.
+    pub fn should_present_at(&mut self, timestamp_ms: u64) -> bool {
+        match self.last_presented_ms {
+            None => {
+                self.last_presented_ms = Some(timestamp_ms);
+                true
+            }
+            Some(last_presented_ms)
+                if timestamp_ms >= last_presented_ms.saturating_add(self.minimum_interval_ms) =>
+            {
+                self.last_presented_ms = Some(timestamp_ms);
+                true
+            }
+            Some(_) => false,
+        }
+    }
+}
+
 /// Audio-thread writer for preallocated non-blocking realtime visual data.
 #[derive(Debug)]
 pub struct RealtimeVisualAudioWriter {
@@ -137,6 +227,17 @@ impl RealtimeVisualUiReader {
     /// Drains packets on the UI thread.
     pub fn ui_drain(&mut self) -> Vec<RealtimeVisualPacket> {
         drain_consumer(&mut self.consumer)
+    }
+
+    /// Drains packets only when the provided frame gate allows a UI presentation.
+    pub fn ui_drain_due(
+        &mut self,
+        timestamp_ms: u64,
+        frame_gate: &mut RealtimeVisualFrameGate,
+    ) -> Option<Vec<RealtimeVisualPacket>> {
+        frame_gate
+            .should_present_at(timestamp_ms)
+            .then(|| self.ui_drain())
     }
 
     /// Returns preallocated capacity.
@@ -220,6 +321,17 @@ impl RealtimeVisualTransport {
         drain_consumer(&mut self.consumer)
     }
 
+    /// Drains packets only when the provided frame gate allows a UI presentation.
+    pub fn ui_drain_due(
+        &mut self,
+        timestamp_ms: u64,
+        frame_gate: &mut RealtimeVisualFrameGate,
+    ) -> Option<Vec<RealtimeVisualPacket>> {
+        frame_gate
+            .should_present_at(timestamp_ms)
+            .then(|| self.ui_drain())
+    }
+
     /// Returns preallocated capacity.
     #[must_use]
     pub const fn capacity(&self) -> usize {
@@ -264,6 +376,11 @@ fn drain_consumer(consumer: &mut Consumer<RealtimeVisualPacket>) -> Vec<Realtime
         packets.push(packet);
     }
     packets
+}
+
+const fn ceil_milliseconds_per_frame(target_hz: u16) -> u64 {
+    let target_hz = target_hz as u64;
+    1000_u64.div_ceil(target_hz)
 }
 
 const fn accepted_without_drop() -> RealtimePushResult {

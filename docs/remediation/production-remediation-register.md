@@ -1359,13 +1359,17 @@ Acceptance:
 
 Evidence:
 
-- Records exist for realtime visual packets/transports.
-- No lock-free/preallocated implementation is wired.
+- `RealtimeVisualTransport` and split audio/UI endpoints use `rtrb`-backed preallocated channels.
+- `RealtimeVisualFrameGate` provides explicit UI-side frame-rate reduction for realtime visual drains.
+
+Status:
+
+- Remediated in source for the format-neutral realtime transport layer.
+- Tests cover meter/analyzer/scope/modulation packets, drop policy behavior, thread-moved audio writers, non-blocking/no-allocation counters, UI drains, and reduced-cadence UI drain gating.
 
 Required remediation:
 
-- Implement meter/analyzer/waveform/scope/modulation channels with preallocated non-blocking behavior.
-- Define drop policy and UI frame-rate reduction.
+- Carry the realtime transport into real plugin format adapters when `REM-PLUGIN-002` lands.
 
 Acceptance:
 
