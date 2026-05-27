@@ -273,7 +273,25 @@ fn skia_backend_reports_structured_diagnostics_for_invalid_lifecycle() {
         "skia.surface.invalid-size"
     );
 
-    assert_eq!(backend.diagnostics().len(), 3);
+    backend.begin_frame("main").unwrap();
+    let fill_error = backend
+        .fill(
+            Geometry::new(0.0, 0.0, f32::NAN, 20.0),
+            hawk2ui_render::Color::rgba(255, 255, 255, 255),
+        )
+        .expect_err("invalid fill geometry must fail");
+    assert_eq!(fill_error.diagnostic().rule(), "skia.geometry.invalid");
+
+    let transform_error = backend
+        .push_transform(Transform::translate(f32::INFINITY, 0.0))
+        .expect_err("invalid transforms must fail");
+    assert_eq!(
+        transform_error.diagnostic().rule(),
+        "skia.transform.invalid"
+    );
+    backend.end_frame("main").unwrap();
+
+    assert_eq!(backend.diagnostics().len(), 5);
 }
 
 fn drive_core_frame(backend: &mut impl RendererBackend) {

@@ -1063,6 +1063,9 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn fill(&mut self, geometry: Geometry, color: Color) -> Result<(), BackendError> {
+        validate_geometry("skia.geometry.invalid", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
         self.with_active_surface(|surface| {
             let mut paint = paint(color, PaintStyle::Fill);
             paint.set_anti_alias(true);
@@ -1083,6 +1086,9 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn stroke(&mut self, geometry: Geometry, stroke: Stroke) -> Result<(), BackendError> {
+        validate_geometry("skia.geometry.invalid", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
         self.with_active_surface(|surface| {
             let mut paint = paint(Color::rgba(255, 255, 255, 255), PaintStyle::Stroke);
             paint.set_stroke_width(stroke.width);
@@ -1156,6 +1162,9 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn push_clip(&mut self, geometry: Geometry) -> Result<(), BackendError> {
+        validate_geometry("skia.geometry.invalid", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
         self.with_active_surface(|surface| {
             surface
                 .canvas()
@@ -1169,6 +1178,9 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn push_transform(&mut self, transform: Transform) -> Result<(), BackendError> {
+        validate_transform(transform).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
         self.with_active_surface(|surface| {
             surface
                 .canvas()
@@ -1194,6 +1206,9 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn mark_dirty(&mut self, geometry: Geometry) -> Result<(), BackendError> {
+        validate_geometry("skia.geometry.invalid", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
         self.with_active_surface(|surface| {
             surface.dirty_regions.push(geometry);
         })?;
@@ -1278,6 +1293,17 @@ fn validate_blur(rule: &'static str, blur_radius: f32) -> Result<(), BackendErro
         Err(BackendError::new(
             rule,
             "blur radius must be finite and greater than zero",
+        ))
+    }
+}
+
+fn validate_transform(transform: Transform) -> Result<(), BackendError> {
+    if transform.translate_x.is_finite() && transform.translate_y.is_finite() {
+        Ok(())
+    } else {
+        Err(BackendError::new(
+            "skia.transform.invalid",
+            "transform coordinates must be finite",
         ))
     }
 }
