@@ -1,4 +1,8 @@
-use hawk2ui_authoring::{ChildList, ElementId, ElementKind, ElementNode, KeyedChild, PropValue};
+use hawk2ui_authoring::{
+    AssetRef, ChildList, ElementId, ElementKind, ElementNode, EventKind, EventPayloadField,
+    FrameworkNativeNode, FrameworkNativeProgram, HandlerRef, KeyedChild, NativeLifecycleEvent,
+    NativeRef, PointerEventKind, PropValue, StyleRef,
+};
 
 #[test]
 fn element_records_preserve_stable_node_identity() {
@@ -39,6 +43,51 @@ fn element_records_reject_duplicate_keyed_children() {
     .expect_err("duplicate keyed children must be rejected");
 
     assert_eq!(error.duplicate_key(), "gain");
+}
+
+#[test]
+fn framework_native_program_records_explicit_compiler_boundary_without_source_scanning() {
+    let program = FrameworkNativeProgram::new(
+        FrameworkNativeNode::new("root", ElementKind::View)
+            .with_ref(NativeRef::new("root_ref"))
+            .with_style(StyleRef::new("surface.card"))
+            .with_asset(AssetRef::new("hawk.logo", "assets/logo.svg"))
+            .with_event(
+                EventKind::Pointer(PointerEventKind::Press),
+                HandlerRef::new("handlePress"),
+                [EventPayloadField::Position],
+            )
+            .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new("onMount"))
+            .with_lifecycle(
+                NativeLifecycleEvent::Unmounted,
+                HandlerRef::new("onDestroy"),
+            )
+            .with_child(
+                "title",
+                FrameworkNativeNode::new("title", ElementKind::Text)
+                    .with_prop("text", PropValue::String("Boundary Title".to_string()))
+                    .with_key("title"),
+            ),
+    );
+
+    assert_eq!(program.root().id().as_str(), "root");
+    assert_eq!(program.keyed_child_order(), ["title"]);
+    assert_eq!(
+        program.custom_renderer_operation_keys("svelte").unwrap(),
+        [
+            "create-node:root:view",
+            "set-style:root:surface.card",
+            "set-asset:root:assets/logo.svg",
+            "set-ref:root:root_ref",
+            "bind-event:root:pointer.press",
+            "bind-lifecycle:root:mounted:onMount",
+            "bind-lifecycle:root:unmounted:onDestroy",
+            "create-node:title:text",
+            "set-prop:title:text",
+            "append-child:root:title:key:title",
+            "commit:root"
+        ]
+    );
 }
 
 #[test]

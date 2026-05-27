@@ -4,8 +4,242 @@ use std::collections::BTreeSet;
 
 use crate::{
     AssetRef, ComponentInstance, CustomSurfaceDeclaration, ElementId, ElementKind, ElementNode,
-    EventBinding, HandlerRef, NativeLifecycleEvent, NativeRef, PropValue, StyleRef,
+    EventBinding, HandlerRef, NativeAuthoringArtifact, NativeAuthoringElement,
+    NativeAuthoringError, NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef,
+    PropValue, StyleRef,
 };
+
+/// Typed native node emitted by a framework compiler boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameworkNativeNode {
+    id: ElementId,
+    kind: ElementKind,
+    key: Option<String>,
+    props: Vec<(String, PropValue)>,
+    refs: Vec<NativeRef>,
+    style_refs: Vec<StyleRef>,
+    asset_refs: Vec<AssetRef>,
+    events: Vec<EventBinding>,
+    lifecycle: Vec<(NativeLifecycleEvent, HandlerRef)>,
+    children: Vec<(Option<String>, FrameworkNativeNode)>,
+}
+
+impl FrameworkNativeNode {
+    /// Creates a typed native framework node.
+    #[must_use]
+    pub fn new(id: impl Into<String>, kind: ElementKind) -> Self {
+        Self {
+            id: ElementId::new(id),
+            kind,
+            key: None,
+            props: Vec::new(),
+            refs: Vec::new(),
+            style_refs: Vec::new(),
+            asset_refs: Vec::new(),
+            events: Vec::new(),
+            lifecycle: Vec::new(),
+            children: Vec::new(),
+        }
+    }
+
+    /// Returns the stable node ID.
+    #[must_use]
+    pub const fn id(&self) -> &ElementId {
+        &self.id
+    }
+
+    /// Returns the native element kind.
+    #[must_use]
+    pub const fn kind(&self) -> ElementKind {
+        self.kind
+    }
+
+    /// Returns the optional framework key.
+    #[must_use]
+    pub fn key(&self) -> Option<&str> {
+        self.key.as_deref()
+    }
+
+    /// Returns typed properties in compiler order.
+    #[must_use]
+    pub fn props(&self) -> &[(String, PropValue)] {
+        &self.props
+    }
+
+    /// Returns refs in compiler order.
+    #[must_use]
+    pub fn refs(&self) -> &[NativeRef] {
+        &self.refs
+    }
+
+    /// Returns style refs in compiler order.
+    #[must_use]
+    pub fn style_refs(&self) -> &[StyleRef] {
+        &self.style_refs
+    }
+
+    /// Returns asset refs in compiler order.
+    #[must_use]
+    pub fn asset_refs(&self) -> &[AssetRef] {
+        &self.asset_refs
+    }
+
+    /// Returns event bindings in compiler order.
+    #[must_use]
+    pub fn events(&self) -> &[EventBinding] {
+        &self.events
+    }
+
+    /// Returns lifecycle handlers in compiler order.
+    #[must_use]
+    pub fn lifecycle(&self) -> &[(NativeLifecycleEvent, HandlerRef)] {
+        &self.lifecycle
+    }
+
+    /// Returns child nodes in compiler order with their optional append keys.
+    #[must_use]
+    pub fn children(&self) -> &[(Option<String>, FrameworkNativeNode)] {
+        &self.children
+    }
+
+    /// Sets the framework key for this node.
+    #[must_use]
+    pub fn with_key(mut self, key: impl Into<String>) -> Self {
+        self.key = Some(key.into());
+        self
+    }
+
+    /// Adds a typed property.
+    #[must_use]
+    pub fn with_prop(mut self, name: impl Into<String>, value: PropValue) -> Self {
+        self.props.push((name.into(), value));
+        self
+    }
+
+    /// Adds a native ref.
+    #[must_use]
+    pub fn with_ref(mut self, reference: NativeRef) -> Self {
+        self.refs.push(reference);
+        self
+    }
+
+    /// Adds a style ref.
+    #[must_use]
+    pub fn with_style(mut self, style_ref: StyleRef) -> Self {
+        self.style_refs.push(style_ref);
+        self
+    }
+
+    /// Adds an asset ref.
+    #[must_use]
+    pub fn with_asset(mut self, asset_ref: AssetRef) -> Self {
+        self.asset_refs.push(asset_ref);
+        self
+    }
+
+    /// Adds an event binding.
+    #[must_use]
+    pub fn with_event(
+        mut self,
+        event: crate::EventKind,
+        handler: HandlerRef,
+        payload_fields: impl IntoIterator<Item = crate::EventPayloadField>,
+    ) -> Self {
+        let mut binding = EventBinding::new(self.id.clone(), event, handler);
+        for field in payload_fields {
+            binding = binding.with_payload(field);
+        }
+        self.events.push(binding);
+        self
+    }
+
+    /// Adds a lifecycle handler.
+    #[must_use]
+    pub fn with_lifecycle(mut self, event: NativeLifecycleEvent, handler: HandlerRef) -> Self {
+        self.lifecycle.push((event, handler));
+        self
+    }
+
+    /// Adds a child node with a stable append key.
+    #[must_use]
+    pub fn with_child(mut self, key: impl Into<String>, child: FrameworkNativeNode) -> Self {
+        self.children.push((Some(key.into()), child));
+        self
+    }
+
+    /// Adds an unkeyed child node.
+    #[must_use]
+    pub fn with_unkeyed_child(mut self, child: FrameworkNativeNode) -> Self {
+        self.children.push((None, child));
+        self
+    }
+}
+
+/// Typed native program emitted by framework compiler/runtime adapters.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameworkNativeProgram {
+    root: FrameworkNativeNode,
+}
+
+impl FrameworkNativeProgram {
+    /// Creates a framework native program with one root node.
+    #[must_use]
+    pub const fn new(root: FrameworkNativeNode) -> Self {
+        Self { root }
+    }
+
+    /// Returns the root node.
+    #[must_use]
+    pub const fn root(&self) -> &FrameworkNativeNode {
+        &self.root
+    }
+
+    /// Returns keyed direct children in compiler order.
+    #[must_use]
+    pub fn keyed_child_order(&self) -> Vec<String> {
+        self.root
+            .children()
+            .iter()
+            .filter_map(|(key, child)| key.clone().or_else(|| child.key.clone()))
+            .collect()
+    }
+
+    /// Records this program as custom renderer protocol operation keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CustomRendererError`] when the program references invalid node relationships.
+    pub fn custom_renderer_operation_keys(
+        &self,
+        framework_label: &str,
+    ) -> Result<Vec<String>, CustomRendererError> {
+        let mut protocol = CustomRendererProtocol::new(framework_label);
+        emit_node_operations(&mut protocol, None, None, &self.root)?;
+        protocol.apply(CustomRendererOperation::Commit {
+            root: self.root.id.clone(),
+        })?;
+        Ok(protocol.operation_keys().to_vec())
+    }
+
+    /// Converts the compiler output to a finalized native authoring artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeAuthoringError`] when native authoring validation rejects the program.
+    pub fn to_native_authoring_artifact(
+        &self,
+        author_file: &str,
+        include_default_visual_props: bool,
+    ) -> Result<NativeAuthoringArtifact, NativeAuthoringError> {
+        let mut runtime = NativeAuthoringRuntime::new(author_file);
+        runtime.mount(framework_node_to_native_element(
+            &self.root,
+            include_default_visual_props,
+            true,
+        ));
+        runtime.finish()
+    }
+}
 
 /// Node operation accepted by native renderer adapters.
 #[derive(Clone, Debug, PartialEq)]
@@ -363,6 +597,107 @@ impl NativeRendererAdapter for RecordingNativeRendererAdapter {
         self.operation_keys.push(operation.stable_key());
         Ok(())
     }
+}
+
+fn emit_node_operations(
+    protocol: &mut CustomRendererProtocol,
+    parent: Option<&ElementId>,
+    append_key: Option<&str>,
+    node: &FrameworkNativeNode,
+) -> Result<(), CustomRendererError> {
+    protocol.apply(CustomRendererOperation::CreateNode {
+        id: node.id.clone(),
+        kind: node.kind,
+    })?;
+    for (name, value) in &node.props {
+        protocol.apply(CustomRendererOperation::SetProp {
+            id: node.id.clone(),
+            name: name.clone(),
+            value: value.clone(),
+        })?;
+    }
+    for style_ref in &node.style_refs {
+        protocol.apply(CustomRendererOperation::SetStyleRef {
+            id: node.id.clone(),
+            style_ref: StyleRef::new(style_ref.name()),
+        })?;
+    }
+    for asset_ref in &node.asset_refs {
+        protocol.apply(CustomRendererOperation::SetAssetRef {
+            id: node.id.clone(),
+            asset_ref: AssetRef::new(asset_ref.name(), asset_ref.path()),
+        })?;
+    }
+    for reference in &node.refs {
+        protocol.apply(CustomRendererOperation::SetRef {
+            id: node.id.clone(),
+            reference: NativeRef::new(reference.name()),
+        })?;
+    }
+    for event in &node.events {
+        protocol.apply(CustomRendererOperation::BindEvent {
+            binding: event.clone(),
+        })?;
+    }
+    for (event, handler) in &node.lifecycle {
+        protocol.apply(CustomRendererOperation::BindLifecycle {
+            id: node.id.clone(),
+            event: *event,
+            handler: HandlerRef::new(handler.as_str()),
+        })?;
+    }
+    if let Some(parent) = parent {
+        protocol.apply(CustomRendererOperation::AppendChild {
+            parent: parent.clone(),
+            child: node.id.clone(),
+            key: append_key.map(str::to_string).or_else(|| node.key.clone()),
+        })?;
+    }
+    for (child_key, child) in &node.children {
+        emit_node_operations(protocol, Some(&node.id), child_key.as_deref(), child)?;
+    }
+    Ok(())
+}
+
+fn framework_node_to_native_element(
+    node: &FrameworkNativeNode,
+    include_default_visual_props: bool,
+    is_root: bool,
+) -> NativeAuthoringElement {
+    let mut element = NativeAuthoringElement::new(node.id.as_str(), node.kind);
+    if include_default_visual_props && is_root {
+        element = element.with_prop("background", PropValue::String("#080a0e".to_string()));
+    }
+    for (name, value) in &node.props {
+        element = element.with_prop(name, value.clone());
+    }
+    for reference in &node.refs {
+        element = element.with_ref(NativeRef::new(reference.name()));
+    }
+    for style in &node.style_refs {
+        element = element.with_style(StyleRef::new(style.name()));
+    }
+    for asset in &node.asset_refs {
+        element = element.with_asset(AssetRef::new(asset.name(), asset.path()));
+    }
+    for event in &node.events {
+        element = element.with_event(
+            event.event().clone(),
+            event.handler().as_str(),
+            event.payload_fields().iter().copied(),
+        );
+    }
+    for (event, handler) in &node.lifecycle {
+        element = element.with_lifecycle(*event, handler.as_str());
+    }
+    for (key, child) in &node.children {
+        let child_element = framework_node_to_native_element(child, false, false);
+        element = element.with_child(match key.as_deref().or_else(|| child.key()) {
+            Some(key) => NativeChild::keyed(key, child_element),
+            None => NativeChild::ordered(child_element),
+        });
+    }
+    element
 }
 
 fn missing_node(id: &ElementId) -> CustomRendererError {

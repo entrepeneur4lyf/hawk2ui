@@ -3,10 +3,10 @@
 
 use hawk2ui_authoring::{
     AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementId, ElementKind,
-    ElementNode, EventBinding, EventKind, EventPayloadField, HandlerRef, LifecycleEventKind,
-    NativeAuthoringElement, NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef,
-    NativeRuntimeBridge, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PointerEventKind,
-    PropValue, StyleRef,
+    ElementNode, EventBinding, EventKind, EventPayloadField, FrameworkNativeProgram, HandlerRef,
+    LifecycleEventKind, NativeAuthoringElement, NativeAuthoringRuntime, NativeChild,
+    NativeLifecycleEvent, NativeRef, NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
+    NativeRuntimeBridgeError, PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_runtime::RuntimeViewTree;
 use hawk2ui_style::{CompiledStyleSheet, TokenSet};
@@ -21,10 +21,11 @@ pub const fn crate_name() -> &'static str {
 }
 
 /// Solid component source submitted to the renderer integration.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SolidComponentSource {
     author_file: String,
     source: String,
+    native_program: Option<FrameworkNativeProgram>,
 }
 
 impl SolidComponentSource {
@@ -34,6 +35,20 @@ impl SolidComponentSource {
         Self {
             author_file: author_file.into(),
             source: source.into(),
+            native_program: None,
+        }
+    }
+
+    /// Creates a Solid source unit from explicit native compiler output.
+    #[must_use]
+    pub fn from_native_program(
+        author_file: impl Into<String>,
+        native_program: FrameworkNativeProgram,
+    ) -> Self {
+        Self {
+            author_file: author_file.into(),
+            source: String::new(),
+            native_program: Some(native_program),
         }
     }
 }
@@ -63,6 +78,7 @@ pub struct SolidRenderedArtifact {
     events: Vec<EventBinding>,
     lifecycle_handlers: Vec<String>,
     fine_grained_updates: Vec<String>,
+    native_program: Option<FrameworkNativeProgram>,
     source_map: SolidSourceMap,
 }
 
@@ -212,8 +228,14 @@ impl SolidIntegration {
         component: SolidComponentSource,
     ) -> Result<SolidRenderedArtifact, SolidRenderError> {
         let source_map = SolidSourceMap {
-            author_file: component.author_file,
+            author_file: component.author_file.clone(),
         };
+        if let Some(native_program) = component.native_program {
+            return Ok(solid_artifact_from_native_program(
+                source_map,
+                native_program,
+            ));
+        }
         let mut diagnostics = Vec::new();
         if let Some(asset) = extract_attribute(&component.source, "data-asset")
             && (asset.contains("://") || asset.starts_with('/') || asset.contains(".."))
@@ -293,6 +315,7 @@ impl SolidIntegration {
                 "for-each:keyed".into(),
                 "effect:root-props".into(),
             ],
+            native_program: None,
             source_map,
         })
     }
@@ -388,6 +411,16 @@ fn native_artifact_from_solid_with_defaults(
     rendered: &SolidRenderedArtifact,
     include_default_visual_props: bool,
 ) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, SolidRenderError> {
+    if let Some(native_program) = &rendered.native_program {
+        return native_program
+            .to_native_authoring_artifact(author_file, include_default_visual_props)
+            .map_err(|error| SolidRenderError {
+                diagnostics: error.diagnostics().to_vec(),
+                source_map: SolidSourceMap {
+                    author_file: author_file.to_string(),
+                },
+            });
+    }
     let mut runtime = NativeAuthoringRuntime::new(author_file);
     let mut root = NativeAuthoringElement::new(rendered.root().id().as_str(), ElementKind::View);
     if include_default_visual_props {
@@ -442,6 +475,67 @@ fn native_artifact_from_solid_with_defaults(
     })
 }
 
+fn solid_artifact_from_native_program(
+    source_map: SolidSourceMap,
+    native_program: FrameworkNativeProgram,
+) -> SolidRenderedArtifact {
+    let events = framework_program_events(&native_program);
+    SolidRenderedArtifact {
+        root: ElementNode::new(
+            native_program.root().id().clone(),
+            native_program.root().kind(),
+        ),
+        keyed_children: native_program.keyed_child_order(),
+        refs: native_program
+            .root()
+            .refs()
+            .iter()
+            .map(|reference| reference.name().to_string())
+            .collect(),
+        style_refs: native_program.root().style_refs().to_vec(),
+        asset_refs: native_program.root().asset_refs().to_vec(),
+        events,
+        lifecycle_handlers: native_program
+            .root()
+            .lifecycle()
+            .iter()
+            .map(|(event, handler)| lifecycle_handler_label(*event, handler.as_str()))
+            .collect(),
+        fine_grained_updates: vec![
+            "signal:items".into(),
+            "for-each:keyed".into(),
+            "effect:root-props".into(),
+        ],
+        native_program: Some(native_program),
+        source_map,
+    }
+}
+
+fn framework_program_events(native_program: &FrameworkNativeProgram) -> Vec<EventBinding> {
+    let mut events = native_program.root().events().to_vec();
+    events.extend(
+        native_program
+            .root()
+            .lifecycle()
+            .iter()
+            .map(|(event, handler)| {
+                EventBinding::new(
+                    native_program.root().id().clone(),
+                    lifecycle_event_kind(*event),
+                    HandlerRef::new(handler.as_str()),
+                )
+            }),
+    );
+    events
+}
+
+fn lifecycle_event_kind(event: NativeLifecycleEvent) -> EventKind {
+    EventKind::Lifecycle(match event {
+        NativeLifecycleEvent::Mounted => LifecycleEventKind::Mounted,
+        NativeLifecycleEvent::Unmounted => LifecycleEventKind::Unmounted,
+    })
+}
+
 fn bridge_error(author_file: &str, error: &NativeRuntimeBridgeError) -> SolidRenderError {
     SolidRenderError {
         diagnostics: vec![AuthoringDiagnostic::new(
@@ -452,6 +546,13 @@ fn bridge_error(author_file: &str, error: &NativeRuntimeBridgeError) -> SolidRen
         source_map: SolidSourceMap {
             author_file: author_file.to_string(),
         },
+    }
+}
+
+fn lifecycle_handler_label(event: NativeLifecycleEvent, handler: &str) -> String {
+    match event {
+        NativeLifecycleEvent::Mounted => format!("mounted:{handler}"),
+        NativeLifecycleEvent::Unmounted => format!("unmounted:{handler}"),
     }
 }
 

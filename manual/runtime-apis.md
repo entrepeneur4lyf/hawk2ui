@@ -55,3 +55,9 @@ Framework integrations should emit native records through `CustomRendererProtoco
 The implemented operation surface covers create node, set prop, set style ref, set asset ref, set native ref, bind event, bind lifecycle, append keyed or unkeyed children, enter error boundary, commit, and remove node. Protocol diagnostics use stable rules such as `custom-renderer.node.duplicate` and `custom-renderer.node.missing`.
 
 React 19+ emits its custom renderer operation list through this protocol. Remaining framework adapters must use the same protocol as they are moved from source scanner compatibility paths to explicit compiler/protocol inputs.
+
+## Framework Native Compiler Boundary
+
+Framework compilers and runtime adapters should hand Rust an explicit `FrameworkNativeProgram` made of `FrameworkNativeNode` records. The program carries the root node, keyed children, props, refs, style refs, asset refs, events, lifecycle handlers, and child node props without requiring Rust to inspect framework source syntax.
+
+Svelte 5, React 19+, Vue 3.5+, and Solid adapters all accept this boundary through `from_native_program(...)`, and framework conformance uses it for normalized snapshot and runtime evidence. Source-string parsing remains a compatibility fixture path; production integrations should emit the typed boundary.

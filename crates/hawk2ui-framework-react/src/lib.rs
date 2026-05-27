@@ -4,9 +4,10 @@
 use hawk2ui_authoring::{
     AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, CustomRendererOperation,
     CustomRendererProtocol, ElementId, ElementKind, ElementNode, EventBinding, EventKind,
-    EventPayloadField, HandlerRef, LifecycleEventKind, NativeAuthoringElement,
-    NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge,
-    NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PointerEventKind, PropValue, StyleRef,
+    EventPayloadField, FrameworkNativeProgram, HandlerRef, LifecycleEventKind,
+    NativeAuthoringElement, NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef,
+    NativeRuntimeBridge, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PointerEventKind,
+    PropValue, StyleRef,
 };
 use hawk2ui_runtime::RuntimeViewTree;
 use hawk2ui_style::{CompiledStyleSheet, TokenSet};
@@ -21,10 +22,11 @@ pub const fn crate_name() -> &'static str {
 }
 
 /// React element tree source submitted to the custom renderer bridge.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ReactElementTree {
     author_file: String,
     source: String,
+    native_program: Option<FrameworkNativeProgram>,
 }
 
 impl ReactElementTree {
@@ -34,6 +36,20 @@ impl ReactElementTree {
         Self {
             author_file: author_file.into(),
             source: source.into(),
+            native_program: None,
+        }
+    }
+
+    /// Creates a React source unit from explicit native compiler output.
+    #[must_use]
+    pub fn from_native_program(
+        author_file: impl Into<String>,
+        native_program: FrameworkNativeProgram,
+    ) -> Self {
+        Self {
+            author_file: author_file.into(),
+            source: String::new(),
+            native_program: Some(native_program),
         }
     }
 }
@@ -62,6 +78,7 @@ pub struct ReactRenderedArtifact {
     asset_refs: Vec<AssetRef>,
     events: Vec<EventBinding>,
     lifecycle_handlers: Vec<String>,
+    native_program: Option<FrameworkNativeProgram>,
     source_map: ReactSourceMap,
     reconciler_operations: Vec<String>,
 }
@@ -209,8 +226,11 @@ impl ReactIntegration {
     /// Returns [`ReactRenderError`] when the source violates the renderer contract.
     pub fn render(self, tree: ReactElementTree) -> Result<ReactRenderedArtifact, ReactRenderError> {
         let source_map = ReactSourceMap {
-            author_file: tree.author_file,
+            author_file: tree.author_file.clone(),
         };
+        if let Some(native_program) = tree.native_program {
+            return react_artifact_from_native_program(source_map, native_program);
+        }
         let mut diagnostics = Vec::new();
         if let Some(asset) = extract_attribute(&tree.source, "data-asset")
             && (asset.contains("://") || asset.starts_with('/') || asset.contains(".."))
@@ -295,6 +315,7 @@ impl ReactIntegration {
             asset_refs,
             events,
             lifecycle_handlers: vec!["mounted:onMount".into(), "unmounted:onUnmount".into()],
+            native_program: None,
             source_map,
             reconciler_operations,
         })
@@ -391,6 +412,16 @@ fn native_artifact_from_react_with_defaults(
     rendered: &ReactRenderedArtifact,
     include_default_visual_props: bool,
 ) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, ReactRenderError> {
+    if let Some(native_program) = &rendered.native_program {
+        return native_program
+            .to_native_authoring_artifact(author_file, include_default_visual_props)
+            .map_err(|error| ReactRenderError {
+                diagnostics: error.diagnostics().to_vec(),
+                source_map: ReactSourceMap {
+                    author_file: author_file.to_string(),
+                },
+            });
+    }
     let mut runtime = NativeAuthoringRuntime::new(author_file);
     let mut root = NativeAuthoringElement::new(rendered.root().id().as_str(), ElementKind::View);
     if include_default_visual_props {
@@ -445,6 +476,69 @@ fn native_artifact_from_react_with_defaults(
     })
 }
 
+fn react_artifact_from_native_program(
+    source_map: ReactSourceMap,
+    native_program: FrameworkNativeProgram,
+) -> Result<ReactRenderedArtifact, ReactRenderError> {
+    let events = framework_program_events(&native_program);
+    let reconciler_operations = native_program
+        .custom_renderer_operation_keys("react")
+        .map_err(|error| custom_renderer_error(source_map.author_file(), &error))?
+        .iter()
+        .map(|key| react_public_operation_key(key))
+        .collect();
+    Ok(ReactRenderedArtifact {
+        root: ElementNode::new(
+            native_program.root().id().clone(),
+            native_program.root().kind(),
+        ),
+        keyed_children: native_program.keyed_child_order(),
+        refs: native_program
+            .root()
+            .refs()
+            .iter()
+            .map(|reference| reference.name().to_string())
+            .collect(),
+        style_refs: native_program.root().style_refs().to_vec(),
+        asset_refs: native_program.root().asset_refs().to_vec(),
+        events,
+        lifecycle_handlers: native_program
+            .root()
+            .lifecycle()
+            .iter()
+            .map(|(event, handler)| lifecycle_handler_label(*event, handler.as_str()))
+            .collect(),
+        native_program: Some(native_program),
+        source_map,
+        reconciler_operations,
+    })
+}
+
+fn framework_program_events(native_program: &FrameworkNativeProgram) -> Vec<EventBinding> {
+    let mut events = native_program.root().events().to_vec();
+    events.extend(
+        native_program
+            .root()
+            .lifecycle()
+            .iter()
+            .map(|(event, handler)| {
+                EventBinding::new(
+                    native_program.root().id().clone(),
+                    lifecycle_event_kind(*event),
+                    HandlerRef::new(handler.as_str()),
+                )
+            }),
+    );
+    events
+}
+
+fn lifecycle_event_kind(event: NativeLifecycleEvent) -> EventKind {
+    EventKind::Lifecycle(match event {
+        NativeLifecycleEvent::Mounted => LifecycleEventKind::Mounted,
+        NativeLifecycleEvent::Unmounted => LifecycleEventKind::Unmounted,
+    })
+}
+
 fn bridge_error(author_file: &str, error: &NativeRuntimeBridgeError) -> ReactRenderError {
     ReactRenderError {
         diagnostics: vec![AuthoringDiagnostic::new(
@@ -455,6 +549,13 @@ fn bridge_error(author_file: &str, error: &NativeRuntimeBridgeError) -> ReactRen
         source_map: ReactSourceMap {
             author_file: author_file.to_string(),
         },
+    }
+}
+
+fn lifecycle_handler_label(event: NativeLifecycleEvent, handler: &str) -> String {
+    match event {
+        NativeLifecycleEvent::Mounted => format!("mounted:{handler}"),
+        NativeLifecycleEvent::Unmounted => format!("unmounted:{handler}"),
     }
 }
 

@@ -3,10 +3,10 @@
 
 use hawk2ui_authoring::{
     AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementId, ElementKind,
-    ElementNode, EventBinding, EventKind, EventPayloadField, HandlerRef, LifecycleEventKind,
-    NativeAuthoringElement, NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef,
-    NativeRuntimeBridge, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PointerEventKind,
-    PropValue, StyleRef,
+    ElementNode, EventBinding, EventKind, EventPayloadField, FrameworkNativeProgram, HandlerRef,
+    LifecycleEventKind, NativeAuthoringElement, NativeAuthoringRuntime, NativeChild,
+    NativeLifecycleEvent, NativeRef, NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
+    NativeRuntimeBridgeError, PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_runtime::RuntimeViewTree;
 use hawk2ui_style::{CompiledStyleSheet, TokenSet};
@@ -21,10 +21,11 @@ pub const fn crate_name() -> &'static str {
 }
 
 /// Svelte component source submitted to the native compile integration.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SvelteComponentSource {
     author_file: String,
     source: String,
+    native_program: Option<FrameworkNativeProgram>,
 }
 
 impl SvelteComponentSource {
@@ -34,6 +35,20 @@ impl SvelteComponentSource {
         Self {
             author_file: author_file.into(),
             source: source.into(),
+            native_program: None,
+        }
+    }
+
+    /// Creates a Svelte source unit from explicit native compiler output.
+    #[must_use]
+    pub fn from_native_program(
+        author_file: impl Into<String>,
+        native_program: FrameworkNativeProgram,
+    ) -> Self {
+        Self {
+            author_file: author_file.into(),
+            source: String::new(),
+            native_program: Some(native_program),
         }
     }
 }
@@ -62,6 +77,7 @@ pub struct SvelteCompiledArtifact {
     asset_refs: Vec<AssetRef>,
     events: Vec<EventBinding>,
     lifecycle_handlers: Vec<String>,
+    native_program: Option<FrameworkNativeProgram>,
     source_map: SvelteSourceMap,
     diagnostics: Vec<AuthoringDiagnostic>,
 }
@@ -212,8 +228,14 @@ impl SvelteIntegration {
         source: SvelteComponentSource,
     ) -> Result<SvelteCompiledArtifact, SvelteCompileError> {
         let source_map = SvelteSourceMap {
-            author_file: source.author_file,
+            author_file: source.author_file.clone(),
         };
+        if let Some(native_program) = source.native_program {
+            return Ok(svelte_artifact_from_native_program(
+                source_map,
+                native_program,
+            ));
+        }
         let mut diagnostics = Vec::new();
         if let Some(asset) = extract_attribute(&source.source, "data-asset")
             && (asset.contains("://") || asset.starts_with('/') || asset.contains(".."))
@@ -285,6 +307,7 @@ impl SvelteIntegration {
                 .collect(),
             events,
             lifecycle_handlers: vec!["mounted:onMount".into(), "unmounted:onDestroy".into()],
+            native_program: None,
             source_map,
             diagnostics: Vec::new(),
         })
@@ -381,6 +404,16 @@ fn native_artifact_from_svelte_with_defaults(
     compiled: &SvelteCompiledArtifact,
     include_default_visual_props: bool,
 ) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, SvelteCompileError> {
+    if let Some(native_program) = &compiled.native_program {
+        return native_program
+            .to_native_authoring_artifact(author_file, include_default_visual_props)
+            .map_err(|error| SvelteCompileError {
+                diagnostics: error.diagnostics().to_vec(),
+                source_map: SvelteSourceMap {
+                    author_file: author_file.to_string(),
+                },
+            });
+    }
     let mut runtime = NativeAuthoringRuntime::new(author_file);
     let mut root = NativeAuthoringElement::new(compiled.root().id().as_str(), ElementKind::View);
     if include_default_visual_props {
@@ -435,6 +468,63 @@ fn native_artifact_from_svelte_with_defaults(
     })
 }
 
+fn svelte_artifact_from_native_program(
+    source_map: SvelteSourceMap,
+    native_program: FrameworkNativeProgram,
+) -> SvelteCompiledArtifact {
+    let events = framework_program_events(&native_program);
+    SvelteCompiledArtifact {
+        root: ElementNode::new(
+            native_program.root().id().clone(),
+            native_program.root().kind(),
+        ),
+        keyed_children: native_program.keyed_child_order(),
+        refs: native_program
+            .root()
+            .refs()
+            .iter()
+            .map(|reference| reference.name().to_string())
+            .collect(),
+        style_refs: native_program.root().style_refs().to_vec(),
+        asset_refs: native_program.root().asset_refs().to_vec(),
+        events,
+        lifecycle_handlers: native_program
+            .root()
+            .lifecycle()
+            .iter()
+            .map(|(event, handler)| lifecycle_handler_label(*event, handler.as_str()))
+            .collect(),
+        native_program: Some(native_program),
+        source_map,
+        diagnostics: Vec::new(),
+    }
+}
+
+fn framework_program_events(native_program: &FrameworkNativeProgram) -> Vec<EventBinding> {
+    let mut events = native_program.root().events().to_vec();
+    events.extend(
+        native_program
+            .root()
+            .lifecycle()
+            .iter()
+            .map(|(event, handler)| {
+                EventBinding::new(
+                    native_program.root().id().clone(),
+                    lifecycle_event_kind(*event),
+                    HandlerRef::new(handler.as_str()),
+                )
+            }),
+    );
+    events
+}
+
+fn lifecycle_event_kind(event: NativeLifecycleEvent) -> EventKind {
+    EventKind::Lifecycle(match event {
+        NativeLifecycleEvent::Mounted => LifecycleEventKind::Mounted,
+        NativeLifecycleEvent::Unmounted => LifecycleEventKind::Unmounted,
+    })
+}
+
 fn bridge_error(author_file: &str, error: &NativeRuntimeBridgeError) -> SvelteCompileError {
     SvelteCompileError {
         diagnostics: vec![AuthoringDiagnostic::new(
@@ -445,6 +535,13 @@ fn bridge_error(author_file: &str, error: &NativeRuntimeBridgeError) -> SvelteCo
         source_map: SvelteSourceMap {
             author_file: author_file.to_string(),
         },
+    }
+}
+
+fn lifecycle_handler_label(event: NativeLifecycleEvent, handler: &str) -> String {
+    match event {
+        NativeLifecycleEvent::Mounted => format!("mounted:{handler}"),
+        NativeLifecycleEvent::Unmounted => format!("unmounted:{handler}"),
     }
 }
 

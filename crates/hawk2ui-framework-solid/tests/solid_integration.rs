@@ -1,4 +1,8 @@
-use hawk2ui_authoring::{ElementKind, EventPayloadField};
+use hawk2ui_authoring::{
+    AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkNativeNode,
+    FrameworkNativeProgram, HandlerRef, NativeLifecycleEvent, NativeRef, PointerEventKind,
+    PropValue, StyleRef,
+};
 use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
 use hawk2ui_layout::Viewport;
 use hawk2ui_render::Color;
@@ -17,6 +21,7 @@ export function App() {
     <For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For>
   </hawk-view>;
 }
+
 "#,
     );
 
@@ -48,6 +53,37 @@ export function App() {
     assert_eq!(
         artifact.source_map().author_file(),
         "examples/frameworks/solid-basic/src/App.tsx"
+    );
+}
+
+#[test]
+fn solid_renderer_accepts_explicit_native_compiler_boundary_without_source_scanning() {
+    let source = SolidComponentSource::from_native_program(
+        "examples/frameworks/solid-basic/src/App.tsx",
+        framework_native_program("solid.asset", "onCleanup"),
+    );
+
+    let artifact = SolidIntegration::new()
+        .render(source.clone())
+        .expect("explicit Solid native compiler output should render");
+    let runtime = SolidIntegration::new()
+        .render_to_runtime(source)
+        .expect("explicit Solid native compiler output should bridge");
+
+    assert_eq!(artifact.root().id().as_str(), "root");
+    assert_eq!(artifact.keyed_children(), ["title"]);
+    assert_eq!(artifact.refs(), ["root_ref"]);
+    assert_eq!(artifact.style_refs(), ["surface.card"]);
+    assert_eq!(artifact.asset_refs()[0].path(), "assets/logo.svg");
+    assert_eq!(artifact.events()[0].event().stable_key(), "pointer.press");
+    assert_eq!(
+        artifact.lifecycle_handlers(),
+        ["mounted:onMount", "unmounted:onCleanup"]
+    );
+    assert!(
+        runtime
+            .operation_keys()
+            .contains(&"mount-element:root".into())
     );
 }
 
@@ -234,4 +270,27 @@ fn solid_smoke_app_declares_public_package_entrypoint() {
     assert!(index_ts.contains("renderHawkSolid"));
     assert!(app.contains("<For each={items()}"));
     assert!(app.contains("assets/logo.svg"));
+}
+
+fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
+    FrameworkNativeProgram::new(
+        FrameworkNativeNode::new("root", ElementKind::View)
+            .with_ref(NativeRef::new("root_ref"))
+            .with_style(StyleRef::new("surface.card"))
+            .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
+            .with_event(
+                EventKind::Pointer(PointerEventKind::Press),
+                HandlerRef::new("handlePress"),
+                [EventPayloadField::Position],
+            )
+            .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new("onMount"))
+            .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted))
+            .with_child(
+                "title",
+                FrameworkNativeNode::new("title", ElementKind::Text)
+                    .with_key("title")
+                    .with_prop("text", PropValue::String("Boundary Title".to_string()))
+                    .with_prop("font_size", PropValue::Number(18.0)),
+            ),
+    )
 }

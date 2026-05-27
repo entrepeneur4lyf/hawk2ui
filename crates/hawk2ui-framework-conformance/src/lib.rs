@@ -2,9 +2,10 @@
 //! Shared framework conformance harness for `Hawk2UI` native, `Svelte`, `React`, `Vue`, and `Solid` integrations.
 
 use hawk2ui_authoring::{
-    AssetRef, ElementKind, EventKind, EventPayloadField, NativeAuthoringElement,
-    NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge,
-    NativeRuntimeBridgeArtifact, PointerEventKind, PropValue, StyleRef,
+    AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkNativeNode,
+    FrameworkNativeProgram, HandlerRef, NativeAuthoringElement, NativeAuthoringRuntime,
+    NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
+    PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_framework_react::{ReactElementTree, ReactIntegration};
 use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
@@ -466,7 +467,10 @@ fn native_snapshot() -> Result<ConformanceSnapshot, String> {
 
 fn svelte_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = SvelteIntegration::new()
-        .compile(SvelteComponentSource::new("src/App.svelte", SVELTE_FIXTURE))
+        .compile(SvelteComponentSource::from_native_program(
+            "src/App.svelte",
+            framework_native_program("svelte.asset", "onDestroy"),
+        ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
         framework: FrameworkKind::Svelte,
@@ -490,7 +494,10 @@ fn svelte_snapshot() -> Result<ConformanceSnapshot, String> {
 
 fn react_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = ReactIntegration::new()
-        .render(ReactElementTree::new("src/App.tsx", REACT_FIXTURE))
+        .render(ReactElementTree::from_native_program(
+            "src/App.tsx",
+            framework_native_program("react.asset", "onUnmount"),
+        ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
         framework: FrameworkKind::React,
@@ -514,7 +521,10 @@ fn react_snapshot() -> Result<ConformanceSnapshot, String> {
 
 fn vue_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = VueIntegration::new()
-        .render(VueSingleFileComponent::new("src/App.vue", VUE_FIXTURE))
+        .render(VueSingleFileComponent::from_native_program(
+            "src/App.vue",
+            framework_native_program("vue.asset", "onUnmounted"),
+        ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
         framework: FrameworkKind::Vue,
@@ -538,7 +548,10 @@ fn vue_snapshot() -> Result<ConformanceSnapshot, String> {
 
 fn solid_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = SolidIntegration::new()
-        .render(SolidComponentSource::new("src/App.tsx", SOLID_FIXTURE))
+        .render(SolidComponentSource::from_native_program(
+            "src/App.tsx",
+            framework_native_program("solid.asset", "onCleanup"),
+        ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
         framework: FrameworkKind::Solid,
@@ -647,7 +660,10 @@ fn runtime_evidence_from_native() -> Result<FrameworkRuntimeEvidence, String> {
 
 fn runtime_evidence_from_svelte() -> Result<FrameworkRuntimeEvidence, String> {
     let artifact = SvelteIntegration::new()
-        .compile_to_runtime(SvelteComponentSource::new("src/App.svelte", SVELTE_FIXTURE))
+        .compile_to_runtime(SvelteComponentSource::from_native_program(
+            "src/App.svelte",
+            framework_native_program("svelte.asset", "onDestroy"),
+        ))
         .map_err(|error| format!("{error:?}"))?;
     runtime_evidence(
         FrameworkKind::Svelte,
@@ -658,7 +674,10 @@ fn runtime_evidence_from_svelte() -> Result<FrameworkRuntimeEvidence, String> {
 
 fn runtime_evidence_from_react() -> Result<FrameworkRuntimeEvidence, String> {
     let artifact = ReactIntegration::new()
-        .render_to_runtime(ReactElementTree::new("src/App.tsx", REACT_FIXTURE))
+        .render_to_runtime(ReactElementTree::from_native_program(
+            "src/App.tsx",
+            framework_native_program("react.asset", "onUnmount"),
+        ))
         .map_err(|error| format!("{error:?}"))?;
     runtime_evidence(
         FrameworkKind::React,
@@ -669,7 +688,10 @@ fn runtime_evidence_from_react() -> Result<FrameworkRuntimeEvidence, String> {
 
 fn runtime_evidence_from_vue() -> Result<FrameworkRuntimeEvidence, String> {
     let artifact = VueIntegration::new()
-        .render_to_runtime(VueSingleFileComponent::new("src/App.vue", VUE_FIXTURE))
+        .render_to_runtime(VueSingleFileComponent::from_native_program(
+            "src/App.vue",
+            framework_native_program("vue.asset", "onUnmounted"),
+        ))
         .map_err(|error| format!("{error:?}"))?;
     runtime_evidence(
         FrameworkKind::Vue,
@@ -680,7 +702,10 @@ fn runtime_evidence_from_vue() -> Result<FrameworkRuntimeEvidence, String> {
 
 fn runtime_evidence_from_solid() -> Result<FrameworkRuntimeEvidence, String> {
     let artifact = SolidIntegration::new()
-        .render_to_runtime(SolidComponentSource::new("src/App.tsx", SOLID_FIXTURE))
+        .render_to_runtime(SolidComponentSource::from_native_program(
+            "src/App.tsx",
+            framework_native_program("solid.asset", "onCleanup"),
+        ))
         .map_err(|error| format!("{error:?}"))?;
     runtime_evidence(
         FrameworkKind::Solid,
@@ -763,6 +788,34 @@ fn native_runtime_artifact() -> Result<NativeRuntimeBridgeArtifact, String> {
 
 fn runtime_text_child(id: &str) -> NativeAuthoringElement {
     NativeAuthoringElement::new(id, ElementKind::Text)
+        .with_prop("text", PropValue::String(id.to_string()))
+        .with_prop("font_size", PropValue::Number(18.0))
+        .with_prop("color", PropValue::String("#ffffff".to_string()))
+        .with_prop("width", PropValue::Number(160.0))
+        .with_prop("height", PropValue::Number(32.0))
+}
+
+fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
+    FrameworkNativeProgram::new(
+        FrameworkNativeNode::new("root", ElementKind::View)
+            .with_ref(NativeRef::new("root_ref"))
+            .with_style(StyleRef::new("surface.card"))
+            .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
+            .with_event(
+                EventKind::Pointer(PointerEventKind::Press),
+                HandlerRef::new("handlePress"),
+                [EventPayloadField::Position],
+            )
+            .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new("onMount"))
+            .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted))
+            .with_child("title", framework_text_node("title"))
+            .with_child("cta", framework_text_node("cta")),
+    )
+}
+
+fn framework_text_node(id: &str) -> FrameworkNativeNode {
+    FrameworkNativeNode::new(id, ElementKind::Text)
+        .with_key(id)
         .with_prop("text", PropValue::String(id.to_string()))
         .with_prop("font_size", PropValue::Number(18.0))
         .with_prop("color", PropValue::String("#ffffff".to_string()))
@@ -1033,11 +1086,6 @@ fn to_strings(items: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
         .map(|item| item.as_ref().to_string())
         .collect()
 }
-
-const SVELTE_FIXTURE: &str = r#"<script>let items = [{ id: 'title' }, { id: 'cta' }];</script><hawk-view id="root" use:ref="root_ref" class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>{#each items as item (item.id)}<hawk-text id={item.id}>{item.id}</hawk-text>{/each}</hawk-view>"#;
-const REACT_FIXTURE: &str = r#"const items = [{ id: 'title' }, { id: 'cta' }];<hawk-view id="root" ref="root_ref" className="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>{items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}</hawk-view>"#;
-const VUE_FIXTURE: &str = r#"<script setup>const items = [{ id: 'title' }, { id: 'cta' }];</script><hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted"><hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text></hawk-view>"#;
-const SOLID_FIXTURE: &str = r#"const [items] = createSignal([{ id: 'title' }, { id: 'cta' }]);<hawk-view id="root" ref={root_ref} class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}><For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For></hawk-view>"#;
 
 #[cfg(test)]
 mod tests {

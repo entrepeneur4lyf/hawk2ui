@@ -642,6 +642,26 @@ Acceptance:
 - Framework examples compile through real framework tooling or an explicitly specified native compiler boundary.
 - Dynamic children, lifecycle, refs, events, styles, assets, and diagnostics are source-mapped.
 
+Status:
+
+- Added `FrameworkNativeProgram` and `FrameworkNativeNode` as the explicit Rust native compiler
+  boundary for framework outputs.
+- The boundary carries root/child node identity, keyed children, typed props, refs, style refs,
+  asset refs, events, lifecycle handlers, and child props without inspecting framework source text.
+- Svelte 5, React 19+, Vue 3.5+, and Solid source units now accept `from_native_program(...)`.
+- Runtime bridging uses the typed program directly when present, including child text/layout props
+  and lifecycle/event bindings.
+- Framework conformance snapshot and runtime evidence now run through explicit native compiler
+  boundary inputs instead of framework source fixture scanning.
+- Source-string scanners remain only as compatibility fixture paths for legacy source tests and
+  source-mapped diagnostic cases; they are not the production conformance path.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this remediation item for production readiness:
+  the production framework boundary is explicit, typed, runtime-bridged, conformance-backed, and
+  documented. No corrective revision is required before continuing the next remediation item.
+
 ### REM-AUTH-002: Implement Custom Renderer API
 
 Evidence:

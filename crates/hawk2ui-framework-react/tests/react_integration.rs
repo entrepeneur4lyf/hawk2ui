@@ -1,4 +1,8 @@
-use hawk2ui_authoring::{ElementKind, EventPayloadField};
+use hawk2ui_authoring::{
+    AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkNativeNode,
+    FrameworkNativeProgram, HandlerRef, NativeLifecycleEvent, NativeRef, PointerEventKind,
+    PropValue, StyleRef,
+};
 use hawk2ui_framework_react::{ReactElementTree, ReactIntegration};
 use hawk2ui_layout::Viewport;
 use hawk2ui_render::Color;
@@ -17,6 +21,7 @@ export function App() {
     {items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}
   </hawk-view>;
 }
+
 "#,
     );
 
@@ -64,6 +69,54 @@ export function App() {
             "append:meter",
             "commit:root"
         ]
+    );
+}
+
+#[test]
+fn react_19_renderer_accepts_explicit_native_compiler_boundary_without_source_scanning() {
+    let tree = ReactElementTree::from_native_program(
+        "examples/frameworks/react-basic/src/App.tsx",
+        framework_native_program("react.asset", "onUnmount"),
+    );
+
+    let artifact = ReactIntegration::new()
+        .render(tree.clone())
+        .expect("explicit React native compiler output should render");
+    let runtime = ReactIntegration::new()
+        .render_to_runtime(tree)
+        .expect("explicit React native compiler output should bridge");
+
+    assert_eq!(artifact.root().id().as_str(), "root");
+    assert_eq!(artifact.keyed_children(), ["title"]);
+    assert_eq!(artifact.refs(), ["root_ref"]);
+    assert_eq!(artifact.style_refs(), ["surface.card"]);
+    assert_eq!(artifact.asset_refs()[0].path(), "assets/logo.svg");
+    assert_eq!(artifact.events()[0].event().stable_key(), "pointer.press");
+    assert_eq!(
+        artifact.lifecycle_handlers(),
+        ["mounted:onMount", "unmounted:onUnmount"]
+    );
+    assert_eq!(
+        artifact.reconciler_operations(),
+        [
+            "create-node:root:view",
+            "set-style:root:surface.card",
+            "set-asset:root:assets/logo.svg",
+            "set-ref:root:root_ref",
+            "bind-event:root:pointer.press",
+            "bind-lifecycle:root:mounted:onMount",
+            "bind-lifecycle:root:unmounted:onUnmount",
+            "create-node:title:text",
+            "set-prop:title:text",
+            "set-prop:title:font_size",
+            "append:title",
+            "commit:root"
+        ]
+    );
+    assert!(
+        runtime
+            .operation_keys()
+            .contains(&"mount-element:root".into())
     );
 }
 
@@ -250,4 +303,27 @@ fn react_smoke_app_declares_public_package_entrypoint() {
     assert!(index_ts.contains("createHawkReactRoot"));
     assert!(app.contains("items.map"));
     assert!(app.contains("assets/logo.svg"));
+}
+
+fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
+    FrameworkNativeProgram::new(
+        FrameworkNativeNode::new("root", ElementKind::View)
+            .with_ref(NativeRef::new("root_ref"))
+            .with_style(StyleRef::new("surface.card"))
+            .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
+            .with_event(
+                EventKind::Pointer(PointerEventKind::Press),
+                HandlerRef::new("handlePress"),
+                [EventPayloadField::Position],
+            )
+            .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new("onMount"))
+            .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted))
+            .with_child(
+                "title",
+                FrameworkNativeNode::new("title", ElementKind::Text)
+                    .with_key("title")
+                    .with_prop("text", PropValue::String("Boundary Title".to_string()))
+                    .with_prop("font_size", PropValue::Number(18.0)),
+            ),
+    )
 }

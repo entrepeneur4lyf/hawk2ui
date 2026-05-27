@@ -1,4 +1,8 @@
-use hawk2ui_authoring::{ElementKind, EventPayloadField};
+use hawk2ui_authoring::{
+    AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkNativeNode,
+    FrameworkNativeProgram, HandlerRef, NativeLifecycleEvent, NativeRef, PointerEventKind,
+    PropValue, StyleRef,
+};
 use hawk2ui_framework_svelte::{SvelteComponentSource, SvelteIntegration};
 use hawk2ui_layout::Viewport;
 use hawk2ui_render::{Color, Geometry, RendererBackend};
@@ -50,6 +54,37 @@ fn svelte_5_compile_maps_lifecycle_keyed_children_events_refs_styles_assets_and_
         "examples/frameworks/svelte-basic/src/App.svelte"
     );
     assert_eq!(artifact.diagnostics(), []);
+}
+
+#[test]
+fn svelte_5_compile_accepts_explicit_native_compiler_boundary_without_source_scanning() {
+    let source = SvelteComponentSource::from_native_program(
+        "examples/frameworks/svelte-basic/src/App.svelte",
+        framework_native_program("svelte.asset", "onDestroy"),
+    );
+
+    let artifact = SvelteIntegration::new()
+        .compile(source.clone())
+        .expect("explicit Svelte native compiler output should compile");
+    let runtime = SvelteIntegration::new()
+        .compile_to_runtime(source)
+        .expect("explicit Svelte native compiler output should bridge");
+
+    assert_eq!(artifact.root().id().as_str(), "root");
+    assert_eq!(artifact.keyed_children(), ["title"]);
+    assert_eq!(artifact.refs(), ["root_ref"]);
+    assert_eq!(artifact.style_refs(), ["surface.card"]);
+    assert_eq!(artifact.asset_refs()[0].path(), "assets/logo.svg");
+    assert_eq!(artifact.events()[0].event().stable_key(), "pointer.press");
+    assert_eq!(
+        artifact.lifecycle_handlers(),
+        ["mounted:onMount", "unmounted:onDestroy"]
+    );
+    assert!(
+        runtime
+            .operation_keys()
+            .contains(&"mount-element:root".into())
+    );
 }
 
 #[test]
@@ -341,4 +376,27 @@ fn count_changed_pixels(
         }
     }
     changed
+}
+
+fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
+    FrameworkNativeProgram::new(
+        FrameworkNativeNode::new("root", ElementKind::View)
+            .with_ref(NativeRef::new("root_ref"))
+            .with_style(StyleRef::new("surface.card"))
+            .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
+            .with_event(
+                EventKind::Pointer(PointerEventKind::Press),
+                HandlerRef::new("handlePress"),
+                [EventPayloadField::Position],
+            )
+            .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new("onMount"))
+            .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted))
+            .with_child(
+                "title",
+                FrameworkNativeNode::new("title", ElementKind::Text)
+                    .with_key("title")
+                    .with_prop("text", PropValue::String("Boundary Title".to_string()))
+                    .with_prop("font_size", PropValue::Number(18.0)),
+            ),
+    )
 }

@@ -12,7 +12,8 @@ pub mod state;
 
 pub use adapter::{
     AdapterError, CustomRendererError, CustomRendererOperation, CustomRendererProtocol,
-    NativeRendererAdapter, NodeOperation, RecordingNativeRendererAdapter,
+    FrameworkNativeNode, FrameworkNativeProgram, NativeRendererAdapter, NodeOperation,
+    RecordingNativeRendererAdapter,
 };
 pub use compile::{
     AuthoringArtifact, AuthoringDiagnostic, AuthoringDiagnosticSeverity, compile_authoring_source,
