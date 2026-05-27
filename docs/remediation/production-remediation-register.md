@@ -1347,9 +1347,15 @@ Evidence:
 
 - `hawk2ui-plugin-adapters` materializes package-like file layouts but does not use real CLAP/VST3/AU/LV2 APIs.
 
+Status:
+
+- CLAP adapter metadata now depends on `clap-sys` and emits a CLAP entry plan containing the CLAP ABI version, `clap_entry` symbol, plugin factory ID, plugin ID, vendor/name/version, descriptor ABI marker, and CLAP feature list.
+- CLAP package materialization now writes `Contents/Resources/clap-entry.toml` and includes it in required file and hash verification coverage.
+- Real loadable dynamic-library generation and host loading remain open under this item.
+
 Required remediation:
 
-- Implement selected format adapters with lifecycle callbacks, editor attachment, parameter binding, state, packaging, signing/notarization where applicable, and host tests.
+- Implement selected format adapters with lifecycle callbacks, editor attachment, parameter binding, state, dynamic-library generation, signing/notarization where applicable, and host tests.
 
 Acceptance:
 

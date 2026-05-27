@@ -2,8 +2,8 @@ use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRange, ParameterRecord,
 };
 use hawk2ui_plugin_adapters::{
-    MaterializedPackageOutput, PackageAdapterSet, PackageFormat, PackagePlan, PackageRequest,
-    VerificationReport, VerificationStatus,
+    ClapPluginEntryPlan, MaterializedPackageOutput, PackageAdapterSet, PackageFormat, PackagePlan,
+    PackageRequest, VerificationReport, VerificationStatus,
 };
 use std::{
     path::Path,
@@ -203,6 +203,14 @@ fn plugin_adapters_materialize_package_metadata_outputs() {
         .expect("artifact descriptor reads");
     assert!(artifact.contains("artifact_format = \"hawk2ui-plugin-package\""));
     assert!(artifact.contains("entry_library = \"Demo.clap\""));
+    let clap_entry = std::fs::read_to_string(
+        Path::new(&outputs[0].output_path).join("Contents/Resources/clap-entry.toml"),
+    )
+    .expect("CLAP entry descriptor reads");
+    assert!(clap_entry.contains("entry_symbol = \"clap_entry\""));
+    assert!(clap_entry.contains("factory_id = \"clap.plugin-factory\""));
+    assert!(clap_entry.contains("clap_version = \"1.2.2\""));
+    assert!(clap_entry.contains("features = [\"audio-effect\"]"));
 
     let report = plan.verify_materialized(&outputs);
     assert_eq!(report.status(), VerificationStatus::Passed);
@@ -210,6 +218,22 @@ fn plugin_adapters_materialize_package_metadata_outputs() {
         .expect("artifact descriptor should be removable");
     let failed = plan.verify_materialized(&outputs);
     assert_eq!(failed.status(), VerificationStatus::Failed);
+}
+
+#[test]
+fn plugin_adapters_build_clap_entry_plan_from_clap_sys_contract() {
+    let metadata = FormatMetadata::new("com.hawk2ui.clap", "Clap", "Hawk2UI")
+        .version("1.0.0")
+        .feature("audio-effect")
+        .feature("utility");
+
+    let entry = ClapPluginEntryPlan::from_metadata(&metadata);
+
+    assert_eq!(entry.entry_symbol(), "clap_entry");
+    assert_eq!(entry.factory_id(), "clap.plugin-factory");
+    assert_eq!(entry.clap_version(), "1.2.2");
+    assert_eq!(entry.plugin_id(), "com.hawk2ui.clap");
+    assert_eq!(entry.features(), &["audio-effect", "utility"]);
 }
 
 #[test]

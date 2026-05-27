@@ -63,6 +63,106 @@ impl PackageFormat {
     }
 }
 
+/// CLAP plugin entry metadata derived from the `clap-sys` ABI contract.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClapPluginEntryPlan {
+    clap_version: String,
+    entry_symbol: String,
+    factory_id: String,
+    plugin_id: String,
+    name: String,
+    vendor: String,
+    version: String,
+    features: Vec<String>,
+    descriptor_abi: String,
+}
+
+impl ClapPluginEntryPlan {
+    /// Creates CLAP entry metadata from plugin metadata.
+    #[must_use]
+    pub fn from_metadata(metadata: &FormatMetadata) -> Self {
+        let mut features = metadata
+            .features
+            .iter()
+            .filter(|feature| is_supported_clap_feature(feature))
+            .cloned()
+            .collect::<Vec<_>>();
+        if features.is_empty() {
+            features.push(clap_feature_string(
+                clap_sys::plugin_features::CLAP_PLUGIN_FEATURE_UTILITY,
+            ));
+        }
+        Self {
+            clap_version: clap_version_string(),
+            entry_symbol: "clap_entry".into(),
+            factory_id: clap_feature_string(
+                clap_sys::factory::plugin_factory::CLAP_PLUGIN_FACTORY_ID,
+            ),
+            plugin_id: metadata.id.clone(),
+            name: metadata.display_name.clone(),
+            vendor: metadata.vendor.clone(),
+            version: metadata.version.clone(),
+            features,
+            descriptor_abi: format!(
+                "clap_plugin_descriptor:{}",
+                std::mem::size_of::<clap_sys::plugin::clap_plugin_descriptor>()
+            ),
+        }
+    }
+
+    /// Returns the CLAP entry symbol required by hosts.
+    #[must_use]
+    pub fn entry_symbol(&self) -> &str {
+        &self.entry_symbol
+    }
+
+    /// Returns the CLAP plugin factory identifier.
+    #[must_use]
+    pub fn factory_id(&self) -> &str {
+        &self.factory_id
+    }
+
+    /// Returns the CLAP ABI version.
+    #[must_use]
+    pub fn clap_version(&self) -> &str {
+        &self.clap_version
+    }
+
+    /// Returns the plugin identifier.
+    #[must_use]
+    pub fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+
+    /// Returns CLAP feature strings accepted by the adapter.
+    #[must_use]
+    pub fn features(&self) -> &[String] {
+        &self.features
+    }
+
+    fn manifest(&self) -> String {
+        let features = self
+            .features
+            .iter()
+            .map(|feature| quoted_metadata_string(feature))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "clap_version = {}\nentry_symbol = {}\nfactory_id = {}\nplugin_id = {}\nname = {}\nvendor = {}\nversion = {}\ndescriptor_abi = {}\nfeatures = [{}]\n",
+            quoted_metadata_string(&self.clap_version),
+            quoted_metadata_string(&self.entry_symbol),
+            quoted_metadata_string(&self.factory_id),
+            quoted_metadata_string(&self.plugin_id),
+            quoted_metadata_string(&self.name),
+            quoted_metadata_string(&self.vendor),
+            quoted_metadata_string(&self.version),
+            quoted_metadata_string(&self.descriptor_abi),
+            features
+        )
+    }
+}
+
 /// Package request.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PackageRequest {
@@ -256,6 +356,12 @@ impl PackageTargetPlan {
                 let clap_manifest_path = resources_path.join("clap.json");
                 write_package_file(&clap_manifest_path, self.clap_manifest())?;
                 written.push(clap_manifest_path);
+                let clap_entry_path = resources_path.join("clap-entry.toml");
+                write_package_file(
+                    &clap_entry_path,
+                    ClapPluginEntryPlan::from_metadata(&self.metadata).manifest(),
+                )?;
+                written.push(clap_entry_path);
             }
             PackageFormat::Vst3 => {
                 let info_path = output_path.join("Contents").join("Info.plist");
@@ -341,6 +447,7 @@ impl PackageTargetPlan {
             PackageFormat::Clap => {
                 files.push(output_path.join(format!("{}.clap", self.metadata.display_name)));
                 files.push(resources_path.join("clap.json"));
+                files.push(resources_path.join("clap-entry.toml"));
             }
             PackageFormat::Vst3 => {
                 files.push(output_path.join("Contents").join("Info.plist"));
@@ -744,6 +851,87 @@ fn validate_request(request: &PackageRequest) -> Result<(), PackagePlanningError
     } else {
         Err(PackagePlanningError { diagnostics })
     }
+}
+
+fn clap_version_string() -> String {
+    format!(
+        "{}.{}.{}",
+        clap_sys::version::CLAP_VERSION_MAJOR,
+        clap_sys::version::CLAP_VERSION_MINOR,
+        clap_sys::version::CLAP_VERSION_REVISION
+    )
+}
+
+fn clap_feature_string(value: &std::ffi::CStr) -> String {
+    value.to_string_lossy().into_owned()
+}
+
+fn is_supported_clap_feature(value: &str) -> bool {
+    supported_clap_features()
+        .iter()
+        .any(|feature| value == feature.to_string_lossy())
+}
+
+fn supported_clap_features() -> [&'static std::ffi::CStr; 39] {
+    use clap_sys::plugin_features::{
+        CLAP_PLUGIN_FEATURE_AMBISONIC, CLAP_PLUGIN_FEATURE_ANALYZER,
+        CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, CLAP_PLUGIN_FEATURE_CHORUS,
+        CLAP_PLUGIN_FEATURE_COMPRESSOR, CLAP_PLUGIN_FEATURE_DEESSER, CLAP_PLUGIN_FEATURE_DELAY,
+        CLAP_PLUGIN_FEATURE_DISTORTION, CLAP_PLUGIN_FEATURE_DRUM, CLAP_PLUGIN_FEATURE_DRUM_MACHINE,
+        CLAP_PLUGIN_FEATURE_EQUALIZER, CLAP_PLUGIN_FEATURE_EXPANDER, CLAP_PLUGIN_FEATURE_FILTER,
+        CLAP_PLUGIN_FEATURE_FLANGER, CLAP_PLUGIN_FEATURE_FREQUENCY_SHIFTER,
+        CLAP_PLUGIN_FEATURE_GATE, CLAP_PLUGIN_FEATURE_GLITCH, CLAP_PLUGIN_FEATURE_GRANULAR,
+        CLAP_PLUGIN_FEATURE_INSTRUMENT, CLAP_PLUGIN_FEATURE_LIMITER, CLAP_PLUGIN_FEATURE_MASTERING,
+        CLAP_PLUGIN_FEATURE_MIXING, CLAP_PLUGIN_FEATURE_MONO, CLAP_PLUGIN_FEATURE_MULTI_EFFECTS,
+        CLAP_PLUGIN_FEATURE_NOTE_DETECTOR, CLAP_PLUGIN_FEATURE_NOTE_EFFECT,
+        CLAP_PLUGIN_FEATURE_PHASE_VOCODER, CLAP_PLUGIN_FEATURE_PHASER,
+        CLAP_PLUGIN_FEATURE_PITCH_CORRECTION, CLAP_PLUGIN_FEATURE_PITCH_SHIFTER,
+        CLAP_PLUGIN_FEATURE_RESTORATION, CLAP_PLUGIN_FEATURE_REVERB, CLAP_PLUGIN_FEATURE_SAMPLER,
+        CLAP_PLUGIN_FEATURE_STEREO, CLAP_PLUGIN_FEATURE_SURROUND, CLAP_PLUGIN_FEATURE_SYNTHESIZER,
+        CLAP_PLUGIN_FEATURE_TRANSIENT_SHAPER, CLAP_PLUGIN_FEATURE_TREMOLO,
+        CLAP_PLUGIN_FEATURE_UTILITY,
+    };
+    [
+        CLAP_PLUGIN_FEATURE_INSTRUMENT,
+        CLAP_PLUGIN_FEATURE_AUDIO_EFFECT,
+        CLAP_PLUGIN_FEATURE_NOTE_EFFECT,
+        CLAP_PLUGIN_FEATURE_NOTE_DETECTOR,
+        CLAP_PLUGIN_FEATURE_ANALYZER,
+        CLAP_PLUGIN_FEATURE_SYNTHESIZER,
+        CLAP_PLUGIN_FEATURE_SAMPLER,
+        CLAP_PLUGIN_FEATURE_DRUM,
+        CLAP_PLUGIN_FEATURE_DRUM_MACHINE,
+        CLAP_PLUGIN_FEATURE_FILTER,
+        CLAP_PLUGIN_FEATURE_PHASER,
+        CLAP_PLUGIN_FEATURE_EQUALIZER,
+        CLAP_PLUGIN_FEATURE_DEESSER,
+        CLAP_PLUGIN_FEATURE_PHASE_VOCODER,
+        CLAP_PLUGIN_FEATURE_GRANULAR,
+        CLAP_PLUGIN_FEATURE_FREQUENCY_SHIFTER,
+        CLAP_PLUGIN_FEATURE_PITCH_SHIFTER,
+        CLAP_PLUGIN_FEATURE_DISTORTION,
+        CLAP_PLUGIN_FEATURE_TRANSIENT_SHAPER,
+        CLAP_PLUGIN_FEATURE_COMPRESSOR,
+        CLAP_PLUGIN_FEATURE_EXPANDER,
+        CLAP_PLUGIN_FEATURE_GATE,
+        CLAP_PLUGIN_FEATURE_LIMITER,
+        CLAP_PLUGIN_FEATURE_FLANGER,
+        CLAP_PLUGIN_FEATURE_CHORUS,
+        CLAP_PLUGIN_FEATURE_DELAY,
+        CLAP_PLUGIN_FEATURE_REVERB,
+        CLAP_PLUGIN_FEATURE_TREMOLO,
+        CLAP_PLUGIN_FEATURE_GLITCH,
+        CLAP_PLUGIN_FEATURE_UTILITY,
+        CLAP_PLUGIN_FEATURE_PITCH_CORRECTION,
+        CLAP_PLUGIN_FEATURE_RESTORATION,
+        CLAP_PLUGIN_FEATURE_MULTI_EFFECTS,
+        CLAP_PLUGIN_FEATURE_MIXING,
+        CLAP_PLUGIN_FEATURE_MASTERING,
+        CLAP_PLUGIN_FEATURE_MONO,
+        CLAP_PLUGIN_FEATURE_STEREO,
+        CLAP_PLUGIN_FEATURE_SURROUND,
+        CLAP_PLUGIN_FEATURE_AMBISONIC,
+    ]
 }
 
 fn quoted_metadata_string(value: &str) -> String {

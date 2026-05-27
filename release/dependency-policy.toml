@@ -87,3 +87,12 @@ owner = "render"
 risk = "Native graphics binding with binary artifacts; upgrades must pass renderer, host software frame, and visual smoke tests."
 release_blocker = false
 upgrade_gate = "cargo test -p hawk2ui-render-skia && cargo test -p hawk2ui-host-winit"
+
+[[dependencies]]
+name = "clap-sys"
+source = "crates-io"
+version = "0.5.0"
+owner = "plugin"
+risk = "Low-level CLAP ABI bindings; upgrades must preserve generated CLAP entry metadata, factory IDs, versioning, and package materialization."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-plugin-adapters plugin_adapters_build_clap_entry_plan_from_clap_sys_contract && cargo test -p hawk2ui-plugin-adapters plugin_adapters_materialize_package_metadata_outputs"

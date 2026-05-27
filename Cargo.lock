@@ -545,6 +545,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a76abbdb2907f6fd97fb6bc0b7be96b77d328f2dd9669d1075cc03369ed22154"
+
+[[package]]
 name = "cobs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1712,6 +1718,7 @@ dependencies = [
 name = "hawk2ui-plugin-adapters"
 version = "0.1.0"
 dependencies = [
+ "clap-sys",
  "hawk2ui-plugin",
  "jsonschema",
  "schemars",
