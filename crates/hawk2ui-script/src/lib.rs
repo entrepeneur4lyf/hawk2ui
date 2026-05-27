@@ -97,6 +97,42 @@ impl ScriptExecution {
     }
 }
 
+/// Deterministic limits enforced before script source is handed to the JavaScript engine.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScriptExecutionLimits {
+    max_source_bytes: usize,
+    max_compiled_source_bytes: usize,
+}
+
+impl ScriptExecutionLimits {
+    /// Creates source-size limits for original and compiled JavaScript.
+    #[must_use]
+    pub const fn new(max_source_bytes: usize, max_compiled_source_bytes: usize) -> Self {
+        Self {
+            max_source_bytes,
+            max_compiled_source_bytes,
+        }
+    }
+
+    /// Returns the maximum accepted source byte length.
+    #[must_use]
+    pub const fn max_source_bytes(&self) -> usize {
+        self.max_source_bytes
+    }
+
+    /// Returns the maximum accepted compiled JavaScript byte length.
+    #[must_use]
+    pub const fn max_compiled_source_bytes(&self) -> usize {
+        self.max_compiled_source_bytes
+    }
+}
+
+impl Default for ScriptExecutionLimits {
+    fn default() -> Self {
+        Self::new(1_048_576, 4_194_304)
+    }
+}
+
 /// Host call policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostCallPolicy {
@@ -250,6 +286,7 @@ pub struct ScriptBackend {
     promises: BTreeMap<PromiseId, PromiseState>,
     timers: Vec<TimerRecord>,
     host_calls: Vec<HostCall>,
+    execution_limits: ScriptExecutionLimits,
     next_promise_id: u64,
     next_timer_id: u64,
     interrupted: Option<String>,
@@ -267,11 +304,22 @@ impl ScriptBackend {
             promises: BTreeMap::new(),
             timers: Vec::new(),
             host_calls: Vec::new(),
+            execution_limits: ScriptExecutionLimits {
+                max_source_bytes: 1_048_576,
+                max_compiled_source_bytes: 4_194_304,
+            },
             next_promise_id: 1,
             next_timer_id: 1,
             interrupted: None,
             torn_down: false,
         }
+    }
+
+    /// Overrides deterministic execution limits.
+    #[must_use]
+    pub const fn with_execution_limits(mut self, execution_limits: ScriptExecutionLimits) -> Self {
+        self.execution_limits = execution_limits;
+        self
     }
 
     /// Executes a module.
@@ -284,10 +332,22 @@ impl ScriptBackend {
         module: ScriptModule,
     ) -> Result<ScriptExecution, ScriptBackendError> {
         self.ensure_running()?;
+        enforce_source_limit(
+            "script.source.too-large",
+            "script source exceeds configured execution limit",
+            module.source.len(),
+            self.execution_limits.max_source_bytes(),
+        )?;
         let executable = match module.kind {
             ScriptModuleKind::JavaScript => module.source.clone(),
             ScriptModuleKind::TypeScript => compile_typescript(&module.id, &module.source)?,
         };
+        enforce_source_limit(
+            "script.compiled-source.too-large",
+            "compiled JavaScript exceeds configured execution limit",
+            executable.len(),
+            self.execution_limits.max_compiled_source_bytes(),
+        )?;
         let value = evaluate_javascript(&executable)?;
         let execution = ScriptExecution {
             module_id: module.id.clone(),
@@ -431,6 +491,21 @@ impl ScriptBackend {
             Ok(())
         }
     }
+}
+
+fn enforce_source_limit(
+    rule: &'static str,
+    message: &'static str,
+    actual_bytes: usize,
+    max_bytes: usize,
+) -> Result<(), ScriptBackendError> {
+    if actual_bytes <= max_bytes {
+        return Ok(());
+    }
+    Err(ScriptBackendError::new(
+        rule,
+        format!("{message}: {actual_bytes} bytes exceeds {max_bytes} bytes"),
+    ))
 }
 
 fn compile_typescript(module_id: &str, source: &str) -> Result<String, ScriptBackendError> {

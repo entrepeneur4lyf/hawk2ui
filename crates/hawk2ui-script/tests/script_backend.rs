@@ -1,5 +1,6 @@
 use hawk2ui_script::{
-    HostCallPolicy, ScriptBackend, ScriptModule, ScriptModuleKind, StructuredValue, TimerPolicy,
+    HostCallPolicy, ScriptBackend, ScriptExecutionLimits, ScriptModule, ScriptModuleKind,
+    StructuredValue, TimerPolicy,
 };
 
 #[test]
@@ -110,4 +111,38 @@ fn script_backend_denies_host_calls_interrupts_and_tears_down_safely() {
     backend.teardown();
     assert!(backend.torn_down());
     assert!(backend.timers().is_empty());
+}
+
+#[test]
+fn script_backend_rejects_modules_that_exceed_execution_limits() {
+    let mut source_limited =
+        ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic())
+            .with_execution_limits(ScriptExecutionLimits::new(24, 64));
+
+    let oversized_source = source_limited
+        .execute_module(ScriptModule::javascript(
+            "oversized.js",
+            "const value = 'this source is too large'; value",
+        ))
+        .expect_err("oversized source is rejected before evaluation");
+    assert_eq!(
+        oversized_source.diagnostic().rule(),
+        "script.source.too-large"
+    );
+
+    let mut compiled_limited =
+        ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic())
+            .with_execution_limits(ScriptExecutionLimits::new(1024, 24));
+    let oversized_compiled = compiled_limited
+        .execute_module(ScriptModule::typescript(
+            "compiled.ts",
+            "const value: string = 'compiled output is too large'; value",
+        ))
+        .expect_err("oversized compiled JavaScript is rejected before evaluation");
+    assert_eq!(
+        oversized_compiled.diagnostic().rule(),
+        "script.compiled-source.too-large"
+    );
+    assert!(source_limited.executed_modules().is_empty());
+    assert!(compiled_limited.executed_modules().is_empty());
 }
