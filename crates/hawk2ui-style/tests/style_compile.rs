@@ -225,6 +225,20 @@ fn style_compile_uses_css_parser_semantics_for_comments() {
 }
 
 #[test]
+fn style_compile_accepts_css_unitless_zero_for_lengths() {
+    let sheet = hawk2ui_style::compile_style_source(".zero { font-size: 0; }")
+        .expect("CSS unitless zero is a valid length token");
+    let rule = sheet.rule("class(zero)").expect("zero rule exists");
+
+    assert_eq!(
+        rule.declaration(&PropertyId::new("font-size"))
+            .unwrap()
+            .value(),
+        &StyleValue::LengthPx(0.0)
+    );
+}
+
+#[test]
 fn style_compile_lowers_color_duration_shadow_and_transform_values() {
     let sheet = hawk2ui_style::compile_style_source(
         r#"

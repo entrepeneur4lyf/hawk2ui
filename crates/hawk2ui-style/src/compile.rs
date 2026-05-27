@@ -294,7 +294,11 @@ fn parse_token_ref(raw_value: &str) -> Option<String> {
 }
 
 fn parse_px(raw_value: &str) -> Option<f32> {
-    raw_value.strip_suffix("px")?.parse::<f32>().ok()
+    if raw_value == "0" {
+        Some(0.0)
+    } else {
+        raw_value.strip_suffix("px")?.parse::<f32>().ok()
+    }
 }
 
 fn parse_duration(raw_value: &str) -> Option<u32> {
