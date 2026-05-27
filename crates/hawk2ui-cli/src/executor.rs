@@ -3,9 +3,10 @@
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
+use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits, AssetRecord};
 use hawk2ui_build::{
     ArtifactSchemaVersion, AssetCompilationError, BuildWorkspace, BuildWorkspaceError,
     BuildWorkspaceOutput, CompiledScriptRecord, HawkManifest, ManifestError, PackageTarget,
@@ -352,13 +353,20 @@ impl WorkspaceCommandRunner {
             );
         }
         let exit_after_first_frame = std::env::var_os("HAWK2UI_EXIT_AFTER_FIRST_FRAME").is_some();
-        let config = match desktop_runtime_config_from_build_output(&output, exit_after_first_frame)
-        {
-            Ok(config) => config,
+        let mut config =
+            match desktop_runtime_config_from_build_output(&output, exit_after_first_frame) {
+                Ok(config) => config,
+                Err(diagnostic) => {
+                    return CommandExecution::failure(CliExitCode::Runtime, vec![*diagnostic]);
+                }
+            };
+        let runtime_assets = match desktop_runtime_assets(&self.root, manifest) {
+            Ok(assets) => assets,
             Err(diagnostic) => {
                 return CommandExecution::failure(CliExitCode::Runtime, vec![*diagnostic]);
             }
         };
+        config = config.with_runtime_assets(runtime_assets);
         match WinitDesktopRuntime::new().run_blocking(config) {
             Ok(summary) => CommandExecution::success(format!(
                 "desktop runtime exited cleanly\nframes-presented: {}\nresizes: {}\ndpi-changes: {}\ninput-events: {}\nclose-requested: {}\n",
@@ -698,6 +706,87 @@ fn desktop_runtime_config_from_manifest_with_app_model(
     ))
     .with_runtime_tree(runtime_tree)
     .with_exit_after_first_frame(exit_after_first_frame))
+}
+
+fn desktop_runtime_assets(
+    root: &Path,
+    manifest: &HawkManifest,
+) -> Result<Vec<AssetRecord>, Box<CliDiagnostic>> {
+    let mut backend = AssetBackend::new(AssetLimits::default());
+    let mut records = Vec::new();
+    for asset in &manifest.assets {
+        if asset.kind == "design-token" {
+            continue;
+        }
+        let bytes = read_runtime_asset_bytes(root, &asset.path)?;
+        let hash = AssetHash::sha256_bytes(&bytes);
+        let record = match asset.kind.as_str() {
+            "image" => backend.compile_image(&asset.id, &asset.path, &bytes, &hash),
+            "vector" => backend.compile_vector(&asset.id, &asset.path, &bytes, &hash),
+            "font" => backend.load_font(&asset.id, &asset.path, &bytes, &hash),
+            _ => {
+                return Err(Box::new(CliDiagnostic::error(
+                    "asset.kind.unsupported",
+                    format!(
+                        "runtime asset {} declares unsupported kind {}",
+                        asset.id, asset.kind
+                    ),
+                )));
+            }
+        }
+        .map_err(|error| {
+            Box::new(CliDiagnostic::error(
+                error.diagnostic().rule(),
+                format!(
+                    "runtime asset {} at {} failed compilation: {}",
+                    asset.id,
+                    asset.path,
+                    error.diagnostic().message()
+                ),
+            ))
+        })?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+fn read_runtime_asset_bytes(root: &Path, path: &str) -> Result<Vec<u8>, Box<CliDiagnostic>> {
+    let relative = Path::new(path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(Box::new(CliDiagnostic::error(
+            "asset.path.unsafe",
+            format!("runtime asset path must stay inside the project: {path}"),
+        )));
+    }
+    let root = root.canonicalize().map_err(|error| {
+        Box::new(CliDiagnostic::error(
+            "asset.workspace.unreadable",
+            format!("failed to resolve project root for runtime assets: {error}"),
+        ))
+    })?;
+    let absolute = root.join(relative);
+    let resolved = absolute.canonicalize().map_err(|error| {
+        Box::new(CliDiagnostic::error(
+            "asset.read-failed",
+            format!("failed to resolve runtime asset {path}: {error}"),
+        ))
+    })?;
+    if !resolved.starts_with(&root) {
+        return Err(Box::new(CliDiagnostic::error(
+            "asset.path.unsafe",
+            format!("runtime asset path escapes the project: {path}"),
+        )));
+    }
+    fs::read(&resolved).map_err(|error| {
+        Box::new(CliDiagnostic::error(
+            "asset.read-failed",
+            format!("failed to read runtime asset {path}: {error}"),
+        ))
+    })
 }
 
 fn runtime_tree_from_manifest(

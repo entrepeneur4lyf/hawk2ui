@@ -2,6 +2,7 @@
 
 use std::{num::NonZeroU32, sync::Arc, time::Instant};
 
+use hawk2ui_assets::AssetRecord;
 use hawk2ui_host::DesktopWindowConfig;
 use hawk2ui_layout::Viewport;
 use hawk2ui_runtime::{
@@ -24,6 +25,7 @@ pub struct WinitDesktopRuntimeConfig {
     window: DesktopWindowConfig,
     exit_after_first_frame: bool,
     runtime_tree: Option<RuntimeViewTree>,
+    runtime_assets: Vec<AssetRecord>,
     animation_policy: AnimationCadencePolicy,
 }
 
@@ -35,6 +37,7 @@ impl WinitDesktopRuntimeConfig {
             window,
             exit_after_first_frame: false,
             runtime_tree: None,
+            runtime_assets: Vec::new(),
             animation_policy: AnimationCadencePolicy::disabled(),
         }
     }
@@ -50,6 +53,13 @@ impl WinitDesktopRuntimeConfig {
     #[must_use]
     pub fn with_runtime_tree(mut self, runtime_tree: RuntimeViewTree) -> Self {
         self.runtime_tree = Some(runtime_tree);
+        self
+    }
+
+    /// Sets the compiled runtime assets rendered by scene asset draw commands.
+    #[must_use]
+    pub fn with_runtime_assets(mut self, assets: impl IntoIterator<Item = AssetRecord>) -> Self {
+        self.runtime_assets = assets.into_iter().collect();
         self
     }
 
@@ -76,6 +86,12 @@ impl WinitDesktopRuntimeConfig {
     #[must_use]
     pub const fn runtime_tree(&self) -> Option<&RuntimeViewTree> {
         self.runtime_tree.as_ref()
+    }
+
+    /// Returns compiled runtime assets available to the renderer.
+    #[must_use]
+    pub fn runtime_assets(&self) -> &[AssetRecord] {
+        &self.runtime_assets
     }
 
     /// Returns the animation cadence policy.
@@ -176,7 +192,7 @@ impl WinitDesktopRuntime {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            renderer: SoftwareFrameRenderer,
+            renderer: SoftwareFrameRenderer::new(),
         }
     }
 
@@ -223,6 +239,7 @@ struct RuntimeApplication {
 impl RuntimeApplication {
     fn new(config: WinitDesktopRuntimeConfig, renderer: SoftwareFrameRenderer) -> Self {
         let animation = AnimationFrameScheduler::new(config.animation_policy());
+        let renderer = renderer.with_assets(config.runtime_assets().iter().cloned());
         Self {
             config,
             renderer,

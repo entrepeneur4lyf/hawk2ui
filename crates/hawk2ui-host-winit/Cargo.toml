@@ -18,6 +18,7 @@ workspace = true
 
 [dependencies]
 hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
+hawk2ui-assets = { version = "0.1.0", path = "../hawk2ui-assets" }
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
@@ -26,3 +27,6 @@ hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
 skia-safe = { version = "0.97.0", default-features = false, features = ["binary-cache"] }
 softbuffer = "0.4.8"
 winit = "0.30.12"
+
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }

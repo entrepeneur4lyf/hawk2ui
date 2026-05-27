@@ -1,5 +1,6 @@
 //! Skia-backed software frame generation for native host presentation.
 
+use hawk2ui_assets::{AssetKind, AssetRecord};
 use hawk2ui_host::SurfaceMetrics;
 use hawk2ui_render::{
     BackendError, Color, CustomSurfaceDrawRequest, CustomSurfaceError, CustomSurfaceFrameContext,
@@ -71,9 +72,30 @@ impl SoftwareFrame {
 
 /// Skia-backed frame renderer for the first production desktop host vertical.
 #[derive(Clone, Debug, Default)]
-pub struct SoftwareFrameRenderer;
+pub struct SoftwareFrameRenderer {
+    assets: Vec<AssetRecord>,
+}
 
 impl SoftwareFrameRenderer {
+    /// Creates a software frame renderer without pre-registered runtime assets.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { assets: Vec::new() }
+    }
+
+    /// Adds compiled runtime assets that scene image/vector commands may draw.
+    #[must_use]
+    pub fn with_assets(mut self, assets: impl IntoIterator<Item = AssetRecord>) -> Self {
+        self.assets = assets.into_iter().collect();
+        self
+    }
+
+    /// Returns the compiled runtime assets registered with this renderer.
+    #[must_use]
+    pub fn assets(&self) -> &[AssetRecord] {
+        &self.assets
+    }
+
     /// Renders a full-surface frame through Skia.
     ///
     /// # Errors
@@ -136,6 +158,7 @@ impl SoftwareFrameRenderer {
                 height,
             ))
             .map_err(|error| map_backend_error(&error))?;
+        register_runtime_assets(&mut backend, &self.assets)?;
         backend
             .begin_frame(SOFTWARE_FRAME_SURFACE_ID)
             .map_err(|error| map_backend_error(&error))?;
@@ -178,20 +201,12 @@ impl SoftwareFrameRenderer {
                         )
                         .map_err(|error| map_backend_error(&error))?;
                 }
-                RuntimeDrawCommand::ImageAsset { geometry, .. } => {
-                    draw_asset_placeholder(
-                        &mut backend,
-                        *geometry,
-                        Color::rgba(80, 180, 255, 255),
-                    )?;
-                }
-                RuntimeDrawCommand::VectorAsset { geometry, .. } => {
-                    draw_asset_placeholder(
-                        &mut backend,
-                        *geometry,
-                        Color::rgba(255, 198, 74, 255),
-                    )?;
-                }
+                RuntimeDrawCommand::ImageAsset {
+                    geometry, asset_id, ..
+                } => draw_image_asset_or_placeholder(&mut backend, asset_id, *geometry)?,
+                RuntimeDrawCommand::VectorAsset {
+                    geometry, asset_id, ..
+                } => draw_vector_asset_or_placeholder(&mut backend, asset_id, *geometry)?,
                 RuntimeDrawCommand::CustomSurface {
                     surface: custom_surface,
                     data,
@@ -223,6 +238,55 @@ impl SoftwareFrameRenderer {
             snapshot.pixels().to_vec(),
         )
     }
+}
+
+fn register_runtime_assets(
+    backend: &mut SkiaRendererBackend,
+    assets: &[AssetRecord],
+) -> Result<(), WinitHostError> {
+    for asset in assets {
+        if matches!(asset.kind(), AssetKind::Image | AssetKind::Vector) {
+            backend
+                .register_compiled_asset(asset)
+                .map_err(|error| map_backend_error(&error))?;
+        }
+    }
+    Ok(())
+}
+
+fn draw_image_asset_or_placeholder(
+    backend: &mut SkiaRendererBackend,
+    asset_id: &str,
+    geometry: Geometry,
+) -> Result<(), WinitHostError> {
+    match backend.draw_image_rect(asset_id, geometry) {
+        Ok(()) => Ok(()),
+        Err(error) if is_missing_asset_error(&error) => {
+            draw_asset_placeholder(backend, geometry, Color::rgba(80, 180, 255, 255))
+        }
+        Err(error) => Err(map_backend_error(&error)),
+    }
+}
+
+fn draw_vector_asset_or_placeholder(
+    backend: &mut SkiaRendererBackend,
+    asset_id: &str,
+    geometry: Geometry,
+) -> Result<(), WinitHostError> {
+    match backend.draw_vector_rect(asset_id, geometry) {
+        Ok(()) => Ok(()),
+        Err(error) if is_missing_asset_error(&error) => {
+            draw_asset_placeholder(backend, geometry, Color::rgba(255, 198, 74, 255))
+        }
+        Err(error) => Err(map_backend_error(&error)),
+    }
+}
+
+fn is_missing_asset_error(error: &BackendError) -> bool {
+    matches!(
+        error.diagnostic().rule(),
+        "skia.image.missing" | "skia.vector.missing"
+    )
 }
 
 /// Converts host metrics to non-zero physical frame dimensions.

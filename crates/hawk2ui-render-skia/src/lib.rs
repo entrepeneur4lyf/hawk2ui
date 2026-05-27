@@ -1131,6 +1131,46 @@ impl SkiaRendererBackend {
         Ok(())
     }
 
+    /// Draws a compiled vector asset into a destination rectangle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, the destination is invalid, or the
+    /// vector asset has not been registered.
+    pub fn draw_vector_rect(
+        &mut self,
+        vector: &str,
+        geometry: Geometry,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        validate_geometry("skia.vector.invalid-geometry", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        let Some(asset) = self.vector_assets.get(vector).cloned() else {
+            return self.fail(
+                "skia.vector.missing",
+                "compiled vector asset is not registered with the renderer",
+            );
+        };
+        self.with_active_surface(|surface| {
+            let canvas = surface.canvas();
+            canvas.save();
+            canvas.clip_rect(rect(geometry), ClipOp::Intersect, true);
+            canvas.translate((geometry.x, geometry.y));
+            for record in &asset.paths {
+                let mut paint = paint(record.fill, PaintStyle::Fill);
+                paint.set_anti_alias(true);
+                canvas.draw_path(&record.path, &paint);
+            }
+            canvas.restore();
+        })?;
+        self.commands.push(format!(
+            "vector-rect:{vector}:{},{},{},{}",
+            geometry.x, geometry.y, geometry.width, geometry.height
+        ));
+        Ok(())
+    }
+
     /// Executes a custom draw surface hook into the active Skia frame.
     ///
     /// # Errors

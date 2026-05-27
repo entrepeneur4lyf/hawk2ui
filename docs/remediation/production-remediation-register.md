@@ -494,6 +494,8 @@ Review check:
 
 ### REM-RENDER-006: Complete Asset-To-Renderer Flow
 
+Status: Remediated in source.
+
 Evidence:
 
 - `hawk2ui-assets` compiles images/vectors/fonts into records.
@@ -501,6 +503,8 @@ Evidence:
 - `hawk2ui-render-skia` registers compiled image and vector payloads from `hawk2ui-assets::AssetRecord`.
 - Runtime scene output carries compiled image/vector asset draw commands and rejects raw path-like asset IDs at the render boundary.
 - `hawk2ui-host-winit` previously failed the whole frame when a runtime scene carried image/vector asset commands that were not registered with the software frame path.
+- `hawk2ui-host-winit::SoftwareFrameRenderer` now accepts compiled runtime asset records, registers image/vector assets with Skia during frame preparation, and draws registered runtime asset commands before falling back to placeholders for genuinely missing assets.
+- `hawk2ui-cli run-desktop` now compiles declared runtime assets from the project workspace and attaches them to the Winit desktop runtime config.
 
 Required remediation:
 
@@ -511,10 +515,17 @@ Acceptance:
 - Raw asset paths are rejected at rendering boundaries.
 - Compiled image and vector assets render in desktop and headless tests.
 
-Status:
+Remediation delivered:
 
-- Winit software frame rendering now degrades missing runtime image/vector assets to visible placeholders instead of hard-failing the frame.
-- Remaining release blocker: compiled image/vector asset registration must flow into desktop and headless renderer preparation so placeholders are only used for explicit missing-asset diagnostics.
+- Winit software frame rendering degrades missing runtime image/vector assets to visible placeholders instead of hard-failing the frame.
+- Registered compiled image assets now render through `SkiaRendererBackend::draw_image_rect` in desktop software frames.
+- Registered compiled vector assets now render through `SkiaRendererBackend::draw_vector_rect` in desktop software frames.
+- CLI desktop launch compiles manifest-declared image/vector/font assets from safe workspace-relative paths and passes the compiled records into the desktop runtime.
+- Regression coverage proves registered runtime image/vector assets render visible compiled pixels and missing runtime assets still degrade visibly.
+
+Review check:
+
+- As the implementer delivering this product, I am satisfied with this remediation for production stability. The desktop presentation path now has a real compiled asset registration flow; placeholders remain only as explicit missing-asset degradation.
 
 ### REM-RENDER-007: Implement Custom Draw Surfaces
 
