@@ -170,6 +170,87 @@ impl AccessibilityRef {
     }
 }
 
+/// Stable scene layer identifier.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SceneLayerId(String);
+
+impl SceneLayerId {
+    /// Creates a scene layer identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Stable scene effect identifier.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SceneEffectId(String);
+
+impl SceneEffectId {
+    /// Creates a scene effect identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Stable opacity group identifier.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OpacityGroupId(String);
+
+impl OpacityGroupId {
+    /// Creates an opacity group identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Offscreen compositing group opacity applied to a scene subtree.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpacityGroup {
+    id: OpacityGroupId,
+    opacity: f32,
+}
+
+impl OpacityGroup {
+    /// Creates an opacity group record.
+    #[must_use]
+    pub const fn new(id: OpacityGroupId, opacity: f32) -> Self {
+        Self { id, opacity }
+    }
+
+    /// Returns the opacity group ID.
+    #[must_use]
+    pub const fn id(&self) -> &OpacityGroupId {
+        &self.id
+    }
+
+    /// Returns the group opacity.
+    #[must_use]
+    pub const fn opacity(&self) -> f32 {
+        self.opacity
+    }
+}
+
 /// Scene invalidation reason.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InvalidationReason {
@@ -192,6 +273,9 @@ pub struct SceneNode {
     opacity: f32,
     hit_test: Option<HitTestGeometry>,
     accessibility_ref: Option<AccessibilityRef>,
+    layer_id: Option<SceneLayerId>,
+    opacity_group: Option<OpacityGroup>,
+    effect_refs: Vec<SceneEffectId>,
     invalidated: bool,
     invalidation_reasons: Vec<InvalidationReason>,
     dirty_bounds: Option<Geometry>,
@@ -211,6 +295,9 @@ impl SceneNode {
             opacity: 1.0,
             hit_test: None,
             accessibility_ref: None,
+            layer_id: None,
+            opacity_group: None,
+            effect_refs: Vec::new(),
             invalidated: false,
             invalidation_reasons: Vec::new(),
             dirty_bounds: None,
@@ -273,6 +360,29 @@ impl SceneNode {
         self
     }
 
+    /// Sets the scene layer this node contributes to.
+    #[must_use]
+    pub fn with_layer_id(mut self, layer_id: SceneLayerId) -> Self {
+        self.layer_id = Some(layer_id);
+        self
+    }
+
+    /// Sets the offscreen opacity group rooted at this node.
+    #[must_use]
+    pub fn with_opacity_group(mut self, opacity_group: OpacityGroup) -> Self {
+        self.opacity_group = Some(opacity_group);
+        self
+    }
+
+    /// Adds an effect reference applied to this node.
+    #[must_use]
+    pub fn with_effect_ref(mut self, effect_ref: SceneEffectId) -> Self {
+        if !self.effect_refs.contains(&effect_ref) {
+            self.effect_refs.push(effect_ref);
+        }
+        self
+    }
+
     /// Returns z-order.
     #[must_use]
     pub const fn z_order(&self) -> i32 {
@@ -313,6 +423,24 @@ impl SceneNode {
     #[must_use]
     pub fn accessibility_ref(&self) -> Option<&AccessibilityRef> {
         self.accessibility_ref.as_ref()
+    }
+
+    /// Returns the scene layer this node contributes to.
+    #[must_use]
+    pub fn layer_id(&self) -> Option<&SceneLayerId> {
+        self.layer_id.as_ref()
+    }
+
+    /// Returns the opacity group rooted at this node.
+    #[must_use]
+    pub fn opacity_group(&self) -> Option<&OpacityGroup> {
+        self.opacity_group.as_ref()
+    }
+
+    /// Returns effect references applied to this node.
+    #[must_use]
+    pub fn effect_refs(&self) -> &[SceneEffectId] {
+        &self.effect_refs
     }
 
     /// Returns whether this node is invalidated.
@@ -372,6 +500,9 @@ impl SceneNode {
             self.opacity.to_bits(),
             self.hit_test,
             &self.accessibility_ref,
+            &self.layer_id,
+            &self.opacity_group,
+            &self.effect_refs,
         );
         let other_render_record = (
             &other.id,
@@ -382,6 +513,9 @@ impl SceneNode {
             other.opacity.to_bits(),
             other.hit_test,
             &other.accessibility_ref,
+            &other.layer_id,
+            &other.opacity_group,
+            &other.effect_refs,
         );
         self_render_record == other_render_record
     }
@@ -412,6 +546,12 @@ pub enum SceneGraphError {
     InvalidOpacity(String),
     /// Accessibility reference is empty.
     InvalidAccessibilityRef(String),
+    /// Scene layer identifier is empty or unstable.
+    InvalidLayerId(String),
+    /// Scene effect reference is empty or unstable.
+    InvalidEffectRef(String),
+    /// Opacity group identifier is empty or unstable.
+    InvalidOpacityGroupId(String),
 }
 
 /// Deterministic retained-scene diff used for repaint and cache decisions.
@@ -624,6 +764,45 @@ impl SceneGraph {
         children
     }
 
+    /// Returns all nodes in deterministic paint order.
+    #[must_use]
+    pub fn nodes_in_paint_order(&self) -> Vec<&SceneNode> {
+        let Some(root) = self.entries.iter().find(|entry| entry.parent.is_none()) else {
+            return Vec::new();
+        };
+        let mut nodes = Vec::new();
+        self.push_paint_order(root.node.id(), &mut nodes);
+        nodes
+    }
+
+    /// Resolves effective opacity for a node.
+    ///
+    /// Node opacity applies to the node render record. Opacity groups apply to the subtree rooted at
+    /// the group node, so ancestor groups multiply into descendant opacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SceneGraphError::MissingNode`] when the node does not exist.
+    pub fn effective_opacity(&self, node_id: &SceneNodeId) -> Result<f32, SceneGraphError> {
+        let mut path = Vec::new();
+        let mut current = Some(node_id.clone());
+        while let Some(id) = current.as_ref() {
+            let Some(entry) = self.entry(id) else {
+                return Err(SceneGraphError::MissingNode(id.as_str().to_string()));
+            };
+            path.push(entry.node.id().clone());
+            current.clone_from(&entry.parent);
+        }
+
+        let mut opacity = self.node(node_id).map_or(1.0, SceneNode::opacity);
+        for id in path.iter().rev() {
+            if let Some(group) = self.node(id).and_then(SceneNode::opacity_group) {
+                opacity *= group.opacity();
+            }
+        }
+        Ok(opacity)
+    }
+
     /// Computes deterministic scene changes needed for repaint and cache invalidation.
     ///
     /// # Errors
@@ -671,6 +850,34 @@ impl SceneGraph {
             .iter()
             .position(|entry| entry.node.id().as_str() == node_id.as_str())
     }
+
+    fn entry(&self, node_id: &SceneNodeId) -> Option<&SceneEntry> {
+        self.entries
+            .iter()
+            .find(|entry| entry.node.id().as_str() == node_id.as_str())
+    }
+
+    fn push_paint_order<'a>(&'a self, node_id: &SceneNodeId, nodes: &mut Vec<&'a SceneNode>) {
+        let Some(entry) = self.entry(node_id) else {
+            return;
+        };
+        nodes.push(&entry.node);
+        let mut child_ids = entry.children.clone();
+        child_ids.sort_by(|left, right| {
+            let left_node = self.node(left);
+            let right_node = self.node(right);
+            match (left_node, right_node) {
+                (Some(left_node), Some(right_node)) => left_node
+                    .z_order()
+                    .cmp(&right_node.z_order())
+                    .then_with(|| left_node.id().cmp(right_node.id())),
+                _ => left.cmp(right),
+            }
+        });
+        for child_id in child_ids {
+            self.push_paint_order(&child_id, nodes);
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -704,20 +911,66 @@ fn validate_scene_node(node: &SceneNode) -> Result<(), SceneGraphError> {
             node.id().as_str().to_string(),
         ));
     }
+    if let Some(layer_id) = node.layer_id() {
+        validate_layer_id(layer_id)?;
+    }
+    if let Some(opacity_group) = node.opacity_group() {
+        validate_opacity_group(opacity_group)?;
+    }
+    for effect_ref in node.effect_refs() {
+        validate_effect_ref(effect_ref)?;
+    }
     Ok(())
 }
 
 fn validate_node_id(node_id: &SceneNodeId) -> Result<(), SceneGraphError> {
-    let value = node_id.as_str();
-    if !value.trim().is_empty()
+    if is_stable_identifier(node_id.as_str()) {
+        Ok(())
+    } else {
+        Err(SceneGraphError::InvalidNodeId(node_id.as_str().to_string()))
+    }
+}
+
+fn validate_layer_id(layer_id: &SceneLayerId) -> Result<(), SceneGraphError> {
+    if is_stable_identifier(layer_id.as_str()) {
+        Ok(())
+    } else {
+        Err(SceneGraphError::InvalidLayerId(
+            layer_id.as_str().to_string(),
+        ))
+    }
+}
+
+fn validate_effect_ref(effect_ref: &SceneEffectId) -> Result<(), SceneGraphError> {
+    if is_stable_identifier(effect_ref.as_str()) {
+        Ok(())
+    } else {
+        Err(SceneGraphError::InvalidEffectRef(
+            effect_ref.as_str().to_string(),
+        ))
+    }
+}
+
+fn validate_opacity_group(opacity_group: &OpacityGroup) -> Result<(), SceneGraphError> {
+    if !is_stable_identifier(opacity_group.id().as_str()) {
+        return Err(SceneGraphError::InvalidOpacityGroupId(
+            opacity_group.id().as_str().to_string(),
+        ));
+    }
+    if opacity_group.opacity().is_finite() && (0.0..=1.0).contains(&opacity_group.opacity()) {
+        Ok(())
+    } else {
+        Err(SceneGraphError::InvalidOpacity(
+            opacity_group.id().as_str().to_string(),
+        ))
+    }
+}
+
+fn is_stable_identifier(value: &str) -> bool {
+    !value.trim().is_empty()
         && value.chars().all(|character| {
             character.is_ascii_alphanumeric() || character == '-' || character == '_'
         })
-    {
-        Ok(())
-    } else {
-        Err(SceneGraphError::InvalidNodeId(value.to_string()))
-    }
 }
 
 fn validate_geometry(node_id: &SceneNodeId, geometry: Geometry) -> Result<(), SceneGraphError> {

@@ -154,7 +154,10 @@ impl From<SceneGraphError> for RuntimeSceneError {
             | SceneGraphError::InvalidGeometry(id)
             | SceneGraphError::InvalidTransform(id)
             | SceneGraphError::InvalidOpacity(id)
-            | SceneGraphError::InvalidAccessibilityRef(id) => Self::InvalidNode(id),
+            | SceneGraphError::InvalidAccessibilityRef(id)
+            | SceneGraphError::InvalidLayerId(id)
+            | SceneGraphError::InvalidEffectRef(id)
+            | SceneGraphError::InvalidOpacityGroupId(id) => Self::InvalidNode(id),
         }
     }
 }

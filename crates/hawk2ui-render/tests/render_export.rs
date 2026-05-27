@@ -1,7 +1,7 @@
 use hawk2ui_render::RendererBackend;
 use hawk2ui_render::{
-    AccessibilityRef, Geometry, HitTestGeometry, InvalidationReason, SceneGraph, SceneNode,
-    SceneNodeId, Transform,
+    AccessibilityRef, Geometry, HitTestGeometry, InvalidationReason, OpacityGroup, OpacityGroupId,
+    SceneEffectId, SceneGraph, SceneLayerId, SceneNode, SceneNodeId, Transform,
 };
 
 #[test]
@@ -150,6 +150,71 @@ fn scene_graph_diff_reports_changes_repaint_bounds_and_cache_invalidations() {
         diff.cache_invalidated_node_ids(),
         &[SceneNodeId::new("meter"), SceneNodeId::new("root")]
     );
+}
+
+#[test]
+fn scene_graph_records_layers_effects_opacity_groups_and_paint_order() {
+    let graph = SceneGraph::new(
+        SceneNode::new(SceneNodeId::new("root"))
+            .with_layer_id(SceneLayerId::new("root-layer"))
+            .with_opacity_group(OpacityGroup::new(OpacityGroupId::new("root-group"), 0.8)),
+    )
+    .with_child(
+        SceneNodeId::new("root"),
+        SceneNode::new(SceneNodeId::new("front"))
+            .with_z_order(20)
+            .with_opacity(0.5)
+            .with_layer_id(SceneLayerId::new("content"))
+            .with_effect_ref(SceneEffectId::new("front-shadow")),
+    )
+    .expect("front child insertion succeeds")
+    .with_child(
+        SceneNodeId::new("root"),
+        SceneNode::new(SceneNodeId::new("back"))
+            .with_z_order(10)
+            .with_layer_id(SceneLayerId::new("content")),
+    )
+    .expect("back child insertion succeeds")
+    .with_child(
+        SceneNodeId::new("root"),
+        SceneNode::new(SceneNodeId::new("alpha"))
+            .with_z_order(20)
+            .with_layer_id(SceneLayerId::new("content")),
+    )
+    .expect("alpha child insertion succeeds")
+    .with_child(
+        SceneNodeId::new("front"),
+        SceneNode::new(SceneNodeId::new("knob"))
+            .with_z_order(5)
+            .with_opacity_group(OpacityGroup::new(OpacityGroupId::new("knob-group"), 0.25))
+            .with_effect_ref(SceneEffectId::new("knob-glow")),
+    )
+    .expect("knob child insertion succeeds");
+
+    let paint_order: Vec<_> = graph
+        .nodes_in_paint_order()
+        .iter()
+        .map(|node| node.id().as_str())
+        .collect();
+    assert_eq!(paint_order, ["root", "back", "alpha", "front", "knob"]);
+
+    let front = graph.node(&SceneNodeId::new("front")).expect("front node");
+    assert_eq!(front.layer_id().unwrap().as_str(), "content");
+    assert_eq!(front.effect_refs(), &[SceneEffectId::new("front-shadow")]);
+    assert_eq!(
+        graph
+            .effective_opacity(&SceneNodeId::new("front"))
+            .expect("front opacity resolves"),
+        0.4
+    );
+    assert_eq!(
+        graph
+            .effective_opacity(&SceneNodeId::new("knob"))
+            .expect("knob opacity resolves"),
+        0.2
+    );
+
+    graph.validate().expect("scene metadata is valid");
 }
 
 #[test]

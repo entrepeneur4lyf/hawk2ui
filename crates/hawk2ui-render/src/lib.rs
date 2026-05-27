@@ -22,8 +22,9 @@ pub use layer::{
     PathLayer, RoundedRect, ShadowLayer, Stroke, TextLayer,
 };
 pub use scene::{
-    AccessibilityRef, Geometry, HitTestGeometry, InvalidationReason, SceneGraph, SceneGraphDiff,
-    SceneGraphError, SceneNode, SceneNodeId, Transform,
+    AccessibilityRef, Geometry, HitTestGeometry, InvalidationReason, OpacityGroup, OpacityGroupId,
+    SceneEffectId, SceneGraph, SceneGraphDiff, SceneGraphError, SceneLayerId, SceneNode,
+    SceneNodeId, Transform,
 };
 pub use text::{
     DeterministicTextMeasurer, FontRegistry, GlyphCacheKey, LineBreakMode, TextMeasureOutput,
