@@ -1333,11 +1333,15 @@ Evidence:
 - `BaseviewPluginAdapter` uses parent fixtures and records events; it does not open/attach a real editor surface.
 - Source imports Baseview open-option types and validates parent handles, metrics, resize, DPI,
   focus, pointer, keyboard, repaint, and teardown contracts through fixture tests.
+- `BaseviewPluginAdapter::render_scene_frame` now replays a `RuntimeSceneFrame` through the Skia
+  backend, retains the presented snapshot, tracks frame count, and sizes the render target from
+  plugin host metrics across resize/DPI changes.
 
 Status:
 
-- Partially open: fixture/contract coverage is useful, but no source path currently opens a
-  real parented Baseview editor surface or presents Skia/Hawk2UI pixels into that surface.
+- Partially open: fixture/contract coverage and runtime-scene Skia presentation exist, but no source
+  path currently opens a real parented Baseview editor surface or binds the retained Skia snapshot
+  to an actual DAW-owned native child surface.
 
 Required remediation:
 
@@ -1401,6 +1405,9 @@ Status:
 - CLAP package materialization now writes `Contents/Resources/clap-entry.toml` and includes it in required file and hash verification coverage.
 - CLAP `cdylib` scaffold generation now writes a Cargo project with a `clap_entry` export, plugin descriptor, plugin factory callbacks, lifecycle callbacks, realtime-safe bypass processing callback, audio-port extension, parameter extension generated from `ParameterModel`, state save/load extension, stateful GUI/editor extension configured from `PluginEditor`, and create-plugin path; tests compile it to a release dynamic library and host-load it through a generated external checker that resolves the entry, obtains the factory, reads the descriptor, creates a plugin instance, invokes lifecycle/process callbacks, reads parameter metadata/default values, round-trips state, and exercises GUI preferred API, create, parent attachment, resize, show/hide, and destroy.
 - Package materialization can now embed a sealed `Hawk2UI` runtime artifact payload under `Contents/Resources/hawk2ui-runtime-artifact.json`, reference it from `hawk2ui-artifact.toml`, include it in hash coverage, and fail package verification when the payload is missing or tampered.
+- Package materialization now emits `Contents/Resources/hawk2ui-editor.toml` for runtime-backed
+  packages, declaring the `baseview` host adapter, `skia` renderer, runtime artifact path, format,
+  plugin ID, and parameter count, and includes that descriptor in package hash verification.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:

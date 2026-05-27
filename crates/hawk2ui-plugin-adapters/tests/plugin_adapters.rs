@@ -276,10 +276,23 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
         artifact_descriptor
             .contains("runtime_artifact = \"Contents/Resources/hawk2ui-runtime-artifact.json\"")
     );
+    let editor_descriptor_path = root
+        .join("Contents")
+        .join("Resources")
+        .join("hawk2ui-editor.toml");
+    let editor_descriptor =
+        std::fs::read_to_string(&editor_descriptor_path).expect("editor descriptor reads");
+    assert!(editor_descriptor.contains("host_adapter = \"baseview\""));
+    assert!(editor_descriptor.contains("renderer = \"skia\""));
+    assert!(
+        editor_descriptor
+            .contains("runtime_artifact = \"Contents/Resources/hawk2ui-runtime-artifact.json\"")
+    );
 
     let hashes =
         std::fs::read_to_string(&outputs[0].hash_manifest_path).expect("hash manifest reads");
     assert!(hashes.contains("Contents/Resources/hawk2ui-runtime-artifact.json"));
+    assert!(hashes.contains("Contents/Resources/hawk2ui-editor.toml"));
     assert_eq!(
         plan.verify_materialized(&outputs).status(),
         VerificationStatus::Passed

@@ -19,3 +19,7 @@ workspace = true
 [dependencies]
 baseview = "0.1.1"
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
+hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
+hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
+hawk2ui-render-skia = { version = "0.1.0", path = "../hawk2ui-render-skia" }
+hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }

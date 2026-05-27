@@ -6,6 +6,9 @@ use hawk2ui_host::{
     HostPlatformHandle, KeyboardInput, PluginEditorConfig, PluginHostAdapter, PluginHostEvent,
     PointerInput, SurfaceMetrics, SurfaceOwnership,
 };
+use hawk2ui_render::{Color, RendererBackend};
+use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend, SkiaSurfaceConfig};
+use hawk2ui_runtime::RuntimeSceneFrame;
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-host-baseview";
@@ -154,6 +157,8 @@ pub struct BaseviewPluginAdapter {
     requested_process_quit: bool,
     events: Vec<PluginHostEvent>,
     repaint_reasons: Vec<String>,
+    presented_frame_count: u64,
+    last_presented_frame: Option<SkiaFrameSnapshot>,
 }
 
 impl BaseviewPluginAdapter {
@@ -189,6 +194,8 @@ impl BaseviewPluginAdapter {
             destroyed: false,
             requested_process_quit: false,
             repaint_reasons: Vec::new(),
+            presented_frame_count: 0,
+            last_presented_frame: None,
         })
     }
 
@@ -220,6 +227,18 @@ impl BaseviewPluginAdapter {
     #[must_use]
     pub fn repaint_reasons(&self) -> &[String] {
         &self.repaint_reasons
+    }
+
+    /// Returns the number of runtime scene frames presented by the adapter.
+    #[must_use]
+    pub const fn presented_frame_count(&self) -> u64 {
+        self.presented_frame_count
+    }
+
+    /// Returns the last presented Skia frame snapshot.
+    #[must_use]
+    pub const fn last_presented_frame(&self) -> Option<&SkiaFrameSnapshot> {
+        self.last_presented_frame.as_ref()
     }
 
     /// Returns the Baseview open options used for native attachment.
@@ -264,6 +283,58 @@ impl BaseviewPluginAdapter {
         self.open_options.scale = WindowScalePolicy::ScaleFactor(scale_factor);
         self.events.push(PluginHostEvent::DpiChanged(scale_factor));
         Ok(())
+    }
+
+    /// Renders a runtime scene frame into the plugin editor surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the editor is destroyed, metrics are invalid, or Skia
+    /// cannot present the frame.
+    pub fn render_scene_frame(
+        &mut self,
+        scene: &RuntimeSceneFrame,
+    ) -> Result<&SkiaFrameSnapshot, BaseviewHostError> {
+        self.ensure_accepts_host_event()?;
+        validate_baseview_metrics(self.config.metrics)?;
+        let (width, height) = self.config.metrics.physical_size();
+        let dpi_scale = scale_factor_to_f32(self.config.metrics.scale_factor)?;
+        let frame_index = self.presented_frame_count;
+        let mut backend = SkiaRendererBackend::new();
+        backend
+            .create_surface_with_config(SkiaSurfaceConfig::cpu_raster(
+                "baseview-editor",
+                width,
+                height,
+            ))
+            .map_err(|error| map_backend_error(&error))?;
+        backend
+            .begin_frame("baseview-editor")
+            .map_err(|error| map_backend_error(&error))?;
+        backend
+            .clear(Color::rgba(0, 0, 0, 0))
+            .map_err(|error| map_backend_error(&error))?;
+        backend
+            .draw_runtime_scene_frame(scene, frame_index, dpi_scale)
+            .map_err(|error| map_backend_error(&error))?;
+        backend
+            .end_frame("baseview-editor")
+            .map_err(|error| map_backend_error(&error))?;
+        let snapshot = backend
+            .frame_snapshot("baseview-editor")
+            .map_err(|error| map_backend_error(&error))?
+            .clone();
+        self.presented_frame_count = self.presented_frame_count.saturating_add(1);
+        self.last_presented_frame = Some(snapshot);
+        self.events.push(PluginHostEvent::RepaintScheduled(
+            "runtime scene presented".into(),
+        ));
+        self.last_presented_frame.as_ref().ok_or_else(|| {
+            BaseviewHostError::new(
+                "baseview.render.snapshot-missing",
+                "baseview render completed without a retained frame snapshot",
+            )
+        })
     }
 
     fn accepts_host_event(&self) -> bool {
@@ -312,6 +383,32 @@ fn validate_baseview_metrics(metrics: SurfaceMetrics) -> Result<(), BaseviewHost
             "baseview editor metrics must be finite and greater than zero",
         ))
     }
+}
+
+fn scale_factor_to_f32(scale_factor: f64) -> Result<f32, BaseviewHostError> {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return Err(BaseviewHostError::new(
+            "baseview.metrics.invalid",
+            "baseview editor metrics must be finite and greater than zero",
+        ));
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let converted = scale_factor as f32;
+    if converted.is_finite() && converted > 0.0 {
+        Ok(converted)
+    } else {
+        Err(BaseviewHostError::new(
+            "baseview.metrics.invalid",
+            "baseview editor metrics must be representable as a positive f32 scale",
+        ))
+    }
+}
+
+fn map_backend_error(error: &hawk2ui_render::BackendError) -> BaseviewHostError {
+    BaseviewHostError::new(
+        format!("baseview.render.{}", error.diagnostic().rule()),
+        error.diagnostic().message(),
+    )
 }
 
 impl PluginHostAdapter for BaseviewPluginAdapter {

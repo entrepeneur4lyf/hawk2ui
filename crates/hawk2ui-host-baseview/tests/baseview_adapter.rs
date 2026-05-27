@@ -3,6 +3,12 @@ use hawk2ui_host::{
     PluginParentHandle, PointerInput, RendererResizeBridge, SurfaceMetrics,
 };
 use hawk2ui_host_baseview::{BaseviewParentFixture, BaseviewPluginAdapter};
+use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
+use hawk2ui_render::Color;
+use hawk2ui_runtime::{
+    RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
+    RuntimeVisual,
+};
 
 #[test]
 fn baseview_adapter_attaches_editor_to_daw_owned_parent() {
@@ -148,6 +154,56 @@ fn baseview_adapter_routes_resize_dpi_repaint_focus_keyboard_and_pointer() {
 }
 
 #[test]
+fn baseview_adapter_renders_runtime_scene_into_presented_skia_snapshot() {
+    let mut adapter = BaseviewPluginAdapter::attach(
+        PluginEditorConfig::new(
+            "editor",
+            PluginParentHandle::opaque("parent"),
+            SurfaceMetrics::new(320.0, 180.0, 1.0),
+        ),
+        BaseviewParentFixture::linux_xwayland(),
+    )
+    .expect("baseview editor attaches");
+    adapter.drain_events();
+
+    let first_frame = runtime_scene_frame(320.0, 180.0, Color::rgba(12, 34, 56, 255));
+    let snapshot = adapter
+        .render_scene_frame(&first_frame)
+        .expect("runtime frame renders into plugin surface");
+
+    assert_eq!((snapshot.width(), snapshot.height()), (320, 180));
+    assert!(snapshot.pixels().iter().any(|pixel| *pixel == 0x0c2238));
+    assert_eq!(adapter.presented_frame_count(), 1);
+    assert_eq!(
+        adapter
+            .last_presented_frame()
+            .expect("presented snapshot is retained")
+            .pixel_at(10, 10),
+        Some(0x0c2238)
+    );
+
+    adapter
+        .try_host_resize(SurfaceMetrics::new(640.0, 360.0, 2.0))
+        .expect("host resize updates render target");
+    let resized_frame = runtime_scene_frame(640.0, 360.0, Color::rgba(90, 120, 30, 255));
+    let resized_snapshot = adapter
+        .render_scene_frame(&resized_frame)
+        .expect("resized runtime frame renders into plugin surface");
+
+    assert_eq!(
+        (resized_snapshot.width(), resized_snapshot.height()),
+        (1280, 720)
+    );
+    assert!(
+        resized_snapshot
+            .pixels()
+            .iter()
+            .any(|pixel| *pixel == 0x5a781e)
+    );
+    assert_eq!(adapter.presented_frame_count(), 2);
+}
+
+#[test]
 fn baseview_adapter_teardown_destroys_editor_without_process_quit() {
     let mut adapter = BaseviewPluginAdapter::attach(
         PluginEditorConfig::new(
@@ -245,4 +301,16 @@ fn baseview_adapter_rejects_native_wayland_parent_handles() {
     .expect_err("baseview 0.1 Linux backend cannot attach native Wayland parents");
 
     assert_eq!(error.rule(), "baseview.platform.unsupported");
+}
+
+fn runtime_scene_frame(width: f32, height: f32, color: Color) -> RuntimeSceneFrame {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(width, height)),
+        RuntimeVisual::Fill(color),
+    ));
+    RuntimeSceneBridge::new(Viewport::new(width, height))
+        .build(&tree)
+        .expect("runtime scene frame builds")
 }

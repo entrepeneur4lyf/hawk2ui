@@ -1088,6 +1088,9 @@ impl PackageTargetPlan {
             })?;
             write_package_file(&runtime_artifact_path, payload)?;
             package_files.push(runtime_artifact_path);
+            let editor_descriptor_path = resources_path.join("hawk2ui-editor.toml");
+            write_package_file(&editor_descriptor_path, self.editor_descriptor())?;
+            package_files.push(editor_descriptor_path);
         }
         package_files.extend(self.write_format_layout(output_path, &resources_path)?);
         let hash_manifest_path = resources_path.join("hawk2ui-hashes.toml");
@@ -1153,8 +1156,25 @@ impl PackageTargetPlan {
                 "runtime_artifact = {}",
                 quoted_metadata_string("Contents/Resources/hawk2ui-runtime-artifact.json")
             );
+            let _ = writeln!(
+                descriptor,
+                "editor_descriptor = {}",
+                quoted_metadata_string("Contents/Resources/hawk2ui-editor.toml")
+            );
         }
         descriptor
+    }
+
+    fn editor_descriptor(&self) -> String {
+        format!(
+            "host_adapter = {}\nrenderer = {}\nruntime_artifact = {}\nformat = {}\nplugin_id = {}\nparameter_count = {}\n",
+            quoted_metadata_string("baseview"),
+            quoted_metadata_string("skia"),
+            quoted_metadata_string("Contents/Resources/hawk2ui-runtime-artifact.json"),
+            quoted_metadata_string(self.format.manifest_key()),
+            quoted_metadata_string(&self.metadata.id),
+            self.parameter_count
+        )
     }
 
     fn write_format_layout(
@@ -1260,6 +1280,7 @@ impl PackageTargetPlan {
         ];
         if self.runtime_artifact.is_some() {
             files.push(resources_path.join("hawk2ui-runtime-artifact.json"));
+            files.push(resources_path.join("hawk2ui-editor.toml"));
         }
         match self.format {
             PackageFormat::Clap => {
