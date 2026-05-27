@@ -2,6 +2,7 @@
 //! Production plugin and package adapters for `Hawk2UI` `CLAP`, `VST3`, AU, standalone, and desktop outputs.
 
 use std::{
+    fmt::Write as _,
     fs,
     path::Component,
     path::{Path, PathBuf},
@@ -195,17 +196,17 @@ impl PackageTargetPlan {
             .metadata
             .features
             .iter()
-            .map(|feature| format!("\"{feature}\""))
+            .map(|feature| quoted_metadata_string(feature))
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "format = \"{}\"\nid = \"{}\"\ndisplay_name = \"{}\"\nvendor = \"{}\"\nversion = \"{}\"\ncategory = \"{}\"\nfeatures = [{}]\nparameter_count = {}\n",
-            self.format.manifest_key(),
-            self.metadata.id,
-            self.metadata.display_name,
-            self.metadata.vendor,
-            self.metadata.version,
-            self.metadata.category,
+            "format = {}\nid = {}\ndisplay_name = {}\nvendor = {}\nversion = {}\ncategory = {}\nfeatures = [{}]\nparameter_count = {}\n",
+            quoted_metadata_string(self.format.manifest_key()),
+            quoted_metadata_string(&self.metadata.id),
+            quoted_metadata_string(&self.metadata.display_name),
+            quoted_metadata_string(&self.metadata.vendor),
+            quoted_metadata_string(&self.metadata.version),
+            quoted_metadata_string(&self.metadata.category),
             features,
             self.parameter_count
         )
@@ -213,10 +214,15 @@ impl PackageTargetPlan {
 
     fn artifact_descriptor(&self) -> String {
         format!(
-            "artifact_format = \"hawk2ui-plugin-package\"\nformat = \"{}\"\nentry_library = \"{}.{}\"\nmetadata_manifest = \"hawk2ui-package.toml\"\nparameter_count = {}\n",
-            self.format.manifest_key(),
-            self.metadata.display_name,
-            self.format.extension(),
+            "artifact_format = {}\nformat = {}\nentry_library = {}\nmetadata_manifest = {}\nparameter_count = {}\n",
+            quoted_metadata_string("hawk2ui-plugin-package"),
+            quoted_metadata_string(self.format.manifest_key()),
+            quoted_metadata_string(&format!(
+                "{}.{}",
+                self.metadata.display_name,
+                self.format.extension()
+            )),
+            quoted_metadata_string("hawk2ui-package.toml"),
             self.parameter_count
         )
     }
@@ -276,32 +282,38 @@ impl PackageTargetPlan {
 
     fn clap_manifest(&self) -> String {
         format!(
-            "{{\n  \"id\": \"{}\",\n  \"name\": \"{}\",\n  \"vendor\": \"{}\",\n  \"version\": \"{}\"\n}}\n",
-            self.metadata.id,
-            self.metadata.display_name,
-            self.metadata.vendor,
-            self.metadata.version
+            "{{\n  \"id\": {},\n  \"name\": {},\n  \"vendor\": {},\n  \"version\": {}\n}}\n",
+            quoted_metadata_string(&self.metadata.id),
+            quoted_metadata_string(&self.metadata.display_name),
+            quoted_metadata_string(&self.metadata.vendor),
+            quoted_metadata_string(&self.metadata.version)
         )
     }
 
     fn info_plist(&self, package_type: &str) -> String {
         format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>{}</string><key>CFBundleName</key><string>{}</string><key>Hawk2UIPackageType</key><string>{}</string></dict></plist>\n",
-            self.metadata.id, self.metadata.display_name, package_type
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>{}</string><key>CFBundleName</key><string>{}</string><key>Hawk2UIVendor</key><string>{}</string><key>Hawk2UIPackageType</key><string>{}</string></dict></plist>\n",
+            xml_text(&self.metadata.id),
+            xml_text(&self.metadata.display_name),
+            xml_text(&self.metadata.vendor),
+            xml_text(package_type)
         )
     }
 
     fn launch_manifest(&self) -> String {
         format!(
-            "entry = \"Contents/MacOS/{}\"\nid = \"{}\"\n",
-            self.metadata.display_name, self.metadata.id
+            "entry = {}\nid = {}\n",
+            quoted_metadata_string(&format!("Contents/MacOS/{}", self.metadata.display_name)),
+            quoted_metadata_string(&self.metadata.id)
         )
     }
 
     fn entry_descriptor(&self, format: &str) -> String {
         format!(
             "hawk2ui package entry\nformat={format}\nid={}\nversion={}\nparameters={}\nartifact_descriptor=Contents/Resources/hawk2ui-artifact.toml\n",
-            self.metadata.id, self.metadata.version, self.parameter_count
+            descriptor_value(&self.metadata.id),
+            descriptor_value(&self.metadata.version),
+            self.parameter_count
         )
     }
 
@@ -636,6 +648,84 @@ fn validate_request(request: &PackageRequest) -> Result<(), PackagePlanningError
     }
 }
 
+fn quoted_metadata_string(value: &str) -> String {
+    format!("\"{}\"", escaped_metadata_string(value))
+}
+
+fn escaped_metadata_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => {
+                let _ = write!(escaped, "\\u{:04x}", u32::from(ch));
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn unescape_metadata_string(value: &str) -> Option<String> {
+    let mut unescaped = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            unescaped.push(ch);
+            continue;
+        }
+        match chars.next()? {
+            '"' => unescaped.push('"'),
+            '\\' => unescaped.push('\\'),
+            'n' => unescaped.push('\n'),
+            'r' => unescaped.push('\r'),
+            't' => unescaped.push('\t'),
+            'u' => {
+                let mut codepoint = String::with_capacity(4);
+                for _ in 0..4 {
+                    codepoint.push(chars.next()?);
+                }
+                let codepoint = u32::from_str_radix(&codepoint, 16).ok()?;
+                unescaped.push(char::from_u32(codepoint)?);
+            }
+            _ => return None,
+        }
+    }
+    Some(unescaped)
+}
+
+fn xml_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn descriptor_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\\' => escaped.push_str("\\\\"),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 fn materialization_error(
     rule: impl Into<String>,
     message: impl Into<String>,
@@ -697,7 +787,7 @@ fn hash_manifest(root: &Path, files: &[PathBuf]) -> Result<String, PackageMateri
     let mut manifest = String::from("algorithm = \"sha256\"\n\n");
     for (path, hash) in entries {
         manifest.push_str("[[files]]\npath = \"");
-        manifest.push_str(&path);
+        manifest.push_str(&escaped_metadata_string(&path));
         manifest.push_str("\"\nhash = \"");
         manifest.push_str(&hash);
         manifest.push_str("\"\n\n");
@@ -748,7 +838,7 @@ fn parse_hash_manifest(manifest: &str) -> Option<Vec<(String, String)>> {
             .strip_prefix("path = \"")
             .and_then(|value| value.strip_suffix('"'))
         {
-            current_path = Some(value.to_string());
+            current_path = Some(unescape_metadata_string(value)?);
             continue;
         }
         if let Some(value) = line

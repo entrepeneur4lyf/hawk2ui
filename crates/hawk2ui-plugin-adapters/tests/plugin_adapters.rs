@@ -249,6 +249,60 @@ fn plugin_adapters_verify_materialized_rejects_tampered_package_payloads() {
 }
 
 #[test]
+fn plugin_adapters_escape_package_metadata_in_generated_descriptors() {
+    let metadata = FormatMetadata::new("com.hawk2ui.escape", "Quote\"Name&<", "Hawk \"A&B\" <Co>")
+        .category("audio \"effect\"")
+        .feature("quoted \"feature\"");
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-plugin-escape-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Escape"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap)
+    .with_format(PackageFormat::Standalone);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+
+    let clap_root = outputs
+        .iter()
+        .find(|output| output.format == PackageFormat::Clap)
+        .map(|output| Path::new(&output.output_path))
+        .expect("clap output exists");
+    let standalone_root = outputs
+        .iter()
+        .find(|output| output.format == PackageFormat::Standalone)
+        .map(|output| Path::new(&output.output_path))
+        .expect("standalone output exists");
+    let package_manifest =
+        std::fs::read_to_string(clap_root.join("hawk2ui-package.toml")).expect("manifest reads");
+    let clap_manifest = std::fs::read_to_string(clap_root.join("Contents/Resources/clap.json"))
+        .expect("clap manifest reads");
+    let info_plist =
+        std::fs::read_to_string(standalone_root.join("Contents/Info.plist")).expect("plist reads");
+    let launch_manifest =
+        std::fs::read_to_string(standalone_root.join("Contents/Resources/hawk2ui-launch.toml"))
+            .expect("launch manifest reads");
+
+    assert!(package_manifest.contains(r#"display_name = "Quote\"Name&<""#));
+    assert!(package_manifest.contains(r#""quoted \"feature\"""#));
+    assert!(clap_manifest.contains(r#""name": "Quote\"Name&<""#));
+    assert!(clap_manifest.contains(r#""vendor": "Hawk \"A&B\" <Co>""#));
+    assert!(info_plist.contains("Quote&quot;Name&amp;&lt;"));
+    assert!(info_plist.contains("Hawk &quot;A&amp;B&quot; &lt;Co&gt;"));
+    assert!(launch_manifest.contains(r#"entry = "Contents/MacOS/Quote\"Name&<""#));
+}
+
+#[test]
 fn plugin_adapters_reject_invalid_package_metadata() {
     let request = PackageRequest::new(
         FormatMetadata::new("not-reverse-dns", "Demo", "Hawk2UI"),
