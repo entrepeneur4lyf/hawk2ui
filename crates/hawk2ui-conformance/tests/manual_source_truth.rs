@@ -142,10 +142,46 @@ fn manual_reference_links_cover_style_layout_and_rendering_source_truth() {
         "selector.state.unsupported",
         "selector.attribute.unsupported",
         "selector.list.unsupported",
+        "style.shorthand.unsupported",
+        "style.unit.unsupported",
+        "style.function.unsupported",
+        "style.keyframes.unsupported",
+        "style.at-rule.unsupported",
     ] {
         assert!(
             style.contains(selector_rule),
             "style manual missing selector diagnostic {selector_rule}"
+        );
+    }
+
+    for style_term in [
+        "Supported Units",
+        "Supported Functions",
+        "Rejected CSS",
+        "manual/css-subset-reference.md",
+    ] {
+        assert!(
+            style.contains(style_term),
+            "style manual missing {style_term}"
+        );
+    }
+
+    let css_subset = manual("manual/css-subset-reference.md");
+    for required_term in [
+        "Selectors",
+        "Properties",
+        "Units",
+        "Functions",
+        "Tokens",
+        "Inheritance",
+        "Shorthands",
+        "Transitions",
+        "Keyframes",
+        "Diagnostics",
+    ] {
+        assert!(
+            css_subset.contains(required_term),
+            "CSS subset reference missing {required_term}"
         );
     }
 

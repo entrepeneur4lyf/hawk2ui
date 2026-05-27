@@ -80,6 +80,49 @@ fn property_registry_validates_typed_values() {
 }
 
 #[test]
+fn style_subset_reference_lists_exact_supported_css_surface() {
+    let reference = hawk2ui_style::StyleSubsetReference::production();
+    let registry = PropertyRegistry::production();
+
+    assert_eq!(
+        reference.selectors(),
+        &[
+            "element",
+            "class",
+            "id",
+            "direct-child",
+            "descendant",
+            ":hawk(state)",
+        ]
+    );
+    assert_eq!(
+        reference.units(),
+        &["px", "unitless-zero", "unitless-number", "ms", "s"]
+    );
+    assert_eq!(reference.functions(), &["rgb()", "rgba()", "token()"]);
+    assert_eq!(
+        reference.rejected_syntax(),
+        &[
+            "selector-list",
+            "attribute-selector",
+            "sibling-combinator",
+            "non-hawk-pseudo-class",
+            "shorthand-property",
+            "css-var-function",
+            "keyframes",
+            "conditional-at-rule",
+        ]
+    );
+
+    for property in reference.properties() {
+        assert!(
+            registry.metadata(&PropertyId::new(*property)).is_some(),
+            "subset reference listed property missing from registry: {property}"
+        );
+    }
+}
+
+#[test]
 fn selector_subset_accepts_supported_forms() {
     let selectors = [
         ("button", "element(button)"),
@@ -321,6 +364,85 @@ fn style_compile_lowers_color_duration_shadow_and_transform_values() {
             .value(),
         &StyleValue::ColorRgba(240, 245, 255, 128)
     );
+}
+
+#[test]
+fn style_compile_accepts_exact_units_functions_tokens_and_transitions() {
+    let sheet = hawk2ui_style::compile_style_source(
+        r#"
+.exact {
+  font-size: 20px;
+  border-width: 0;
+  opacity: 0.75;
+  color: rgb(12, 24, 36);
+  background-color: token(color.surface);
+  transition-duration: 0.25s;
+}
+"#,
+    )
+    .expect("exact supported CSS subset must compile");
+    let rule = sheet.rule("class(exact)").expect("exact rule exists");
+
+    assert_eq!(
+        rule.declaration(&PropertyId::new("font-size"))
+            .unwrap()
+            .value(),
+        &StyleValue::LengthPx(20.0)
+    );
+    assert_eq!(
+        rule.declaration(&PropertyId::new("border-width"))
+            .unwrap()
+            .value(),
+        &StyleValue::LengthPx(0.0)
+    );
+    assert_eq!(
+        rule.declaration(&PropertyId::new("color")).unwrap().value(),
+        &StyleValue::ColorRgba(12, 24, 36, 255)
+    );
+    assert_eq!(
+        rule.declaration(&PropertyId::new("background-color"))
+            .unwrap()
+            .value(),
+        &StyleValue::TokenRef("color.surface".to_string())
+    );
+    assert_eq!(
+        rule.declaration(&PropertyId::new("transition-duration"))
+            .unwrap()
+            .value(),
+        &StyleValue::DurationMs(250)
+    );
+}
+
+#[test]
+fn style_compile_rejects_every_documented_unsupported_css_class() {
+    for (source, rule) in [
+        (".card { margin: 8px; }", "style.shorthand.unsupported"),
+        (
+            ".card { transition: opacity 120ms; }",
+            "style.shorthand.unsupported",
+        ),
+        (".card { font-size: 1rem; }", "style.unit.unsupported"),
+        (
+            ".card { color: var(--accent-color); }",
+            "style.function.unsupported",
+        ),
+        (
+            "@keyframes pulse { from { opacity: 0; } to { opacity: 1; } }",
+            "style.keyframes.unsupported",
+        ),
+        (
+            "@media (min-width: 400px) { .card { opacity: 1; } }",
+            "style.at-rule.unsupported",
+        ),
+    ] {
+        let error = hawk2ui_style::compile_style_source(source)
+            .expect_err("unsupported CSS class must fail");
+        assert_eq!(
+            error.diagnostics()[0].rule(),
+            rule,
+            "unexpected diagnostic for {source}"
+        );
+    }
 }
 
 #[test]

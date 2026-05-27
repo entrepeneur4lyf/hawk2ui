@@ -9,7 +9,7 @@ pub mod token;
 
 pub use compile::{
     CompiledDeclaration, CompiledStyleRule, CompiledStyleSheet, StyleCompileDiagnostic,
-    StyleCompileError, compile_style_source,
+    StyleCompileError, StyleSubsetReference, compile_style_source,
 };
 pub use property::{
     PropertyGroup, PropertyId, PropertyMetadata, PropertyRegistry, PropertyRequirement, StyleValue,

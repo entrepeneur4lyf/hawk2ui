@@ -19,6 +19,14 @@ The production property registry contains these property names:
 - `transition-duration`
 - `background-color`
 
+## Supported Units
+
+The compiler accepts `px`, unitless `0` for lengths, unitless numbers for numeric properties, `ms`, and `s`.
+
+## Supported Functions
+
+The compiler accepts `rgb()`, `rgba()`, and `token()`. Use `token(color.surface)` style references for themeable values; CSS `var()` is rejected.
+
 ## Selector Diagnostics
 
 The implemented selector validator reports these stable rules for unsupported selector forms:
@@ -27,6 +35,18 @@ The implemented selector validator reports these stable rules for unsupported se
 - `selector.state.unsupported`
 - `selector.attribute.unsupported`
 - `selector.list.unsupported`
+
+## Rejected CSS
+
+The implemented compiler reports these stable rules for unsupported style forms:
+
+- `style.shorthand.unsupported`
+- `style.unit.unsupported`
+- `style.function.unsupported`
+- `style.keyframes.unsupported`
+- `style.at-rule.unsupported`
+
+The full user-facing subset is maintained in `manual/css-subset-reference.md`.
 
 ## Authoring Guidance
 

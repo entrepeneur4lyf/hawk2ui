@@ -492,6 +492,25 @@ Acceptance:
 - User-facing style reference exists.
 - Tests cover every accepted and rejected syntax class.
 
+Status:
+
+- Implemented `StyleSubsetReference` as a machine-readable production CSS subset surface.
+- Enforced shorthand, unsupported unit, unsupported function, keyframe, and conditional at-rule
+  diagnostics after Lightning CSS parsing.
+- Added tests for accepted selectors, properties, units, functions, tokens, inheritance metadata,
+  transition duration, and every documented rejected syntax class.
+- Added `manual/css-subset-reference.md` with selectors, properties, units, functions, tokens,
+  inheritance, shorthands, transitions, keyframes, and diagnostics.
+- Expanded the user-facing style reference to document supported units/functions and rejected CSS
+  diagnostics.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this remediation item for production readiness:
+  the accepted subset is explicit in code and docs, unsupported CSS fails with stable diagnostics,
+  and Lightning CSS remains the parser source of truth before typed lowering. No corrective
+  revision is required before moving to cascade, inheritance, variables, and tokens.
+
 ### REM-STYLE-002: Complete Cascade, Inheritance, Variables, And Tokens
 
 Evidence:

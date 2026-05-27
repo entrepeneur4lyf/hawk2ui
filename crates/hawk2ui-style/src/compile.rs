@@ -59,6 +59,77 @@ impl StyleCompileError {
     }
 }
 
+/// Machine-readable description of the exact production CSS subset.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StyleSubsetReference;
+
+impl StyleSubsetReference {
+    /// Returns the production CSS subset reference.
+    #[must_use]
+    pub const fn production() -> Self {
+        Self
+    }
+
+    /// Returns supported selector forms.
+    #[must_use]
+    pub const fn selectors(&self) -> &'static [&'static str] {
+        &[
+            "element",
+            "class",
+            "id",
+            "direct-child",
+            "descendant",
+            ":hawk(state)",
+        ]
+    }
+
+    /// Returns supported style properties.
+    #[must_use]
+    pub const fn properties(&self) -> &'static [&'static str] {
+        &[
+            "display",
+            "font-size",
+            "color",
+            "border-width",
+            "border-radius",
+            "box-shadow",
+            "transform",
+            "opacity",
+            "overflow",
+            "--accent-color",
+            "transition-duration",
+            "background-color",
+        ]
+    }
+
+    /// Returns supported unit forms.
+    #[must_use]
+    pub const fn units(&self) -> &'static [&'static str] {
+        &["px", "unitless-zero", "unitless-number", "ms", "s"]
+    }
+
+    /// Returns supported CSS function forms.
+    #[must_use]
+    pub const fn functions(&self) -> &'static [&'static str] {
+        &["rgb()", "rgba()", "token()"]
+    }
+
+    /// Returns rejected syntax classes.
+    #[must_use]
+    pub const fn rejected_syntax(&self) -> &'static [&'static str] {
+        &[
+            "selector-list",
+            "attribute-selector",
+            "sibling-combinator",
+            "non-hawk-pseudo-class",
+            "shorthand-property",
+            "css-var-function",
+            "keyframes",
+            "conditional-at-rule",
+        ]
+    }
+}
+
 /// Compiled typed style declaration.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledDeclaration {
@@ -174,12 +245,34 @@ pub fn compile_style_source(source: &str) -> Result<CompiledStyleSheet, StyleCom
     };
 
     for rule in stylesheet.rules.0 {
-        let CssRule::Style(style_rule) = rule else {
-            diagnostics.push(StyleCompileDiagnostic::new(
-                "style.rule.unsupported",
-                "only style rules are supported in Hawk2UI stylesheets",
-            ));
-            continue;
+        let style_rule = match rule {
+            CssRule::Style(style_rule) => style_rule,
+            CssRule::Keyframes(_) => {
+                diagnostics.push(StyleCompileDiagnostic::new(
+                    "style.keyframes.unsupported",
+                    "keyframes are not supported in the Hawk2UI CSS subset",
+                ));
+                continue;
+            }
+            CssRule::Media(_)
+            | CssRule::Supports(_)
+            | CssRule::Container(_)
+            | CssRule::Scope(_)
+            | CssRule::LayerBlock(_)
+            | CssRule::LayerStatement(_) => {
+                diagnostics.push(StyleCompileDiagnostic::new(
+                    "style.at-rule.unsupported",
+                    "conditional and grouping at-rules are not supported in Hawk2UI stylesheets",
+                ));
+                continue;
+            }
+            _ => {
+                diagnostics.push(StyleCompileDiagnostic::new(
+                    "style.rule.unsupported",
+                    "only style rules are supported in Hawk2UI stylesheets",
+                ));
+                continue;
+            }
         };
         let Ok(selector_source) = style_rule
             .selectors
@@ -240,6 +333,16 @@ fn compile_declarations(
             continue;
         };
         let property = PropertyId::new(name.trim());
+        if is_unsupported_shorthand(property.as_str()) {
+            diagnostics.push(StyleCompileDiagnostic::new(
+                "style.shorthand.unsupported",
+                format!(
+                    "style shorthand `{}` is not supported; use explicit longhand properties",
+                    property.as_str()
+                ),
+            ));
+            continue;
+        }
         let Some(metadata) = registry.metadata(&property) else {
             diagnostics.push(StyleCompileDiagnostic::new(
                 "style.property.unknown",
@@ -248,9 +351,9 @@ fn compile_declarations(
             continue;
         };
         let Some(value) = parse_value(raw_value.trim(), metadata.value_type()) else {
-            diagnostics.push(StyleCompileDiagnostic::new(
-                "style.value.unsupported",
-                format!("style value `{}` is not supported", raw_value.trim()),
+            diagnostics.push(diagnostic_from_unsupported_value(
+                raw_value.trim(),
+                metadata.value_type(),
             ));
             continue;
         };
@@ -261,6 +364,53 @@ fn compile_declarations(
         declarations.push(CompiledDeclaration::new(property, value));
     }
     declarations
+}
+
+fn is_unsupported_shorthand(property: &str) -> bool {
+    matches!(
+        property,
+        "margin" | "padding" | "border" | "background" | "transition" | "animation"
+    )
+}
+
+fn diagnostic_from_unsupported_value(
+    raw_value: &str,
+    value_type: ValueType,
+) -> StyleCompileDiagnostic {
+    if raw_value.contains("var(") || contains_unsupported_function(raw_value, value_type) {
+        return StyleCompileDiagnostic::new(
+            "style.function.unsupported",
+            format!("style function in `{raw_value}` is not supported"),
+        );
+    }
+    if has_unsupported_unit(raw_value, value_type) {
+        return StyleCompileDiagnostic::new(
+            "style.unit.unsupported",
+            format!("style unit in `{raw_value}` is not supported"),
+        );
+    }
+    StyleCompileDiagnostic::new(
+        "style.value.unsupported",
+        format!("style value `{raw_value}` is not supported"),
+    )
+}
+
+fn contains_unsupported_function(raw_value: &str, value_type: ValueType) -> bool {
+    raw_value.contains('(')
+        && !matches!(
+            value_type,
+            ValueType::Shadow | ValueType::Transform | ValueType::TokenReference
+        )
+        && !raw_value.starts_with("rgb(")
+        && !raw_value.starts_with("rgba(")
+}
+
+fn has_unsupported_unit(raw_value: &str, value_type: ValueType) -> bool {
+    match value_type {
+        ValueType::Length => raw_value != "0" && raw_value.chars().any(char::is_alphabetic),
+        ValueType::Duration => raw_value.chars().any(char::is_alphabetic),
+        _ => false,
+    }
 }
 
 fn parse_value(raw_value: &str, value_type: ValueType) -> Option<StyleValue> {
