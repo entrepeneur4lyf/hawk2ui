@@ -78,6 +78,15 @@ impl PlatformSecretPolicy {
         key: &str,
         value: impl Into<String>,
     ) -> Result<PlatformSecretHandle, PlatformSecretDenied> {
+        if !is_valid_secret_key(key) {
+            return Err(PlatformSecretDenied {
+                key: key.into(),
+                diagnostic: PlatformDiagnostic::error(
+                    "secret.key.invalid",
+                    "secret key is structurally invalid",
+                ),
+            });
+        }
         if !manifest.contains(key) {
             return Err(PlatformSecretDenied {
                 key: key.into(),
@@ -92,4 +101,11 @@ impl PlatformSecretPolicy {
             value: value.into(),
         })
     }
+}
+
+fn is_valid_secret_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }

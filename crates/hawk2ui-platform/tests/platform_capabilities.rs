@@ -117,6 +117,24 @@ fn filesystem_scope_rejects_forbidden_paths() {
 }
 
 #[test]
+fn filesystem_scope_rejects_structurally_unsafe_roots() {
+    for root in ["relative/root", "/app/../secrets", "C:\\app\\data"] {
+        let grant = FilesystemGrant::new(FilesystemScope::AppData, root);
+
+        let error = FilesystemPolicy::resolve(&grant, "settings.json")
+            .expect_err("unsafe grant root must be denied");
+
+        assert_eq!(
+            error.diagnostic,
+            PlatformDiagnostic::error(
+                "filesystem.root.invalid",
+                "filesystem grant root is invalid"
+            )
+        );
+    }
+}
+
+#[test]
 fn filesystem_scope_allows_user_selected_file_grants() {
     let grant = FilesystemPolicy::user_selected_file("/home/user/session.hawk");
 
@@ -255,6 +273,18 @@ fn secrets_database_redacts_secret_values_and_denies_missing_declarations() {
     assert!(!format!("{handle:?}").contains("super-secret-value"));
     assert_eq!(handle.redacted(), "[REDACTED:api-token]");
     assert_eq!(missing.diagnostic.rule, "secret.declaration.missing");
+}
+
+#[test]
+fn secrets_policy_denies_structurally_invalid_secret_keys() {
+    let manifest = PlatformSecretManifest::new(["api-token", ""]);
+
+    for key in ["", "api token", "api/token", "api\ntoken", "api\0token"] {
+        let error = PlatformSecretPolicy::read(&manifest, key, "unused")
+            .expect_err("invalid secret key must be denied");
+
+        assert_eq!(error.diagnostic.rule, "secret.key.invalid");
+    }
 }
 
 #[test]

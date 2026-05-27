@@ -161,7 +161,17 @@ fn validate_relative_path(path: &str) -> Option<PathBuf> {
 }
 
 fn is_valid_scope_root(root: &str) -> bool {
-    !root.is_empty() && !root.contains('\0')
+    if root.is_empty() || root.contains('\0') || root.contains('\\') {
+        return false;
+    }
+    let root = Path::new(root);
+    root.is_absolute()
+        && root.components().all(|component| {
+            matches!(
+                component,
+                Component::RootDir | Component::Normal(_) | Component::CurDir
+            )
+        })
 }
 
 fn join_scope_path(root: &str, relative_path: &Path) -> String {
