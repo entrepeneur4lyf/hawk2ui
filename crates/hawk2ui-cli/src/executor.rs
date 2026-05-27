@@ -29,7 +29,7 @@ use hawk2ui_script::{HostCallPolicy, ScriptBackend, ScriptModule, StructuredValu
 
 use crate::{CliCommand, CliDiagnostic, CliExitCode};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct DesktopEntryAppModel {
     root: DesktopEntryNode,
 }
@@ -63,12 +63,24 @@ enum DesktopEntryNodeKind {
     Text,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct DesktopEntryNode {
     id: String,
     kind: DesktopEntryNodeKind,
     text: Option<String>,
+    props: DesktopEntryNodeProps,
     children: Vec<Self>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct DesktopEntryNodeProps {
+    background_color: Option<Color>,
+    text_color: Option<Color>,
+    font_size: Option<f32>,
+    width: Option<f32>,
+    height: Option<f32>,
+    padding: Option<f32>,
+    gap: Option<f32>,
 }
 
 impl DesktopEntryNode {
@@ -77,6 +89,7 @@ impl DesktopEntryNode {
             id: id.into(),
             kind: DesktopEntryNodeKind::View,
             text: None,
+            props: DesktopEntryNodeProps::default(),
             children,
         }
     }
@@ -86,12 +99,19 @@ impl DesktopEntryNode {
             id: id.into(),
             kind: DesktopEntryNodeKind::Text,
             text: Some(text.into()),
+            props: DesktopEntryNodeProps::default(),
             children: Vec::new(),
         }
     }
 
+    fn with_props(mut self, props: DesktopEntryNodeProps) -> Self {
+        self.props = props;
+        self
+    }
+
     fn from_json(value: &serde_json::Value) -> Result<Self, String> {
         let id = non_empty_json_string(value, "id")?;
+        let props = DesktopEntryNodeProps::from_json(value.get("props"))?;
         let raw_kind = value
             .get("type")
             .and_then(serde_json::Value::as_str)
@@ -108,17 +128,56 @@ impl DesktopEntryNode {
                     .iter()
                     .map(Self::from_json)
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Self::view(id, children))
+                Ok(Self::view(id, children).with_props(props))
             }
             "text" => {
                 let text = non_empty_json_string(value, "text")?;
                 if value.get("children").is_some() {
                     return Err(format!("text node '{id}' must not declare children"));
                 }
-                Ok(Self::text(id, text))
+                Ok(Self::text(id, text).with_props(props))
             }
             _ => Err(format!("node '{id}' uses unsupported type '{raw_kind}'")),
         }
+    }
+}
+
+impl DesktopEntryNodeProps {
+    fn from_json(value: Option<&serde_json::Value>) -> Result<Self, String> {
+        let Some(value) = value else {
+            return Ok(Self::default());
+        };
+        let serde_json::Value::Object(props) = value else {
+            return Err("field 'props' must be an object".to_string());
+        };
+        let mut result = Self::default();
+        for (name, value) in props {
+            match name.as_str() {
+                "backgroundColor" => {
+                    result.background_color = Some(json_color_prop(value, name)?);
+                }
+                "color" => {
+                    result.text_color = Some(json_color_prop(value, name)?);
+                }
+                "fontSize" => {
+                    result.font_size = Some(json_positive_number_prop(value, name)?);
+                }
+                "width" => {
+                    result.width = Some(json_positive_number_prop(value, name)?);
+                }
+                "height" => {
+                    result.height = Some(json_positive_number_prop(value, name)?);
+                }
+                "padding" => {
+                    result.padding = Some(json_non_negative_number_prop(value, name)?);
+                }
+                "gap" => {
+                    result.gap = Some(json_non_negative_number_prop(value, name)?);
+                }
+                _ => return Err(format!("unsupported native node prop '{name}'")),
+            }
+        }
+        Ok(result)
     }
 }
 
@@ -683,41 +742,52 @@ fn runtime_node_from_desktop_entry(
     height: f32,
     is_root: bool,
 ) -> RuntimeViewNode {
+    let node_width = node.props.width.unwrap_or(width);
+    let node_height = node.props.height.unwrap_or(height);
     let layout_style = match node.kind {
         DesktopEntryNodeKind::View => LayoutStyle::flex_container(FlexDirection::Column)
-            .with_size(LayoutSizing::fixed(width, height))
-            .with_padding(BoxEdges::all(LayoutValue::px(if is_root {
-                24.0
-            } else {
-                0.0
-            })))
-            .with_gap(LayoutValue::px(12.0)),
+            .with_size(LayoutSizing::fixed(node_width, node_height))
+            .with_padding(BoxEdges::all(LayoutValue::px(
+                node.props
+                    .padding
+                    .unwrap_or(if is_root { 24.0 } else { 0.0 }),
+            )))
+            .with_gap(LayoutValue::px(node.props.gap.unwrap_or(12.0))),
         DesktopEntryNodeKind::Text => LayoutStyle::flex_container(FlexDirection::Row)
-            .with_size(LayoutSizing::fixed(width, height)),
+            .with_size(LayoutSizing::fixed(node_width, node_height)),
     };
     let visual = match node.kind {
         DesktopEntryNodeKind::View => RuntimeVisual::Fill(if is_root {
-            Color::rgba(11, 12, 18, 255)
+            node.props
+                .background_color
+                .unwrap_or(Color::rgba(11, 12, 18, 255))
         } else {
-            Color::rgba(20, 22, 31, 255)
+            node.props
+                .background_color
+                .unwrap_or(Color::rgba(20, 22, 31, 255))
         }),
         DesktopEntryNodeKind::Text => RuntimeVisual::Text(RuntimeTextVisual::new(
             node.text.clone().unwrap_or_default(),
-            20.0,
-            Color::rgba(241, 245, 249, 255),
+            node.props.font_size.unwrap_or(20.0),
+            node.props
+                .text_color
+                .unwrap_or(Color::rgba(241, 245, 249, 255)),
         )),
     };
     RuntimeViewNode::new(RuntimeViewId::new(node.id.clone()), layout_style, visual)
 }
 
 fn desktop_entry_node_height(node: &DesktopEntryNode) -> f32 {
+    if let Some(height) = node.props.height {
+        return height;
+    }
     match node.kind {
         DesktopEntryNodeKind::Text => 32.0,
         DesktopEntryNodeKind::View => {
             let children_height: f32 = node.children.iter().map(desktop_entry_node_height).sum();
             let gap_count =
                 u16::try_from(node.children.len().saturating_sub(1)).unwrap_or(u16::MAX);
-            let gaps = f32::from(gap_count) * 12.0;
+            let gaps = f32::from(gap_count) * node.props.gap.unwrap_or(12.0);
             (children_height + gaps).max(32.0)
         }
     }
@@ -826,6 +896,64 @@ fn invalid_entry_tree_diagnostic(
         CliDiagnostic::error("runtime.desktop.invalid-entry-tree", message.into())
             .file(script.source_path.clone()),
     )
+}
+
+fn json_color_prop(value: &serde_json::Value, name: &str) -> Result<Color, String> {
+    let value = value
+        .as_str()
+        .ok_or_else(|| format!("prop '{name}' must be a CSS hex color string"))?;
+    parse_hex_color(value)
+        .ok_or_else(|| format!("prop '{name}' must use #RRGGBB or #RRGGBBAA hex color syntax"))
+}
+
+fn parse_hex_color(value: &str) -> Option<Color> {
+    let hex = value.strip_prefix('#')?;
+    let (r, g, b, a) = match hex.len() {
+        6 => (
+            u8::from_str_radix(&hex[0..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..6], 16).ok()?,
+            255,
+        ),
+        8 => (
+            u8::from_str_radix(&hex[0..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..6], 16).ok()?,
+            u8::from_str_radix(&hex[6..8], 16).ok()?,
+        ),
+        _ => return None,
+    };
+    Some(Color::rgba(r, g, b, a))
+}
+
+fn json_positive_number_prop(value: &serde_json::Value, name: &str) -> Result<f32, String> {
+    let number = json_number_prop(value, name)?;
+    if number <= 0.0 {
+        return Err(format!("prop '{name}' must be greater than zero"));
+    }
+    Ok(number)
+}
+
+fn json_non_negative_number_prop(value: &serde_json::Value, name: &str) -> Result<f32, String> {
+    let number = json_number_prop(value, name)?;
+    if number < 0.0 {
+        return Err(format!("prop '{name}' must not be negative"));
+    }
+    Ok(number)
+}
+
+fn json_number_prop(value: &serde_json::Value, name: &str) -> Result<f32, String> {
+    let serde_json::Value::Number(number) = value else {
+        return Err(format!("prop '{name}' must be a number"));
+    };
+    let parsed = number
+        .to_string()
+        .parse::<f32>()
+        .map_err(|_| format!("prop '{name}' cannot be represented as a 32-bit float"))?;
+    if !parsed.is_finite() {
+        return Err(format!("prop '{name}' must be finite"));
+    }
+    Ok(parsed)
 }
 
 fn non_empty_json_string(value: &serde_json::Value, key: &str) -> Result<String, String> {
@@ -1237,5 +1365,101 @@ export function mount() {
 
         assert_eq!(diagnostic.rule, "runtime.desktop.invalid-entry-tree");
         assert!(diagnostic.message.contains("duplicate"));
+    }
+
+    #[test]
+    fn desktop_runtime_config_applies_native_app_tree_props() {
+        let manifest = HawkManifest::parse(
+            r#"[identity]
+id = "com.example.desktop"
+name = "Manifest Only Title"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[editor]
+width = 640
+height = 360
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+        )
+        .expect("manifest parses");
+        let source = r##"
+export function mount() {
+    return {
+        id: "app-root",
+        type: "view",
+        props: {
+            backgroundColor: "#102030",
+            padding: 8,
+            gap: 4
+        },
+        children: [
+            {
+                id: "hero-title",
+                type: "text",
+                text: "Styled Hero",
+                props: {
+                    color: "#aabbcc",
+                    fontSize: 18,
+                    width: 320,
+                    height: 40
+                }
+            }
+        ]
+    };
+}
+"##;
+        let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+            .with_compiled_script(
+                CompiledScriptRecord::new(
+                    "entry",
+                    "src/main.ts",
+                    "scripts/entry.hawk.js",
+                    ArtifactHash::from_bytes(source.as_bytes()),
+                )
+                .with_compiled_source(source),
+            );
+        let output = BuildWorkspaceOutput {
+            manifest,
+            pipeline: BuildPipeline::production(),
+            artifact,
+            verification: VerificationReport::new("com.example.desktop"),
+        };
+
+        let config =
+            desktop_runtime_config_from_build_output(&output, true).expect("runtime config builds");
+        let scene = RuntimeSceneBridge::new(Viewport::new(640.0, 360.0))
+            .build(
+                config
+                    .runtime_tree()
+                    .expect("desktop config carries runtime tree"),
+            )
+            .expect("runtime scene builds");
+
+        assert!(scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Fill { id, color, .. }
+                if id.as_str() == "app-root" && *color == Color::rgba(16, 32, 48, 255)
+        )));
+        assert!(scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Text {
+                id,
+                geometry,
+                text,
+                font_size,
+                color
+            } if id.as_str() == "hero-title"
+                && text == "Styled Hero"
+                && geometry.width == 320.0
+                && geometry.height == 40.0
+                && *font_size == 18.0
+                && *color == Color::rgba(170, 187, 204, 255)
+        )));
     }
 }
