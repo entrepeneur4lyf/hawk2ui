@@ -148,8 +148,17 @@ impl A11yHostExporter {
     pub fn export_accesskit_update(&self) -> Result<AccessKitExport, AccessKitExportError> {
         let mut node_ids = BTreeMap::new();
         assign_accesskit_ids(&self.tree.root, &mut node_ids)?;
-        let focus = focused_node_id(&self.tree.root)
-            .and_then(|id| node_ids.get(id).copied())
+        let mut focused = Vec::new();
+        collect_focused_node_ids(&self.tree.root, &mut focused);
+        if focused.len() > 1 {
+            return Err(AccessKitExportError::new(
+                "a11y.accesskit.multiple-focused-nodes",
+                "accessibility tree must contain at most one focused node",
+            ));
+        }
+        let focus = focused
+            .first()
+            .and_then(|id| node_ids.get(*id).copied())
             .unwrap_or(NodeId(1));
         let mut nodes = Vec::new();
         collect_accesskit_nodes(&self.tree.root, &node_ids, &mut nodes)?;
@@ -246,11 +255,13 @@ fn collect_accesskit_nodes(
     Ok(())
 }
 
-fn focused_node_id(node: &A11yNode) -> Option<&str> {
+fn collect_focused_node_ids<'a>(node: &'a A11yNode, focused: &mut Vec<&'a str>) {
     if node.focused {
-        return Some(&node.id);
+        focused.push(&node.id);
     }
-    node.children.iter().find_map(focused_node_id)
+    for child in &node.children {
+        collect_focused_node_ids(child, focused);
+    }
 }
 
 fn role_to_accesskit(role: A11yRole) -> Role {

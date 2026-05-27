@@ -198,6 +198,21 @@ fn host_export_builds_accesskit_tree_update() {
     );
 }
 
+#[test]
+fn host_export_rejects_multiple_focused_accesskit_nodes() {
+    let tree = A11yTree::new(
+        A11yNode::new("root", A11yRole::Window)
+            .child(A11yNode::new("gain", A11yRole::Slider).focused(true))
+            .child(A11yNode::new("mix", A11yRole::Slider).focused(true)),
+    );
+
+    let error = A11yHostExporter::desktop(tree)
+        .export_accesskit_update()
+        .expect_err("AccessKit export must not silently choose between focused nodes");
+
+    assert_eq!(error.rule, "a11y.accesskit.multiple-focused-nodes");
+}
+
 use hawk2ui_a11y::{A11yPluginGuard, A11yPluginOperation, A11yThreadContext};
 
 #[test]
