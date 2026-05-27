@@ -283,12 +283,19 @@ Review check:
 Evidence:
 
 - `docs/technical/crate-selection.md` lists `rtrb`, `vst3`, `clap-sys`, `clack-*`, and related audio/plugin candidates.
-- `crates/hawk2ui-plugin/Cargo.toml` and `crates/hawk2ui-plugin-adapters/Cargo.toml` do not depend on realtime or plugin format crates.
+- `crates/hawk2ui-plugin/Cargo.toml` now depends on `rtrb` for realtime visual transport.
+- `crates/hawk2ui-plugin-adapters/Cargo.toml` still does not depend on plugin format crates.
+
+Status:
+
+- Realtime visual data now uses `rtrb`-backed preallocated transport records.
+- `RealtimeVisualTransport::split_preallocated` returns separate audio-writer and UI-reader endpoints, and tests move the audio writer across a thread boundary.
+- Loadable CLAP/VST3/AU/LV2 format adapters remain open under this item.
 
 Required remediation:
 
 - Choose plugin format sequence in decision records.
-- Implement realtime UI data channels with a preallocated lock-free primitive such as `rtrb`.
+- Extend realtime UI data channels beyond the current `rtrb` split endpoint as needed by plugin format adapters.
 - Implement actual CLAP/VST3/AU/LV2 adapters according to selected compatibility matrix.
 
 Acceptance:

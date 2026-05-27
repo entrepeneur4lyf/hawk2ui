@@ -389,7 +389,7 @@ fn realtime_visual_data_audio_thread_write_is_non_blocking_and_preallocated() {
 #[test]
 fn realtime_visual_data_ui_reads_do_not_block_audio_writes() {
     let mut transport = RealtimeVisualTransport::preallocated(4, FrameDropPolicy::DropNewest);
-    transport.audio_thread_push(RealtimeVisualPacket::modulation("lfo", 0.5));
+    let _ = transport.audio_thread_push(RealtimeVisualPacket::modulation("lfo", 0.5));
 
     let packets = transport.ui_drain();
     let write = transport.audio_thread_push(RealtimeVisualPacket::scope("osc", vec![0.0]));
@@ -397,4 +397,38 @@ fn realtime_visual_data_ui_reads_do_not_block_audio_writes() {
     assert_eq!(packets.len(), 1);
     assert!(write.accepted);
     assert_eq!(transport.blocking_wait_count(), 0);
+}
+
+#[test]
+fn realtime_visual_data_split_transport_moves_audio_writer_across_threads() {
+    let (mut audio_writer, mut ui_reader) =
+        RealtimeVisualTransport::split_preallocated(2, FrameDropPolicy::DropNewest);
+
+    let handle = std::thread::spawn(move || {
+        let first = audio_writer.audio_thread_push(RealtimeVisualPacket::meter("out", 0.1));
+        let second = audio_writer.audio_thread_push(RealtimeVisualPacket::meter("out", 0.2));
+        let third = audio_writer.audio_thread_push(RealtimeVisualPacket::meter("out", 0.3));
+        (
+            first,
+            second,
+            third,
+            audio_writer.allocation_count(),
+            audio_writer.blocking_wait_count(),
+        )
+    });
+
+    let (first, second, third, allocations, blocking_waits) =
+        handle.join().expect("audio writer thread should not panic");
+    let packets = ui_reader.ui_drain();
+
+    assert!(first.accepted);
+    assert!(second.accepted);
+    assert!(!third.accepted);
+    assert_eq!(third.dropped_frames, 1);
+    assert_eq!(allocations, 0);
+    assert_eq!(blocking_waits, 0);
+    assert_eq!(ui_reader.capacity(), 2);
+    assert_eq!(packets.len(), 2);
+    assert_eq!(packets[0].values, vec![0.1]);
+    assert_eq!(packets[1].values, vec![0.2]);
 }
