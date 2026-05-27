@@ -623,6 +623,12 @@ fn validate_request(request: &PackageRequest) -> Result<(), PackagePlanningError
             "bundle name must be a single filesystem segment",
         ));
     }
+    if !is_filesystem_segment(&request.metadata.display_name) {
+        diagnostics.push(PackageDiagnostic::new(
+            "package.display-name.invalid",
+            "display name must be a non-empty single filesystem segment",
+        ));
+    }
     if diagnostics.is_empty() {
         Ok(())
     } else {
@@ -807,6 +813,16 @@ fn is_reverse_dns_id(value: &str) -> bool {
                     .chars()
                     .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
         })
+}
+
+fn is_filesystem_segment(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed != "."
+        && trimmed != ".."
+        && !trimmed.contains('/')
+        && !trimmed.contains('\\')
+        && !trimmed.contains('\0')
 }
 
 #[cfg(test)]

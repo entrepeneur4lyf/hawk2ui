@@ -263,3 +263,24 @@ fn plugin_adapters_reject_invalid_package_metadata() {
 
     assert_eq!(error.diagnostics()[0].rule(), "package.metadata.invalid");
 }
+
+#[test]
+fn plugin_adapters_reject_path_unsafe_metadata_names() {
+    let request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.unsafe", "../Escape", "Hawk2UI"),
+        BundleOutput::new("dist", "SafeBundle"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Vst3);
+
+    let error = PackageAdapterSet::new()
+        .plan(&request)
+        .expect_err("path-unsafe display names must fail before materialization");
+
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.rule() == "package.display-name.invalid")
+    );
+}
