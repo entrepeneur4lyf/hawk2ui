@@ -17,4 +17,5 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+accesskit = "0.24.0"
 serde.workspace = true

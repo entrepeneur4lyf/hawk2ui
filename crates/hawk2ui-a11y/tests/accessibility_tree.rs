@@ -148,6 +148,56 @@ fn host_export_records_plugin_editor_accessibility_availability() {
     assert!(!snapshot.platform_services_enabled);
 }
 
+#[test]
+fn host_export_builds_accesskit_tree_update() {
+    let tree = A11yTree::new(
+        A11yNode::new("root", A11yRole::Window)
+            .name("Main Window")
+            .bounds(A11yBounds::new(0.0, 0.0, 800.0, 600.0))
+            .child(
+                A11yNode::new("gain", A11yRole::Slider)
+                    .name("Gain")
+                    .value("-6 dB")
+                    .focused(true)
+                    .bounds(A11yBounds::new(20.0, 20.0, 120.0, 32.0))
+                    .action(A11yAction::Increment)
+                    .action(A11yAction::Decrement),
+            ),
+    );
+    let export = A11yHostExporter::desktop(tree)
+        .export_accesskit_update()
+        .expect("accesskit tree export succeeds");
+    let root_id = export.node_id("root").expect("root id exported");
+    let gain_id = export.node_id("gain").expect("gain id exported");
+    let root = export
+        .update
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == root_id)
+        .map(|(_, node)| node)
+        .expect("root node exported");
+    let gain = export
+        .update
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == gain_id)
+        .map(|(_, node)| node)
+        .expect("gain node exported");
+
+    assert_eq!(export.update.focus, gain_id);
+    assert_eq!(root.role(), accesskit::Role::Window);
+    assert_eq!(root.children(), &[gain_id]);
+    assert_eq!(gain.role(), accesskit::Role::Slider);
+    assert_eq!(gain.label(), Some("Gain"));
+    assert_eq!(gain.value(), Some("-6 dB"));
+    assert!(gain.supports_action(accesskit::Action::Increment));
+    assert!(gain.supports_action(accesskit::Action::Decrement));
+    assert_eq!(
+        gain.bounds().expect("bounds exported"),
+        accesskit::Rect::new(20.0, 20.0, 140.0, 52.0)
+    );
+}
+
 use hawk2ui_a11y::{A11yPluginGuard, A11yPluginOperation, A11yThreadContext};
 
 #[test]
