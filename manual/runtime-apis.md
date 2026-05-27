@@ -47,3 +47,11 @@ The runtime API surface is the public contract between application code, host ad
 ## Runtime Use
 
 Applications and framework adapters should communicate with the host through these records instead of relying on backend-specific window or plugin handles. Host capabilities should be declared through manifest capability keys and represented with `CapabilityKey` at runtime.
+
+## Custom Renderer Protocol
+
+Framework integrations should emit native records through `CustomRendererProtocol` and `CustomRendererOperation`. The protocol validates node identity and records deterministic operation keys before native runtime bridging.
+
+The implemented operation surface covers create node, set prop, set style ref, set asset ref, set native ref, bind event, bind lifecycle, append keyed or unkeyed children, enter error boundary, commit, and remove node. Protocol diagnostics use stable rules such as `custom-renderer.node.duplicate` and `custom-renderer.node.missing`.
+
+React 19+ emits its custom renderer operation list through this protocol. Remaining framework adapters must use the same protocol as they are moved from source scanner compatibility paths to explicit compiler/protocol inputs.

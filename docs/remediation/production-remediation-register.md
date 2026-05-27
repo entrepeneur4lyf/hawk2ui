@@ -658,6 +658,25 @@ Acceptance:
 
 - At least one framework integration uses the custom renderer API rather than bespoke parsing.
 
+Status:
+
+- Implemented `CustomRendererProtocol`, `CustomRendererOperation`, and `CustomRendererError` in
+  `hawk2ui-authoring`.
+- The public operation surface covers create node, set prop, style refs, asset refs, native refs,
+  event bindings, lifecycle bindings, keyed/unkeyed child append, error boundaries, commit, and
+  remove node.
+- Protocol validation rejects duplicate nodes and references to missing nodes with stable
+  diagnostics.
+- React 19+ now emits reconciler operation evidence through `CustomRendererProtocol`.
+- Documented the custom renderer protocol in `manual/runtime-apis.md`.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this remediation item for production readiness:
+  the custom renderer API is explicit, validated, documented, and exercised by React as the first
+  framework proof. No corrective revision is required before continuing framework scanner
+  replacement.
+
 ### REM-AUTH-003: Complete App Lifecycle And Event Model
 
 Evidence:

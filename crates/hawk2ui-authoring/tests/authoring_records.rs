@@ -262,3 +262,134 @@ fn adapter_contract_records_equivalent_operations_for_framework_labels() {
         );
     }
 }
+
+#[test]
+fn custom_renderer_protocol_records_full_node_lifecycle_surface() {
+    let mut protocol = hawk2ui_authoring::CustomRendererProtocol::new("react");
+    let root = ElementId::new("root");
+
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::CreateNode {
+            id: root.clone(),
+            kind: ElementKind::View,
+        })
+        .expect("create node should be accepted");
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::SetProp {
+            id: root.clone(),
+            name: "role".to_string(),
+            value: PropValue::String("main".to_string()),
+        })
+        .expect("set prop should be accepted");
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::SetStyleRef {
+            id: root.clone(),
+            style_ref: hawk2ui_authoring::StyleRef::new("surface.card"),
+        })
+        .expect("style ref should be accepted");
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::SetAssetRef {
+            id: root.clone(),
+            asset_ref: hawk2ui_authoring::AssetRef::new("logo", "assets/logo.svg"),
+        })
+        .expect("asset ref should be accepted");
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::SetRef {
+            id: root.clone(),
+            reference: hawk2ui_authoring::NativeRef::new("root_ref"),
+        })
+        .expect("native ref should be accepted");
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::BindEvent {
+            binding: hawk2ui_authoring::EventBinding::new(
+                root.clone(),
+                hawk2ui_authoring::EventKind::Pointer(hawk2ui_authoring::PointerEventKind::Press),
+                hawk2ui_authoring::HandlerRef::new("handle_press"),
+            )
+            .with_payload(hawk2ui_authoring::EventPayloadField::Position),
+        })
+        .expect("event binding should be accepted");
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::BindLifecycle {
+            id: root.clone(),
+            event: hawk2ui_authoring::NativeLifecycleEvent::Mounted,
+            handler: hawk2ui_authoring::HandlerRef::new("on_mount"),
+        })
+        .expect("lifecycle binding should be accepted");
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::CreateNode {
+            id: ElementId::new("title"),
+            kind: ElementKind::Text,
+        })
+        .expect("child create should be accepted");
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::AppendChild {
+            parent: root.clone(),
+            child: ElementId::new("title"),
+            key: Some("title".to_string()),
+        })
+        .expect("append child should be accepted");
+    protocol
+        .apply(
+            hawk2ui_authoring::CustomRendererOperation::EnterErrorBoundary {
+                id: root.clone(),
+                handler: hawk2ui_authoring::HandlerRef::new("handle_error"),
+            },
+        )
+        .expect("error boundary should be accepted");
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::Commit { root: root.clone() })
+        .expect("commit should be accepted");
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::RemoveNode {
+            id: ElementId::new("title"),
+        })
+        .expect("remove node should be accepted");
+
+    assert_eq!(protocol.framework_label(), "react");
+    assert_eq!(
+        protocol.operation_keys(),
+        [
+            "create-node:root:view",
+            "set-prop:root:role",
+            "set-style:root:surface.card",
+            "set-asset:root:assets/logo.svg",
+            "set-ref:root:root_ref",
+            "bind-event:root:pointer.press",
+            "bind-lifecycle:root:mounted:on_mount",
+            "create-node:title:text",
+            "append-child:root:title:key:title",
+            "error-boundary:root:handle_error",
+            "commit:root",
+            "remove-node:title",
+        ]
+    );
+}
+
+#[test]
+fn custom_renderer_protocol_rejects_duplicate_nodes_and_missing_children() {
+    let mut protocol = hawk2ui_authoring::CustomRendererProtocol::new("vue");
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::CreateNode {
+            id: ElementId::new("root"),
+            kind: ElementKind::View,
+        })
+        .expect("first create should be accepted");
+
+    let duplicate = protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::CreateNode {
+            id: ElementId::new("root"),
+            kind: ElementKind::Text,
+        })
+        .expect_err("duplicate node IDs must be rejected");
+    assert_eq!(duplicate.rule(), "custom-renderer.node.duplicate");
+
+    let missing = protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::AppendChild {
+            parent: ElementId::new("root"),
+            child: ElementId::new("missing"),
+            key: None,
+        })
+        .expect_err("missing child IDs must be rejected");
+    assert_eq!(missing.rule(), "custom-renderer.node.missing");
+}

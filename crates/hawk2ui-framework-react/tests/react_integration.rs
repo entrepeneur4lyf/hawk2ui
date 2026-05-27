@@ -48,9 +48,19 @@ export function App() {
     assert_eq!(
         artifact.reconciler_operations(),
         [
-            "create:root",
+            "create-node:root:view",
+            "set-style:root:surface.card",
+            "set-style:root:intent.primary",
+            "set-asset:root:assets/logo.svg",
+            "set-ref:root:root_ref",
+            "bind-event:root:pointer.press",
+            "bind-lifecycle:root:mounted:onMount",
+            "bind-lifecycle:root:unmounted:onUnmount",
+            "create-node:title:text",
             "append:title",
+            "create-node:cta:text",
             "append:cta",
+            "create-node:meter:text",
             "append:meter",
             "commit:root"
         ]

@@ -11,7 +11,8 @@ pub mod runtime_bridge;
 pub mod state;
 
 pub use adapter::{
-    AdapterError, NativeRendererAdapter, NodeOperation, RecordingNativeRendererAdapter,
+    AdapterError, CustomRendererError, CustomRendererOperation, CustomRendererProtocol,
+    NativeRendererAdapter, NodeOperation, RecordingNativeRendererAdapter,
 };
 pub use compile::{
     AuthoringArtifact, AuthoringDiagnostic, AuthoringDiagnosticSeverity, compile_authoring_source,

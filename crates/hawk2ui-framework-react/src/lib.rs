@@ -2,11 +2,11 @@
 //! `React` 19 and later integration for emitting `Hawk2UI` typed records.
 
 use hawk2ui_authoring::{
-    AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementId, ElementKind,
-    ElementNode, EventBinding, EventKind, EventPayloadField, HandlerRef, LifecycleEventKind,
-    NativeAuthoringElement, NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef,
-    NativeRuntimeBridge, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PointerEventKind,
-    PropValue, StyleRef,
+    AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, CustomRendererOperation,
+    CustomRendererProtocol, ElementId, ElementKind, ElementNode, EventBinding, EventKind,
+    EventPayloadField, HandlerRef, LifecycleEventKind, NativeAuthoringElement,
+    NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge,
+    NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_runtime::RuntimeViewTree;
 use hawk2ui_style::{CompiledStyleSheet, TokenSet};
@@ -270,20 +270,29 @@ impl ReactIntegration {
         }
 
         let keyed_children = keyed_children(&tree.source);
-        let mut reconciler_operations = Vec::with_capacity(keyed_children.len() + 2);
-        reconciler_operations.push("create:root".to_string());
-        reconciler_operations.extend(keyed_children.iter().map(|child| format!("append:{child}")));
-        reconciler_operations.push("commit:root".to_string());
+        let refs: Vec<_> = extract_attribute(&tree.source, "ref").into_iter().collect();
+        let style_refs = style_refs_from_attribute(&tree.source, "className");
+        let asset_refs: Vec<_> = extract_attribute(&tree.source, "data-asset")
+            .into_iter()
+            .map(|path| AssetRef::new("react.asset", path))
+            .collect();
+        let reconciler_operations = react_protocol_operations(ReactProtocolInput {
+            author_file: source_map.author_file(),
+            source_text: tree.source.as_str(),
+            root_id: root_id.as_str(),
+            refs: &refs,
+            style_refs: &style_refs,
+            asset_refs: &asset_refs,
+            events: &events,
+            keyed_children: &keyed_children,
+        })?;
 
         Ok(ReactRenderedArtifact {
             root: ElementNode::new(ElementId::new(root_id), ElementKind::View),
             keyed_children,
-            refs: extract_attribute(&tree.source, "ref").into_iter().collect(),
-            style_refs: style_refs_from_attribute(&tree.source, "className"),
-            asset_refs: extract_attribute(&tree.source, "data-asset")
-                .into_iter()
-                .map(|path| AssetRef::new("react.asset", path))
-                .collect(),
+            refs,
+            style_refs,
+            asset_refs,
             events,
             lifecycle_handlers: vec!["mounted:onMount".into(), "unmounted:onUnmount".into()],
             source_map,
@@ -442,6 +451,175 @@ fn bridge_error(author_file: &str, error: &NativeRuntimeBridgeError) -> ReactRen
             AuthoringDiagnosticSeverity::Error,
             "react.runtime-bridge.failed",
             error.message().to_string(),
+        )],
+        source_map: ReactSourceMap {
+            author_file: author_file.to_string(),
+        },
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ReactProtocolInput<'a> {
+    author_file: &'a str,
+    source_text: &'a str,
+    root_id: &'a str,
+    refs: &'a [String],
+    style_refs: &'a [StyleRef],
+    asset_refs: &'a [AssetRef],
+    events: &'a [EventBinding],
+    keyed_children: &'a [String],
+}
+
+fn react_protocol_operations(
+    input: ReactProtocolInput<'_>,
+) -> Result<Vec<String>, ReactRenderError> {
+    let root_element_id = ElementId::new(input.root_id);
+    let mut protocol = CustomRendererProtocol::new("react");
+    apply_react_protocol_operation(
+        input.author_file,
+        &mut protocol,
+        CustomRendererOperation::CreateNode {
+            id: root_element_id.clone(),
+            kind: ElementKind::View,
+        },
+    )?;
+    for style_ref in input.style_refs {
+        apply_react_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::SetStyleRef {
+                id: root_element_id.clone(),
+                style_ref: StyleRef::new(style_ref.name()),
+            },
+        )?;
+    }
+    for asset_ref in input.asset_refs {
+        apply_react_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::SetAssetRef {
+                id: root_element_id.clone(),
+                asset_ref: AssetRef::new(asset_ref.name(), asset_ref.path()),
+            },
+        )?;
+    }
+    for reference in input.refs {
+        apply_react_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::SetRef {
+                id: root_element_id.clone(),
+                reference: NativeRef::new(reference),
+            },
+        )?;
+    }
+    for event in input.events {
+        if !matches!(event.event(), EventKind::Lifecycle(_)) {
+            apply_react_protocol_operation(
+                input.author_file,
+                &mut protocol,
+                CustomRendererOperation::BindEvent {
+                    binding: event.clone(),
+                },
+            )?;
+        }
+    }
+    apply_react_lifecycle_protocol_operations(
+        input.author_file,
+        input.source_text,
+        input.root_id,
+        &mut protocol,
+    )?;
+    for child in input.keyed_children {
+        let child_id = ElementId::new(child);
+        apply_react_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::CreateNode {
+                id: child_id.clone(),
+                kind: ElementKind::Text,
+            },
+        )?;
+        apply_react_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::AppendChild {
+                parent: root_element_id.clone(),
+                child: child_id,
+                key: Some(child.clone()),
+            },
+        )?;
+    }
+    apply_react_protocol_operation(
+        input.author_file,
+        &mut protocol,
+        CustomRendererOperation::Commit {
+            root: root_element_id,
+        },
+    )?;
+    Ok(protocol
+        .operation_keys()
+        .iter()
+        .map(|key| react_public_operation_key(key))
+        .collect())
+}
+
+fn apply_react_lifecycle_protocol_operations(
+    author_file: &str,
+    source_text: &str,
+    root_id: &str,
+    protocol: &mut CustomRendererProtocol,
+) -> Result<(), ReactRenderError> {
+    if source_text.contains("onMount") {
+        apply_react_protocol_operation(
+            author_file,
+            protocol,
+            CustomRendererOperation::BindLifecycle {
+                id: ElementId::new(root_id),
+                event: NativeLifecycleEvent::Mounted,
+                handler: HandlerRef::new("onMount"),
+            },
+        )?;
+    }
+    if source_text.contains("onUnmount") {
+        apply_react_protocol_operation(
+            author_file,
+            protocol,
+            CustomRendererOperation::BindLifecycle {
+                id: ElementId::new(root_id),
+                event: NativeLifecycleEvent::Unmounted,
+                handler: HandlerRef::new("onUnmount"),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn apply_react_protocol_operation(
+    author_file: &str,
+    protocol: &mut CustomRendererProtocol,
+    operation: CustomRendererOperation,
+) -> Result<(), ReactRenderError> {
+    protocol
+        .apply(operation)
+        .map_err(|error| custom_renderer_error(author_file, &error))
+}
+
+fn react_public_operation_key(key: &str) -> String {
+    key.strip_prefix("append-child:root:")
+        .and_then(|rest| rest.split(":key:").next())
+        .map_or_else(|| key.to_string(), |child| format!("append:{child}"))
+}
+
+fn custom_renderer_error(
+    author_file: &str,
+    error: &hawk2ui_authoring::CustomRendererError,
+) -> ReactRenderError {
+    ReactRenderError {
+        diagnostics: vec![AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "react.custom-renderer.failed",
+            format!("{}: {}", error.rule(), error.message()),
         )],
         source_map: ReactSourceMap {
             author_file: author_file.to_string(),
