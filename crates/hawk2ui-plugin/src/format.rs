@@ -1,9 +1,10 @@
 //! Plugin format target records.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Supported plugin package format.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum PluginFormat {
     /// CLAP plugin package.
     Clap,
@@ -16,7 +17,8 @@ pub enum PluginFormat {
 }
 
 /// Generated plugin metadata shared by all package formats.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FormatMetadata {
     /// Stable reverse-DNS plugin identifier.
     pub id: String,
@@ -79,7 +81,8 @@ impl FormatMetadata {
 }
 
 /// Bundle output fields for a package target.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BundleOutput {
     /// Filesystem output path for the generated package.
     pub path: String,
@@ -117,7 +120,8 @@ impl FormatValidationError {
 }
 
 /// Single plugin package target.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PluginFormatTarget {
     /// Plugin format.
     pub format: PluginFormat,
@@ -208,10 +212,49 @@ impl PluginFormatTarget {
             Err(errors)
         }
     }
+
+    /// Generates the JSON Schema used to validate plugin package target metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FormatValidationError`] when the generated schema cannot be represented as JSON.
+    pub fn json_schema() -> Result<serde_json::Value, FormatValidationError> {
+        serde_json::to_value(schemars::schema_for!(Self)).map_err(|error| {
+            FormatValidationError::new(
+                "format.schema.generate-failed",
+                format!("plugin format target schema could not be serialized: {error}"),
+            )
+        })
+    }
+
+    /// Validates JSON against the generated plugin package target schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FormatValidationError`] when schema compilation or validation fails.
+    pub fn validate_json(value: &serde_json::Value) -> Result<(), FormatValidationError> {
+        let schema = Self::json_schema()?;
+        let validator = jsonschema::Validator::new(&schema).map_err(|error| {
+            FormatValidationError::new(
+                "format.schema.compile-failed",
+                format!("plugin format target schema could not be compiled: {error}"),
+            )
+        })?;
+        validator.validate(value).map_err(|error| {
+            FormatValidationError::new(
+                "format.schema.invalid",
+                format!(
+                    "plugin format target failed schema validation at {}: {error}",
+                    error.instance_path()
+                ),
+            )
+        })
+    }
 }
 
 /// Package target collection.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageTarget {
     /// Format targets in package order.
     pub targets: Vec<PluginFormatTarget>,

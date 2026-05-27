@@ -1,10 +1,13 @@
 //! Sealed artifact records and compatibility checks.
 
 use crate::{BuildDiagnostic, BuildDiagnosticSeverity, HawkManifest, PackageTarget};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Artifact schema version.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactSchemaVersion {
     /// Major schema version.
     pub major: u32,
@@ -27,7 +30,8 @@ impl ArtifactSchemaVersion {
 }
 
 /// Stable artifact hash wrapper.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
 pub struct ArtifactHash(pub String);
 
 impl ArtifactHash {
@@ -51,7 +55,8 @@ fn hex_nibble(value: u8) -> char {
 }
 
 /// Compiled script payload recorded in a sealed artifact.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompiledScriptRecord {
     /// Stable entrypoint ID.
     pub entrypoint_id: String,
@@ -92,7 +97,8 @@ impl CompiledScriptRecord {
 }
 
 /// Compiled style payload recorded in a sealed artifact.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompiledStyleRecord {
     /// Stable entrypoint ID.
     pub entrypoint_id: String,
@@ -123,7 +129,8 @@ impl CompiledStyleRecord {
 }
 
 /// Asset manifest entry exposed to runtime code.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AssetManifestEntry {
     /// Stable asset ID.
     pub id: String,
@@ -154,7 +161,8 @@ impl AssetManifestEntry {
 }
 
 /// Compiled asset payload recorded in a sealed artifact.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompiledAssetRecord {
     /// Stable asset ID.
     pub id: String,
@@ -185,7 +193,8 @@ impl CompiledAssetRecord {
 }
 
 /// Artifact hash summary.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactHashes {
     /// Manifest snapshot hash.
     pub manifest: ArtifactHash,
@@ -194,7 +203,8 @@ pub struct ArtifactHashes {
 }
 
 /// Build metadata embedded into a sealed artifact.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BuildMetadata {
     /// Build tool that produced the artifact.
     pub generator: String,
@@ -212,7 +222,8 @@ impl Default for BuildMetadata {
 }
 
 /// Target metadata embedded into a sealed artifact.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TargetArtifactMetadata {
     /// Package target kind.
     pub kind: PackageTarget,
@@ -221,7 +232,8 @@ pub struct TargetArtifactMetadata {
 }
 
 /// Sealed artifact record consumed by runtime code.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SealedArtifact {
     /// Artifact schema version.
     pub schema_version: ArtifactSchemaVersion,
@@ -348,6 +360,53 @@ impl SealedArtifact {
         }
     }
 
+    /// Generates the JSON Schema used to validate sealed artifact records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealedArtifactError`] when the generated schema cannot be represented as JSON.
+    pub fn json_schema() -> Result<serde_json::Value, SealedArtifactError> {
+        serde_json::to_value(schemars::schema_for!(Self)).map_err(|error| {
+            SealedArtifactError::SchemaGeneration {
+                diagnostic: BuildDiagnostic::new(
+                    BuildDiagnosticSeverity::Error,
+                    "artifact.schema.generate-failed",
+                    format!("sealed artifact schema could not be serialized: {error}"),
+                ),
+            }
+        })
+    }
+
+    /// Validates JSON against the generated sealed artifact schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealedArtifactError`] when schema compilation or validation fails.
+    pub fn validate_json(value: &serde_json::Value) -> Result<(), SealedArtifactError> {
+        let schema = Self::json_schema()?;
+        let validator = jsonschema::Validator::new(&schema).map_err(|error| {
+            SealedArtifactError::SchemaValidation {
+                diagnostic: BuildDiagnostic::new(
+                    BuildDiagnosticSeverity::Error,
+                    "artifact.schema.compile-failed",
+                    format!("sealed artifact schema could not be compiled: {error}"),
+                ),
+            }
+        })?;
+        validator
+            .validate(value)
+            .map_err(|error| SealedArtifactError::SchemaValidation {
+                diagnostic: BuildDiagnostic::new(
+                    BuildDiagnosticSeverity::Error,
+                    "artifact.schema.invalid",
+                    format!(
+                        "sealed artifact failed schema validation at {}: {error}",
+                        error.instance_path()
+                    ),
+                ),
+            })
+    }
+
     fn stable_payload(&self) -> String {
         let mut payload = format!(
             "schema={}.{};manifest={};generator={};profile={};",
@@ -431,6 +490,16 @@ pub enum SealedArtifactError {
         expected: ArtifactSchemaVersion,
         /// Actual schema version.
         actual: ArtifactSchemaVersion,
+        /// Structured diagnostic.
+        diagnostic: BuildDiagnostic,
+    },
+    /// Artifact schema generation failed.
+    SchemaGeneration {
+        /// Structured diagnostic.
+        diagnostic: BuildDiagnostic,
+    },
+    /// Artifact schema validation failed.
+    SchemaValidation {
         /// Structured diagnostic.
         diagnostic: BuildDiagnostic,
     },

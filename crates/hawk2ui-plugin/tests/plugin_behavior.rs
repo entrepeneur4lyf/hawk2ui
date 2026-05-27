@@ -96,6 +96,27 @@ fn format_records_enumerate_package_targets() {
     );
 }
 
+#[test]
+fn format_records_generate_and_validate_package_metadata_schema() {
+    let target = PluginFormatTarget::vst3(
+        FormatMetadata::new("com.hawk2ui.delay", "Delay", "Hawk2")
+            .version("1.2.3")
+            .category("delay")
+            .feature("stereo"),
+        BundleOutput::new("dist/Delay.vst3", "Delay.vst3"),
+    );
+    let target_json = serde_json::to_value(&target).expect("plugin target serializes");
+
+    let schema = PluginFormatTarget::json_schema().expect("plugin target schema generates");
+    PluginFormatTarget::validate_json(&target_json).expect("plugin target schema accepts target");
+
+    let schema_text = schema.to_string();
+    assert!(schema_text.contains("metadata"));
+    assert!(schema_text.contains("output"));
+    assert!(schema_text.contains("display_name"));
+    assert!(schema_text.contains("bundle_name"));
+}
+
 use hawk2ui_plugin::{
     EditorEvent, EditorKind, EditorParent, PluginEditor, PluginEditorLifecycle, PluginEditorSize,
 };

@@ -1696,7 +1696,10 @@ name = "hawk2ui-plugin"
 version = "0.1.0"
 dependencies = [
  "hawk2ui-api",
+ "jsonschema",
+ "schemars",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

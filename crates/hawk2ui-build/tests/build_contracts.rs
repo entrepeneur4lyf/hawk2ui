@@ -292,6 +292,34 @@ fn sealed_artifact_carries_compiled_records_and_metadata() {
 }
 
 #[test]
+fn sealed_artifact_generates_and_validates_json_schema() {
+    let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
+    let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(CompiledScriptRecord::new(
+            "main",
+            "src/main.ts",
+            "scripts/main.hawk.js",
+            ArtifactHash::from_bytes(b"script"),
+        ))
+        .with_asset_manifest_entry(AssetManifestEntry::new(
+            "hero",
+            "image",
+            "assets/hero.png",
+            ArtifactHash::from_bytes(b"asset"),
+        ));
+    let artifact_json = serde_json::to_value(&artifact).expect("artifact serializes");
+
+    let schema = SealedArtifact::json_schema().expect("artifact schema generates");
+    SealedArtifact::validate_json(&artifact_json).expect("artifact schema accepts artifact JSON");
+
+    let schema_text = schema.to_string();
+    assert!(schema_text.contains("manifest_snapshot_hash"));
+    assert!(schema_text.contains("compiled_scripts"));
+    assert!(schema_text.contains("asset_manifest"));
+    assert!(schema_text.contains("target_metadata"));
+}
+
+#[test]
 fn sealed_artifact_content_hash_changes_when_compiled_payload_changes() {
     let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
     let first = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)

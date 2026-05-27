@@ -239,6 +239,11 @@ Evidence:
   validation.
 - Manifest schema validation now preserves the JSON pointer and validator detail instead of
   collapsing every schema failure into a generic error.
+- `crates/hawk2ui-build` now generates and validates sealed artifact JSON Schema from the artifact
+  record types.
+- `crates/hawk2ui-plugin` now generates and validates plugin package target metadata JSON Schema
+  from `PluginFormatTarget`, `FormatMetadata`, and `BundleOutput`.
+- Manifest capability declarations are covered by the generated raw manifest schema.
 
 Required remediation:
 
@@ -255,14 +260,18 @@ Status:
 
 - Partially remediated: product model and raw manifest schema generation/validation are implemented,
   and CLI manifest schema diagnostics now include a failing JSON pointer plus validator detail.
-- Remaining release blocker: artifact, capability, plugin metadata, and package metadata schemas must
-  be generated and validated through the shared schema/build boundary before this item can close.
+- Partially remediated: sealed artifact, plugin metadata, and package target metadata schema
+  generation/validation are implemented at the owning crate boundaries.
+- Remaining release blocker: capability schemas beyond manifest declarations, package adapter output
+  schemas, and central schema catalog/export commands must be generated and validated through the
+  shared schema/build boundary before this item can close.
 
 Review check:
 
 - As the delivering engineer, I am satisfied with this schema diagnostics slice for production
-  stability: invalid manifests no longer lose source-actionable schema failure detail. Further schema
-  surface expansion remains required before `REM-CRATE-005` is complete.
+  stability: invalid manifests no longer lose source-actionable schema failure detail, and artifact
+  plus plugin package metadata records now have generated validation schemas. Further schema catalog
+  and capability/package-adapter expansion remains required before `REM-CRATE-005` is complete.
 
 
 ### REM-CRATE-006: Add Realtime And Plugin Format Crates Where Chosen
@@ -1153,6 +1162,8 @@ Evidence:
 
 - Sealed artifact records exist.
 - Stable binary/container format and verification rules need completion.
+- Sealed artifact records now derive serde/schema contracts and can validate JSON against the
+  generated schema.
 
 Required remediation:
 
@@ -1161,6 +1172,19 @@ Required remediation:
 Acceptance:
 
 - Artifacts are reproducible and verifiable.
+
+Status:
+
+- Partially remediated: sealed artifact records have deterministic content hashing, compatibility
+  checks, generated JSON Schema, and schema validation.
+- Remaining release blocker: stable binary/container serialization, signature policy, and external
+  verification rules still need execution-backed implementation.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this sealed-artifact schema slice for production
+  stability: the typed artifact contract is now schema-backed and tested. Container/signature work
+  remains open under this item.
 
 ### REM-BUILD-003: Implement Dev Server And Hot Reload
 
@@ -1295,6 +1319,8 @@ Evidence:
 
 - Plugin metadata, parameter, automation, state, realtime records exist.
 - No real plugin format adapter is complete.
+- Plugin format/package metadata records now generate and validate JSON Schema at the plugin crate
+  boundary.
 
 Required remediation:
 
