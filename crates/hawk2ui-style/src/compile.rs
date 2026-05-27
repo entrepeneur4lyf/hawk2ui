@@ -1,6 +1,13 @@
 //! Style source validation and lowering into typed style records.
 
 use crate::{PropertyId, PropertyRegistry, Selector, StyleValue, ValidationError, ValueType};
+use lightningcss::{
+    printer::PrinterOptions,
+    properties::Property,
+    rules::CssRule,
+    stylesheet::{ParserOptions, StyleSheet},
+    traits::ToCss,
+};
 
 /// Style compiler diagnostic.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -155,15 +162,32 @@ pub fn compile_style_source(source: &str) -> Result<CompiledStyleSheet, StyleCom
     let mut rules = Vec::new();
     let mut diagnostics = Vec::new();
 
-    for block in source
-        .split('}')
-        .map(str::trim)
-        .filter(|block| !block.is_empty())
-    {
-        let Some((selector_source, body)) = block.split_once('{') else {
+    let stylesheet = match StyleSheet::parse(source, ParserOptions::default()) {
+        Ok(stylesheet) => stylesheet,
+        Err(error) => {
             diagnostics.push(StyleCompileDiagnostic::new(
                 "style.syntax.invalid",
-                "style block is missing '{'",
+                format!("style source is not valid CSS: {error}"),
+            ));
+            return Err(StyleCompileError::new(diagnostics));
+        }
+    };
+
+    for rule in stylesheet.rules.0 {
+        let CssRule::Style(style_rule) = rule else {
+            diagnostics.push(StyleCompileDiagnostic::new(
+                "style.rule.unsupported",
+                "only style rules are supported in Hawk2UI stylesheets",
+            ));
+            continue;
+        };
+        let Ok(selector_source) = style_rule
+            .selectors
+            .to_css_string(PrinterOptions::default())
+        else {
+            diagnostics.push(StyleCompileDiagnostic::new(
+                "style.selector.serialize-failed",
+                "style selector could not be serialized for Hawk2UI validation",
             ));
             continue;
         };
@@ -177,7 +201,11 @@ pub fn compile_style_source(source: &str) -> Result<CompiledStyleSheet, StyleCom
                 continue;
             }
         };
-        let declarations = compile_declarations(body, &registry, &mut diagnostics);
+        let declarations = compile_declarations(
+            &style_rule.declarations.declarations,
+            &registry,
+            &mut diagnostics,
+        );
         if !declarations.is_empty() {
             rules.push(CompiledStyleRule::new(selector, declarations));
         }
@@ -191,16 +219,19 @@ pub fn compile_style_source(source: &str) -> Result<CompiledStyleSheet, StyleCom
 }
 
 fn compile_declarations(
-    body: &str,
+    properties: &[Property<'_>],
     registry: &PropertyRegistry,
     diagnostics: &mut Vec<StyleCompileDiagnostic>,
 ) -> Vec<CompiledDeclaration> {
     let mut declarations = Vec::new();
-    for raw_decl in body
-        .split(';')
-        .map(str::trim)
-        .filter(|decl| !decl.is_empty())
-    {
+    for property in properties {
+        let Ok(raw_decl) = property.to_css_string(false, PrinterOptions::default()) else {
+            diagnostics.push(StyleCompileDiagnostic::new(
+                "style.declaration.serialize-failed",
+                "style declaration could not be serialized for Hawk2UI validation",
+            ));
+            continue;
+        };
         let Some((name, raw_value)) = raw_decl.split_once(':') else {
             diagnostics.push(StyleCompileDiagnostic::new(
                 "style.declaration.invalid",
@@ -242,7 +273,7 @@ fn parse_value(raw_value: &str, value_type: ValueType) -> Option<StyleValue> {
         ValueType::Color => parse_color(raw_value),
         ValueType::Shadow => parse_expression(raw_value).map(StyleValue::Shadow),
         ValueType::Transform => parse_expression(raw_value).map(StyleValue::Transform),
-        ValueType::Duration => parse_ms(raw_value).map(StyleValue::DurationMs),
+        ValueType::Duration => parse_duration(raw_value).map(StyleValue::DurationMs),
         ValueType::TokenReference => parse_token_ref(raw_value).map(StyleValue::TokenRef),
     }
 }
@@ -266,8 +297,21 @@ fn parse_px(raw_value: &str) -> Option<f32> {
     raw_value.strip_suffix("px")?.parse::<f32>().ok()
 }
 
+fn parse_duration(raw_value: &str) -> Option<u32> {
+    parse_ms(raw_value).or_else(|| parse_seconds(raw_value))
+}
+
 fn parse_ms(raw_value: &str) -> Option<u32> {
     raw_value.strip_suffix("ms")?.parse::<u32>().ok()
+}
+
+fn parse_seconds(raw_value: &str) -> Option<u32> {
+    let seconds = raw_value.strip_suffix('s')?.parse::<f32>().ok()?;
+    if seconds.is_finite() && seconds >= 0.0 {
+        format!("{:.0}", seconds * 1000.0).parse::<u32>().ok()
+    } else {
+        None
+    }
 }
 
 fn parse_color(raw_value: &str) -> Option<StyleValue> {

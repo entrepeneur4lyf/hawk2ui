@@ -195,6 +195,36 @@ fn style_compile_lowers_supported_declarations_to_typed_records() {
 }
 
 #[test]
+fn style_compile_uses_css_parser_semantics_for_comments() {
+    let sheet = hawk2ui_style::compile_style_source(
+        r#"
+/* author-facing stylesheet comment */
+.primary {
+  /* declaration comment */
+  font-size: 18px;
+  color: rgb(240, 245, 255);
+}
+"#,
+    )
+    .expect("CSS comments must not affect supported style compilation");
+
+    let rule = sheet
+        .rule("class(primary)")
+        .expect("commented class rule must compile");
+
+    assert_eq!(
+        rule.declaration(&PropertyId::new("font-size"))
+            .unwrap()
+            .value(),
+        &StyleValue::LengthPx(18.0)
+    );
+    assert_eq!(
+        rule.declaration(&PropertyId::new("color")).unwrap().value(),
+        &StyleValue::ColorRgba(240, 245, 255, 255)
+    );
+}
+
+#[test]
 fn style_compile_lowers_color_duration_shadow_and_transform_values() {
     let sheet = hawk2ui_style::compile_style_source(
         r#"
@@ -205,7 +235,7 @@ fn style_compile_lowers_color_duration_shadow_and_transform_values() {
   transform: translateX(12px);
 }
 .overlay {
-  color: rgba(240, 245, 255, 128);
+  color: rgba(240, 245, 255, 0.5);
 }
 "#,
     )
@@ -231,7 +261,7 @@ fn style_compile_lowers_color_duration_shadow_and_transform_values() {
             .declaration(&PropertyId::new("box-shadow"))
             .unwrap()
             .value(),
-        &StyleValue::Shadow("0px 8px 24px rgba(0,0,0,0.35)".to_string())
+        &StyleValue::Shadow("0 8px 24px #00000059".to_string())
     );
     assert_eq!(
         visual
