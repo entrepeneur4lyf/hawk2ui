@@ -195,6 +195,63 @@ fn style_compile_lowers_supported_declarations_to_typed_records() {
 }
 
 #[test]
+fn style_compile_lowers_color_duration_shadow_and_transform_values() {
+    let sheet = hawk2ui_style::compile_style_source(
+        r#"
+.visual {
+  color: #f0f5ff;
+  transition-duration: 120ms;
+  box-shadow: 0px 8px 24px rgba(0,0,0,0.35);
+  transform: translateX(12px);
+}
+.overlay {
+  color: rgba(240, 245, 255, 128);
+}
+"#,
+    )
+    .expect("production visual values must compile");
+
+    let visual = sheet.rule("class(visual)").expect("visual rule exists");
+    assert_eq!(
+        visual
+            .declaration(&PropertyId::new("color"))
+            .unwrap()
+            .value(),
+        &StyleValue::ColorRgba(240, 245, 255, 255)
+    );
+    assert_eq!(
+        visual
+            .declaration(&PropertyId::new("transition-duration"))
+            .unwrap()
+            .value(),
+        &StyleValue::DurationMs(120)
+    );
+    assert_eq!(
+        visual
+            .declaration(&PropertyId::new("box-shadow"))
+            .unwrap()
+            .value(),
+        &StyleValue::Shadow("0px 8px 24px rgba(0,0,0,0.35)".to_string())
+    );
+    assert_eq!(
+        visual
+            .declaration(&PropertyId::new("transform"))
+            .unwrap()
+            .value(),
+        &StyleValue::Transform("translateX(12px)".to_string())
+    );
+
+    let overlay = sheet.rule("class(overlay)").expect("overlay rule exists");
+    assert_eq!(
+        overlay
+            .declaration(&PropertyId::new("color"))
+            .unwrap()
+            .value(),
+        &StyleValue::ColorRgba(240, 245, 255, 128)
+    );
+}
+
+#[test]
 fn style_compile_rejects_unsupported_syntax_with_diagnostics() {
     let error = hawk2ui_style::compile_style_source("button + label { opacity: 0.5; }")
         .expect_err("unsupported selector must fail");

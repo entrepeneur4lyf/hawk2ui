@@ -1,6 +1,6 @@
 //! Style source validation and lowering into typed style records.
 
-use crate::{PropertyId, PropertyRegistry, Selector, StyleValue, ValidationError};
+use crate::{PropertyId, PropertyRegistry, Selector, StyleValue, ValidationError, ValueType};
 
 /// Style compiler diagnostic.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -209,14 +209,14 @@ fn compile_declarations(
             continue;
         };
         let property = PropertyId::new(name.trim());
-        if registry.metadata(&property).is_none() {
+        let Some(metadata) = registry.metadata(&property) else {
             diagnostics.push(StyleCompileDiagnostic::new(
                 "style.property.unknown",
                 format!("style property `{}` is not supported", property.as_str()),
             ));
             continue;
-        }
-        let Some(value) = parse_value(raw_value.trim()) else {
+        };
+        let Some(value) = parse_value(raw_value.trim(), metadata.value_type()) else {
             diagnostics.push(StyleCompileDiagnostic::new(
                 "style.value.unsupported",
                 format!("style value `{}` is not supported", raw_value.trim()),
@@ -232,20 +232,18 @@ fn compile_declarations(
     declarations
 }
 
-fn parse_value(raw_value: &str) -> Option<StyleValue> {
-    if let Some(token) = raw_value
-        .strip_prefix("token(")
-        .and_then(|value| value.strip_suffix(')'))
-    {
-        Some(StyleValue::TokenRef(token.to_string()))
-    } else if let Some(px) = raw_value.strip_suffix("px") {
-        px.parse::<f32>().ok().map(StyleValue::LengthPx)
-    } else if let Ok(number) = raw_value.parse::<f32>() {
-        Some(StyleValue::Number(number))
-    } else if is_keyword(raw_value) {
-        Some(StyleValue::Keyword(raw_value.to_string()))
-    } else {
-        None
+fn parse_value(raw_value: &str, value_type: ValueType) -> Option<StyleValue> {
+    match value_type {
+        ValueType::Keyword => {
+            is_keyword(raw_value).then(|| StyleValue::Keyword(raw_value.to_string()))
+        }
+        ValueType::Length => parse_px(raw_value).map(StyleValue::LengthPx),
+        ValueType::Number => raw_value.parse::<f32>().ok().map(StyleValue::Number),
+        ValueType::Color => parse_color(raw_value),
+        ValueType::Shadow => parse_expression(raw_value).map(StyleValue::Shadow),
+        ValueType::Transform => parse_expression(raw_value).map(StyleValue::Transform),
+        ValueType::Duration => parse_ms(raw_value).map(StyleValue::DurationMs),
+        ValueType::TokenReference => parse_token_ref(raw_value).map(StyleValue::TokenRef),
     }
 }
 
@@ -253,6 +251,106 @@ fn is_keyword(raw_value: &str) -> bool {
     raw_value
         .chars()
         .all(|character| character.is_ascii_alphabetic() || character == '-')
+}
+
+fn parse_token_ref(raw_value: &str) -> Option<String> {
+    raw_value
+        .strip_prefix("token(")
+        .and_then(|value| value.strip_suffix(')'))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn parse_px(raw_value: &str) -> Option<f32> {
+    raw_value.strip_suffix("px")?.parse::<f32>().ok()
+}
+
+fn parse_ms(raw_value: &str) -> Option<u32> {
+    raw_value.strip_suffix("ms")?.parse::<u32>().ok()
+}
+
+fn parse_color(raw_value: &str) -> Option<StyleValue> {
+    parse_hex_color(raw_value).or_else(|| parse_function_color(raw_value))
+}
+
+fn parse_hex_color(raw_value: &str) -> Option<StyleValue> {
+    let hex = raw_value.strip_prefix('#')?;
+    let (red, green, blue, alpha) = match hex.len() {
+        6 => (
+            parse_hex_channel(&hex[0..2])?,
+            parse_hex_channel(&hex[2..4])?,
+            parse_hex_channel(&hex[4..6])?,
+            255,
+        ),
+        8 => (
+            parse_hex_channel(&hex[0..2])?,
+            parse_hex_channel(&hex[2..4])?,
+            parse_hex_channel(&hex[4..6])?,
+            parse_hex_channel(&hex[6..8])?,
+        ),
+        _ => return None,
+    };
+    Some(StyleValue::ColorRgba(red, green, blue, alpha))
+}
+
+fn parse_hex_channel(value: &str) -> Option<u8> {
+    u8::from_str_radix(value, 16).ok()
+}
+
+fn parse_function_color(raw_value: &str) -> Option<StyleValue> {
+    if let Some(args) = raw_value
+        .strip_prefix("rgba(")
+        .and_then(|value| value.strip_suffix(')'))
+    {
+        let channels: Vec<_> = args.split(',').map(str::trim).collect();
+        if channels.len() != 4 {
+            return None;
+        }
+        return Some(StyleValue::ColorRgba(
+            parse_u8_channel(channels[0])?,
+            parse_u8_channel(channels[1])?,
+            parse_u8_channel(channels[2])?,
+            parse_alpha_channel(channels[3])?,
+        ));
+    }
+    let args = raw_value
+        .strip_prefix("rgb(")
+        .and_then(|value| value.strip_suffix(')'))?;
+    let channels: Vec<_> = args.split(',').map(str::trim).collect();
+    if channels.len() != 3 {
+        return None;
+    }
+    Some(StyleValue::ColorRgba(
+        parse_u8_channel(channels[0])?,
+        parse_u8_channel(channels[1])?,
+        parse_u8_channel(channels[2])?,
+        255,
+    ))
+}
+
+fn parse_u8_channel(value: &str) -> Option<u8> {
+    value.parse::<u8>().ok()
+}
+
+fn parse_alpha_channel(value: &str) -> Option<u8> {
+    if let Ok(alpha) = value.parse::<u8>() {
+        return Some(alpha);
+    }
+    let alpha = value.parse::<f32>().ok()?;
+    if (0.0..=1.0).contains(&alpha) {
+        format!("{:.0}", alpha * 255.0).parse::<u8>().ok()
+    } else {
+        None
+    }
+}
+
+fn parse_expression(raw_value: &str) -> Option<String> {
+    (!raw_value.is_empty()
+        && !raw_value.contains('{')
+        && !raw_value.contains('}')
+        && !raw_value.contains(';'))
+    .then(|| raw_value.to_string())
 }
 
 fn diagnostic_from_validation(error: ValidationError) -> StyleCompileDiagnostic {
