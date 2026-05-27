@@ -1,9 +1,9 @@
 use hawk2ui_layout::{
     AnalyzerRegion, BoxEdges, FlexDirection, GeneratedParameterLayout, GraphRegion,
-    HawkTextMeasurer, LayoutNode, LayoutNodeId, LayoutSizing, LayoutStyle, LayoutTextMeasurer,
-    LayoutTree, LayoutValue, PluginEditorConstraints, PluginEditorSize, SceneGeometryAttachment,
-    TestTextMeasurer, TextMeasureInput, TextMeasureKey, TextMeasureMode, TextMeasureResult,
-    Viewport,
+    HawkTextMeasurer, LayoutAlignItems, LayoutJustifyContent, LayoutNode, LayoutNodeId,
+    LayoutSizing, LayoutStyle, LayoutTextMeasurer, LayoutTree, LayoutValue,
+    PluginEditorConstraints, PluginEditorSize, SceneGeometryAttachment, TestTextMeasurer,
+    TextMeasureInput, TextMeasureKey, TextMeasureMode, TextMeasureResult, Viewport,
 };
 use hawk2ui_text::{FontCatalog, TextBackend};
 
@@ -119,6 +119,18 @@ fn layout_tree_rejects_invalid_ids_styles_and_viewports() {
         .try_compute_layout(Viewport::new(0.0, 100.0))
         .expect_err("non-positive viewport sizes must fail");
     assert_eq!(error, hawk2ui_layout::LayoutTreeError::InvalidViewport);
+
+    let tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Row).with_flex_grow(f32::NAN),
+    ));
+    let error = tree
+        .try_compute_layout(Viewport::new(300.0, 100.0))
+        .expect_err("invalid flex factors must fail before layout");
+    assert_eq!(
+        error,
+        hawk2ui_layout::LayoutTreeError::InvalidStyle("root".to_string())
+    );
 }
 
 #[test]
@@ -265,6 +277,87 @@ fn layout_compute_applies_min_and_max_constraints() {
             .unwrap()
             .height,
         80.0
+    );
+}
+
+#[test]
+fn layout_compute_supports_flex_growth_alignment_basis_and_absolute_insets() {
+    let tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Row)
+            .with_size(LayoutSizing::fixed(600.0, 200.0))
+            .with_align_items(LayoutAlignItems::Center)
+            .with_justify_content(LayoutJustifyContent::Start),
+    ))
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new("left"),
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_size(LayoutSizing::fixed(0.0, 40.0))
+                .with_flex_basis(LayoutValue::px(100.0))
+                .with_flex_grow(1.0),
+        ),
+    )
+    .expect("left child insertion should succeed")
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new("right"),
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_size(LayoutSizing::fixed(0.0, 80.0))
+                .with_flex_basis(LayoutValue::px(100.0))
+                .with_flex_grow(2.0),
+        ),
+    )
+    .expect("right child insertion should succeed")
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new("overlay"),
+            LayoutStyle::absolute_region()
+                .with_size(LayoutSizing::fixed(50.0, 40.0))
+                .with_inset(BoxEdges {
+                    left: LayoutValue::px(24.0),
+                    right: LayoutValue::Auto,
+                    top: LayoutValue::px(32.0),
+                    bottom: LayoutValue::Auto,
+                }),
+        ),
+    )
+    .expect("absolute child insertion should succeed");
+
+    let output = tree.compute_layout(Viewport::new(600.0, 200.0));
+    let left = output.geometry(&LayoutNodeId::new("left")).unwrap();
+    let right = output.geometry(&LayoutNodeId::new("right")).unwrap();
+    let overlay = output.geometry(&LayoutNodeId::new("overlay")).unwrap();
+
+    assert_eq!(left.width, 233.0);
+    assert_eq!(right.width, 367.0);
+    assert_eq!(left.y, 80.0);
+    assert_eq!(right.y, 60.0);
+    assert_eq!(overlay.x, 24.0);
+    assert_eq!(overlay.y, 32.0);
+
+    let centered_tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Row)
+            .with_size(LayoutSizing::fixed(300.0, 100.0))
+            .with_justify_content(LayoutJustifyContent::Center),
+    ))
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new("centered"),
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_size(LayoutSizing::fixed(100.0, 20.0)),
+        ),
+    )
+    .expect("centered child insertion should succeed");
+    let centered = centered_tree.compute_layout(Viewport::new(300.0, 100.0));
+    assert_eq!(
+        centered.geometry(&LayoutNodeId::new("centered")).unwrap().x,
+        100.0
     );
 }
 

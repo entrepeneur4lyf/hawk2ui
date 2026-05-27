@@ -1,12 +1,13 @@
 //! Deterministic layout calculation backend.
 
 use crate::{
-    BoxEdges, FlexDirection, LayoutNodeId, LayoutStyle, LayoutTextMeasurer, LayoutTree,
-    LayoutTreeError, LayoutValue, TextMeasureError, TextMeasureInput,
+    BoxEdges, FlexDirection, LayoutAlignItems, LayoutJustifyContent, LayoutNodeId, LayoutStyle,
+    LayoutTextMeasurer, LayoutTree, LayoutTreeError, LayoutValue, TextMeasureError,
+    TextMeasureInput,
 };
 use taffy::{
-    AvailableSpace, Dimension, Display, LengthPercentage, LengthPercentageAuto, NodeId, Overflow,
-    Point, Position, Rect, Size, Style, TaffyTree,
+    AlignContent, AlignItems, AvailableSpace, Dimension, Display, LengthPercentage,
+    LengthPercentageAuto, NodeId, Overflow, Point, Position, Rect, Size, Style, TaffyTree,
 };
 
 /// Viewport size used as the root layout constraint.
@@ -269,6 +270,7 @@ fn taffy_style(style: &LayoutStyle, root_viewport: Option<Viewport>) -> Style {
         } else {
             Position::Relative
         },
+        inset: rect_auto(style.inset()),
         size: Size {
             width: dimension(style.size().width()),
             height: dimension(style.size().height()),
@@ -298,11 +300,15 @@ fn taffy_style(style: &LayoutStyle, root_viewport: Option<Viewport>) -> Style {
             width: length_percentage(style.gap()),
             height: length_percentage(style.gap()),
         },
+        align_items: style.align_items().map(align_items),
+        justify_content: style.justify_content().map(justify_content),
         flex_direction: match style.flex_direction().unwrap_or(FlexDirection::Column) {
             FlexDirection::Row => taffy::FlexDirection::Row,
             FlexDirection::Column => taffy::FlexDirection::Column,
         },
-        flex_shrink: 0.0,
+        flex_basis: dimension(style.flex_basis()),
+        flex_grow: style.flex_grow(),
+        flex_shrink: style.flex_shrink(),
         ..Style::default()
     };
     if let Some(viewport) = root_viewport {
@@ -314,6 +320,26 @@ fn taffy_style(style: &LayoutStyle, root_viewport: Option<Viewport>) -> Style {
         }
     }
     taffy_style
+}
+
+fn align_items(value: LayoutAlignItems) -> AlignItems {
+    match value {
+        LayoutAlignItems::Start => AlignItems::Start,
+        LayoutAlignItems::End => AlignItems::End,
+        LayoutAlignItems::Center => AlignItems::Center,
+        LayoutAlignItems::Stretch => AlignItems::Stretch,
+    }
+}
+
+fn justify_content(value: LayoutJustifyContent) -> AlignContent {
+    match value {
+        LayoutJustifyContent::Start => AlignContent::Start,
+        LayoutJustifyContent::End => AlignContent::End,
+        LayoutJustifyContent::Center => AlignContent::Center,
+        LayoutJustifyContent::SpaceBetween => AlignContent::SpaceBetween,
+        LayoutJustifyContent::SpaceAround => AlignContent::SpaceAround,
+        LayoutJustifyContent::SpaceEvenly => AlignContent::SpaceEvenly,
+    }
 }
 
 fn dimension(value: LayoutValue) -> Dimension {

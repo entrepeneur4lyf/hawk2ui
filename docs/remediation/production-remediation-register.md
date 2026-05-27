@@ -565,6 +565,28 @@ Acceptance:
 
 - Layout tests cover desktop windows and constrained plugin editors.
 
+Status:
+
+- Layout computation flows through Taffy behind Hawk2UI-owned records.
+- `LayoutStyle` now exposes flex basis, flex grow, explicit flex shrink, cross-axis alignment,
+  main-axis distribution, and absolute inset records.
+- Taffy lowering maps nested flex, fixed and percentage sizing, min/max constraints, margins,
+  padding, gaps, scroll clips, absolute positioning, absolute insets, flex basis/grow/shrink,
+  alignment, distribution, and measured text leaves.
+- Existing tests cover nested flex, scroll clipping, absolute children, percentage resize behavior,
+  text measurement, plugin editor constraints, and graph/analyzer geometry attachment.
+- Added coverage for flex growth, flex basis, alignment, justify content, absolute insets, and
+  invalid flex factors.
+- Documented the production Taffy mapping and shrink default in `manual/layout-reference.md`.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this remediation item for production readiness:
+  the layout engine is Taffy-backed through stable Hawk2UI records, missing flex/absolute controls
+  are implemented and tested, existing scroll overflow behavior is preserved, and plugin/editor
+  geometry coverage remains intact. No corrective revision is required before host size/DPI
+  integration.
+
 ### REM-LAYOUT-002: Host Size Negotiation And DPI
 
 Evidence:

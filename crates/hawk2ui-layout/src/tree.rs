@@ -137,6 +137,36 @@ pub enum FlexDirection {
     Column,
 }
 
+/// Cross-axis alignment for flex children.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LayoutAlignItems {
+    /// Pack children toward the start of the cross axis.
+    Start,
+    /// Pack children toward the end of the cross axis.
+    End,
+    /// Center children along the cross axis.
+    Center,
+    /// Stretch children along the cross axis.
+    Stretch,
+}
+
+/// Main-axis distribution for flex children.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LayoutJustifyContent {
+    /// Pack children toward the start of the main axis.
+    Start,
+    /// Pack children toward the end of the main axis.
+    End,
+    /// Center children along the main axis.
+    Center,
+    /// Distribute remaining space between children.
+    SpaceBetween,
+    /// Distribute remaining space around children.
+    SpaceAround,
+    /// Distribute remaining space evenly around children.
+    SpaceEvenly,
+}
+
 /// Layout style record.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutStyle {
@@ -147,6 +177,12 @@ pub struct LayoutStyle {
     padding: BoxEdges,
     gap: LayoutValue,
     flex_direction: Option<FlexDirection>,
+    flex_basis: LayoutValue,
+    flex_grow: f32,
+    flex_shrink: f32,
+    align_items: Option<LayoutAlignItems>,
+    justify_content: Option<LayoutJustifyContent>,
+    inset: BoxEdges,
     scroll_container: bool,
     absolute: bool,
     custom_measured: bool,
@@ -198,6 +234,12 @@ impl LayoutStyle {
             padding: BoxEdges::all(LayoutValue::Px(0.0)),
             gap: LayoutValue::Px(0.0),
             flex_direction: None,
+            flex_basis: LayoutValue::Auto,
+            flex_grow: 0.0,
+            flex_shrink: 0.0,
+            align_items: None,
+            justify_content: None,
+            inset: BoxEdges::all(LayoutValue::Auto),
             scroll_container: false,
             absolute: false,
             custom_measured: false,
@@ -246,6 +288,48 @@ impl LayoutStyle {
         self
     }
 
+    /// Sets the flex basis used by the parent flex container.
+    #[must_use]
+    pub const fn with_flex_basis(mut self, flex_basis: LayoutValue) -> Self {
+        self.flex_basis = flex_basis;
+        self
+    }
+
+    /// Sets the positive flex grow factor.
+    #[must_use]
+    pub const fn with_flex_grow(mut self, flex_grow: f32) -> Self {
+        self.flex_grow = flex_grow;
+        self
+    }
+
+    /// Sets the positive flex shrink factor.
+    #[must_use]
+    pub const fn with_flex_shrink(mut self, flex_shrink: f32) -> Self {
+        self.flex_shrink = flex_shrink;
+        self
+    }
+
+    /// Sets cross-axis alignment for this flex container's children.
+    #[must_use]
+    pub const fn with_align_items(mut self, align_items: LayoutAlignItems) -> Self {
+        self.align_items = Some(align_items);
+        self
+    }
+
+    /// Sets main-axis distribution for this flex container's children.
+    #[must_use]
+    pub const fn with_justify_content(mut self, justify_content: LayoutJustifyContent) -> Self {
+        self.justify_content = Some(justify_content);
+        self
+    }
+
+    /// Sets absolute/relative inset offsets.
+    #[must_use]
+    pub const fn with_inset(mut self, inset: BoxEdges) -> Self {
+        self.inset = inset;
+        self
+    }
+
     /// Returns preferred size.
     #[must_use]
     pub const fn size(&self) -> LayoutSizing {
@@ -286,6 +370,42 @@ impl LayoutStyle {
     #[must_use]
     pub const fn flex_direction(&self) -> Option<FlexDirection> {
         self.flex_direction
+    }
+
+    /// Returns the flex basis.
+    #[must_use]
+    pub const fn flex_basis(&self) -> LayoutValue {
+        self.flex_basis
+    }
+
+    /// Returns the flex grow factor.
+    #[must_use]
+    pub const fn flex_grow(&self) -> f32 {
+        self.flex_grow
+    }
+
+    /// Returns the flex shrink factor.
+    #[must_use]
+    pub const fn flex_shrink(&self) -> f32 {
+        self.flex_shrink
+    }
+
+    /// Returns cross-axis child alignment.
+    #[must_use]
+    pub const fn align_items(&self) -> Option<LayoutAlignItems> {
+        self.align_items
+    }
+
+    /// Returns main-axis child distribution.
+    #[must_use]
+    pub const fn justify_content(&self) -> Option<LayoutJustifyContent> {
+        self.justify_content
+    }
+
+    /// Returns absolute/relative inset offsets.
+    #[must_use]
+    pub const fn inset(&self) -> BoxEdges {
+        self.inset
     }
 
     /// Returns whether this node scrolls content.
@@ -522,7 +642,18 @@ fn validate_layout_style(
     validate_sizing(node_id, style.max_size(), false)?;
     validate_edges(node_id, style.margin(), true)?;
     validate_edges(node_id, style.padding(), false)?;
-    validate_value(node_id, style.gap(), false)
+    validate_edges(node_id, style.inset(), true)?;
+    validate_value(node_id, style.gap(), false)?;
+    validate_value(node_id, style.flex_basis(), false)?;
+    if style.flex_grow().is_finite()
+        && style.flex_grow() >= 0.0
+        && style.flex_shrink().is_finite()
+        && style.flex_shrink() >= 0.0
+    {
+        Ok(())
+    } else {
+        Err(LayoutTreeError::InvalidStyle(node_id.as_str().to_string()))
+    }
 }
 
 fn validate_sizing(

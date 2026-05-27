@@ -7,6 +7,8 @@ The layout API turns typed style records and content measurements into geometry 
 - `LayoutTree`: retained layout tree input and output container.
 - `LayoutStyle`: typed layout style applied to nodes.
 - `FlexDirection`: flex axis direction record used by layout style.
+- `LayoutAlignItems`: cross-axis alignment for flex children.
+- `LayoutJustifyContent`: main-axis distribution for flex children.
 - `PluginEditorConstraints`: plugin editor sizing constraints for host embedding.
 - `SceneGeometryAttachment`: geometry bridge from layout output to scene rendering.
 - `TextMeasureInput`: text measurement input used before final layout.
@@ -23,3 +25,9 @@ A typical flow is:
 6. Attach computed geometry to the scene through `SceneGeometryAttachment`.
 
 The layout surface is intentionally data-oriented so desktop windows and plugin hosts can share the same geometry contract.
+
+## Taffy Mapping
+
+`LayoutTree::try_compute_layout(...)` lowers Hawk2UI-owned records into Taffy. The production mapping covers nested flex trees, row and column directions, fixed and percentage sizing, min/max constraints, margins, padding, gaps, scroll clips, absolute positioning, absolute insets, flex basis, flex grow, explicit flex shrink, cross-axis alignment, main-axis distribution, and measured text leaves.
+
+Hawk2UI defaults preserve native UI overflow behavior: flex children do not shrink unless `LayoutStyle::with_flex_shrink(...)` opts in. This keeps scrollable graph and analyzer regions from collapsing under constrained plugin or desktop hosts.
