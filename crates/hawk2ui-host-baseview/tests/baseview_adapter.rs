@@ -83,3 +83,30 @@ fn baseview_adapter_teardown_destroys_editor_without_process_quit() {
     );
     assert!(events.contains(&PluginHostEvent::SafeTeardownComplete));
 }
+
+#[test]
+fn baseview_adapter_ignores_host_events_after_destroy() {
+    let mut adapter = BaseviewPluginAdapter::attach(
+        PluginEditorConfig::new(
+            "editor",
+            PluginParentHandle::opaque("parent"),
+            SurfaceMetrics::new(320.0, 180.0, 1.0),
+        ),
+        BaseviewParentFixture::wayland(),
+    )
+    .expect("baseview editor attaches");
+    adapter.drain_events();
+
+    adapter.destroy_editor("host closed editor");
+    adapter.drain_events();
+    adapter.host_resize(SurfaceMetrics::new(640.0, 360.0, 2.0));
+    adapter.dpi_changed(3.0);
+    adapter.schedule_repaint("late repaint");
+    adapter.route_focus(true);
+    adapter.route_keyboard(KeyboardInput::new("Space", true));
+    adapter.route_pointer(PointerInput::new(10.0, 12.0, "left"));
+
+    assert_eq!(adapter.metrics(), SurfaceMetrics::new(320.0, 180.0, 1.0));
+    assert!(adapter.repaint_reasons().is_empty());
+    assert!(adapter.drain_events().is_empty());
+}

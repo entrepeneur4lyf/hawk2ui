@@ -132,6 +132,10 @@ impl RecordingPluginAdapter {
     pub fn drain_events(&mut self) -> Vec<PluginHostEvent> {
         std::mem::take(&mut self.events)
     }
+
+    fn accepts_host_event(&self) -> bool {
+        !self.destroyed
+    }
 }
 
 impl PluginHostAdapter for RecordingPluginAdapter {
@@ -140,29 +144,47 @@ impl PluginHostAdapter for RecordingPluginAdapter {
     }
 
     fn host_resize(&mut self, metrics: SurfaceMetrics) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.config.metrics = metrics;
         self.events.push(PluginHostEvent::HostResize(metrics));
     }
 
     fn dpi_changed(&mut self, scale_factor: f64) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.config.metrics.scale_factor = scale_factor;
         self.events.push(PluginHostEvent::DpiChanged(scale_factor));
     }
 
     fn schedule_repaint(&mut self, reason: impl Into<String>) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.events
             .push(PluginHostEvent::RepaintScheduled(reason.into()));
     }
 
     fn route_focus(&mut self, focused: bool) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.events.push(PluginHostEvent::FocusRouted(focused));
     }
 
     fn route_keyboard(&mut self, input: KeyboardInput) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.events.push(PluginHostEvent::KeyboardRouted(input));
     }
 
     fn route_pointer(&mut self, input: PointerInput) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.events.push(PluginHostEvent::PointerRouted(input));
     }
 

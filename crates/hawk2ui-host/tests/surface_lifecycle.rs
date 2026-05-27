@@ -166,6 +166,28 @@ fn plugin_lifecycle_teardown_never_requests_process_quit() {
 }
 
 #[test]
+fn plugin_lifecycle_ignores_host_events_after_teardown() {
+    let mut adapter = RecordingPluginAdapter::attach(PluginEditorConfig::new(
+        "editor",
+        PluginParentHandle::opaque("clap-parent"),
+        SurfaceMetrics::new(320.0, 240.0, 1.0),
+    ));
+    adapter.drain_events();
+
+    adapter.destroy_editor("host destroyed editor");
+    adapter.drain_events();
+    adapter.host_resize(SurfaceMetrics::new(640.0, 480.0, 2.0));
+    adapter.dpi_changed(3.0);
+    adapter.schedule_repaint("late repaint");
+    adapter.route_focus(true);
+    adapter.route_keyboard(KeyboardInput::new("Space", true));
+    adapter.route_pointer(PointerInput::new(8.0, 16.0, "primary"));
+
+    assert_eq!(adapter.metrics(), SurfaceMetrics::new(320.0, 240.0, 1.0));
+    assert!(adapter.drain_events().is_empty());
+}
+
+#[test]
 fn platform_handles_support_windows_macos_wayland_x11_xcb_and_xwayland() {
     use hawk2ui_host::{HostPlatformHandle, LinuxWindowSystem, SurfaceOwnership};
 

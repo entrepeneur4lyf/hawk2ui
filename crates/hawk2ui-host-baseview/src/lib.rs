@@ -215,6 +215,10 @@ impl BaseviewPluginAdapter {
     pub fn drain_events(&mut self) -> Vec<PluginHostEvent> {
         std::mem::take(&mut self.events)
     }
+
+    fn accepts_host_event(&self) -> bool {
+        !self.destroyed
+    }
 }
 
 impl PluginHostAdapter for BaseviewPluginAdapter {
@@ -223,32 +227,50 @@ impl PluginHostAdapter for BaseviewPluginAdapter {
     }
 
     fn host_resize(&mut self, metrics: SurfaceMetrics) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.config.metrics = metrics;
         self.open_options.size = Size::new(metrics.logical_width, metrics.logical_height);
         self.events.push(PluginHostEvent::HostResize(metrics));
     }
 
     fn dpi_changed(&mut self, scale_factor: f64) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.config.metrics.scale_factor = scale_factor;
         self.open_options.scale = WindowScalePolicy::ScaleFactor(scale_factor);
         self.events.push(PluginHostEvent::DpiChanged(scale_factor));
     }
 
     fn schedule_repaint(&mut self, reason: impl Into<String>) {
+        if !self.accepts_host_event() {
+            return;
+        }
         let reason = reason.into();
         self.repaint_reasons.push(reason.clone());
         self.events.push(PluginHostEvent::RepaintScheduled(reason));
     }
 
     fn route_focus(&mut self, focused: bool) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.events.push(PluginHostEvent::FocusRouted(focused));
     }
 
     fn route_keyboard(&mut self, input: KeyboardInput) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.events.push(PluginHostEvent::KeyboardRouted(input));
     }
 
     fn route_pointer(&mut self, input: PointerInput) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.events.push(PluginHostEvent::PointerRouted(input));
     }
 
