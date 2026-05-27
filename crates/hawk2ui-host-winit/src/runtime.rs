@@ -195,7 +195,7 @@ struct RuntimeApplication {
     window: Option<Arc<Window>>,
     context: Option<Context<Arc<Window>>>,
     surface: Option<Surface<Arc<Window>, Arc<Window>>>,
-    summary: WinitDesktopRuntimeSummary,
+    lifecycle: RuntimeLifecycle,
     last_error: Option<WinitHostError>,
 }
 
@@ -207,7 +207,7 @@ impl RuntimeApplication {
             window: None,
             context: None,
             surface: None,
-            summary: WinitDesktopRuntimeSummary::default(),
+            lifecycle: RuntimeLifecycle::default(),
             last_error: None,
         }
     }
@@ -216,7 +216,7 @@ impl RuntimeApplication {
         if let Some(error) = self.last_error {
             Err(error)
         } else {
-            Ok(self.summary)
+            Ok(self.lifecycle.into_summary())
         }
     }
 
@@ -247,7 +247,7 @@ impl RuntimeApplication {
             )
         })?;
 
-        self.summary.window_created = true;
+        self.lifecycle.record_window_created();
         self.context = Some(context);
         self.surface = Some(surface);
         self.window = Some(window);
@@ -270,12 +270,15 @@ impl RuntimeApplication {
                 format!("failed to resize native presentation surface: {error}"),
             )
         })?;
-        self.summary.resizes += 1;
+        self.lifecycle.record_resize();
         self.request_redraw();
         Ok(())
     }
 
     fn present_frame(&mut self, event_loop: &ActiveEventLoop) -> Result<(), WinitHostError> {
+        if !self.lifecycle.accepts_frame_presentation() {
+            return Ok(());
+        }
         let Some(window) = self.window.as_ref() else {
             return Ok(());
         };
@@ -338,7 +341,7 @@ impl RuntimeApplication {
                 format!("failed to present native frame: {error}"),
             )
         })?;
-        self.summary.frames_presented += 1;
+        self.lifecycle.record_frame_presented();
         if self.config.exit_after_first_frame {
             event_loop.exit();
         }
@@ -380,6 +383,96 @@ fn logical_size_to_f32(value: f64) -> Result<f32, WinitHostError> {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+struct RuntimeLifecycle {
+    summary: WinitDesktopRuntimeSummary,
+}
+
+impl RuntimeLifecycle {
+    #[cfg(test)]
+    fn summary(&self) -> &WinitDesktopRuntimeSummary {
+        &self.summary
+    }
+
+    fn into_summary(self) -> WinitDesktopRuntimeSummary {
+        self.summary
+    }
+
+    fn accepts_host_event(&self) -> bool {
+        !self.summary.close_requested
+    }
+
+    fn accepts_frame_presentation(&self) -> bool {
+        self.accepts_host_event()
+    }
+
+    fn record_window_created(&mut self) {
+        self.summary.window_created = true;
+    }
+
+    fn record_frame_presented(&mut self) {
+        if self.accepts_frame_presentation() {
+            self.summary.frames_presented += 1;
+        }
+    }
+
+    fn record_resize(&mut self) {
+        if self.accepts_frame_presentation() {
+            self.summary.resizes += 1;
+        }
+    }
+
+    fn record_dpi_change(&mut self) {
+        if self.accepts_frame_presentation() {
+            self.summary.dpi_changes += 1;
+        }
+    }
+
+    fn record_input_event(&mut self) {
+        if self.accepts_frame_presentation() {
+            self.summary.input_events += 1;
+        }
+    }
+
+    fn request_close(&mut self) -> bool {
+        if self.summary.close_requested {
+            false
+        } else {
+            self.summary.close_requested = true;
+            true
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeLifecycle;
+
+    #[test]
+    fn runtime_lifecycle_stops_presenting_frames_after_close() {
+        let mut lifecycle = RuntimeLifecycle::default();
+
+        assert!(lifecycle.accepts_frame_presentation());
+        lifecycle.record_frame_presented();
+        assert_eq!(lifecycle.summary().frames_presented, 1);
+
+        assert!(lifecycle.request_close());
+        assert!(!lifecycle.request_close());
+        assert!(!lifecycle.accepts_host_event());
+        assert!(!lifecycle.accepts_frame_presentation());
+        assert!(lifecycle.summary().close_requested);
+
+        lifecycle.record_resize();
+        lifecycle.record_dpi_change();
+        lifecycle.record_input_event();
+        lifecycle.record_frame_presented();
+        assert_eq!(lifecycle.summary().resizes, 0);
+        assert_eq!(lifecycle.summary().dpi_changes, 0);
+        assert_eq!(lifecycle.summary().input_events, 0);
+        assert_eq!(lifecycle.summary().frames_presented, 1);
+    }
+}
+
 impl ApplicationHandler for RuntimeApplication {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none()
@@ -395,15 +488,18 @@ impl ApplicationHandler for RuntimeApplication {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        if !self.lifecycle.accepts_host_event() && !matches!(&event, &WindowEvent::CloseRequested) {
+            return;
+        }
         let result = match event {
             WindowEvent::CloseRequested => {
-                self.summary.close_requested = true;
+                self.lifecycle.request_close();
                 event_loop.exit();
                 Ok(())
             }
             WindowEvent::Resized(size) => self.resize_surface(size),
             WindowEvent::ScaleFactorChanged { .. } => {
-                self.summary.dpi_changes += 1;
+                self.lifecycle.record_dpi_change();
                 self.request_redraw();
                 Ok(())
             }
@@ -416,7 +512,7 @@ impl ApplicationHandler for RuntimeApplication {
             | WindowEvent::MouseInput { .. }
             | WindowEvent::MouseWheel { .. }
             | WindowEvent::ModifiersChanged(_) => {
-                self.summary.input_events += 1;
+                self.lifecycle.record_input_event();
                 Ok(())
             }
             _ => Ok(()),

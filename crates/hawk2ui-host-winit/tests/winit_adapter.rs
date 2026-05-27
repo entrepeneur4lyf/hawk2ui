@@ -1,7 +1,7 @@
 use hawk2ui_host::{
-    ClipboardCapability, DesktopHostAdapter, DesktopWindowConfig, HostPlatformHandle,
-    KeyboardInput, LinuxWindowSystem, PointerInput, RendererResizeBridge, SurfaceMetrics,
-    WindowMode,
+    ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
+    HostPlatformHandle, KeyboardInput, LinuxWindowSystem, PointerInput, RendererResizeBridge,
+    SurfaceMetrics, WindowMode,
 };
 use hawk2ui_host_winit::{WinitDesktopAdapter, WinitPlatformFixture};
 
@@ -96,6 +96,66 @@ fn winit_adapter_reports_invalid_live_resize_and_dpi_metrics() {
         .try_dpi_changed(f64::INFINITY)
         .expect_err("invalid live DPI metrics must report diagnostics");
     assert_eq!(error.rule(), "desktop.window.invalid-size");
+
+    assert_eq!(adapter.metrics(), initial_metrics);
+    assert!(adapter.drain_events().is_empty());
+}
+
+#[test]
+fn winit_adapter_close_is_idempotent_and_freezes_late_events() {
+    let initial_metrics = SurfaceMetrics::new(400.0, 300.0, 1.0);
+    let mut adapter = WinitDesktopAdapter::create_window(
+        DesktopWindowConfig::new("app", initial_metrics),
+        WinitPlatformFixture::linux(LinuxWindowSystem::Wayland),
+    )
+    .expect("window fixture creates");
+    adapter.drain_events();
+
+    adapter.request_close("first close");
+    adapter.request_close("duplicate close");
+    adapter.request_maximize(true);
+    adapter.handle_resize(SurfaceMetrics::new(800.0, 600.0, 2.0));
+    adapter.dpi_changed(2.0);
+    adapter.set_focus(true);
+    adapter.keyboard_input(KeyboardInput::new("KeyA", true));
+    adapter.pointer_input(PointerInput::new(10.0, 20.0, "left"));
+    adapter.clipboard_available(ClipboardCapability::ReadWrite);
+    adapter.request_repaint("late repaint");
+
+    assert!(adapter.close_requested());
+    assert_eq!(adapter.mode(), WindowMode::Normal);
+    assert!(!adapter.focused());
+    assert_eq!(adapter.metrics(), initial_metrics);
+    assert_eq!(adapter.config().clipboard, ClipboardCapability::None);
+    assert!(adapter.repaint_requests().is_empty());
+    assert_eq!(
+        adapter.drain_events(),
+        vec![DesktopHostEvent::CloseRequested("first close".into())]
+    );
+}
+
+#[test]
+fn winit_adapter_reports_fallible_events_after_close() {
+    let initial_metrics = SurfaceMetrics::new(400.0, 300.0, 1.0);
+    let mut adapter = WinitDesktopAdapter::create_window(
+        DesktopWindowConfig::new("app", initial_metrics),
+        WinitPlatformFixture::linux(LinuxWindowSystem::Wayland),
+    )
+    .expect("window fixture creates");
+    adapter.drain_events();
+
+    adapter.request_close("closed");
+    adapter.drain_events();
+
+    let error = adapter
+        .try_handle_resize(SurfaceMetrics::new(800.0, 600.0, 2.0))
+        .expect_err("fallible resize must report closed window");
+    assert_eq!(error.rule(), "desktop.window.closed");
+
+    let error = adapter
+        .try_dpi_changed(2.0)
+        .expect_err("fallible DPI change must report closed window");
+    assert_eq!(error.rule(), "desktop.window.closed");
 
     assert_eq!(adapter.metrics(), initial_metrics);
     assert!(adapter.drain_events().is_empty());

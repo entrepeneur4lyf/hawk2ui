@@ -284,6 +284,7 @@ impl WinitDesktopAdapter {
     ///
     /// Returns [`WinitHostError`] when the resize metrics are not finite and positive.
     pub fn try_handle_resize(&mut self, metrics: SurfaceMetrics) -> Result<(), WinitHostError> {
+        self.ensure_accepts_host_event()?;
         validate_desktop_metrics(metrics)?;
         self.config.metrics = metrics;
         self.logical_size = LogicalSize::new(metrics.logical_width, metrics.logical_height);
@@ -298,6 +299,7 @@ impl WinitDesktopAdapter {
     ///
     /// Returns [`WinitHostError`] when the resulting surface metrics are not finite and positive.
     pub fn try_dpi_changed(&mut self, scale_factor: f64) -> Result<(), WinitHostError> {
+        self.ensure_accepts_host_event()?;
         let metrics = SurfaceMetrics::new(
             self.config.metrics.logical_width,
             self.config.metrics.logical_height,
@@ -313,6 +315,9 @@ impl WinitDesktopAdapter {
 
     /// Requests a repaint.
     pub fn request_repaint(&mut self, reason: impl Into<String>) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.repaint_requests
             .push(RepaintRequest::full_surface(reason));
     }
@@ -323,8 +328,26 @@ impl WinitDesktopAdapter {
     }
 
     fn set_mode(&mut self, mode: WindowMode) {
+        if !self.accepts_host_event() || self.mode == mode {
+            return;
+        }
         self.mode = mode;
         self.events.push(DesktopHostEvent::ModeChanged(mode));
+    }
+
+    fn accepts_host_event(&self) -> bool {
+        !self.close_requested
+    }
+
+    fn ensure_accepts_host_event(&self) -> Result<(), WinitHostError> {
+        if self.accepts_host_event() {
+            Ok(())
+        } else {
+            Err(WinitHostError::new(
+                "desktop.window.closed",
+                "desktop window has already received a close request",
+            ))
+        }
     }
 }
 
@@ -362,25 +385,40 @@ impl DesktopHostAdapter for WinitDesktopAdapter {
     }
 
     fn request_close(&mut self, reason: impl Into<String>) {
+        if self.close_requested {
+            return;
+        }
         self.close_requested = true;
         self.events
             .push(DesktopHostEvent::CloseRequested(reason.into()));
     }
 
     fn set_focus(&mut self, focused: bool) {
+        if !self.accepts_host_event() || self.focused == focused {
+            return;
+        }
         self.focused = focused;
         self.events.push(DesktopHostEvent::FocusChanged(focused));
     }
 
     fn keyboard_input(&mut self, input: KeyboardInput) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.events.push(DesktopHostEvent::KeyboardInput(input));
     }
 
     fn pointer_input(&mut self, input: PointerInput) {
+        if !self.accepts_host_event() {
+            return;
+        }
         self.events.push(DesktopHostEvent::PointerInput(input));
     }
 
     fn clipboard_available(&mut self, capability: ClipboardCapability) {
+        if !self.accepts_host_event() || self.config.clipboard == capability {
+            return;
+        }
         self.config.clipboard = capability;
         self.events
             .push(DesktopHostEvent::ClipboardCapabilityChanged(capability));
