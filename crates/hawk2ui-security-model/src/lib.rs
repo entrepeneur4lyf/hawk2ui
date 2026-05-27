@@ -481,6 +481,7 @@ impl PackageTrustValidator {
         }
 
         require_hash(
+            "manifest_snapshot_hash",
             &record.manifest_snapshot_hash,
             PackageTrustViolation::MissingManifestSnapshotHash,
         )?;
@@ -488,9 +489,23 @@ impl PackageTrustValidator {
         if record.compiled_asset_hashes.is_empty() {
             return Err(PackageTrustViolation::MissingCompiledAssetHashes);
         }
+        for hash in &record.compiled_asset_hashes {
+            require_hash(
+                "compiled_asset_hashes",
+                hash,
+                PackageTrustViolation::MissingCompiledAssetHashes,
+            )?;
+        }
 
         if record.compiled_script_hashes.is_empty() {
             return Err(PackageTrustViolation::MissingCompiledScriptHashes);
+        }
+        for hash in &record.compiled_script_hashes {
+            require_hash(
+                "compiled_script_hashes",
+                hash,
+                PackageTrustViolation::MissingCompiledScriptHashes,
+            )?;
         }
 
         if record.target_metadata.trim().is_empty() {
@@ -511,12 +526,31 @@ impl PackageTrustValidator {
     }
 }
 
-fn require_hash(hash: &str, violation: PackageTrustViolation) -> Result<(), PackageTrustViolation> {
+fn require_hash(
+    field: &'static str,
+    hash: &str,
+    violation: PackageTrustViolation,
+) -> Result<(), PackageTrustViolation> {
     if hash.trim().is_empty() {
-        Err(violation)
-    } else {
-        Ok(())
+        return Err(violation);
     }
+    if is_supported_hash(hash) {
+        Ok(())
+    } else {
+        Err(PackageTrustViolation::InvalidHash {
+            field: field.into(),
+        })
+    }
+}
+
+fn is_supported_hash(hash: &str) -> bool {
+    let Some(hex) = hash
+        .strip_prefix("sha256:")
+        .or_else(|| hash.strip_prefix("blake3:"))
+    else {
+        return false;
+    };
+    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Package trust validation failure.
@@ -543,6 +577,11 @@ pub enum PackageTrustViolation {
     InvalidSignature,
     /// Verification report is missing.
     MissingVerificationReport,
+    /// Hash field is malformed or uses an unsupported algorithm.
+    InvalidHash {
+        /// Field that carried the invalid hash.
+        field: String,
+    },
 }
 
 #[cfg(test)]

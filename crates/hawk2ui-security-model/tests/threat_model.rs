@@ -228,9 +228,9 @@ fn runtime_authority_redacts_secret_payloads() {
 fn package_trust_accepts_complete_verified_record() {
     let record = PackageTrustRecord {
         artifact_schema_version: 1,
-        manifest_snapshot_hash: "blake3:manifest".into(),
-        compiled_asset_hashes: vec!["blake3:asset".into()],
-        compiled_script_hashes: vec!["blake3:script".into()],
+        manifest_snapshot_hash: valid_hash("manifest"),
+        compiled_asset_hashes: vec![valid_hash("asset")],
+        compiled_script_hashes: vec![valid_hash("script")],
         target_metadata: "linux-wayland-desktop".into(),
         signature_status: PackageSignatureStatus::Verified,
         verification_report_status: VerificationReportStatus::Present,
@@ -243,9 +243,9 @@ fn package_trust_accepts_complete_verified_record() {
 fn package_trust_rejects_tampered_artifact() {
     let record = PackageTrustRecord {
         artifact_schema_version: 2,
-        manifest_snapshot_hash: "blake3:manifest".into(),
-        compiled_asset_hashes: vec!["blake3:asset".into()],
-        compiled_script_hashes: vec!["blake3:script".into()],
+        manifest_snapshot_hash: valid_hash("manifest"),
+        compiled_asset_hashes: vec![valid_hash("asset")],
+        compiled_script_hashes: vec![valid_hash("script")],
         target_metadata: "linux-wayland-desktop".into(),
         signature_status: PackageSignatureStatus::Verified,
         verification_report_status: VerificationReportStatus::Present,
@@ -268,9 +268,9 @@ fn package_trust_rejects_tampered_artifact() {
 fn package_trust_rejects_missing_verification_report() {
     let record = PackageTrustRecord {
         artifact_schema_version: 1,
-        manifest_snapshot_hash: "blake3:manifest".into(),
-        compiled_asset_hashes: vec!["blake3:asset".into()],
-        compiled_script_hashes: vec!["blake3:script".into()],
+        manifest_snapshot_hash: valid_hash("manifest"),
+        compiled_asset_hashes: vec![valid_hash("asset")],
+        compiled_script_hashes: vec![valid_hash("script")],
         target_metadata: "linux-wayland-desktop".into(),
         signature_status: PackageSignatureStatus::Verified,
         verification_report_status: VerificationReportStatus::Missing,
@@ -281,4 +281,67 @@ fn package_trust_rejects_missing_verification_report() {
         .expect_err("missing report must fail");
 
     assert_eq!(error, PackageTrustViolation::MissingVerificationReport);
+}
+
+#[test]
+fn package_trust_rejects_malformed_hashes() {
+    for (field, record) in [
+        (
+            "manifest_snapshot_hash",
+            PackageTrustRecord {
+                artifact_schema_version: 1,
+                manifest_snapshot_hash: "blake3:manifest".into(),
+                compiled_asset_hashes: vec![valid_hash("asset")],
+                compiled_script_hashes: vec![valid_hash("script")],
+                target_metadata: "linux-wayland-desktop".into(),
+                signature_status: PackageSignatureStatus::Verified,
+                verification_report_status: VerificationReportStatus::Present,
+            },
+        ),
+        (
+            "compiled_asset_hashes",
+            PackageTrustRecord {
+                artifact_schema_version: 1,
+                manifest_snapshot_hash: valid_hash("manifest"),
+                compiled_asset_hashes: vec!["sha256:not-hex".into()],
+                compiled_script_hashes: vec![valid_hash("script")],
+                target_metadata: "linux-wayland-desktop".into(),
+                signature_status: PackageSignatureStatus::Verified,
+                verification_report_status: VerificationReportStatus::Present,
+            },
+        ),
+        (
+            "compiled_script_hashes",
+            PackageTrustRecord {
+                artifact_schema_version: 1,
+                manifest_snapshot_hash: valid_hash("manifest"),
+                compiled_asset_hashes: vec![valid_hash("asset")],
+                compiled_script_hashes: vec!["md5:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()],
+                target_metadata: "linux-wayland-desktop".into(),
+                signature_status: PackageSignatureStatus::Verified,
+                verification_report_status: VerificationReportStatus::Present,
+            },
+        ),
+    ] {
+        let error = PackageTrustValidator::new(1)
+            .validate(&record)
+            .expect_err("malformed hash must fail");
+
+        assert_eq!(
+            error,
+            PackageTrustViolation::InvalidHash {
+                field: field.into()
+            }
+        );
+    }
+}
+
+fn valid_hash(label: &str) -> String {
+    let fill = match label {
+        "manifest" => 'a',
+        "asset" => 'b',
+        "script" => 'c',
+        _ => 'd',
+    };
+    format!("sha256:{}", fill.to_string().repeat(64))
 }
