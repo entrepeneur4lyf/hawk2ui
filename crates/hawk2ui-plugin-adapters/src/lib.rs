@@ -2,6 +2,7 @@
 //! Production plugin and package adapters for `Hawk2UI` `CLAP`, `VST3`, AU, standalone, and desktop outputs.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     fs,
     path::Component,
@@ -802,19 +803,79 @@ fn hash_manifest_matches(root: &Path, manifest_path: &Path) -> bool {
     let Some(entries) = parse_hash_manifest(&manifest) else {
         return false;
     };
-    !entries.is_empty()
-        && entries.into_iter().all(|(relative_path, expected)| {
-            let relative = Path::new(&relative_path);
-            if relative.is_absolute()
-                || relative
-                    .components()
-                    .any(|component| matches!(component, Component::ParentDir))
-            {
-                return false;
+    if entries.is_empty() {
+        return false;
+    }
+    let Ok(manifest_relative) = manifest_path.strip_prefix(root) else {
+        return false;
+    };
+    let manifest_relative = normalized_relative_path(manifest_relative);
+    let mut expected = BTreeMap::new();
+    for (relative_path, expected_hash) in entries {
+        let relative = Path::new(&relative_path);
+        if !is_safe_relative_path(relative)
+            || !is_sha256_hash(&expected_hash)
+            || expected.insert(relative_path, expected_hash).is_some()
+        {
+            return false;
+        }
+    }
+    let Some(actual_files) = package_regular_files(root, &manifest_relative) else {
+        return false;
+    };
+    if expected.keys().cloned().collect::<BTreeSet<_>>() != actual_files {
+        return false;
+    }
+    expected.into_iter().all(|(relative_path, expected_hash)| {
+        fs::read(root.join(&relative_path)).is_ok_and(|bytes| sha256(&bytes) == expected_hash)
+    })
+}
+
+fn package_regular_files(root: &Path, excluded_relative: &str) -> Option<BTreeSet<String>> {
+    fn visit(
+        root: &Path,
+        current: &Path,
+        excluded_relative: &str,
+        files: &mut BTreeSet<String>,
+    ) -> Option<()> {
+        for entry in fs::read_dir(current).ok()? {
+            let entry = entry.ok()?;
+            let file_type = entry.file_type().ok()?;
+            let path = entry.path();
+            if file_type.is_dir() {
+                visit(root, &path, excluded_relative, files)?;
+            } else if file_type.is_file() {
+                let relative = normalized_relative_path(path.strip_prefix(root).ok()?);
+                if relative != excluded_relative {
+                    files.insert(relative);
+                }
+            } else {
+                return None;
             }
-            let path = root.join(relative);
-            fs::read(path).is_ok_and(|bytes| sha256(&bytes) == expected)
-        })
+        }
+        Some(())
+    }
+
+    let mut files = BTreeSet::new();
+    visit(root, root, excluded_relative, &mut files)?;
+    Some(files)
+}
+
+fn is_safe_relative_path(path: &Path) -> bool {
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn normalized_relative_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn is_sha256_hash(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| hex.len() == 64 && hex.chars().all(|ch| ch.is_ascii_hexdigit()))
 }
 
 fn parse_hash_manifest(manifest: &str) -> Option<Vec<(String, String)>> {

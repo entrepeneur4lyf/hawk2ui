@@ -249,6 +249,58 @@ fn plugin_adapters_verify_materialized_rejects_tampered_package_payloads() {
 }
 
 #[test]
+fn plugin_adapters_verify_materialized_rejects_incomplete_or_extra_hash_coverage() {
+    let metadata =
+        FormatMetadata::new("com.hawk2ui.coverage", "Coverage", "Hawk2UI").version("4.0.0");
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-plugin-coverage-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Coverage"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+    let output = &outputs[0];
+    let original_hash_manifest =
+        std::fs::read_to_string(&output.hash_manifest_path).expect("hash manifest reads");
+    let incomplete_hash_manifest = original_hash_manifest
+        .split("\n\n")
+        .filter(|entry| !entry.contains("Contents/Resources/clap.json"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    std::fs::write(&output.hash_manifest_path, incomplete_hash_manifest)
+        .expect("hash manifest should be writable");
+
+    assert_eq!(
+        plan.verify_materialized(&outputs).status(),
+        VerificationStatus::Failed
+    );
+
+    std::fs::write(&output.hash_manifest_path, original_hash_manifest)
+        .expect("hash manifest should be restorable");
+    std::fs::write(
+        Path::new(&output.output_path).join("Contents/Resources/injected.bin"),
+        "unexpected payload",
+    )
+    .expect("extra payload should be writable");
+
+    assert_eq!(
+        plan.verify_materialized(&outputs).status(),
+        VerificationStatus::Failed
+    );
+}
+
+#[test]
 fn plugin_adapters_escape_package_metadata_in_generated_descriptors() {
     let metadata = FormatMetadata::new("com.hawk2ui.escape", "Quote\"Name&<", "Hawk \"A&B\" <Co>")
         .category("audio \"effect\"")
