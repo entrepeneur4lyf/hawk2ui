@@ -17,17 +17,33 @@ No item in this register is optional. Items may be sequenced, but they are not d
 
 ## Current Verdict
 
-Hawk2UI is not production-ready. The repository contains useful crate boundaries, records, tests, and a real Winit smoke window, but several crates are currently contract/scaffold implementations while their descriptions imply production completeness.
+Hawk2UI is not production-ready, but the largest early drift items have been materially reduced in
+source. The current blocker profile is no longer "core foundations are absent"; it is "several
+production verticals still stop at a validated internal boundary instead of an end-user,
+host-backed product path."
 
-The largest confirmed drift is that the current code rebuilt core systems with simplified internal models instead of implementing the selected production foundations:
+Source-truth status as of 2026-05-27:
 
-- style parsing uses handwritten string splitting instead of Lightning CSS,
-- layout uses a custom partial layout engine instead of Taffy,
-- script execution uses a toy expression evaluator instead of Boa or another real JavaScript runtime,
-- framework adapters parse source by string scanning instead of real framework/compiler integration,
-- Winit presents a hard-coded Skia frame instead of rendered runtime scene output,
-- Baseview/plugin support is lifecycle-record scaffolding instead of real embedded editor surfaces,
-- accessibility and schema crates are typed records without production backend integration.
+- style parsing uses `lightningcss` in `hawk2ui-style` and lowers the accepted subset into typed
+  style records,
+- layout computation uses `taffy` in `hawk2ui-layout` with `flexbox` and `grid` features enabled,
+- script execution uses Boa plus OXC TypeScript transformation in `hawk2ui-script`, but the Boa
+  dependency is pinned to a Git revision and remains a release-policy blocker,
+- framework adapters have an explicit native compiler boundary and conformance path; legacy source
+  scanners remain for compatibility fixtures and source-mapped diagnostic cases,
+- Winit opens a native window and renders compiled runtime scene output through the Skia renderer
+  path, with a fallback diagnostic frame only for direct host API use without a runtime tree,
+- CLAP package/scaffold generation exists and is host-loaded by tests, but the attached plugin GUI
+  does not yet render a live Hawk2UI scene inside a real Baseview/editor surface,
+- Baseview support is still headless-safe fixture/recording coverage rather than real parented
+  window attachment,
+- accessibility model/export/action dispatch and schema catalog/export are implemented, while
+  OS-specific accessibility attachment remains host-backend work.
+
+Remaining production blockers must therefore be tracked around real host attachment, complete
+package/product workflows, live plugin editor rendering, native dev loop/hot reload, visual
+golden-image regression, release-grade dependency/signing policy, platform API backends, user
+manuals, and premium templates.
 
 ## Release-Blocking Standard
 
@@ -136,9 +152,8 @@ Evidence:
 
 - `docs/technical/crate-selection.md` marks `taffy` as preferred stable.
 - `docs/specs/0001-product-direction.md` says Taffy should be the preferred primary layout engine.
-- `crates/hawk2ui-layout/Cargo.toml` pins `taffy = "0.10.0"` with `std`, `taffy_tree`, and `flexbox`.
-- `crates/hawk2ui-layout/src/compute.rs` computes layout through Taffy for the implemented flex path.
-- The Taffy `grid` feature is not enabled, while grid support remains a required product domain.
+- `crates/hawk2ui-layout/Cargo.toml` pins `taffy = "0.10.0"` with `std`, `taffy_tree`, `flexbox`, and `grid`.
+- `crates/hawk2ui-layout/src/compute.rs` computes layout through Taffy for flex, grid, absolute, percentage, scroll clip, and text-measured paths.
 
 Required remediation:
 
@@ -154,8 +169,10 @@ Acceptance:
 
 Status:
 
-- Implemented Taffy-backed flex layout and text measurement integration.
-- Grid support remains tracked by `REM-LAYOUT-003`.
+- Implemented Taffy-backed flex layout, grid layout, absolute positioning, scroll clipping,
+  percentage sizing, and text measurement integration.
+- Remaining layout work should be tracked as explicit supported-subset expansion or host/platform
+  integration, not as "Taffy is missing."
 
 ### REM-CRATE-003: Implement Real Embedded JavaScript Runtime
 
@@ -166,13 +183,15 @@ Evidence:
 - `crates/hawk2ui-script/Cargo.toml` depends on `boa_engine` by Git commit `8f5ef6542d641fd22320e51234e914b59e623717`, which is not publishable to crates.io and is not a release-grade dependency contract.
 - `crates/hawk2ui-script/Cargo.toml` pins OXC crates at `0.133.0`, which are fast-moving compiler crates and need explicit upgrade policy.
 - `crates/hawk2ui-script/src/lib.rs` evaluates JavaScript through Boa and calls `Context::run_jobs()`.
-- `ScriptBackend::create_promise`, `ScriptBackend::resolve_promise`, and `ScriptBackend::schedule_timer` are Rust-side records and are not wired into Boa promises, Boa job scheduling, or timer callback execution.
+- `ScriptBackend::execute_module_with_host_jobs` projects Rust-owned promise/timer records into
+  Boa, drains Boa jobs, invokes deterministic timer callbacks, and reads a settled host-job result.
 
 Required remediation:
 
-- Implement the Boa runtime spike unless a decision record changes runtime choice.
-- Support modules, promises, host bindings, interruption, memory/resource limits, deterministic timers, teardown, and diagnostics.
-- Remove the toy evaluator from production paths.
+- Keep production script execution on the selected Boa/OXC runtime path unless a decision record
+  changes runtime choice.
+- Finish any remaining module loading, host binding, interruption, memory/resource limit,
+  deterministic timer, teardown, and diagnostic gaps around that runtime path.
 - Keep Bun, if used, as external tooling only.
 
 Acceptance:
@@ -284,19 +303,24 @@ Evidence:
 
 - `docs/technical/crate-selection.md` lists `rtrb`, `vst3`, `clap-sys`, `clack-*`, and related audio/plugin candidates.
 - `crates/hawk2ui-plugin/Cargo.toml` now depends on `rtrb` for realtime visual transport.
-- `crates/hawk2ui-plugin-adapters/Cargo.toml` still does not depend on plugin format crates.
+- `crates/hawk2ui-plugin-adapters/Cargo.toml` now depends on `clap-sys`.
 
 Status:
 
 - Realtime visual data now uses `rtrb`-backed preallocated transport records.
 - `RealtimeVisualTransport::split_preallocated` returns separate audio-writer and UI-reader endpoints, and tests move the audio writer across a thread boundary.
-- Loadable CLAP/VST3/AU/LV2 format adapters remain open under this item.
+- CLAP generated `cdylib` scaffolding and host-load tests exist.
+- VST3/AU/LV2 remain package-layout or compatibility-matrix targets unless separately
+  implemented or removed from the supported production matrix.
 
 Required remediation:
 
 - Choose plugin format sequence in decision records.
 - Extend realtime UI data channels beyond the current `rtrb` split endpoint as needed by plugin format adapters.
-- Implement actual CLAP/VST3/AU/LV2 adapters according to selected compatibility matrix.
+- Finish the selected CLAP production vertical by connecting generated runtime artifacts to live
+  Hawk2UI editor rendering inside the attached plugin GUI surface.
+- Implement VST3/AU/LV2 adapters only if they remain in the selected production compatibility
+  matrix; otherwise remove them from product claims and CLI/package output descriptions.
 
 Acceptance:
 
@@ -312,11 +336,16 @@ Evidence:
 - `crates/hawk2ui-style/Cargo.toml` pins `lightningcss = "1.0.0-alpha.71"`.
 - `crates/hawk2ui-layout/Cargo.toml` pins `taffy = "0.10.0"`.
 - `crates/hawk2ui-render-skia/Cargo.toml` and `crates/hawk2ui-host-winit/Cargo.toml` pin `skia-safe = "0.97.0"`.
-- Cargo.lock provides local reproducibility, but there is no workspace policy for release eligibility, upgrade cadence, compatibility matrix updates, or how alpha/pre-1.0/git dependencies are accepted.
+- `release/dependency-policy.toml` records dependency owners, risks, release blockers, and upgrade
+  gates for Boa, OXC, Lightning CSS, Taffy, Skia, and CLAP.
+- The Boa Git dependency remains explicitly release-blocking until replaced by a crates.io release
+  dependency or isolated from publishable crates.
 
 Required remediation:
 
-- Define a workspace dependency policy covering crates.io-only publishability, Git dependency exceptions, alpha/pre-1.0 acceptance, lockfile update cadence, security advisories, and compatibility testing.
+- Keep the workspace dependency policy complete as dependencies are added or upgraded, including
+  crates.io-only publishability, Git dependency exceptions, alpha/pre-1.0 acceptance, lockfile
+  update cadence, security advisories, and compatibility testing.
 - Replace the Boa Git dependency with a release-grade dependency contract before publishing, or isolate it behind a non-published adapter crate with explicit release rules.
 - Add dependency audit commands to the release gate.
 - Document accepted versions and upgrade triggers for Boa, OXC, Lightning CSS, Taffy, Skia, Winit, Baseview, and plugin crates.
@@ -406,8 +435,10 @@ Acceptance:
 Evidence:
 
 - Product direction lists premium visual capability as non-negotiable.
-- Current Winit output is a hard-coded diagnostic frame.
-- Current runtime visuals only model fill and text.
+- Winit can render compiled runtime scene output through the Skia path.
+- The current visual/template surface is not yet sufficient to prove premium desktop/plugin UI
+  quality across gradients, typography, imagery, layer effects, analyzers, dense controls, and
+  animated surfaces.
 
 Required remediation:
 
@@ -424,14 +455,15 @@ Acceptance:
 Evidence:
 
 - Product direction requires plugin identity, editor metadata, parameters, presets, and asset declarations to be manifest-first and validated before runtime.
-- Build/schema/plugin crates contain partial typed records and package scaffolding, but schema validation is not complete.
+- Build/schema/plugin crates contain typed records, schema catalog/export, raw manifest validation,
+  and package metadata validation.
 - Raw manifest schema validation runs before semantic validation, and schema failures now carry
   path/detail diagnostics through the CLI boundary.
 
 Required remediation:
 
-- Complete manifest schema, validation diagnostics, and CLI integration.
 - Validate app identity, plugin identity, editor metadata, parameters, defaults, ranges, duplicate IDs, asset references, unsafe assets, package targets, and capabilities.
+- Keep schema coverage synchronized as new manifest/package fields are added.
 
 Acceptance:
 
@@ -770,7 +802,9 @@ Review check:
 Evidence:
 
 - Style tokens and runtime tables exist.
-- Full cascade/inheritance/custom property behavior is not complete.
+- Runtime style computation implements deterministic selector matching, specificity/source order,
+  registry initial values, inherited properties, token resolution, theme variants, preference
+  overrides, and invalidation diffs.
 
 Required remediation:
 
@@ -809,7 +843,9 @@ Review check:
 Evidence:
 
 - Layout tree and records exist.
-- Custom layout is partial and not Taffy-backed.
+- Layout computation flows through Taffy behind Hawk2UI-owned records.
+- Flex, grid, absolute positioning, percentage sizing, scroll clipping, text measurement, plugin
+  constraints, and graph/analyzer geometry attachment are covered by source tests.
 
 Required remediation:
 
@@ -1260,7 +1296,8 @@ Review check:
 Evidence:
 
 - Winit opens a native window and handles resize/DPI/input/close.
-- It renders a hard-coded frame and does not handle actual app scene rendering, maximize repaint validation, menus, tray, dialogs, drag/drop, IME, or complete clipboard.
+- It renders compiled runtime scene output through the renderer-owned Skia replay path.
+- It still does not provide complete menus, tray, dialogs, drag/drop, IME, or OS clipboard behavior.
 - `scale_factor_to_f32` previously converted numeric DPI scale by string round-trip instead of direct checked numeric conversion.
 
 Required remediation:
@@ -1294,10 +1331,18 @@ Evidence:
 
 - Baseview dependency exists.
 - `BaseviewPluginAdapter` uses parent fixtures and records events; it does not open/attach a real editor surface.
+- Source imports Baseview open-option types and validates parent handles, metrics, resize, DPI,
+  focus, pointer, keyboard, repaint, and teardown contracts through fixture tests.
+
+Status:
+
+- Partially open: fixture/contract coverage is useful, but no source path currently opens a
+  real parented Baseview editor surface or presents Skia/Hawk2UI pixels into that surface.
 
 Required remediation:
 
 - Implement real Baseview parented editor attachment.
+- Connect the attached surface to the Hawk2UI runtime-scene-to-Skia rendering path.
 - Route host resize, DPI, focus, pointer, keyboard, repaint, show/hide, and teardown.
 - Ensure plugin editor teardown never exits process.
 
@@ -1345,7 +1390,10 @@ Acceptance:
 
 Evidence:
 
-- `hawk2ui-plugin-adapters` materializes package-like file layouts but does not use real CLAP/VST3/AU/LV2 APIs.
+- `hawk2ui-plugin-adapters` materializes package file layouts and now uses `clap-sys` for the
+  generated CLAP scaffold path.
+- VST3/AU/LV2 remain non-loadable package/metadata paths unless separately implemented or removed
+  from the production target matrix.
 
 Status:
 
@@ -1357,7 +1405,11 @@ Status:
 
 Required remediation:
 
-- Implement selected format adapters with lifecycle callbacks, editor attachment, parameter binding, state, dynamic-library generation, signing/notarization where applicable, and host tests.
+- Finish the selected CLAP adapter with live Hawk2UI editor rendering in the attached GUI surface,
+  parameter/state/realtime bridge integration, dynamic-library generation, signing/notarization
+  policy where applicable, and host tests.
+- Implement VST3/AU/LV2 with equivalent lifecycle/editor/state/host tests only if those formats
+  remain selected production targets.
 
 Acceptance:
 
@@ -1560,13 +1612,17 @@ Acceptance:
 
 Evidence:
 
-- Testkit visual snapshot metadata exists.
-- No complete deterministic golden image renderer is wired to production scene output.
+- Testkit visual fixture metadata and comparison-threshold records exist.
+- `hawk2ui-render-skia` exposes CPU-readable `SkiaFrameSnapshot` data, and some framework tests
+  assert visible rendered pixels.
+- No complete deterministic golden-image suite currently renders production runtime scenes,
+  writes baseline/diff artifacts, and fails with actionable pixel diagnostics.
 
 Required remediation:
 
-- Implement headless Skia rendering of runtime scenes.
-- Define golden image tolerances, font fixtures, CI behavior, and failure diagnostics.
+- Wire headless Skia runtime-scene rendering into the visual testkit.
+- Define golden image tolerances, font fixtures, update workflow, CI behavior, and failure
+  diagnostics.
 
 Acceptance:
 
@@ -1576,12 +1632,17 @@ Acceptance:
 
 Evidence:
 
-- Performance records and crate exist.
-- Production budgets for startup, style, layout, render, JS, asset load, and plugin realtime are incomplete.
+- `hawk2ui-perf` contains performance budget records, benchmark helpers, and bench targets for
+  startup, layout, render, render baseline, runtime, and plugin realtime.
+- `release/release-criteria.toml` includes performance and realtime-safety gates.
+- The remaining gap is release-grade measured evidence across the complete product matrix, not the
+  absence of a performance crate or budget model.
 
 Required remediation:
 
-- Add Criterion or equivalent benchmarks and release budgets.
+- Expand the existing benchmark suite into release-grade measured benchmarks for startup, style,
+  layout, render, JS, asset load, package verification, desktop host, and plugin realtime paths.
+- Persist baseline reports and enforce budget failures in release gates.
 
 Acceptance:
 
@@ -1593,12 +1654,17 @@ Acceptance:
 
 Evidence:
 
-- CLI can validate/run some paths.
-- Full `new`, `dev`, `build`, `validate`, `run`, package, diagnostics, explain, and exit-code behavior is incomplete.
+- `hawk2ui-cli` defines and documents `new`, `validate`, `build-dev`, `build-release`,
+  `verify-artifact`, `run-desktop`, `package-plugin`, `export-schemas`, and `diagnostics`.
+- The CLI dev loop source is a recording watcher/reload target, not a real native hot-reload
+  command.
+- Generic `run`, production `dev`, `explain`, richer scaffolding, and complete no-Rust user
+  workflows remain incomplete.
 
 Required remediation:
 
-- Implement full CLI commands with stable exit codes and source diagnostics.
+- Implement production `dev` hot reload, `explain`, complete scaffolding workflows, stable exit
+  code documentation, and source diagnostics across all user-facing commands.
 
 Acceptance:
 
@@ -1831,25 +1897,30 @@ The following dedicated specs must exist and be implementation-aligned.
 - M08: `docs/manual/troubleshooting.md`
 - M09: `docs/manual/prototype-migration-guide.md`
 
-## Implementation Priority Order
+## Remaining Implementation Priority Order
 
-This order exists to avoid building on sand. It is sequencing, not scope reduction.
+This order is based on the source-truth audit above. It is sequencing, not scope reduction.
 
-1. Documentation/spec alignment: create missing specs and decision records.
-2. Style compiler: Lightning CSS-backed parser and typed lowering.
-3. Layout engine: Taffy-backed layout and text measurement integration.
-4. Runtime-to-render path: runtime scene frame to Skia backend to Winit presentation.
-5. Typed paint commands and complete Skia layer execution.
-6. Real JS runtime: Boa spike and capability enforcement.
-7. Real framework compiler/runtime adapters, starting with custom renderer API and Svelte 5.
-8. Build pipeline: manifests, schemas, sealed artifacts, asset/style/script compilation.
-9. Host backends: Winit lifecycle completion, Baseview embedded plugin lifecycle, platform matrices.
-10. Plugin vertical: realtime channels, generated UI, one real format adapter, package validation.
-11. Accessibility: AccessKit bridge and action routing.
-12. Security/trust: package integrity, sandbox, untrusted package handling, supply chain gates.
-13. Platform APIs: capability-gated filesystem/network/database/clipboard/secrets/etc.
-14. Visual quality: premium templates, graph/custom surfaces, animation, visual regression.
-15. Release readiness: performance budgets, compatibility matrix, manual, troubleshooting, CI gates.
+1. Live plugin editor vertical: real Baseview parented attachment, live Hawk2UI scene rendering in
+   the attached CLAP GUI, host resize/focus/input teardown, and realtime visual data bridge.
+2. Native desktop completion: finish Winit menus, tray, dialogs, drag/drop, IME, complete OS
+   clipboard, platform-specific validation, and accessibility attachment.
+3. Build/package completion: replace build record-only phases with real source graph execution,
+   TypeScript/framework/style compilation, deterministic package outputs, signing/notarization
+   policy, and release verification reports.
+4. Dev loop and CLI completion: real file watching, incremental rebuilds, native hot reload,
+   state preservation, error overlays, `explain`, complete scaffolding, and stable documented exit
+   codes.
+5. Platform APIs: capability-gated filesystem, network, database, clipboard, secrets, dialogs,
+   notifications, global shortcuts, localization, AI provider, and MCP backends.
+6. Security/trust completion: source validation, runtime sandbox enforcement, asset sanitization,
+   untrusted package handling, supply-chain integrity, dependency publishing policy closure, and
+   denial fixtures that exercise real build/runtime/package paths.
+7. Visual quality and regression: premium desktop/plugin templates, graph/custom surfaces,
+   animation coverage, deterministic Skia golden-image rendering, baseline/diff artifact workflow,
+   and font/CI tolerance policy.
+8. Release readiness: measured performance baselines across the product matrix, compatibility
+   matrix evidence, manual completion, troubleshooting docs, release evidence capture, and CI gates.
 
 ## Non-Completion Criteria
 
