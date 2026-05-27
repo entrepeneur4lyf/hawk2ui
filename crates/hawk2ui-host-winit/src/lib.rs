@@ -275,13 +275,40 @@ impl WinitDesktopAdapter {
 
     /// Handles Winit resize events.
     pub fn handle_resize(&mut self, metrics: SurfaceMetrics) {
-        if validate_desktop_metrics(metrics).is_err() {
-            return;
-        }
+        let _ = self.try_handle_resize(metrics);
+    }
+
+    /// Handles Winit resize events and reports invalid metrics.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the resize metrics are not finite and positive.
+    pub fn try_handle_resize(&mut self, metrics: SurfaceMetrics) -> Result<(), WinitHostError> {
+        validate_desktop_metrics(metrics)?;
         self.config.metrics = metrics;
         self.logical_size = LogicalSize::new(metrics.logical_width, metrics.logical_height);
         self.events
             .push(DesktopHostEvent::RendererTargetRecreateRequested);
+        Ok(())
+    }
+
+    /// Handles Winit DPI changes and reports invalid scale factors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the resulting surface metrics are not finite and positive.
+    pub fn try_dpi_changed(&mut self, scale_factor: f64) -> Result<(), WinitHostError> {
+        let metrics = SurfaceMetrics::new(
+            self.config.metrics.logical_width,
+            self.config.metrics.logical_height,
+            scale_factor,
+        );
+        validate_desktop_metrics(metrics)?;
+        self.config.metrics.scale_factor = scale_factor;
+        self.events.push(DesktopHostEvent::DpiChanged(scale_factor));
+        self.events
+            .push(DesktopHostEvent::RendererTargetRecreateRequested);
+        Ok(())
     }
 
     /// Requests a repaint.
@@ -360,18 +387,7 @@ impl DesktopHostAdapter for WinitDesktopAdapter {
     }
 
     fn dpi_changed(&mut self, scale_factor: f64) {
-        let metrics = SurfaceMetrics::new(
-            self.config.metrics.logical_width,
-            self.config.metrics.logical_height,
-            scale_factor,
-        );
-        if validate_desktop_metrics(metrics).is_err() {
-            return;
-        }
-        self.config.metrics.scale_factor = scale_factor;
-        self.events.push(DesktopHostEvent::DpiChanged(scale_factor));
-        self.events
-            .push(DesktopHostEvent::RendererTargetRecreateRequested);
+        let _ = self.try_dpi_changed(scale_factor);
     }
 }
 

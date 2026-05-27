@@ -233,8 +233,52 @@ impl BaseviewPluginAdapter {
         std::mem::take(&mut self.events)
     }
 
+    /// Handles host resize events and reports invalid metrics.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the editor is destroyed or the resize metrics are invalid.
+    pub fn try_host_resize(&mut self, metrics: SurfaceMetrics) -> Result<(), BaseviewHostError> {
+        self.ensure_accepts_host_event()?;
+        validate_baseview_metrics(metrics)?;
+        self.config.metrics = metrics;
+        self.open_options.size = Size::new(metrics.logical_width, metrics.logical_height);
+        self.events.push(PluginHostEvent::HostResize(metrics));
+        Ok(())
+    }
+
+    /// Handles host DPI changes and reports invalid scale factors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the editor is destroyed or the resulting metrics are invalid.
+    pub fn try_dpi_changed(&mut self, scale_factor: f64) -> Result<(), BaseviewHostError> {
+        self.ensure_accepts_host_event()?;
+        let metrics = SurfaceMetrics::new(
+            self.config.metrics.logical_width,
+            self.config.metrics.logical_height,
+            scale_factor,
+        );
+        validate_baseview_metrics(metrics)?;
+        self.config.metrics.scale_factor = scale_factor;
+        self.open_options.scale = WindowScalePolicy::ScaleFactor(scale_factor);
+        self.events.push(PluginHostEvent::DpiChanged(scale_factor));
+        Ok(())
+    }
+
     fn accepts_host_event(&self) -> bool {
         !self.destroyed
+    }
+
+    fn ensure_accepts_host_event(&self) -> Result<(), BaseviewHostError> {
+        if self.accepts_host_event() {
+            Ok(())
+        } else {
+            Err(BaseviewHostError::new(
+                "baseview.editor.destroyed",
+                "baseview editor has already been destroyed",
+            ))
+        }
     }
 }
 
@@ -276,32 +320,11 @@ impl PluginHostAdapter for BaseviewPluginAdapter {
     }
 
     fn host_resize(&mut self, metrics: SurfaceMetrics) {
-        if !self.accepts_host_event() {
-            return;
-        }
-        if validate_baseview_metrics(metrics).is_err() {
-            return;
-        }
-        self.config.metrics = metrics;
-        self.open_options.size = Size::new(metrics.logical_width, metrics.logical_height);
-        self.events.push(PluginHostEvent::HostResize(metrics));
+        let _ = self.try_host_resize(metrics);
     }
 
     fn dpi_changed(&mut self, scale_factor: f64) {
-        if !self.accepts_host_event() {
-            return;
-        }
-        let metrics = SurfaceMetrics::new(
-            self.config.metrics.logical_width,
-            self.config.metrics.logical_height,
-            scale_factor,
-        );
-        if validate_baseview_metrics(metrics).is_err() {
-            return;
-        }
-        self.config.metrics.scale_factor = scale_factor;
-        self.open_options.scale = WindowScalePolicy::ScaleFactor(scale_factor);
-        self.events.push(PluginHostEvent::DpiChanged(scale_factor));
+        let _ = self.try_dpi_changed(scale_factor);
     }
 
     fn schedule_repaint(&mut self, reason: impl Into<String>) {

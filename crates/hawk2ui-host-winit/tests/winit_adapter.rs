@@ -78,6 +78,30 @@ fn winit_adapter_ignores_invalid_live_resize_and_dpi_metrics() {
 }
 
 #[test]
+fn winit_adapter_reports_invalid_live_resize_and_dpi_metrics() {
+    let initial_metrics = SurfaceMetrics::new(400.0, 300.0, 1.0);
+    let mut adapter = WinitDesktopAdapter::create_window(
+        DesktopWindowConfig::new("app", initial_metrics),
+        WinitPlatformFixture::linux(LinuxWindowSystem::Wayland),
+    )
+    .expect("window fixture creates");
+    adapter.drain_events();
+
+    let error = adapter
+        .try_handle_resize(SurfaceMetrics::new(0.0, 600.0, 2.0))
+        .expect_err("invalid live resize metrics must report diagnostics");
+    assert_eq!(error.rule(), "desktop.window.invalid-size");
+
+    let error = adapter
+        .try_dpi_changed(f64::INFINITY)
+        .expect_err("invalid live DPI metrics must report diagnostics");
+    assert_eq!(error.rule(), "desktop.window.invalid-size");
+
+    assert_eq!(adapter.metrics(), initial_metrics);
+    assert!(adapter.drain_events().is_empty());
+}
+
+#[test]
 fn winit_adapter_routes_focus_keyboard_pointer_clipboard_and_repaint() {
     let mut adapter = WinitDesktopAdapter::create_window(
         DesktopWindowConfig::new("app", SurfaceMetrics::new(400.0, 300.0, 1.0)),

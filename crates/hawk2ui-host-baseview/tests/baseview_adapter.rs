@@ -84,6 +84,34 @@ fn baseview_adapter_ignores_invalid_live_metrics() {
 }
 
 #[test]
+fn baseview_adapter_reports_invalid_live_metrics() {
+    let initial_metrics = SurfaceMetrics::new(320.0, 180.0, 1.0);
+    let mut adapter = BaseviewPluginAdapter::attach(
+        PluginEditorConfig::new(
+            "editor",
+            PluginParentHandle::opaque("parent"),
+            initial_metrics,
+        ),
+        BaseviewParentFixture::linux_xwayland(),
+    )
+    .expect("baseview editor attaches");
+    adapter.drain_events();
+
+    let error = adapter
+        .try_host_resize(SurfaceMetrics::new(0.0, 360.0, 2.0))
+        .expect_err("invalid host resize metrics must report diagnostics");
+    assert_eq!(error.rule(), "baseview.metrics.invalid");
+
+    let error = adapter
+        .try_dpi_changed(f64::INFINITY)
+        .expect_err("invalid DPI metrics must report diagnostics");
+    assert_eq!(error.rule(), "baseview.metrics.invalid");
+
+    assert_eq!(adapter.metrics(), initial_metrics);
+    assert!(adapter.drain_events().is_empty());
+}
+
+#[test]
 fn baseview_adapter_routes_resize_dpi_repaint_focus_keyboard_and_pointer() {
     let mut adapter = BaseviewPluginAdapter::attach(
         PluginEditorConfig::new(
@@ -171,6 +199,36 @@ fn baseview_adapter_ignores_host_events_after_destroy() {
 
     assert_eq!(adapter.metrics(), SurfaceMetrics::new(320.0, 180.0, 1.0));
     assert!(adapter.repaint_reasons().is_empty());
+    assert!(adapter.drain_events().is_empty());
+}
+
+#[test]
+fn baseview_adapter_reports_fallible_host_events_after_destroy() {
+    let mut adapter = BaseviewPluginAdapter::attach(
+        PluginEditorConfig::new(
+            "editor",
+            PluginParentHandle::opaque("parent"),
+            SurfaceMetrics::new(320.0, 180.0, 1.0),
+        ),
+        BaseviewParentFixture::linux_xwayland(),
+    )
+    .expect("baseview editor attaches");
+    adapter.drain_events();
+
+    adapter.destroy_editor("host closed editor");
+    adapter.drain_events();
+
+    let error = adapter
+        .try_host_resize(SurfaceMetrics::new(640.0, 360.0, 2.0))
+        .expect_err("fallible resize must report destroyed editor");
+    assert_eq!(error.rule(), "baseview.editor.destroyed");
+
+    let error = adapter
+        .try_dpi_changed(2.0)
+        .expect_err("fallible DPI change must report destroyed editor");
+    assert_eq!(error.rule(), "baseview.editor.destroyed");
+
+    assert_eq!(adapter.metrics(), SurfaceMetrics::new(320.0, 180.0, 1.0));
     assert!(adapter.drain_events().is_empty());
 }
 
