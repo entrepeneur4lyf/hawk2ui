@@ -136,6 +136,19 @@ fn solid_renderer_preserves_static_text_children() {
             .collect::<Vec<_>>(),
         vec!["title"]
     );
+    let frame = RuntimeSceneBridge::new(Viewport::new(160.0, 80.0))
+        .build(artifact.runtime_tree())
+        .expect("runtime scene builds");
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Text {
+                id,
+                text,
+                ..
+            } if id.as_str() == "title" && text == "Static Title"
+        )
+    }));
 }
 
 #[test]

@@ -414,7 +414,13 @@ fn native_artifact_from_react_with_defaults(
         root = root.with_child(NativeChild::keyed(
             child_id,
             NativeAuthoringElement::new(child_id, ElementKind::Text)
-                .with_prop("text", PropValue::String(child_id.clone()))
+                .with_prop(
+                    "text",
+                    PropValue::String(
+                        static_hawk_text_content(source_text, child_id)
+                            .unwrap_or_else(|| child_id.clone()),
+                    ),
+                )
                 .with_prop("font_size", PropValue::Number(font_size))
                 .with_prop("color", PropValue::String("#ffffff".to_string()))
                 .with_prop("width", PropValue::Number(160.0))
@@ -496,6 +502,23 @@ fn static_hawk_text_ids(source: &str) -> Vec<String> {
         rest = &after["<hawk-text".len()..];
     }
     ids
+}
+
+fn static_hawk_text_content(source: &str, child_id: &str) -> Option<String> {
+    let mut rest = source;
+    while let Some(index) = rest.find("<hawk-text") {
+        let after = &rest[index..];
+        let tag_end = after.find('>')?;
+        let tag = &after[..tag_end];
+        if extract_attribute(tag, "id").as_deref() == Some(child_id) {
+            let body = &after[tag_end + 1..];
+            let end = body.find("</hawk-text>")?;
+            let text = body[..end].trim();
+            return (!text.is_empty()).then(|| text.to_string());
+        }
+        rest = &after["<hawk-text".len()..];
+    }
+    None
 }
 
 fn declared_item_ids(source: &str) -> Vec<String> {
