@@ -78,6 +78,18 @@ impl ClipboardPolicy {
         operation: PlatformOperation,
         context: PlatformContext,
     ) -> Result<ClipboardAccess, ClipboardDenied> {
+        if !matches!(
+            operation,
+            PlatformOperation::ClipboardRead | PlatformOperation::ClipboardWrite
+        ) {
+            return Err(ClipboardDenied {
+                data_type,
+                diagnostic: PlatformDiagnostic::error(
+                    "clipboard.operation.invalid",
+                    "clipboard policy only accepts clipboard read and write operations",
+                ),
+            });
+        }
         capabilities
             .ensure_allowed(&manifest.capability_key, operation, context)
             .map_err(|denial| ClipboardDenied {

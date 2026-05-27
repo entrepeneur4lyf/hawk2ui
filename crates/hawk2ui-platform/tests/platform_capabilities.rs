@@ -288,6 +288,27 @@ fn clipboard_capabilities_deny_unsupported_image_missing_capability_and_plugin_c
 }
 
 #[test]
+fn clipboard_capabilities_reject_non_clipboard_operations() {
+    let table = CapabilityTable::new([CapabilityRecord::new("clipboard.write")
+        .allow(PlatformOperation::NetworkRequest)
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)
+        .plugin(true)]);
+    let manifest = ClipboardManifest::new("clipboard.write", [ClipboardDataType::Text]);
+
+    let error = ClipboardPolicy::access(
+        &table,
+        &manifest,
+        ClipboardDataType::Text,
+        PlatformOperation::NetworkRequest,
+        PlatformContext::Desktop,
+    )
+    .expect_err("clipboard policy must only accept clipboard operations");
+
+    assert_eq!(error.diagnostic.rule, "clipboard.operation.invalid");
+}
+
+#[test]
 fn secrets_database_redacts_secret_values_and_denies_missing_declarations() {
     let manifest = PlatformSecretManifest::new(["api-token"]);
 
