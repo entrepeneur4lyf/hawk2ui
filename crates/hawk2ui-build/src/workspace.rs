@@ -125,12 +125,15 @@ impl BuildWorkspace {
         path: &str,
     ) -> Result<CompiledScriptRecord, BuildWorkspaceError> {
         let bytes = self.read_declared_file(path)?;
+        let compiled_source = String::from_utf8(bytes.clone())
+            .map_err(|_| BuildWorkspaceError::UnreadableFile(path.into()))?;
         Ok(CompiledScriptRecord::new(
             entrypoint_id,
             path,
             format!("scripts/{entrypoint_id}.hawk.js"),
             ArtifactHash::from_bytes(&bytes),
-        ))
+        )
+        .with_compiled_source(compiled_source))
     }
 
     fn compiled_style(

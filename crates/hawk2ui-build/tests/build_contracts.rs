@@ -657,6 +657,10 @@ path = "assets/logo.svg"
         ArtifactHash::from_bytes(b"export const app = 'hawk';")
     );
     assert_eq!(
+        output.artifact.compiled_scripts[0].compiled_source,
+        "export const app = 'hawk';"
+    );
+    assert_eq!(
         output.artifact.compiled_styles[0].source_path,
         "styles/main.hawk.css"
     );

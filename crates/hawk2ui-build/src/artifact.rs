@@ -61,6 +61,8 @@ pub struct CompiledScriptRecord {
     pub artifact_path: String,
     /// Source content hash.
     pub source_hash: ArtifactHash,
+    /// Compiled JavaScript or TypeScript payload carried by the sealed artifact.
+    pub compiled_source: String,
 }
 
 impl CompiledScriptRecord {
@@ -77,7 +79,15 @@ impl CompiledScriptRecord {
             source_path: source_path.into(),
             artifact_path: artifact_path.into(),
             source_hash,
+            compiled_source: String::new(),
         }
+    }
+
+    /// Sets the compiled script payload carried by the sealed artifact.
+    #[must_use]
+    pub fn with_compiled_source(mut self, compiled_source: impl Into<String>) -> Self {
+        self.compiled_source = compiled_source.into();
+        self
     }
 }
 
@@ -371,6 +381,8 @@ impl SealedArtifact {
             payload.push_str(&script.artifact_path);
             payload.push(':');
             payload.push_str(&script.source_hash.0);
+            payload.push(':');
+            payload.push_str(&ArtifactHash::from_bytes(script.compiled_source.as_bytes()).0);
             payload.push(';');
         }
         for style in &self.compiled_styles {

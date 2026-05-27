@@ -1535,6 +1535,7 @@ dependencies = [
  "hawk2ui-plugin-adapters",
  "hawk2ui-render",
  "hawk2ui-runtime",
+ "hawk2ui-script",
  "serde",
 ]
 

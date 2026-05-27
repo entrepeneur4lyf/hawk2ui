@@ -24,6 +24,7 @@ use hawk2ui_runtime::{
     RuntimeSceneError, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
     RuntimeVisual,
 };
+use hawk2ui_script::{HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy};
 
 use crate::{CliCommand, CliDiagnostic, CliExitCode};
 
@@ -183,10 +184,11 @@ impl WorkspaceCommandRunner {
     }
 
     fn run_desktop(&self) -> CommandExecution {
-        let manifest = match self.validated_manifest() {
-            Ok(manifest) => manifest,
+        let output = match self.build_workspace() {
+            Ok(output) => output,
             Err(execution) => return execution,
         };
+        let manifest = &output.manifest;
         if !manifest.has_target(PackageTarget::Desktop) {
             return CommandExecution::failure(
                 CliExitCode::Runtime,
@@ -197,7 +199,8 @@ impl WorkspaceCommandRunner {
             );
         }
         let exit_after_first_frame = std::env::var_os("HAWK2UI_EXIT_AFTER_FIRST_FRAME").is_some();
-        let config = match desktop_runtime_config_from_manifest(&manifest, exit_after_first_frame) {
+        let config = match desktop_runtime_config_from_build_output(&output, exit_after_first_frame)
+        {
             Ok(config) => config,
             Err(diagnostic) => {
                 return CommandExecution::failure(CliExitCode::Runtime, vec![*diagnostic]);
@@ -500,14 +503,40 @@ fn bundle_name(identity_id: &str) -> String {
         .collect()
 }
 
+#[cfg(test)]
 fn desktop_runtime_config_from_manifest(
     manifest: &HawkManifest,
+    exit_after_first_frame: bool,
+) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
+    desktop_runtime_config_from_manifest_with_title(
+        manifest,
+        manifest.identity.name.as_str(),
+        exit_after_first_frame,
+    )
+}
+
+fn desktop_runtime_config_from_build_output(
+    output: &BuildWorkspaceOutput,
+    exit_after_first_frame: bool,
+) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
+    let visible_title =
+        entry_script_visible_title(output).unwrap_or_else(|| output.manifest.identity.name.clone());
+    desktop_runtime_config_from_manifest_with_title(
+        &output.manifest,
+        visible_title.as_str(),
+        exit_after_first_frame,
+    )
+}
+
+fn desktop_runtime_config_from_manifest_with_title(
+    manifest: &HawkManifest,
+    visible_title: &str,
     exit_after_first_frame: bool,
 ) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
     let (width, height) = manifest.editor.as_ref().map_or((960.0, 540.0), |editor| {
         (f64::from(editor.width), f64::from(editor.height))
     });
-    let runtime_tree = runtime_tree_from_manifest(manifest, width, height)?;
+    let runtime_tree = runtime_tree_from_manifest(manifest, visible_title, width, height)?;
     Ok(WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
         manifest.identity.name.clone(),
         SurfaceMetrics::new(width, height, 1.0),
@@ -518,6 +547,7 @@ fn desktop_runtime_config_from_manifest(
 
 fn runtime_tree_from_manifest(
     manifest: &HawkManifest,
+    visible_title: &str,
     width: f64,
     height: f64,
 ) -> Result<RuntimeViewTree, Box<CliDiagnostic>> {
@@ -540,7 +570,7 @@ fn runtime_tree_from_manifest(
         LayoutStyle::flex_container(FlexDirection::Row)
             .with_size(LayoutSizing::fixed(content_width, 32.0)),
         RuntimeVisual::Text(RuntimeTextVisual::new(
-            manifest.identity.name.clone(),
+            visible_title.to_string(),
             20.0,
             Color::rgba(241, 245, 249, 255),
         )),
@@ -562,6 +592,33 @@ fn runtime_tree_from_manifest(
         .with_child(&root_id, title)
         .and_then(|tree| tree.with_child(&root_id, status))
         .map_err(|error| runtime_scene_diagnostic(&error))
+}
+
+fn entry_script_visible_title(output: &BuildWorkspaceOutput) -> Option<String> {
+    let script = output
+        .artifact
+        .compiled_scripts
+        .iter()
+        .find(|script| script.entrypoint_id == "entry")?;
+    let extension = Path::new(&script.source_path)
+        .extension()
+        .and_then(|extension| extension.to_str());
+    let module = if extension.is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("ts") || extension.eq_ignore_ascii_case("tsx")
+    }) {
+        ScriptModule::typescript(&script.source_path, script.compiled_source.as_str())
+    } else {
+        ScriptModule::javascript(&script.source_path, script.compiled_source.as_str())
+    };
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+    let execution = backend.execute_module(module).ok()?;
+    match execution.value() {
+        StructuredValue::String(value) if !value.trim().is_empty() => Some(value.clone()),
+        StructuredValue::Null
+        | StructuredValue::Bool(_)
+        | StructuredValue::Number(_)
+        | StructuredValue::String(_) => None,
+    }
 }
 
 fn runtime_dimension_to_f32(value: f64) -> Result<f32, Box<CliDiagnostic>> {
@@ -615,6 +672,9 @@ name = "local-desktop"
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hawk2ui_build::{
+        ArtifactHash, BuildPipeline, CompiledScriptRecord, SealedArtifact, VerificationReport,
+    };
     use hawk2ui_layout::Viewport;
     use hawk2ui_runtime::RuntimeSceneBridge;
 
@@ -664,6 +724,64 @@ name = "linux-wayland"
         assert!(scene.draw_commands().iter().any(|command| matches!(
             command,
             hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Desktop Smoke"
+        )));
+    }
+
+    #[test]
+    fn desktop_runtime_config_uses_compiled_entry_source_result_for_visible_title() {
+        let manifest = HawkManifest::parse(
+            r#"[identity]
+id = "com.example.desktop"
+name = "Manifest Only Title"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[editor]
+width = 640
+height = 360
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+        )
+        .expect("manifest parses");
+        let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+            .with_compiled_script(
+                CompiledScriptRecord::new(
+                    "entry",
+                    "src/main.ts",
+                    "scripts/entry.hawk.js",
+                    ArtifactHash::from_bytes(b"const title: string = 'Entry Driven Title'; title"),
+                )
+                .with_compiled_source("const title: string = 'Entry Driven Title'; title"),
+            );
+        let output = BuildWorkspaceOutput {
+            manifest,
+            pipeline: BuildPipeline::production(),
+            artifact,
+            verification: VerificationReport::new("com.example.desktop"),
+        };
+
+        let config =
+            desktop_runtime_config_from_build_output(&output, true).expect("runtime config builds");
+        let scene = RuntimeSceneBridge::new(Viewport::new(640.0, 360.0))
+            .build(
+                config
+                    .runtime_tree()
+                    .expect("desktop config carries runtime tree"),
+            )
+            .expect("runtime scene builds");
+
+        assert!(scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Entry Driven Title"
+        )));
+        assert!(!scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Manifest Only Title"
         )));
     }
 }
