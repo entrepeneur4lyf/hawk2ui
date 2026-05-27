@@ -1,9 +1,19 @@
 #![forbid(unsafe_code)]
 //! Production script backend for `Hawk2UI` `JavaScript` and `TypeScript` execution.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    path::Path,
+};
 
 use boa_engine::{Context, JsValue, JsVariant, Source};
+use oxc_allocator::Allocator;
+use oxc_codegen::Codegen;
+use oxc_parser::Parser;
+use oxc_semantic::SemanticBuilder;
+use oxc_span::SourceType;
+use oxc_transformer::{HelperLoaderMode, TransformOptions, Transformer};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-script";
@@ -276,7 +286,7 @@ impl ScriptBackend {
         self.ensure_running()?;
         let executable = match module.kind {
             ScriptModuleKind::JavaScript => module.source.clone(),
-            ScriptModuleKind::TypeScript => compile_typescript(&module.source),
+            ScriptModuleKind::TypeScript => compile_typescript(&module.id, &module.source)?,
         };
         let value = evaluate_javascript(&executable)?;
         let execution = ScriptExecution {
@@ -423,8 +433,54 @@ impl ScriptBackend {
     }
 }
 
-fn compile_typescript(source: &str) -> String {
-    source.replace(": number", "").replace(": string", "")
+fn compile_typescript(module_id: &str, source: &str) -> Result<String, ScriptBackendError> {
+    let allocator = Allocator::default();
+    let source_path = Path::new(module_id);
+    let source_type = SourceType::from_path(source_path).unwrap_or_else(|_| SourceType::ts());
+    let parse_return = Parser::new(&allocator, source, source_type).parse();
+    if !parse_return.errors.is_empty() {
+        return Err(ScriptBackendError::new(
+            "script.typescript.parse-failed",
+            format_oxc_diagnostics("TypeScript parse failed", parse_return.errors),
+        ));
+    }
+
+    let mut program = parse_return.program;
+    let semantic_return = SemanticBuilder::new()
+        .with_excess_capacity(2.0)
+        .with_enum_eval(true)
+        .build(&program);
+    if !semantic_return.errors.is_empty() {
+        return Err(ScriptBackendError::new(
+            "script.typescript.semantic-failed",
+            format_oxc_diagnostics(
+                "TypeScript semantic analysis failed",
+                semantic_return.errors,
+            ),
+        ));
+    }
+
+    let mut options = TransformOptions::default();
+    options.helper_loader.mode = HelperLoaderMode::External;
+    let transform_return = Transformer::new(&allocator, source_path, &options)
+        .build_with_scoping(semantic_return.semantic.into_scoping(), &mut program);
+    if !transform_return.errors.is_empty() {
+        return Err(ScriptBackendError::new(
+            "script.typescript.transform-failed",
+            format_oxc_diagnostics("TypeScript transform failed", transform_return.errors),
+        ));
+    }
+
+    Ok(Codegen::new().build(&program).code)
+}
+
+fn format_oxc_diagnostics<T: fmt::Debug>(prefix: &'static str, errors: Vec<T>) -> String {
+    let details = errors
+        .into_iter()
+        .map(|error| format!("{error:?}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("{prefix}: {details}")
 }
 
 fn evaluate_javascript(source: &str) -> Result<StructuredValue, ScriptBackendError> {

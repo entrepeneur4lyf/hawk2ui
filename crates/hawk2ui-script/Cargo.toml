@@ -18,3 +18,9 @@ workspace = true
 
 [dependencies]
 boa_engine = { git = "https://github.com/boa-dev/boa", rev = "8f5ef6542d641fd22320e51234e914b59e623717" }
+oxc_allocator = "0.133.0"
+oxc_codegen = "0.133.0"
+oxc_parser = "0.133.0"
+oxc_semantic = "0.133.0"
+oxc_span = "0.133.0"
+oxc_transformer = "0.133.0"

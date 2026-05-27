@@ -42,6 +42,30 @@ values.map((value) => value * 2).reduce((total, value) => total + value, 0);
 }
 
 #[test]
+fn script_backend_compiles_typescript_with_interfaces_generics_and_assertions() {
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+
+    let execution = backend
+        .execute_module(ScriptModule::typescript(
+            "typed.ts",
+            r#"
+type Scalar = number;
+interface Accumulator {
+  current: Scalar;
+}
+function sum<T extends number>(items: T[]): Scalar {
+  return items.reduce((total: number, item: T) => total + item, 0);
+}
+const state = { current: sum([1, 2, 3]) } as Accumulator;
+state.current + 3;
+"#,
+        ))
+        .expect("typescript source compiles through the production compiler");
+
+    assert_eq!(execution.value(), &StructuredValue::Number(9.0));
+}
+
+#[test]
 fn script_backend_handles_promises_timers_and_structured_host_calls() {
     let mut backend = ScriptBackend::new(
         HostCallPolicy::allow(["ui.setTitle"]),
