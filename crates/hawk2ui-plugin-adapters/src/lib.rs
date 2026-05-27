@@ -163,6 +163,85 @@ impl ClapPluginEntryPlan {
     }
 }
 
+/// Generated CLAP `cdylib` scaffold for producing a loadable entry-library target.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClapCdylibScaffold {
+    entry: ClapPluginEntryPlan,
+    package_name: String,
+    library_file_stem: String,
+}
+
+impl ClapCdylibScaffold {
+    /// Creates a CLAP dynamic-library scaffold from plugin metadata.
+    #[must_use]
+    pub fn from_metadata(metadata: &FormatMetadata) -> Self {
+        Self {
+            entry: ClapPluginEntryPlan::from_metadata(metadata),
+            package_name: "hawk2ui-generated-clap".into(),
+            library_file_stem: "hawk2ui_generated_clap".into(),
+        }
+    }
+
+    /// Writes the scaffold to a Cargo project directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageMaterializationError`] when project directories or source files cannot be
+    /// created.
+    pub fn write_to(
+        &self,
+        root: impl AsRef<Path>,
+    ) -> Result<ClapCdylibScaffoldOutput, PackageMaterializationError> {
+        let root = root.as_ref();
+        let src_dir = root.join("src");
+        create_package_dir(&src_dir)?;
+        let cargo_toml_path = root.join("Cargo.toml");
+        let lib_rs_path = src_dir.join("lib.rs");
+        write_package_file(&cargo_toml_path, self.cargo_toml())?;
+        write_package_file(&lib_rs_path, self.lib_rs())?;
+        Ok(ClapCdylibScaffoldOutput {
+            root_path: root.to_string_lossy().into_owned(),
+            cargo_toml_path: cargo_toml_path.to_string_lossy().into_owned(),
+            lib_rs_path: lib_rs_path.to_string_lossy().into_owned(),
+            package_name: self.package_name.clone(),
+            library_file_stem: self.library_file_stem.clone(),
+        })
+    }
+
+    fn cargo_toml(&self) -> String {
+        format!(
+            "[package]\nname = {}\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\nname = {}\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nclap-sys = \"0.5.0\"\n",
+            quoted_metadata_string(&self.package_name),
+            quoted_metadata_string(&self.library_file_stem)
+        )
+    }
+
+    fn lib_rs(&self) -> String {
+        format!(
+            "//! Generated Hawk2UI CLAP entry library scaffold.\n\nuse clap_sys::entry::clap_plugin_entry;\nuse clap_sys::version::CLAP_VERSION;\nuse std::ffi::{{c_char, c_void}};\n\nconst PLUGIN_ID: &str = {};\nconst FACTORY_ID: &str = {};\n\nunsafe extern \"C\" fn init(_plugin_path: *const c_char) -> bool {{\n    true\n}}\n\nunsafe extern \"C\" fn deinit() {{}}\n\nunsafe extern \"C\" fn get_factory(_factory_id: *const c_char) -> *const c_void {{\n    std::ptr::null()\n}}\n\n#[unsafe(no_mangle)]\n#[allow(non_upper_case_globals)]\npub static clap_entry: clap_plugin_entry = clap_plugin_entry {{\n    clap_version: CLAP_VERSION,\n    init: Some(init),\n    deinit: Some(deinit),\n    get_factory: Some(get_factory),\n}};\n\n#[doc(hidden)]\npub fn hawk2ui_generated_plugin_id() -> &'static str {{\n    PLUGIN_ID\n}}\n\n#[doc(hidden)]\npub fn hawk2ui_generated_factory_id() -> &'static str {{\n    FACTORY_ID\n}}\n",
+            quoted_metadata_string(self.entry.plugin_id()),
+            quoted_metadata_string(self.entry.factory_id())
+        )
+    }
+}
+
+/// Files written for a generated CLAP `cdylib` scaffold.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClapCdylibScaffoldOutput {
+    /// Root project path.
+    pub root_path: String,
+    /// Generated `Cargo.toml` path.
+    pub cargo_toml_path: String,
+    /// Generated `src/lib.rs` path.
+    pub lib_rs_path: String,
+    /// Generated Cargo package name.
+    pub package_name: String,
+    /// Generated dynamic library file stem.
+    pub library_file_stem: String,
+}
+
 /// Package request.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PackageRequest {

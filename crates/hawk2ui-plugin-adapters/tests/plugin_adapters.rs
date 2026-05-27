@@ -2,8 +2,8 @@ use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRange, ParameterRecord,
 };
 use hawk2ui_plugin_adapters::{
-    ClapPluginEntryPlan, MaterializedPackageOutput, PackageAdapterSet, PackageFormat, PackagePlan,
-    PackageRequest, VerificationReport, VerificationStatus,
+    ClapCdylibScaffold, ClapPluginEntryPlan, MaterializedPackageOutput, PackageAdapterSet,
+    PackageFormat, PackagePlan, PackageRequest, VerificationReport, VerificationStatus,
 };
 use std::{
     path::Path,
@@ -234,6 +234,58 @@ fn plugin_adapters_build_clap_entry_plan_from_clap_sys_contract() {
     assert_eq!(entry.clap_version(), "1.2.2");
     assert_eq!(entry.plugin_id(), "com.hawk2ui.clap");
     assert_eq!(entry.features(), &["audio-effect", "utility"]);
+}
+
+#[test]
+fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
+    let metadata = FormatMetadata::new("com.hawk2ui.loadable", "Loadable", "Hawk2UI")
+        .version("1.0.0")
+        .feature("audio-effect");
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-clap-cdylib-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+
+    let scaffold = ClapCdylibScaffold::from_metadata(&metadata);
+    let output = scaffold
+        .write_to(&output_root)
+        .expect("CLAP scaffold should write");
+
+    assert!(Path::new(&output.cargo_toml_path).is_file());
+    assert!(Path::new(&output.lib_rs_path).is_file());
+    let source = std::fs::read_to_string(&output.lib_rs_path).expect("generated source reads");
+    assert!(source.contains("pub static clap_entry"));
+    assert!(source.contains("clap_plugin_entry"));
+
+    let target_dir = output_root.join("target");
+    let status = std::process::Command::new("cargo")
+        .arg("build")
+        .arg("--release")
+        .arg("--manifest-path")
+        .arg(&output.cargo_toml_path)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .status()
+        .expect("cargo build should launch for generated CLAP scaffold");
+    assert!(status.success(), "generated CLAP scaffold should compile");
+
+    let library_path = target_dir
+        .join("release")
+        .join(format!(
+            "{}{}",
+            std::env::consts::DLL_PREFIX,
+            output.library_file_stem
+        ))
+        .with_extension(std::env::consts::DLL_EXTENSION);
+    assert!(library_path.is_file());
+    let library_bytes = std::fs::read(&library_path).expect("compiled CLAP library reads");
+    assert!(
+        library_bytes
+            .windows("clap_entry".len())
+            .any(|window| window == b"clap_entry")
+    );
 }
 
 #[test]
