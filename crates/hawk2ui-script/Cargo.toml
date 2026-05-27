@@ -15,3 +15,6 @@ path = "src/lib.rs"
 
 [lints]
 workspace = true
+
+[dependencies]
+boa_engine = { git = "https://github.com/boa-dev/boa", rev = "8f5ef6542d641fd22320e51234e914b59e623717" }

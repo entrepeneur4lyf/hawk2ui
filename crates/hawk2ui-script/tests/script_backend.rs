@@ -25,6 +25,23 @@ fn script_backend_executes_javascript_and_typescript_modules() {
 }
 
 #[test]
+fn script_backend_executes_real_javascript_language_features() {
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+
+    let execution = backend
+        .execute_module(ScriptModule::javascript(
+            "language.js",
+            r#"
+const values = [1, 2, 3];
+values.map((value) => value * 2).reduce((total, value) => total + value, 0);
+"#,
+        ))
+        .expect("boa executes standard JavaScript features");
+
+    assert_eq!(execution.value(), &StructuredValue::Number(12.0));
+}
+
+#[test]
 fn script_backend_handles_promises_timers_and_structured_host_calls() {
     let mut backend = ScriptBackend::new(
         HostCallPolicy::allow(["ui.setTitle"]),

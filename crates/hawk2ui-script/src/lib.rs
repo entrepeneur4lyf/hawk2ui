@@ -3,6 +3,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use boa_engine::{Context, JsValue, JsVariant, Source};
+
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-script";
 
@@ -276,7 +278,7 @@ impl ScriptBackend {
             ScriptModuleKind::JavaScript => module.source.clone(),
             ScriptModuleKind::TypeScript => compile_typescript(&module.source),
         };
-        let value = evaluate_expression_module(&executable)?;
+        let value = evaluate_javascript(&executable)?;
         let execution = ScriptExecution {
             module_id: module.id.clone(),
             value,
@@ -425,54 +427,47 @@ fn compile_typescript(source: &str) -> String {
     source.replace(": number", "").replace(": string", "")
 }
 
-fn evaluate_expression_module(source: &str) -> Result<StructuredValue, ScriptBackendError> {
-    let mut variables = BTreeMap::<String, f64>::new();
-    let mut last = StructuredValue::Null;
-    for statement in source
-        .split(';')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        if let Some(rest) = statement.strip_prefix("const ") {
-            let Some((name, value)) = rest.split_once('=') else {
-                return Err(ScriptBackendError::new(
-                    "script.parse.invalid-const",
-                    "const statement must contain assignment",
-                ));
-            };
-            let value = evaluate_number_expression(value.trim(), &variables)?;
-            variables.insert(name.trim().to_string(), value);
-            last = StructuredValue::Number(value);
-        } else {
-            last = StructuredValue::Number(evaluate_number_expression(statement, &variables)?);
-        }
-    }
-    Ok(last)
+fn evaluate_javascript(source: &str) -> Result<StructuredValue, ScriptBackendError> {
+    let mut context = Context::default();
+    let value = context.eval(Source::from_bytes(source)).map_err(|error| {
+        ScriptBackendError::new(
+            "script.eval.failed",
+            format!("JavaScript execution failed: {error}"),
+        )
+    })?;
+    context.run_jobs().map_err(|error| {
+        ScriptBackendError::new(
+            "script.jobs.failed",
+            format!("JavaScript job queue failed: {error}"),
+        )
+    })?;
+    structured_value_from_js(&value)
 }
 
-fn evaluate_number_expression(
-    expression: &str,
-    variables: &BTreeMap<String, f64>,
-) -> Result<f64, ScriptBackendError> {
-    let mut total = 0.0_f64;
-    for term in expression
-        .split('+')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        let value = if let Ok(number) = term.parse::<f64>() {
-            number
-        } else {
-            *variables.get(term).ok_or_else(|| {
-                ScriptBackendError::new(
-                    "script.eval.unknown-identifier",
-                    "identifier is not defined",
-                )
-            })?
-        };
-        total += value;
+fn structured_value_from_js(value: &JsValue) -> Result<StructuredValue, ScriptBackendError> {
+    match value.variant() {
+        JsVariant::Null | JsVariant::Undefined => Ok(StructuredValue::Null),
+        JsVariant::Boolean(value) => Ok(StructuredValue::Bool(value)),
+        JsVariant::Float64(value) => Ok(StructuredValue::Number(value)),
+        JsVariant::Integer32(value) => Ok(StructuredValue::Number(f64::from(value))),
+        JsVariant::String(value) => {
+            value
+                .to_std_string()
+                .map(StructuredValue::String)
+                .map_err(|_| {
+                    ScriptBackendError::new(
+                        "script.value.unsupported-string",
+                        "JavaScript string result cannot be represented as UTF-8",
+                    )
+                })
+        }
+        JsVariant::BigInt(_) | JsVariant::Object(_) | JsVariant::Symbol(_) => {
+            Err(ScriptBackendError::new(
+                "script.value.unsupported",
+                "JavaScript result type cannot be represented as a structured Hawk2UI value",
+            ))
+        }
     }
-    Ok(total)
 }
 
 #[cfg(test)]
