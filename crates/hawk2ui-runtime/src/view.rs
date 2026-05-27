@@ -123,6 +123,8 @@ pub enum RuntimeSceneError {
     MissingNode(String),
     /// Node already exists.
     DuplicateNode(String),
+    /// Node contains invalid runtime data.
+    InvalidNode(String),
 }
 
 impl From<LayoutTreeError> for RuntimeSceneError {
@@ -209,6 +211,7 @@ impl RuntimeSceneBridge {
     ///
     /// Returns [`RuntimeSceneError`] when the tree cannot be converted into layout or scene data.
     pub fn build(&self, tree: &RuntimeViewTree) -> Result<RuntimeSceneFrame, RuntimeSceneError> {
+        tree.validate_for_bridge()?;
         let layout_tree = tree.to_layout_tree()?;
         let layout = layout_tree.compute_layout(self.viewport);
         let geometry = collect_geometry(tree, &layout)?;
@@ -393,6 +396,13 @@ impl RuntimeViewTree {
             .position(|entry| entry.node.id().as_str() == node_id.as_str())
     }
 
+    fn validate_for_bridge(&self) -> Result<(), RuntimeSceneError> {
+        for entry in &self.entries {
+            validate_runtime_node(&entry.node)?;
+        }
+        Ok(())
+    }
+
     fn to_layout_tree(&self) -> Result<LayoutTree, RuntimeSceneError> {
         let root = self
             .entries
@@ -547,4 +557,27 @@ fn geometry_for(
 
 fn checked_order(order: usize) -> i32 {
     i32::try_from(order).unwrap_or(i32::MAX)
+}
+
+fn validate_runtime_node(node: &RuntimeViewNode) -> Result<(), RuntimeSceneError> {
+    if !is_valid_runtime_id(node.id().as_str()) {
+        return Err(RuntimeSceneError::InvalidNode(
+            node.id().as_str().to_string(),
+        ));
+    }
+    if let RuntimeVisual::Text(text) = node.visual()
+        && (!text.font_size().is_finite() || text.font_size() <= 0.0)
+    {
+        return Err(RuntimeSceneError::InvalidNode(
+            node.id().as_str().to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_valid_runtime_id(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
 }

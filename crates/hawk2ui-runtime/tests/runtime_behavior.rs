@@ -540,6 +540,37 @@ fn runtime_scene_bridge_computes_layout_scene_and_paint_commands() {
 }
 
 #[test]
+fn runtime_scene_bridge_rejects_invalid_view_records_before_rendering() {
+    let invalid_root = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new(""),
+        LayoutStyle::flex_container(FlexDirection::Column),
+        RuntimeVisual::Fill(Color::rgba(12, 14, 18, 255)),
+    ));
+
+    let error = RuntimeSceneBridge::new(Viewport::new(320.0, 200.0))
+        .build(&invalid_root)
+        .expect_err("empty runtime view IDs must fail before layout");
+
+    assert_eq!(error, RuntimeSceneError::InvalidNode("".into()));
+
+    let invalid_text = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column),
+        RuntimeVisual::Text(RuntimeTextVisual::new(
+            "Invalid",
+            f32::NAN,
+            Color::rgba(255, 255, 255, 255),
+        )),
+    ));
+
+    let error = RuntimeSceneBridge::new(Viewport::new(320.0, 200.0))
+        .build(&invalid_text)
+        .expect_err("invalid text metrics must fail before render commands");
+
+    assert_eq!(error, RuntimeSceneError::InvalidNode("root".into()));
+}
+
+#[test]
 fn runtime_scene_bridge_marks_invalidated_nodes_and_ancestors() {
     let tree = RuntimeViewTree::new(RuntimeViewNode::new(
         RuntimeViewId::new("root"),

@@ -286,6 +286,10 @@ impl From<RuntimeSceneError> for NativeRuntimeBridgeError {
                 "native-runtime.tree.duplicate-node",
                 format!("runtime node `{id}` already exists"),
             ),
+            RuntimeSceneError::InvalidNode(id) => Self::new(
+                "native-runtime.tree.invalid-node",
+                format!("runtime node `{id}` contains invalid render data"),
+            ),
         }
     }
 }
