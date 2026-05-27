@@ -161,6 +161,59 @@ fn flex_scroll_layout_tracks_scroll_clip_and_absolute_regions() {
 }
 
 #[test]
+fn layout_compute_applies_min_and_max_constraints() {
+    let tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Row)
+            .with_size(LayoutSizing::fixed(500.0, 100.0)),
+    ))
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new("min-bound"),
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_size(LayoutSizing::percent(10.0, 100.0))
+                .with_min_size(LayoutSizing::fixed(120.0, 40.0)),
+        ),
+    )
+    .expect("min-bound child insertion should succeed")
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new("max-bound"),
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_size(LayoutSizing::percent(100.0, 100.0))
+                .with_max_size(LayoutSizing::fixed(200.0, 80.0)),
+        ),
+    )
+    .expect("max-bound child insertion should succeed");
+
+    let output = tree.compute_layout(Viewport::new(500.0, 100.0));
+
+    assert_eq!(
+        output
+            .geometry(&LayoutNodeId::new("min-bound"))
+            .unwrap()
+            .width,
+        120.0
+    );
+    assert_eq!(
+        output
+            .geometry(&LayoutNodeId::new("max-bound"))
+            .unwrap()
+            .width,
+        200.0
+    );
+    assert_eq!(
+        output
+            .geometry(&LayoutNodeId::new("max-bound"))
+            .unwrap()
+            .height,
+        80.0
+    );
+}
+
+#[test]
 fn text_measurement_reports_intrinsic_wrapped_and_truncated_sizes() {
     let measurer = TestTextMeasurer::new().with_average_glyph_width(8.0);
     let intrinsic = measurer.measure(&TextMeasureInput::new(

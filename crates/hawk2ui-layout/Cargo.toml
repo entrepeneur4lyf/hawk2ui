@@ -15,3 +15,6 @@ path = "src/lib.rs"
 
 [lints]
 workspace = true
+
+[dependencies]
+taffy = { version = "0.10.0", default-features = false, features = ["std", "taffy_tree", "flexbox"] }
