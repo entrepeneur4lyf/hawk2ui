@@ -1537,6 +1537,7 @@ dependencies = [
  "hawk2ui-runtime",
  "hawk2ui-script",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

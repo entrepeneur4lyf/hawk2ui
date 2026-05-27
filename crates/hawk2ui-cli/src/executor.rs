@@ -7,7 +7,7 @@ use std::{
 
 use hawk2ui_build::{
     ArtifactSchemaVersion, AssetCompilationError, BuildWorkspace, BuildWorkspaceError,
-    BuildWorkspaceOutput, HawkManifest, ManifestError, PackageTarget,
+    BuildWorkspaceOutput, CompiledScriptRecord, HawkManifest, ManifestError, PackageTarget,
 };
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{WinitDesktopRuntime, WinitDesktopRuntimeConfig};
@@ -27,6 +27,31 @@ use hawk2ui_runtime::{
 use hawk2ui_script::{HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy};
 
 use crate::{CliCommand, CliDiagnostic, CliExitCode};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DesktopEntryAppModel {
+    root_id: String,
+    visible_title: String,
+}
+
+impl DesktopEntryAppModel {
+    fn manifest_fallback(visible_title: impl Into<String>) -> Self {
+        Self {
+            root_id: "root".to_string(),
+            visible_title: visible_title.into(),
+        }
+    }
+
+    fn from_mount_json(value: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(value).ok()?;
+        let root_id = non_empty_json_string(&value, "id")?;
+        let visible_title = non_empty_json_string(&value, "text")?;
+        Some(Self {
+            root_id,
+            visible_title,
+        })
+    }
+}
 
 /// Result of a concrete CLI command execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -508,9 +533,10 @@ fn desktop_runtime_config_from_manifest(
     manifest: &HawkManifest,
     exit_after_first_frame: bool,
 ) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
-    desktop_runtime_config_from_manifest_with_title(
+    let app_model = DesktopEntryAppModel::manifest_fallback(manifest.identity.name.as_str());
+    desktop_runtime_config_from_manifest_with_app_model(
         manifest,
-        manifest.identity.name.as_str(),
+        &app_model,
         exit_after_first_frame,
     )
 }
@@ -519,24 +545,25 @@ fn desktop_runtime_config_from_build_output(
     output: &BuildWorkspaceOutput,
     exit_after_first_frame: bool,
 ) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
-    let visible_title =
-        entry_script_visible_title(output).unwrap_or_else(|| output.manifest.identity.name.clone());
-    desktop_runtime_config_from_manifest_with_title(
+    let app_model = entry_script_app_model(output).unwrap_or_else(|| {
+        DesktopEntryAppModel::manifest_fallback(output.manifest.identity.name.clone())
+    });
+    desktop_runtime_config_from_manifest_with_app_model(
         &output.manifest,
-        visible_title.as_str(),
+        &app_model,
         exit_after_first_frame,
     )
 }
 
-fn desktop_runtime_config_from_manifest_with_title(
+fn desktop_runtime_config_from_manifest_with_app_model(
     manifest: &HawkManifest,
-    visible_title: &str,
+    app_model: &DesktopEntryAppModel,
     exit_after_first_frame: bool,
 ) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
     let (width, height) = manifest.editor.as_ref().map_or((960.0, 540.0), |editor| {
         (f64::from(editor.width), f64::from(editor.height))
     });
-    let runtime_tree = runtime_tree_from_manifest(manifest, visible_title, width, height)?;
+    let runtime_tree = runtime_tree_from_manifest(manifest, app_model, width, height)?;
     Ok(WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
         manifest.identity.name.clone(),
         SurfaceMetrics::new(width, height, 1.0),
@@ -547,15 +574,15 @@ fn desktop_runtime_config_from_manifest_with_title(
 
 fn runtime_tree_from_manifest(
     manifest: &HawkManifest,
-    visible_title: &str,
+    app_model: &DesktopEntryAppModel,
     width: f64,
     height: f64,
 ) -> Result<RuntimeViewTree, Box<CliDiagnostic>> {
     let width = runtime_dimension_to_f32(width)?;
     let height = runtime_dimension_to_f32(height)?;
-    let root_id = RuntimeViewId::new("root");
-    let title_id = RuntimeViewId::new("title");
-    let status_id = RuntimeViewId::new("status");
+    let root_id = RuntimeViewId::new(app_model.root_id.clone());
+    let title_id = RuntimeViewId::new(format!("{}-title", app_model.root_id));
+    let status_id = RuntimeViewId::new(format!("{}-status", app_model.root_id));
     let content_width = (width - 48.0).max(1.0);
     let root = RuntimeViewNode::new(
         root_id.clone(),
@@ -570,7 +597,7 @@ fn runtime_tree_from_manifest(
         LayoutStyle::flex_container(FlexDirection::Row)
             .with_size(LayoutSizing::fixed(content_width, 32.0)),
         RuntimeVisual::Text(RuntimeTextVisual::new(
-            visible_title.to_string(),
+            app_model.visible_title.clone(),
             20.0,
             Color::rgba(241, 245, 249, 255),
         )),
@@ -594,30 +621,80 @@ fn runtime_tree_from_manifest(
         .map_err(|error| runtime_scene_diagnostic(&error))
 }
 
-fn entry_script_visible_title(output: &BuildWorkspaceOutput) -> Option<String> {
+fn entry_script_app_model(output: &BuildWorkspaceOutput) -> Option<DesktopEntryAppModel> {
     let script = output
         .artifact
         .compiled_scripts
         .iter()
         .find(|script| script.entrypoint_id == "entry")?;
-    let extension = Path::new(&script.source_path)
-        .extension()
-        .and_then(|extension| extension.to_str());
-    let module = if extension.is_some_and(|extension| {
-        extension.eq_ignore_ascii_case("ts") || extension.eq_ignore_ascii_case("tsx")
-    }) {
-        ScriptModule::typescript(&script.source_path, script.compiled_source.as_str())
-    } else {
-        ScriptModule::javascript(&script.source_path, script.compiled_source.as_str())
-    };
+
+    entry_script_mount_app_model(script)
+        .or_else(|| entry_script_visible_title(script).map(DesktopEntryAppModel::manifest_fallback))
+}
+
+fn entry_script_mount_app_model(script: &CompiledScriptRecord) -> Option<DesktopEntryAppModel> {
+    let source = native_mount_bootstrap_source(script.compiled_source.as_str())?;
     let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
-    let execution = backend.execute_module(module).ok()?;
+    let execution = backend
+        .execute_module(entry_script_module(script, source.as_str()))
+        .ok()?;
+    match execution.value() {
+        StructuredValue::String(value) => DesktopEntryAppModel::from_mount_json(value),
+        StructuredValue::Null | StructuredValue::Bool(_) | StructuredValue::Number(_) => None,
+    }
+}
+
+fn entry_script_visible_title(script: &CompiledScriptRecord) -> Option<String> {
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+    let execution = backend
+        .execute_module(entry_script_module(script, script.compiled_source.as_str()))
+        .ok()?;
     match execution.value() {
         StructuredValue::String(value) if !value.trim().is_empty() => Some(value.clone()),
         StructuredValue::Null
         | StructuredValue::Bool(_)
         | StructuredValue::Number(_)
         | StructuredValue::String(_) => None,
+    }
+}
+
+fn entry_script_module(script: &CompiledScriptRecord, source: &str) -> ScriptModule {
+    let extension = Path::new(&script.source_path)
+        .extension()
+        .and_then(|extension| extension.to_str());
+    if extension.is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("ts") || extension.eq_ignore_ascii_case("tsx")
+    }) {
+        ScriptModule::typescript(&script.source_path, source)
+    } else {
+        ScriptModule::javascript(&script.source_path, source)
+    }
+}
+
+fn native_mount_bootstrap_source(source: &str) -> Option<String> {
+    let source = source.replacen("export function mount", "function mount", 1);
+    if !source.contains("function mount") {
+        return None;
+    }
+    Some(format!(
+        r"{source}
+
+const __hawk2ui_host = Object.freeze({{
+    on(_name, _handler) {{}},
+    setState(_value) {{}}
+}});
+
+JSON.stringify(mount(__hawk2ui_host));
+"
+    ))
+}
+
+fn non_empty_json_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    let value = value.get(key)?.as_str()?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
     }
 }
 
@@ -778,6 +855,74 @@ name = "linux-wayland"
         assert!(scene.draw_commands().iter().any(|command| matches!(
             command,
             hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Entry Driven Title"
+        )));
+        assert!(!scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Manifest Only Title"
+        )));
+    }
+
+    #[test]
+    fn desktop_runtime_config_mounts_compiled_entry_app_model() {
+        let manifest = HawkManifest::parse(
+            r#"[identity]
+id = "com.example.desktop"
+name = "Manifest Only Title"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[editor]
+width = 640
+height = 360
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+        )
+        .expect("manifest parses");
+        let source = r#"
+export function mount(host: { on(name: string, handler: () => void): void; setState(value: object): void }) {
+    host.on("click", () => host.setState({ ready: true }));
+    return {
+        id: "desktop-basic-root",
+        text: "Hello From Mount"
+    };
+}
+"#;
+        let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+            .with_compiled_script(
+                CompiledScriptRecord::new(
+                    "entry",
+                    "src/main.ts",
+                    "scripts/entry.hawk.js",
+                    ArtifactHash::from_bytes(source.as_bytes()),
+                )
+                .with_compiled_source(source),
+            );
+        let output = BuildWorkspaceOutput {
+            manifest,
+            pipeline: BuildPipeline::production(),
+            artifact,
+            verification: VerificationReport::new("com.example.desktop"),
+        };
+
+        let config =
+            desktop_runtime_config_from_build_output(&output, true).expect("runtime config builds");
+        let runtime_tree = config
+            .runtime_tree()
+            .expect("desktop config carries runtime tree");
+        assert_eq!(runtime_tree.root_id().as_str(), "desktop-basic-root");
+
+        let scene = RuntimeSceneBridge::new(Viewport::new(640.0, 360.0))
+            .build(runtime_tree)
+            .expect("runtime scene builds");
+
+        assert!(scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Hello From Mount"
         )));
         assert!(!scene.draw_commands().iter().any(|command| matches!(
             command,
