@@ -1,5 +1,10 @@
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{DesktopRuntimeEvent, SoftwareFrameRenderer, WinitDesktopRuntimeConfig};
+use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
+use hawk2ui_render::Color;
+use hawk2ui_runtime::{
+    RuntimeSceneBridge, RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
+};
 
 #[test]
 fn software_frame_renders_visible_pixels() {
@@ -21,6 +26,28 @@ fn software_frame_renders_visible_pixels() {
 }
 
 #[test]
+fn software_frame_renders_runtime_scene_commands() {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(32.0, 24.0)),
+        RuntimeVisual::Fill(Color::rgba(255, 0, 0, 255)),
+    ));
+    let frame = RuntimeSceneBridge::new(Viewport::new(32.0, 24.0))
+        .build(&tree)
+        .expect("runtime scene frame should build");
+
+    let pixels = SoftwareFrameRenderer::default()
+        .render_scene_frame(&frame, 32, 24, 1.0)
+        .expect("runtime scene should render to software frame");
+
+    assert_eq!(pixels.width(), 32);
+    assert_eq!(pixels.height(), 24);
+    assert_eq!(pixels.pixels()[0], 0x00ff0000);
+    assert!(pixels.pixels().iter().all(|pixel| *pixel == 0x00ff0000));
+}
+
+#[test]
 fn runtime_config_rejects_zero_size() {
     let config = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
         "app",
@@ -34,14 +61,22 @@ fn runtime_config_rejects_zero_size() {
 
 #[test]
 fn runtime_config_accepts_first_frame_smoke_mode() {
+    let scene_tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(640.0, 480.0)),
+        RuntimeVisual::Fill(Color::rgba(8, 10, 14, 255)),
+    ));
     let config = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
         "app",
         SurfaceMetrics::new(640.0, 480.0, 1.0),
     ))
+    .with_runtime_tree(scene_tree)
     .with_exit_after_first_frame(true);
 
     config.validate().expect("valid runtime config");
     assert!(config.exit_after_first_frame());
+    assert!(config.runtime_tree().is_some());
 }
 
 #[test]

@@ -3,6 +3,8 @@
 use std::{num::NonZeroU32, sync::Arc};
 
 use hawk2ui_host::DesktopWindowConfig;
+use hawk2ui_layout::Viewport;
+use hawk2ui_runtime::{RuntimeSceneBridge, RuntimeViewTree};
 use softbuffer::{Context, Surface};
 use winit::{
     application::ApplicationHandler,
@@ -19,6 +21,7 @@ use crate::{SoftwareFrameRenderer, WinitHostError, physical_frame_size};
 pub struct WinitDesktopRuntimeConfig {
     window: DesktopWindowConfig,
     exit_after_first_frame: bool,
+    runtime_tree: Option<RuntimeViewTree>,
 }
 
 impl WinitDesktopRuntimeConfig {
@@ -28,6 +31,7 @@ impl WinitDesktopRuntimeConfig {
         Self {
             window,
             exit_after_first_frame: false,
+            runtime_tree: None,
         }
     }
 
@@ -35,6 +39,13 @@ impl WinitDesktopRuntimeConfig {
     #[must_use]
     pub const fn with_exit_after_first_frame(mut self, exit_after_first_frame: bool) -> Self {
         self.exit_after_first_frame = exit_after_first_frame;
+        self
+    }
+
+    /// Sets the runtime view tree rendered by this desktop runtime.
+    #[must_use]
+    pub fn with_runtime_tree(mut self, runtime_tree: RuntimeViewTree) -> Self {
+        self.runtime_tree = Some(runtime_tree);
         self
     }
 
@@ -48,6 +59,12 @@ impl WinitDesktopRuntimeConfig {
     #[must_use]
     pub const fn exit_after_first_frame(&self) -> bool {
         self.exit_after_first_frame
+    }
+
+    /// Returns the optional runtime view tree rendered by this desktop runtime.
+    #[must_use]
+    pub const fn runtime_tree(&self) -> Option<&RuntimeViewTree> {
+        self.runtime_tree.as_ref()
     }
 
     /// Validates runtime configuration before entering the native event loop.
@@ -278,12 +295,35 @@ impl RuntimeApplication {
             )
         })?;
 
-        let frame = self.renderer.render_frame(
-            &self.config.window.title,
-            size.width,
-            size.height,
-            window.scale_factor(),
-        )?;
+        let frame = if let Some(runtime_tree) = self.config.runtime_tree() {
+            let logical_width = f64::from(size.width) / window.scale_factor();
+            let logical_height = f64::from(size.height) / window.scale_factor();
+            let viewport = Viewport::new(
+                logical_size_to_f32(logical_width)?,
+                logical_size_to_f32(logical_height)?,
+            );
+            let scene = RuntimeSceneBridge::new(viewport)
+                .build(runtime_tree)
+                .map_err(|error| {
+                    WinitHostError::new(
+                        "desktop.runtime-scene.build-failed",
+                        format!("failed to build runtime scene for desktop frame: {error:?}"),
+                    )
+                })?;
+            self.renderer.render_scene_frame(
+                &scene,
+                size.width,
+                size.height,
+                window.scale_factor(),
+            )?
+        } else {
+            self.renderer.render_frame(
+                &self.config.window.title,
+                size.width,
+                size.height,
+                window.scale_factor(),
+            )?
+        };
         let mut buffer = surface.buffer_mut().map_err(|error| {
             WinitHostError::new(
                 "desktop.surface.buffer-failed",
@@ -314,6 +354,29 @@ impl RuntimeApplication {
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: WinitHostError) {
         self.last_error = Some(error);
         event_loop.exit();
+    }
+}
+
+fn logical_size_to_f32(value: f64) -> Result<f32, WinitHostError> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(WinitHostError::new(
+            "desktop.runtime-scene.invalid-viewport",
+            "runtime scene viewport dimensions must be finite and greater than zero",
+        ));
+    }
+    let value = value.to_string().parse::<f32>().map_err(|_| {
+        WinitHostError::new(
+            "desktop.runtime-scene.invalid-viewport",
+            "runtime scene viewport dimension is invalid",
+        )
+    })?;
+    if value.is_finite() && value > 0.0 {
+        Ok(value)
+    } else {
+        Err(WinitHostError::new(
+            "desktop.runtime-scene.invalid-viewport",
+            "runtime scene viewport dimensions must be finite and greater than zero",
+        ))
     }
 }
 

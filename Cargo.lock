@@ -1109,6 +1109,9 @@ name = "hawk2ui-host-winit"
 version = "0.1.0"
 dependencies = [
  "hawk2ui-host",
+ "hawk2ui-layout",
+ "hawk2ui-render",
+ "hawk2ui-runtime",
  "skia-safe",
  "softbuffer",
  "winit",

@@ -1,7 +1,10 @@
 //! Skia-backed software frame generation for native host presentation.
 
 use hawk2ui_host::SurfaceMetrics;
-use skia_safe::{AlphaType, Color, ColorType, Font, ImageInfo, Paint, PaintStyle, Rect, surfaces};
+use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneFrame};
+use skia_safe::{
+    AlphaType, Color as SkiaColor, ColorType, Font, ImageInfo, Paint, PaintStyle, Rect, surfaces,
+};
 
 use crate::WinitHostError;
 
@@ -100,46 +103,88 @@ impl SoftwareFrameRenderer {
 
         draw_default_scene(surface.canvas(), title, width, height, scale_factor);
 
-        let row_bytes = usize::try_from(u64::from(width) * 4).map_err(|_| {
+        surface_to_frame(surface, width, height, skia_width, skia_height)
+    }
+
+    /// Renders a prepared runtime scene frame through Skia.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when dimensions are invalid, Skia cannot allocate a raster
+    /// surface, draw commands are invalid, or pixels cannot be read back for host presentation.
+    pub fn render_scene_frame(
+        &self,
+        scene: &RuntimeSceneFrame,
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+    ) -> Result<SoftwareFrame, WinitHostError> {
+        validate_pixel_size(width, height)?;
+        let scale = scale_factor_to_f32(scale_factor)?;
+        let skia_width = i32::try_from(width).map_err(|_| {
             WinitHostError::new(
-                "desktop.frame.row-bytes-overflow",
-                "frame row byte count exceeds addressable memory",
+                "desktop.frame.size-overflow",
+                "frame width exceeds Skia raster limits",
             )
         })?;
-        let byte_len = row_bytes
-            .checked_mul(usize::try_from(height).map_err(|_| {
+        let skia_height = i32::try_from(height).map_err(|_| {
+            WinitHostError::new(
+                "desktop.frame.size-overflow",
+                "frame height exceeds Skia raster limits",
+            )
+        })?;
+        let mut surface =
+            surfaces::raster_n32_premul((skia_width, skia_height)).ok_or_else(|| {
                 WinitHostError::new(
-                    "desktop.frame.byte-count-overflow",
-                    "frame byte count exceeds addressable memory",
-                )
-            })?)
-            .ok_or_else(|| {
-                WinitHostError::new(
-                    "desktop.frame.byte-count-overflow",
-                    "frame byte count exceeds addressable memory",
+                    "desktop.frame.skia-allocation-failed",
+                    "failed to allocate Skia CPU raster surface",
                 )
             })?;
-        let image_info = ImageInfo::new(
-            (skia_width, skia_height),
-            ColorType::RGBA8888,
-            AlphaType::Premul,
-            None,
-        );
-        let mut rgba = vec![0_u8; byte_len];
-        if !surface.read_pixels(&image_info, &mut rgba, row_bytes, (0, 0)) {
-            return Err(WinitHostError::new(
-                "desktop.frame.readback-failed",
-                "failed to read Skia raster pixels",
-            ));
+        surface.canvas().clear(SkiaColor::TRANSPARENT);
+
+        for command in scene.draw_commands() {
+            match command {
+                RuntimeDrawCommand::Fill {
+                    geometry, color, ..
+                } => {
+                    let mut paint = Paint::default();
+                    paint.set_style(PaintStyle::Fill);
+                    paint.set_anti_alias(true);
+                    paint.set_color(to_skia_color(*color));
+                    surface
+                        .canvas()
+                        .draw_rect(scaled_rect(*geometry, scale), &paint);
+                }
+                RuntimeDrawCommand::Text {
+                    geometry,
+                    text,
+                    font_size,
+                    color,
+                    ..
+                } => {
+                    if !font_size.is_finite() || *font_size <= 0.0 {
+                        return Err(WinitHostError::new(
+                            "desktop.frame.text-invalid",
+                            "runtime text font size must be finite and greater than zero",
+                        ));
+                    }
+                    let mut paint = Paint::default();
+                    paint.set_style(PaintStyle::Fill);
+                    paint.set_anti_alias(true);
+                    paint.set_color(to_skia_color(*color));
+                    let mut font = Font::default();
+                    font.set_size((*font_size * scale.max(1.0)).max(1.0));
+                    surface.canvas().draw_str(
+                        text,
+                        (geometry.x * scale, (geometry.y + *font_size) * scale),
+                        &font,
+                        &paint,
+                    );
+                }
+            }
         }
 
-        let pixels = rgba
-            .chunks_exact(4)
-            .map(|chunk| {
-                (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2])
-            })
-            .collect();
-        SoftwareFrame::new(width, height, pixels)
+        surface_to_frame(surface, width, height, skia_width, skia_height)
     }
 }
 
@@ -162,12 +207,12 @@ fn draw_default_scene(
     height: u32,
     scale_factor: f64,
 ) {
-    canvas.clear(Color::from_argb(255, 11, 12, 18));
+    canvas.clear(SkiaColor::from_argb(255, 11, 12, 18));
 
     let mut panel = Paint::default();
     panel.set_style(PaintStyle::Fill);
     panel.set_anti_alias(true);
-    panel.set_color(Color::from_argb(255, 20, 22, 31));
+    panel.set_color(SkiaColor::from_argb(255, 20, 22, 31));
     canvas.draw_rect(
         Rect::from_xywh(0.0, 0.0, width as f32, height as f32),
         &panel,
@@ -177,13 +222,13 @@ fn draw_default_scene(
     let mut accent = Paint::default();
     accent.set_style(PaintStyle::Fill);
     accent.set_anti_alias(true);
-    accent.set_color(Color::from_argb(255, 42, 128, 255));
+    accent.set_color(SkiaColor::from_argb(255, 42, 128, 255));
     canvas.draw_rect(Rect::from_xywh(0.0, 0.0, accent_width, 4.0), &accent);
 
     let mut text = Paint::default();
     text.set_style(PaintStyle::Fill);
     text.set_anti_alias(true);
-    text.set_color(Color::from_argb(255, 241, 245, 249));
+    text.set_color(SkiaColor::from_argb(255, 241, 245, 249));
     let mut font = Font::default();
     font.set_size((18.0 * scale_factor.max(1.0)) as f32);
     canvas.draw_str(title, (24.0, 48.0), &font, &text);
@@ -191,7 +236,7 @@ fn draw_default_scene(
     let mut secondary = Paint::default();
     secondary.set_style(PaintStyle::Fill);
     secondary.set_anti_alias(true);
-    secondary.set_color(Color::from_argb(255, 166, 173, 186));
+    secondary.set_color(SkiaColor::from_argb(255, 166, 173, 186));
     let mut secondary_font = Font::default();
     secondary_font.set_size((13.0 * scale_factor.max(1.0)) as f32);
     canvas.draw_str(
@@ -200,6 +245,86 @@ fn draw_default_scene(
         &secondary_font,
         &secondary,
     );
+}
+
+fn surface_to_frame(
+    mut surface: skia_safe::Surface,
+    width: u32,
+    height: u32,
+    skia_width: i32,
+    skia_height: i32,
+) -> Result<SoftwareFrame, WinitHostError> {
+    let row_bytes = usize::try_from(u64::from(width) * 4).map_err(|_| {
+        WinitHostError::new(
+            "desktop.frame.row-bytes-overflow",
+            "frame row byte count exceeds addressable memory",
+        )
+    })?;
+    let byte_len = row_bytes
+        .checked_mul(usize::try_from(height).map_err(|_| {
+            WinitHostError::new(
+                "desktop.frame.byte-count-overflow",
+                "frame byte count exceeds addressable memory",
+            )
+        })?)
+        .ok_or_else(|| {
+            WinitHostError::new(
+                "desktop.frame.byte-count-overflow",
+                "frame byte count exceeds addressable memory",
+            )
+        })?;
+    let image_info = ImageInfo::new(
+        (skia_width, skia_height),
+        ColorType::RGBA8888,
+        AlphaType::Premul,
+        None,
+    );
+    let mut rgba = vec![0_u8; byte_len];
+    if !surface.read_pixels(&image_info, &mut rgba, row_bytes, (0, 0)) {
+        return Err(WinitHostError::new(
+            "desktop.frame.readback-failed",
+            "failed to read Skia raster pixels",
+        ));
+    }
+
+    let pixels = rgba
+        .chunks_exact(4)
+        .map(|chunk| (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]))
+        .collect();
+    SoftwareFrame::new(width, height, pixels)
+}
+
+fn scaled_rect(geometry: hawk2ui_render::Geometry, scale: f32) -> Rect {
+    Rect::from_xywh(
+        geometry.x * scale,
+        geometry.y * scale,
+        geometry.width * scale,
+        geometry.height * scale,
+    )
+}
+
+fn to_skia_color(color: hawk2ui_render::Color) -> SkiaColor {
+    SkiaColor::from_argb(color.a, color.r, color.g, color.b)
+}
+
+fn scale_factor_to_f32(scale_factor: f64) -> Result<f32, WinitHostError> {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return Err(WinitHostError::new(
+            "desktop.frame.invalid-scale",
+            "scale factor must be finite and greater than zero",
+        ));
+    }
+    let scale = scale_factor.to_string().parse::<f32>().map_err(|_| {
+        WinitHostError::new("desktop.frame.invalid-scale", "scale factor is invalid")
+    })?;
+    if scale.is_finite() && scale > 0.0 {
+        Ok(scale)
+    } else {
+        Err(WinitHostError::new(
+            "desktop.frame.invalid-scale",
+            "scale factor must be finite and greater than zero",
+        ))
+    }
 }
 
 fn validate_pixel_size(width: u32, height: u32) -> Result<(), WinitHostError> {
