@@ -18,6 +18,10 @@ workspace = true
 
 [dependencies]
 hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
+hawk2ui-build = { version = "0.1.0", path = "../hawk2ui-build" }
+hawk2ui-platform = { version = "0.1.0", path = "../hawk2ui-platform" }
+hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
+hawk2ui-plugin-adapters = { version = "0.1.0", path = "../hawk2ui-plugin-adapters" }
 jsonschema = { version = "0.46.5", default-features = false }
 schemars = "1.2.1"
 serde.workspace = true

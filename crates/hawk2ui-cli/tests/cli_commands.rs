@@ -18,6 +18,7 @@ fn cli_commands_help_lists_required_workflows() {
         "verify-artifact",
         "run-desktop",
         "package-plugin",
+        "export-schemas",
         "diagnostics",
     ] {
         assert!(help.contains(command), "help missing command: {command}");
@@ -36,12 +37,36 @@ fn cli_commands_parse_known_commands_and_reject_invalid_command() {
         catalog.parse(["hawk2ui", "build-release"]).unwrap(),
         CliCommand::BuildRelease
     );
+    assert_eq!(
+        catalog.parse(["hawk2ui", "export-schemas"]).unwrap(),
+        CliCommand::ExportSchemas
+    );
 
     let error = catalog
         .parse(["hawk2ui", "nope"])
         .expect_err("invalid command should fail");
     assert_eq!(error.exit_code, CliExitCode::Usage);
     assert!(error.message.contains("unknown command"));
+}
+
+#[test]
+fn workspace_export_schemas_writes_central_schema_catalog() {
+    let root = temp_cli_workspace("export-schemas");
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::ExportSchemas);
+    let catalog: serde_json::Value =
+        serde_json::from_str(&execution.stdout).expect("schema catalog stdout is JSON");
+    let ids = catalog["schemas"]
+        .as_array()
+        .expect("schemas is an array")
+        .iter()
+        .filter_map(|entry| entry["id"].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    assert_eq!(execution.exit_code, CliExitCode::Success);
+    assert_eq!(catalog["schema_version"], "1.0.0");
+    assert!(ids.contains("hawk2ui.raw-manifest"));
+    assert!(ids.contains("hawk2ui.capability-table"));
+    assert!(ids.contains("hawk2ui.package-verification-report"));
 }
 
 use hawk2ui_cli::{CliDiagnostic, DiagnosticSeverity, SourceSpan};

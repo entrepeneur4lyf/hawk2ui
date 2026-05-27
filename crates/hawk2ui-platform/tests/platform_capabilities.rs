@@ -91,6 +91,37 @@ fn capability_table_records_schema_availability_and_operations() {
 }
 
 #[test]
+fn capability_records_generate_and_validate_json_schema() {
+    let table = CapabilityTable::new([CapabilityRecord::new("clipboard.write")
+        .allow(PlatformOperation::ClipboardWrite)
+        .schemas(CapabilitySchema::new(
+            "ClipboardWriteInput",
+            "()",
+            "PlatformError",
+        ))
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)
+        .plugin(false)]);
+
+    let record_schema =
+        CapabilityRecord::json_schema().expect("capability record schema generates");
+    let table_schema = CapabilityTable::json_schema().expect("capability table schema generates");
+    let table_value = serde_json::to_value(&table).expect("capability table serializes");
+
+    CapabilityTable::validate_json(&table_value)
+        .expect("serialized capability table validates against generated schema");
+    assert_eq!(record_schema["title"], "CapabilityRecord");
+    assert_eq!(table_schema["title"], "CapabilityTable");
+    assert!(table_schema["properties"]["records"].is_object());
+
+    let mut invalid = table_value;
+    invalid["unexpected"] = serde_json::json!(true);
+    let error = CapabilityTable::validate_json(&invalid)
+        .expect_err("unknown capability table fields fail schema validation");
+    assert_eq!(error.rule, "capability.schema.table.invalid");
+}
+
+#[test]
 fn capability_table_preserves_first_duplicate_declaration() {
     let table = CapabilityTable::new([
         CapabilityRecord::new("filesystem.read")

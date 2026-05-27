@@ -2,7 +2,8 @@ use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRange, ParameterRecord,
 };
 use hawk2ui_plugin_adapters::{
-    PackageAdapterSet, PackageFormat, PackageRequest, VerificationStatus,
+    MaterializedPackageOutput, PackageAdapterSet, PackageFormat, PackagePlan, PackageRequest,
+    VerificationReport, VerificationStatus,
 };
 use std::{
     path::Path,
@@ -93,6 +94,79 @@ fn plugin_adapters_emit_metadata_and_verification_reports() {
             .iter()
             .all(|entry| entry.metadata().id == "com.hawk2ui.demo")
     );
+}
+
+#[test]
+fn plugin_adapters_generate_and_validate_verification_report_schema() {
+    let metadata =
+        FormatMetadata::new("com.hawk2ui.schema", "Schema", "Hawk2UI").feature("audio-effect");
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new("dist", "Schema"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap)
+    .with_format(PackageFormat::DesktopBundle);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let report = plan.verify();
+    let schema = VerificationReport::json_schema().expect("verification report schema generates");
+    let value = serde_json::to_value(&report).expect("verification report serializes");
+
+    VerificationReport::validate_json(&value)
+        .expect("serialized verification report validates against generated schema");
+    assert_eq!(schema["title"], "VerificationReport");
+    assert!(schema["properties"]["entries"].is_object());
+
+    let mut invalid = value;
+    invalid["unexpected"] = serde_json::json!(true);
+    let error = VerificationReport::validate_json(&invalid)
+        .expect_err("unknown verification report fields fail schema validation");
+    assert_eq!(error.rule(), "package.schema.verification-report.invalid");
+}
+
+#[test]
+fn plugin_adapters_generate_and_validate_package_output_schemas() {
+    let metadata = FormatMetadata::new("com.hawk2ui.output", "Output", "Hawk2UI");
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-plugin-output-schema-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Output"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let plan_schema = PackagePlan::json_schema().expect("package plan schema generates");
+    let plan_value = serde_json::to_value(&plan).expect("package plan serializes");
+    PackagePlan::validate_json(&plan_value).expect("serialized package plan validates");
+    assert_eq!(plan_schema["title"], "PackagePlan");
+    assert!(plan_schema["properties"]["targets"].is_object());
+
+    let outputs = plan.materialize().expect("materialization succeeds");
+    let output_schema =
+        MaterializedPackageOutput::json_schema().expect("materialized output schema generates");
+    let output_value = serde_json::to_value(&outputs[0]).expect("materialized output serializes");
+    MaterializedPackageOutput::validate_json(&output_value)
+        .expect("serialized materialized output validates");
+    assert_eq!(output_schema["title"], "MaterializedPackageOutput");
+    assert!(output_schema["properties"]["hash_manifest_path"].is_object());
+
+    let mut invalid = output_value;
+    invalid["unexpected"] = serde_json::json!(true);
+    let error = MaterializedPackageOutput::validate_json(&invalid)
+        .expect_err("unknown materialized output fields fail schema validation");
+    assert_eq!(error.rule(), "package.schema.materialized-output.invalid");
 }
 
 #[test]

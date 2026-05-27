@@ -26,6 +26,7 @@ use hawk2ui_runtime::{
     RuntimeSceneError, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
     RuntimeVisual,
 };
+use hawk2ui_schema::schema_catalog_json;
 use hawk2ui_script::{HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy};
 
 use crate::{CliCommand, CliDiagnostic, CliExitCode};
@@ -244,6 +245,7 @@ impl WorkspaceCommandRunner {
             CliCommand::VerifyArtifact => self.verify_artifact(),
             CliCommand::RunDesktop => self.run_desktop(),
             CliCommand::PackagePlugin => self.package_plugin(),
+            CliCommand::ExportSchemas => Self::export_schemas(),
             CliCommand::Diagnostics => self.diagnostics(),
         }
     }
@@ -482,6 +484,28 @@ impl WorkspaceCommandRunner {
         match self.build_workspace() {
             Ok(_) => CommandExecution::success("no diagnostics\n"),
             Err(execution) => execution,
+        }
+    }
+
+    fn export_schemas() -> CommandExecution {
+        match schema_catalog_json()
+            .and_then(|catalog| {
+                serde_json::to_string_pretty(&catalog).map_err(|error| {
+                    hawk2ui_schema::SchemaValidationError::new(
+                        "schema.catalog.render-failed",
+                        format!("schema catalog could not be rendered: {error}"),
+                    )
+                })
+            })
+            .map(|mut catalog| {
+                catalog.push('\n');
+                catalog
+            }) {
+            Ok(catalog) => CommandExecution::success(catalog),
+            Err(error) => CommandExecution::failure(
+                CliExitCode::Validation,
+                vec![CliDiagnostic::error(error.rule(), error.message())],
+            ),
         }
     }
 

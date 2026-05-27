@@ -2,8 +2,13 @@
 
 use std::collections::BTreeMap;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 /// Platform API operation.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub enum PlatformOperation {
     /// Filesystem read operation.
     FilesystemRead,
@@ -40,7 +45,7 @@ pub enum PlatformOperation {
 }
 
 /// Platform execution context.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum PlatformContext {
     /// Desktop application context.
     Desktop,
@@ -49,7 +54,7 @@ pub enum PlatformContext {
 }
 
 /// Runtime availability for a platform capability.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum RuntimeAvailability {
     /// Available at runtime.
     Runtime,
@@ -60,7 +65,8 @@ pub enum RuntimeAvailability {
 }
 
 /// Platform API schema labels.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilitySchema {
     /// Input schema label.
     pub input: String,
@@ -97,7 +103,8 @@ impl Default for CapabilitySchema {
 }
 
 /// Platform diagnostic.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlatformDiagnostic {
     /// Stable diagnostic rule.
     pub rule: String,
@@ -117,7 +124,8 @@ impl PlatformDiagnostic {
 }
 
 /// Capability denial.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityDenied {
     /// Manifest capability key.
     pub manifest_key: String,
@@ -128,7 +136,8 @@ pub struct CapabilityDenied {
 }
 
 /// Manifest-declared platform capability record.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityRecord {
     /// Manifest capability key.
     pub manifest_key: String,
@@ -147,6 +156,32 @@ pub struct CapabilityRecord {
 }
 
 impl CapabilityRecord {
+    /// Generates the JSON Schema for capability records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformDiagnostic`] when the generated schema cannot be represented as JSON.
+    pub fn json_schema() -> Result<serde_json::Value, PlatformDiagnostic> {
+        capability_json_schema::<Self>(
+            "capability.schema.record.generate-failed",
+            "capability record schema",
+        )
+    }
+
+    /// Validates a JSON value against the generated capability record schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformDiagnostic`] when schema compilation fails or the value fails validation.
+    pub fn validate_json(value: &serde_json::Value) -> Result<(), PlatformDiagnostic> {
+        validate_capability_json::<Self>(
+            value,
+            "capability.schema.record.compile-failed",
+            "capability.schema.record.invalid",
+            "capability record",
+        )
+    }
+
     /// Creates a capability record.
     #[must_use]
     pub fn new(manifest_key: impl Into<String>) -> Self {
@@ -205,12 +240,39 @@ impl CapabilityRecord {
 }
 
 /// Platform capability table.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityTable {
     records: BTreeMap<String, CapabilityRecord>,
 }
 
 impl CapabilityTable {
+    /// Generates the JSON Schema for capability tables.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformDiagnostic`] when the generated schema cannot be represented as JSON.
+    pub fn json_schema() -> Result<serde_json::Value, PlatformDiagnostic> {
+        capability_json_schema::<Self>(
+            "capability.schema.table.generate-failed",
+            "capability table schema",
+        )
+    }
+
+    /// Validates a JSON value against the generated capability table schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformDiagnostic`] when schema compilation fails or the value fails validation.
+    pub fn validate_json(value: &serde_json::Value) -> Result<(), PlatformDiagnostic> {
+        validate_capability_json::<Self>(
+            value,
+            "capability.schema.table.compile-failed",
+            "capability.schema.table.invalid",
+            "capability table",
+        )
+    }
+
     /// Creates a capability table.
     #[must_use]
     pub fn new(records: impl IntoIterator<Item = CapabilityRecord>) -> Self {
@@ -281,4 +343,40 @@ impl CapabilityTable {
         }
         Ok(())
     }
+}
+
+fn capability_json_schema<T: JsonSchema>(
+    rule: &'static str,
+    label: &'static str,
+) -> Result<serde_json::Value, PlatformDiagnostic> {
+    serde_json::to_value(schemars::schema_for!(T)).map_err(|error| {
+        PlatformDiagnostic::error(
+            rule,
+            format!("generated {label} could not be serialized: {error}"),
+        )
+    })
+}
+
+fn validate_capability_json<T: JsonSchema>(
+    value: &serde_json::Value,
+    compile_rule: &'static str,
+    invalid_rule: &'static str,
+    label: &'static str,
+) -> Result<(), PlatformDiagnostic> {
+    let schema = capability_json_schema::<T>(
+        "capability.schema.generate-failed",
+        "capability record schema",
+    )?;
+    let validator = jsonschema::Validator::new(&schema).map_err(|error| {
+        PlatformDiagnostic::error(
+            compile_rule,
+            format!("generated {label} schema could not be compiled: {error}"),
+        )
+    })?;
+    validator.validate(value).map_err(|error| {
+        PlatformDiagnostic::error(
+            invalid_rule,
+            format!("{label} failed schema validation: {error}"),
+        )
+    })
 }

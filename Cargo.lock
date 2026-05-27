@@ -1539,6 +1539,7 @@ dependencies = [
  "hawk2ui-plugin-adapters",
  "hawk2ui-render",
  "hawk2ui-runtime",
+ "hawk2ui-schema",
  "hawk2ui-script",
  "serde",
  "serde_json",
@@ -1688,6 +1689,10 @@ dependencies = [
 name = "hawk2ui-platform"
 version = "0.1.0"
 dependencies = [
+ "jsonschema",
+ "schemars",
+ "serde",
+ "serde_json",
  "url",
 ]
 
@@ -1707,6 +1712,10 @@ name = "hawk2ui-plugin-adapters"
 version = "0.1.0"
 dependencies = [
  "hawk2ui-plugin",
+ "jsonschema",
+ "schemars",
+ "serde",
+ "serde_json",
  "sha2 0.10.9",
 ]
 
@@ -1746,6 +1755,10 @@ name = "hawk2ui-schema"
 version = "0.1.0"
 dependencies = [
  "hawk2ui-api",
+ "hawk2ui-build",
+ "hawk2ui-platform",
+ "hawk2ui-plugin",
+ "hawk2ui-plugin-adapters",
  "jsonschema",
  "schemars",
  "serde",

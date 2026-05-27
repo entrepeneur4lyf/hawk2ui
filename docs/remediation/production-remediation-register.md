@@ -244,6 +244,12 @@ Evidence:
 - `crates/hawk2ui-plugin` now generates and validates plugin package target metadata JSON Schema
   from `PluginFormatTarget`, `FormatMetadata`, and `BundleOutput`.
 - Manifest capability declarations are covered by the generated raw manifest schema.
+- `crates/hawk2ui-platform` now generates and validates capability record/table schemas.
+- `crates/hawk2ui-plugin-adapters` now generates and validates package plan, materialized output,
+  and verification report schemas.
+- `crates/hawk2ui-schema` now exports a deterministic central schema catalog covering product,
+  manifest, artifact, plugin, package adapter, and capability schema entries.
+- `hawk2ui-cli export-schemas` emits the central schema catalog as JSON for build/release tooling.
 
 Required remediation:
 
@@ -258,20 +264,17 @@ Acceptance:
 
 Status:
 
-- Partially remediated: product model and raw manifest schema generation/validation are implemented,
-  and CLI manifest schema diagnostics now include a failing JSON pointer plus validator detail.
-- Partially remediated: sealed artifact, plugin metadata, and package target metadata schema
-  generation/validation are implemented at the owning crate boundaries.
-- Remaining release blocker: capability schemas beyond manifest declarations, package adapter output
-  schemas, and central schema catalog/export commands must be generated and validated through the
-  shared schema/build boundary before this item can close.
+- Remediated: product model, raw manifest, sealed artifact, plugin metadata, package target metadata,
+  package adapter outputs, and platform capability records now generate and validate JSON Schema at
+  their owning crate boundaries.
+- Remediated: the shared schema crate provides a deterministic catalog for all production schema
+  entries, and the CLI exposes that catalog through `export-schemas`.
 
 Review check:
 
-- As the delivering engineer, I am satisfied with this schema diagnostics slice for production
-  stability: invalid manifests no longer lose source-actionable schema failure detail, and artifact
-  plus plugin package metadata records now have generated validation schemas. Further schema catalog
-  and capability/package-adapter expansion remains required before `REM-CRATE-005` is complete.
+- As the delivering engineer, I am satisfied with this schema boundary for production stability:
+  every registered production data boundary now has generated JSON Schema, validation coverage, a
+  central deterministic catalog entry, and a CLI export path for downstream build/release tooling.
 
 
 ### REM-CRATE-006: Add Realtime And Plugin Format Crates Where Chosen

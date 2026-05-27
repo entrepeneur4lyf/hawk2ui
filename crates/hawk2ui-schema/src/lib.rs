@@ -3,10 +3,39 @@
 
 pub mod product;
 
+use serde::{Deserialize, Serialize};
+
 pub use product::{
     HostTarget, ProductCapability, ProductModel, ProductModelError, SchemaValidationError,
     SurfaceKind,
 };
+
+/// Stable semantic version for the schema catalog document.
+pub const SCHEMA_CATALOG_VERSION: &str = "1.0.0";
+
+/// A generated JSON Schema entry in the central `Hawk2UI` schema catalog.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchemaCatalogEntry {
+    /// Stable schema identifier.
+    pub id: String,
+    /// Schema version for compatibility checks.
+    pub version: String,
+    /// Owning crate that defines the source record.
+    pub owner: String,
+    /// Generated JSON Schema document.
+    pub schema: serde_json::Value,
+}
+
+/// Central generated schema catalog for production `Hawk2UI` boundaries.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchemaCatalog {
+    /// Catalog schema version.
+    pub schema_version: String,
+    /// Generated schema entries in deterministic order.
+    pub schemas: Vec<SchemaCatalogEntry>,
+}
 
 /// Generates the JSON Schema for [`ProductModel`].
 ///
@@ -33,6 +62,94 @@ pub fn validate_product_model_json(value: &serde_json::Value) -> Result<(), Sche
     validate_json_value(&schema, value, "schema.product.invalid")
 }
 
+/// Generates the central production schema catalog.
+///
+/// # Errors
+///
+/// Returns [`SchemaValidationError`] when any owning crate fails to generate its schema.
+pub fn schema_catalog() -> Result<SchemaCatalog, SchemaValidationError> {
+    Ok(SchemaCatalog {
+        schema_version: SCHEMA_CATALOG_VERSION.into(),
+        schemas: vec![
+            schema_entry(
+                "hawk2ui.product-model",
+                "hawk2ui-schema",
+                product_model_json_schema()?,
+            ),
+            schema_entry(
+                "hawk2ui.raw-manifest",
+                "hawk2ui-build",
+                hawk2ui_build::HawkManifest::json_schema()
+                    .map_err(|error| schema_error("schema.raw-manifest.generate-failed", error))?,
+            ),
+            schema_entry(
+                "hawk2ui.sealed-artifact",
+                "hawk2ui-build",
+                hawk2ui_build::SealedArtifact::json_schema().map_err(|error| {
+                    schema_error("schema.sealed-artifact.generate-failed", error)
+                })?,
+            ),
+            schema_entry(
+                "hawk2ui.plugin-format-target",
+                "hawk2ui-plugin",
+                hawk2ui_plugin::PluginFormatTarget::json_schema().map_err(|error| {
+                    schema_error("schema.plugin-format-target.generate-failed", error)
+                })?,
+            ),
+            schema_entry(
+                "hawk2ui.package-plan",
+                "hawk2ui-plugin-adapters",
+                hawk2ui_plugin_adapters::PackagePlan::json_schema()
+                    .map_err(|error| schema_error("schema.package-plan.generate-failed", error))?,
+            ),
+            schema_entry(
+                "hawk2ui.materialized-package-output",
+                "hawk2ui-plugin-adapters",
+                hawk2ui_plugin_adapters::MaterializedPackageOutput::json_schema().map_err(
+                    |error| {
+                        schema_error("schema.materialized-package-output.generate-failed", error)
+                    },
+                )?,
+            ),
+            schema_entry(
+                "hawk2ui.package-verification-report",
+                "hawk2ui-plugin-adapters",
+                hawk2ui_plugin_adapters::VerificationReport::json_schema().map_err(|error| {
+                    schema_error("schema.package-verification-report.generate-failed", error)
+                })?,
+            ),
+            schema_entry(
+                "hawk2ui.capability-record",
+                "hawk2ui-platform",
+                hawk2ui_platform::CapabilityRecord::json_schema().map_err(|error| {
+                    schema_error("schema.capability-record.generate-failed", error)
+                })?,
+            ),
+            schema_entry(
+                "hawk2ui.capability-table",
+                "hawk2ui-platform",
+                hawk2ui_platform::CapabilityTable::json_schema().map_err(|error| {
+                    schema_error("schema.capability-table.generate-failed", error)
+                })?,
+            ),
+        ],
+    })
+}
+
+/// Serializes the central production schema catalog to JSON.
+///
+/// # Errors
+///
+/// Returns [`SchemaValidationError`] when generation or serialization fails.
+pub fn schema_catalog_json() -> Result<serde_json::Value, SchemaValidationError> {
+    serde_json::to_value(schema_catalog()?).map_err(|error| {
+        SchemaValidationError::new(
+            "schema.catalog.serialize-failed",
+            format!("schema catalog could not be serialized: {error}"),
+        )
+    })
+}
+
 fn validate_json_value(
     schema: &serde_json::Value,
     value: &serde_json::Value,
@@ -52,6 +169,19 @@ fn validate_json_value(
     })
 }
 
+fn schema_entry(id: &str, owner: &str, schema: serde_json::Value) -> SchemaCatalogEntry {
+    SchemaCatalogEntry {
+        id: id.into(),
+        version: SCHEMA_CATALOG_VERSION.into(),
+        owner: owner.into(),
+        schema,
+    }
+}
+
+fn schema_error(rule: &'static str, error: impl std::fmt::Debug) -> SchemaValidationError {
+    SchemaValidationError::new(rule, format!("{error:?}"))
+}
+
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-schema";
 
@@ -68,5 +198,33 @@ mod tests {
     #[test]
     fn exposes_crate_identity() {
         assert_eq!(crate_name(), "hawk2ui-schema");
+    }
+
+    #[test]
+    fn schema_catalog_contains_all_production_schema_entries() {
+        let catalog = schema_catalog().expect("schema catalog generates");
+        let ids = catalog
+            .schemas
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for id in [
+            "hawk2ui.product-model",
+            "hawk2ui.raw-manifest",
+            "hawk2ui.sealed-artifact",
+            "hawk2ui.plugin-format-target",
+            "hawk2ui.package-plan",
+            "hawk2ui.materialized-package-output",
+            "hawk2ui.package-verification-report",
+            "hawk2ui.capability-record",
+            "hawk2ui.capability-table",
+        ] {
+            assert!(ids.contains(id), "schema catalog missing {id}");
+        }
+
+        let json = schema_catalog_json().expect("schema catalog serializes");
+        assert_eq!(json["schema_version"], "1.0.0");
+        assert!(json["schemas"].is_array());
     }
 }

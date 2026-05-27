@@ -21,6 +21,8 @@ pub enum CliCommand {
     RunDesktop,
     /// Package plugin targets.
     PackagePlugin,
+    /// Export the central generated JSON Schema catalog.
+    ExportSchemas,
     /// Render diagnostics.
     Diagnostics,
 }
@@ -35,6 +37,7 @@ impl CliCommand {
             "verify-artifact" => Some(Self::VerifyArtifact),
             "run-desktop" => Some(Self::RunDesktop),
             "package-plugin" => Some(Self::PackagePlugin),
+            "export-schemas" => Some(Self::ExportSchemas),
             "diagnostics" => Some(Self::Diagnostics),
             _ => None,
         }
@@ -107,6 +110,7 @@ impl CommandCatalog {
             "  verify-artifact  Verify a sealed artifact",
             "  run-desktop      Run a desktop native surface",
             "  package-plugin   Package CLAP, VST3, AU, and standalone targets",
+            "  export-schemas   Export the central generated JSON Schema catalog",
             "  diagnostics      Render structured diagnostics",
         ]
         .join("\n")

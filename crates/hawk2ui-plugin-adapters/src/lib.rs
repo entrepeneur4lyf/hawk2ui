@@ -10,6 +10,8 @@ use std::{
 };
 
 use hawk2ui_plugin::{BundleOutput, FormatMetadata, ParameterModel};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// The canonical Cargo package name for this crate.
@@ -22,7 +24,7 @@ pub const fn crate_name() -> &'static str {
 }
 
 /// Package output format.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum PackageFormat {
     /// CLAP plugin bundle.
     Clap,
@@ -97,7 +99,8 @@ impl PackageRequest {
 }
 
 /// Planned package target.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageTargetPlan {
     format: PackageFormat,
     metadata: FormatMetadata,
@@ -391,12 +394,36 @@ impl PackageTargetPlan {
 }
 
 /// Package plan.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackagePlan {
     targets: Vec<PackageTargetPlan>,
 }
 
 impl PackagePlan {
+    /// Generates the JSON Schema for package plans.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageDiagnostic`] when the generated schema cannot be represented as JSON.
+    pub fn json_schema() -> Result<serde_json::Value, PackageDiagnostic> {
+        package_json_schema::<Self>("package.schema.plan.generate-failed", "package plan schema")
+    }
+
+    /// Validates a JSON value against the generated package plan schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageDiagnostic`] when schema compilation fails or the value fails validation.
+    pub fn validate_json(value: &serde_json::Value) -> Result<(), PackageDiagnostic> {
+        validate_package_json::<Self>(
+            value,
+            "package.schema.plan.compile-failed",
+            "package.schema.plan.invalid",
+            "package plan",
+        )
+    }
+
     /// Returns planned targets.
     #[must_use]
     pub fn targets(&self) -> &[PackageTargetPlan] {
@@ -455,7 +482,8 @@ impl PackagePlan {
 }
 
 /// Materialized package output metadata.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MaterializedPackageOutput {
     /// Package format.
     pub format: PackageFormat,
@@ -467,6 +495,34 @@ pub struct MaterializedPackageOutput {
     pub artifact_descriptor_path: String,
     /// Package hash manifest path written inside the output directory.
     pub hash_manifest_path: String,
+}
+
+impl MaterializedPackageOutput {
+    /// Generates the JSON Schema for materialized package output metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageDiagnostic`] when the generated schema cannot be represented as JSON.
+    pub fn json_schema() -> Result<serde_json::Value, PackageDiagnostic> {
+        package_json_schema::<Self>(
+            "package.schema.materialized-output.generate-failed",
+            "materialized package output schema",
+        )
+    }
+
+    /// Validates a JSON value against the generated materialized package output schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageDiagnostic`] when schema compilation fails or the value fails validation.
+    pub fn validate_json(value: &serde_json::Value) -> Result<(), PackageDiagnostic> {
+        validate_package_json::<Self>(
+            value,
+            "package.schema.materialized-output.compile-failed",
+            "package.schema.materialized-output.invalid",
+            "materialized package output",
+        )
+    }
 }
 
 /// Package materialization error.
@@ -516,7 +572,7 @@ impl PackageAdapterSet {
 }
 
 /// Verification status.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum VerificationStatus {
     /// Verification passed.
     Passed,
@@ -525,7 +581,8 @@ pub enum VerificationStatus {
 }
 
 /// Single verification entry.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct VerificationEntry {
     target: PackageTargetPlan,
     status: VerificationStatus,
@@ -552,12 +609,39 @@ impl VerificationEntry {
 }
 
 /// Verification report.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct VerificationReport {
     entries: Vec<VerificationEntry>,
 }
 
 impl VerificationReport {
+    /// Generates the JSON Schema for package verification reports.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageDiagnostic`] when the generated schema cannot be represented as JSON.
+    pub fn json_schema() -> Result<serde_json::Value, PackageDiagnostic> {
+        package_json_schema::<Self>(
+            "package.schema.verification-report.generate-failed",
+            "verification report schema",
+        )
+    }
+
+    /// Validates a JSON value against the generated package verification report schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageDiagnostic`] when schema compilation fails or the value fails validation.
+    pub fn validate_json(value: &serde_json::Value) -> Result<(), PackageDiagnostic> {
+        validate_package_json::<Self>(
+            value,
+            "package.schema.verification-report.compile-failed",
+            "package.schema.verification-report.invalid",
+            "verification report",
+        )
+    }
+
     /// Returns aggregate status.
     #[must_use]
     pub fn status(&self) -> VerificationStatus {
@@ -600,6 +684,12 @@ impl PackageDiagnostic {
     #[must_use]
     pub fn rule(&self) -> &str {
         &self.rule
+    }
+
+    /// Returns diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
@@ -741,6 +831,42 @@ fn materialization_error(
     PackageMaterializationError {
         diagnostic: PackageDiagnostic::new(rule, message),
     }
+}
+
+fn package_json_schema<T: JsonSchema>(
+    rule: &'static str,
+    label: &'static str,
+) -> Result<serde_json::Value, PackageDiagnostic> {
+    serde_json::to_value(schemars::schema_for!(T)).map_err(|error| {
+        PackageDiagnostic::new(
+            rule,
+            format!("generated {label} could not be serialized: {error}"),
+        )
+    })
+}
+
+fn validate_package_json<T: JsonSchema>(
+    value: &serde_json::Value,
+    compile_rule: &'static str,
+    invalid_rule: &'static str,
+    label: &'static str,
+) -> Result<(), PackageDiagnostic> {
+    let schema = package_json_schema::<T>(
+        "package.schema.generate-failed",
+        "package adapter record schema",
+    )?;
+    let validator = jsonschema::Validator::new(&schema).map_err(|error| {
+        PackageDiagnostic::new(
+            compile_rule,
+            format!("generated {label} schema could not be compiled: {error}"),
+        )
+    })?;
+    validator.validate(value).map_err(|error| {
+        PackageDiagnostic::new(
+            invalid_rule,
+            format!("{label} failed schema validation: {error}"),
+        )
+    })
 }
 
 fn create_package_dir(path: &Path) -> Result<(), PackageMaterializationError> {
