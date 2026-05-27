@@ -341,6 +341,14 @@ pub enum LayoutTreeError {
     MissingParent(String),
     /// Node already exists.
     DuplicateNode(String),
+    /// Node ID is empty or contains unsupported characters.
+    InvalidNodeId(String),
+    /// Viewport size is not finite and positive.
+    InvalidViewport,
+    /// Node style contains non-renderable numeric values.
+    InvalidStyle(String),
+    /// Layout backend failed to compute geometry.
+    ComputeFailed(String),
 }
 
 /// Layout tree record.
@@ -372,6 +380,8 @@ impl LayoutTree {
         parent_id: LayoutNodeId,
         child: LayoutNode,
     ) -> Result<Self, LayoutTreeError> {
+        validate_node_id(&parent_id)?;
+        validate_layout_node(&child)?;
         if self.find_index(child.id()).is_some() {
             return Err(LayoutTreeError::DuplicateNode(
                 child.id().as_str().to_string(),
@@ -390,6 +400,34 @@ impl LayoutTree {
             children: Vec::new(),
         });
         Ok(self)
+    }
+
+    /// Validates tree identities, parent links, child links, and node styles.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayoutTreeError`] when any record is invalid.
+    pub fn validate(&self) -> Result<(), LayoutTreeError> {
+        for entry in &self.nodes {
+            validate_layout_node(&entry.node)?;
+            if let Some(parent_id) = entry.parent.as_ref() {
+                validate_node_id(parent_id)?;
+                if self.find_index(parent_id).is_none() {
+                    return Err(LayoutTreeError::MissingParent(
+                        parent_id.as_str().to_string(),
+                    ));
+                }
+            }
+            for child_id in &entry.children {
+                validate_node_id(child_id)?;
+                if self.find_index(child_id).is_none() {
+                    return Err(LayoutTreeError::MissingParent(
+                        child_id.as_str().to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Returns the parent of a node.
@@ -435,4 +473,72 @@ struct TreeEntry {
     node: LayoutNode,
     parent: Option<LayoutNodeId>,
     children: Vec<LayoutNodeId>,
+}
+
+fn validate_layout_node(node: &LayoutNode) -> Result<(), LayoutTreeError> {
+    validate_node_id(node.id())?;
+    validate_layout_style(node.id(), node.style())
+}
+
+fn validate_node_id(node_id: &LayoutNodeId) -> Result<(), LayoutTreeError> {
+    let value = node_id.as_str();
+    if !value.trim().is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+    {
+        Ok(())
+    } else {
+        Err(LayoutTreeError::InvalidNodeId(value.to_string()))
+    }
+}
+
+fn validate_layout_style(
+    node_id: &LayoutNodeId,
+    style: &LayoutStyle,
+) -> Result<(), LayoutTreeError> {
+    validate_sizing(node_id, style.size(), false)?;
+    validate_sizing(node_id, style.min_size(), false)?;
+    validate_sizing(node_id, style.max_size(), false)?;
+    validate_edges(node_id, style.margin(), true)?;
+    validate_edges(node_id, style.padding(), false)?;
+    validate_value(node_id, style.gap(), false)
+}
+
+fn validate_sizing(
+    node_id: &LayoutNodeId,
+    sizing: LayoutSizing,
+    allow_negative: bool,
+) -> Result<(), LayoutTreeError> {
+    validate_value(node_id, sizing.width(), allow_negative)?;
+    validate_value(node_id, sizing.height(), allow_negative)
+}
+
+fn validate_edges(
+    node_id: &LayoutNodeId,
+    edges: BoxEdges,
+    allow_negative: bool,
+) -> Result<(), LayoutTreeError> {
+    validate_value(node_id, edges.left, allow_negative)?;
+    validate_value(node_id, edges.right, allow_negative)?;
+    validate_value(node_id, edges.top, allow_negative)?;
+    validate_value(node_id, edges.bottom, allow_negative)
+}
+
+fn validate_value(
+    node_id: &LayoutNodeId,
+    value: LayoutValue,
+    allow_negative: bool,
+) -> Result<(), LayoutTreeError> {
+    let is_valid = match value {
+        LayoutValue::Auto => true,
+        LayoutValue::Px(value) | LayoutValue::Percent(value) => {
+            value.is_finite() && (allow_negative || value >= 0.0)
+        }
+    };
+    if is_valid {
+        Ok(())
+    } else {
+        Err(LayoutTreeError::InvalidStyle(node_id.as_str().to_string()))
+    }
 }

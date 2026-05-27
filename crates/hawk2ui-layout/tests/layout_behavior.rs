@@ -67,6 +67,59 @@ fn layout_tree_converts_style_values_to_layout_records() {
 }
 
 #[test]
+fn layout_tree_rejects_invalid_ids_styles_and_viewports() {
+    let error = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new(""),
+        LayoutStyle::flex_container(FlexDirection::Row),
+    ))
+    .validate()
+    .expect_err("empty root layout IDs must fail validation");
+    assert_eq!(
+        error,
+        hawk2ui_layout::LayoutTreeError::InvalidNodeId(String::new())
+    );
+
+    let error = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Row),
+    ))
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new(""),
+            LayoutStyle::flex_container(FlexDirection::Column),
+        ),
+    )
+    .expect_err("empty child layout IDs must fail insertion");
+    assert_eq!(
+        error,
+        hawk2ui_layout::LayoutTreeError::InvalidNodeId(String::new())
+    );
+
+    let tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Row)
+            .with_size(LayoutSizing::fixed(f32::NAN, 100.0)),
+    ));
+    let error = tree
+        .try_compute_layout(Viewport::new(300.0, 100.0))
+        .expect_err("invalid style values must fail before layout");
+    assert_eq!(
+        error,
+        hawk2ui_layout::LayoutTreeError::InvalidStyle("root".to_string())
+    );
+
+    let tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Row),
+    ));
+    let error = tree
+        .try_compute_layout(Viewport::new(0.0, 100.0))
+        .expect_err("non-positive viewport sizes must fail");
+    assert_eq!(error, hawk2ui_layout::LayoutTreeError::InvalidViewport);
+}
+
+#[test]
 fn flex_scroll_layout_calculates_row_column_gaps_and_padding() {
     let tree = LayoutTree::new(LayoutNode::new(
         LayoutNodeId::new("root"),

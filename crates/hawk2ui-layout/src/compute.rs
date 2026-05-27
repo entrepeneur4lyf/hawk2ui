@@ -1,6 +1,8 @@
 //! Deterministic layout calculation backend.
 
-use crate::{BoxEdges, FlexDirection, LayoutNodeId, LayoutStyle, LayoutTree, LayoutValue};
+use crate::{
+    BoxEdges, FlexDirection, LayoutNodeId, LayoutStyle, LayoutTree, LayoutTreeError, LayoutValue,
+};
 use taffy::{
     AvailableSpace, Dimension, Display, LengthPercentage, LengthPercentageAuto, NodeId, Overflow,
     Point, Position, Rect, Size, Style, TaffyTree,
@@ -100,16 +102,27 @@ impl LayoutTree {
     /// Computes layout geometry for this tree.
     #[must_use]
     pub fn compute_layout(&self, viewport: Viewport) -> LayoutOutput {
+        self.try_compute_layout(viewport)
+            .unwrap_or_else(|_| LayoutOutput::new(Vec::new(), Vec::new()))
+    }
+
+    /// Computes layout geometry for this tree and reports validation/backend failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayoutTreeError`] when the viewport, tree records, style records, or layout backend fail.
+    pub fn try_compute_layout(&self, viewport: Viewport) -> Result<LayoutOutput, LayoutTreeError> {
+        validate_viewport(viewport)?;
+        self.validate()?;
         let Some(root) = self.root_id() else {
-            return LayoutOutput::new(Vec::new(), Vec::new());
+            return Err(LayoutTreeError::ComputeFailed("missing root".to_string()));
         };
         let mut taffy = TaffyTree::new();
         let mut ids = Vec::new();
-        let Ok(root_node) = self.build_taffy_node(root, viewport, true, &mut taffy, &mut ids)
-        else {
-            return LayoutOutput::new(Vec::new(), Vec::new());
-        };
-        if taffy
+        let root_node = self
+            .build_taffy_node(root, viewport, true, &mut taffy, &mut ids)
+            .map_err(|error| LayoutTreeError::ComputeFailed(error.to_string()))?;
+        taffy
             .compute_layout(
                 root_node,
                 Size {
@@ -117,19 +130,18 @@ impl LayoutTree {
                     height: AvailableSpace::Definite(viewport.height),
                 },
             )
-            .is_err()
-        {
-            return LayoutOutput::new(Vec::new(), Vec::new());
-        }
+            .map_err(|error| LayoutTreeError::ComputeFailed(error.to_string()))?;
 
         let mut output = ComputedBuilder::default();
         for (layout_id, taffy_id) in ids {
             let Some(layout_node) = self.node(&layout_id) else {
-                continue;
+                return Err(LayoutTreeError::ComputeFailed(
+                    layout_id.as_str().to_string(),
+                ));
             };
-            let Ok(layout) = taffy.layout(taffy_id) else {
-                continue;
-            };
+            let layout = taffy
+                .layout(taffy_id)
+                .map_err(|error| LayoutTreeError::ComputeFailed(error.to_string()))?;
             let geometry = ComputedGeometry::new(
                 layout.location.x,
                 layout.location.y,
@@ -137,12 +149,17 @@ impl LayoutTree {
                 layout.size.height,
                 layout_node.style().absolute(),
             );
+            if !is_valid_computed_geometry(geometry) {
+                return Err(LayoutTreeError::ComputeFailed(
+                    layout_id.as_str().to_string(),
+                ));
+            }
             output.geometry.push((layout_id.clone(), geometry));
             if layout_node.style().is_scroll_container() {
                 output.clips.push((layout_id, geometry));
             }
         }
-        LayoutOutput::new(output.geometry, output.clips)
+        Ok(LayoutOutput::new(output.geometry, output.clips))
     }
 
     fn build_taffy_node(
@@ -275,4 +292,25 @@ fn rect_auto(edges: BoxEdges) -> Rect<LengthPercentageAuto> {
         top: length_percentage_auto(edges.top),
         bottom: length_percentage_auto(edges.bottom),
     }
+}
+
+fn validate_viewport(viewport: Viewport) -> Result<(), LayoutTreeError> {
+    if viewport.width.is_finite()
+        && viewport.height.is_finite()
+        && viewport.width > 0.0
+        && viewport.height > 0.0
+    {
+        Ok(())
+    } else {
+        Err(LayoutTreeError::InvalidViewport)
+    }
+}
+
+fn is_valid_computed_geometry(geometry: ComputedGeometry) -> bool {
+    geometry.x.is_finite()
+        && geometry.y.is_finite()
+        && geometry.width.is_finite()
+        && geometry.height.is_finite()
+        && geometry.width >= 0.0
+        && geometry.height >= 0.0
 }

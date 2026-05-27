@@ -135,6 +135,10 @@ impl From<LayoutTreeError> for RuntimeSceneError {
         match error {
             LayoutTreeError::MissingParent(id) => Self::MissingParent(id),
             LayoutTreeError::DuplicateNode(id) => Self::DuplicateNode(id),
+            LayoutTreeError::InvalidNodeId(id)
+            | LayoutTreeError::InvalidStyle(id)
+            | LayoutTreeError::ComputeFailed(id) => Self::InvalidNode(id),
+            LayoutTreeError::InvalidViewport => Self::InvalidNode("viewport".to_string()),
         }
     }
 }
@@ -227,7 +231,7 @@ impl RuntimeSceneBridge {
     pub fn build(&self, tree: &RuntimeViewTree) -> Result<RuntimeSceneFrame, RuntimeSceneError> {
         tree.validate_for_bridge()?;
         let layout_tree = tree.to_layout_tree()?;
-        let layout = layout_tree.compute_layout(self.viewport);
+        let layout = layout_tree.try_compute_layout(self.viewport)?;
         let geometry = collect_geometry(tree, &layout)?;
         let scene = tree.to_scene_graph(&layout)?;
         let (layers, draw_commands) = tree.to_layers_and_draw_commands(&geometry);
