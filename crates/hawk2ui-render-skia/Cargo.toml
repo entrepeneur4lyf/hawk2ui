@@ -16,9 +16,13 @@ path = "src/lib.rs"
 [dependencies]
 hawk2ui-assets = { version = "0.1.0", path = "../hawk2ui-assets" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
+hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
 hawk2ui-text = { version = "0.1.0", path = "../hawk2ui-text" }
 image = { version = "0.25.10", default-features = false, features = ["png", "webp"] }
 skia-safe = { version = "0.97.0", default-features = false, features = ["binary-cache"] }
+
+[dev-dependencies]
+hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 
 [lints]
 workspace = true

@@ -6,9 +6,10 @@ use std::collections::BTreeMap;
 use hawk2ui_assets::{AssetKind as CompiledAssetKind, AssetRecord};
 use hawk2ui_render::{
     BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, Color,
-    CustomSurfaceCategory, CustomSurfaceDrawRequest, Geometry, RendererBackend,
-    RendererCacheInvalidator, Stroke, Transform,
+    CustomSurfaceCategory, CustomSurfaceDrawRequest, CustomSurfaceError, CustomSurfaceFrameContext,
+    Geometry, RendererBackend, RendererCacheInvalidator, Stroke, Transform,
 };
+use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneFrame};
 use hawk2ui_text::TextLayout;
 use skia_safe::{
     AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
@@ -373,6 +374,48 @@ pub struct SkiaTextStyle {
     pub font_size: f32,
     /// Text fill color.
     pub color: Color,
+}
+
+/// Policy for runtime scene asset commands whose compiled asset payload is unavailable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeSceneAssetFallback {
+    /// Return the renderer's missing-asset diagnostic.
+    Error,
+    /// Draw a visible diagnostic placeholder and continue replaying the frame.
+    Placeholder,
+}
+
+/// Runtime scene replay options for renderer-owned scene presentation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RuntimeSceneReplayOptions {
+    /// Runtime frame index used by custom-surface frame gating.
+    pub frame_index: u64,
+    /// Current host DPI scale.
+    pub dpi_scale: f32,
+    /// Missing-asset behavior for image/vector draw commands.
+    pub missing_asset_fallback: RuntimeSceneAssetFallback,
+}
+
+impl RuntimeSceneReplayOptions {
+    /// Creates runtime scene replay options with missing assets reported as errors.
+    #[must_use]
+    pub const fn new(frame_index: u64, dpi_scale: f32) -> Self {
+        Self {
+            frame_index,
+            dpi_scale,
+            missing_asset_fallback: RuntimeSceneAssetFallback::Error,
+        }
+    }
+
+    /// Sets the missing-asset replay policy.
+    #[must_use]
+    pub const fn with_missing_asset_fallback(
+        mut self,
+        missing_asset_fallback: RuntimeSceneAssetFallback,
+    ) -> Self {
+        self.missing_asset_fallback = missing_asset_fallback;
+        self
+    }
 }
 
 impl SkiaTextStyle {
@@ -1171,6 +1214,49 @@ impl SkiaRendererBackend {
         Ok(())
     }
 
+    /// Replays a runtime scene frame through this Skia backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, replay options are invalid, or any
+    /// runtime draw command cannot be lowered into Skia.
+    pub fn draw_runtime_scene_frame(
+        &mut self,
+        scene: &RuntimeSceneFrame,
+        frame_index: u64,
+        dpi_scale: f32,
+    ) -> Result<(), BackendError> {
+        self.draw_runtime_scene_frame_with_options(
+            scene,
+            RuntimeSceneReplayOptions::new(frame_index, dpi_scale),
+        )
+    }
+
+    /// Replays a runtime scene frame through this Skia backend with explicit replay options.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, replay options are invalid, or any
+    /// runtime draw command cannot be lowered into Skia.
+    pub fn draw_runtime_scene_frame_with_options(
+        &mut self,
+        scene: &RuntimeSceneFrame,
+        options: RuntimeSceneReplayOptions,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        validate_runtime_scene_replay_options(options)?;
+        for command in scene.draw_commands() {
+            self.draw_runtime_command(command, options)?;
+        }
+        self.commands.push(format!(
+            "runtime-scene-frame:commands={}:frame={}:dpi={}",
+            scene.draw_commands().len(),
+            options.frame_index,
+            options.dpi_scale
+        ));
+        Ok(())
+    }
+
     /// Executes a custom draw surface hook into the active Skia frame.
     ///
     /// # Errors
@@ -1221,6 +1307,98 @@ impl SkiaRendererBackend {
             request.data().samples().len()
         ));
         Ok(())
+    }
+
+    fn draw_runtime_command(
+        &mut self,
+        command: &RuntimeDrawCommand,
+        options: RuntimeSceneReplayOptions,
+    ) -> Result<(), BackendError> {
+        match command {
+            RuntimeDrawCommand::Fill {
+                geometry, color, ..
+            } => self.fill(*geometry, *color),
+            RuntimeDrawCommand::Text {
+                geometry,
+                text,
+                font_size,
+                color,
+                ..
+            } => self.draw_text_at(
+                text,
+                geometry.x,
+                geometry.y + *font_size,
+                *font_size,
+                *color,
+            ),
+            RuntimeDrawCommand::ImageAsset {
+                geometry, asset_id, ..
+            } => self.draw_runtime_image_asset(asset_id, *geometry, options),
+            RuntimeDrawCommand::VectorAsset {
+                geometry, asset_id, ..
+            } => self.draw_runtime_vector_asset(asset_id, *geometry, options),
+            RuntimeDrawCommand::CustomSurface { surface, data, .. } => {
+                let context =
+                    CustomSurfaceFrameContext::new(options.frame_index, options.dpi_scale)
+                        .map_err(|error| custom_surface_error_to_backend(&error))?;
+                let request = CustomSurfaceDrawRequest::new(surface.clone(), context, data.clone())
+                    .map_err(|error| custom_surface_error_to_backend(&error))?;
+                self.draw_custom_surface(&request)
+            }
+        }
+    }
+
+    fn draw_runtime_image_asset(
+        &mut self,
+        asset_id: &str,
+        geometry: Geometry,
+        options: RuntimeSceneReplayOptions,
+    ) -> Result<(), BackendError> {
+        match self.draw_image_rect(asset_id, geometry) {
+            Ok(()) => Ok(()),
+            Err(error)
+                if options.missing_asset_fallback == RuntimeSceneAssetFallback::Placeholder
+                    && is_missing_asset_error(&error) =>
+            {
+                self.draw_missing_asset_placeholder(geometry, Color::rgba(80, 180, 255, 255))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn draw_runtime_vector_asset(
+        &mut self,
+        asset_id: &str,
+        geometry: Geometry,
+        options: RuntimeSceneReplayOptions,
+    ) -> Result<(), BackendError> {
+        match self.draw_vector_rect(asset_id, geometry) {
+            Ok(()) => Ok(()),
+            Err(error)
+                if options.missing_asset_fallback == RuntimeSceneAssetFallback::Placeholder
+                    && is_missing_asset_error(&error) =>
+            {
+                self.draw_missing_asset_placeholder(geometry, Color::rgba(255, 198, 74, 255))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn draw_missing_asset_placeholder(
+        &mut self,
+        geometry: Geometry,
+        accent: Color,
+    ) -> Result<(), BackendError> {
+        self.fill(geometry, Color::rgba(18, 24, 34, 120))?;
+        self.stroke(geometry, Stroke::new(2.0))?;
+        self.fill(
+            Geometry::new(geometry.x, geometry.y, geometry.width.max(1.0), 2.0),
+            accent,
+        )?;
+        self.fill(
+            Geometry::new(geometry.x, geometry.y, 2.0, geometry.height.max(1.0)),
+            accent,
+        )
     }
 
     fn fail<T>(&mut self, rule: &str, message: &str) -> Result<T, BackendError> {
@@ -1763,6 +1941,30 @@ fn validate_geometry(rule: &'static str, geometry: Geometry) -> Result<(), Backe
             "geometry coordinates and dimensions must be finite and dimensions must be greater than zero",
         ))
     }
+}
+
+fn validate_runtime_scene_replay_options(
+    options: RuntimeSceneReplayOptions,
+) -> Result<(), BackendError> {
+    if options.dpi_scale.is_finite() && options.dpi_scale > 0.0 {
+        Ok(())
+    } else {
+        Err(BackendError::new(
+            "skia.runtime-scene.invalid-dpi",
+            "runtime scene replay DPI scale must be finite and greater than zero",
+        ))
+    }
+}
+
+fn is_missing_asset_error(error: &BackendError) -> bool {
+    matches!(
+        error.diagnostic().rule(),
+        "skia.image.missing" | "skia.vector.missing"
+    )
+}
+
+fn custom_surface_error_to_backend(error: &CustomSurfaceError) -> BackendError {
+    BackendError::new(error.rule().to_string(), error.message().to_string())
 }
 
 fn validate_text_placement(x: f32, y: f32, font_size: f32) -> Result<(), BackendError> {

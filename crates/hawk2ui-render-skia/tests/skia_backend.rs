@@ -1,10 +1,15 @@
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits};
+use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_render::{
     BackendCapabilities, Color, CustomDrawSurface, CustomSurfaceCategory,
     CustomSurfaceDataSnapshot, CustomSurfaceDrawRequest, CustomSurfaceFrameContext, Geometry,
     RendererBackend, Transform,
 };
 use hawk2ui_render_skia::{SkiaRendererBackend, SkiaSurfaceConfig};
+use hawk2ui_runtime::{
+    RuntimeCustomSurfaceVisual, RuntimeSceneBridge, RuntimeViewId, RuntimeViewNode,
+    RuntimeViewTree, RuntimeVisual,
+};
 use hawk2ui_text::{FontCatalog, LineBreakMode, TextBackend, TextLayoutInput};
 use image::{ColorType, ImageEncoder};
 
@@ -280,6 +285,83 @@ fn compiled_asset_records_register_and_render_image_and_vector_pixels() {
 
     assert!(count_changed_pixels(snapshot, 0x080a0e, Geometry::new(40.0, 8.0, 16.0, 16.0)) > 0);
     assert!(count_changed_pixels(snapshot, 0x080a0e, Geometry::new(10.0, 10.0, 20.0, 20.0)) > 0);
+}
+
+#[test]
+fn skia_backend_replays_runtime_scene_frame_commands() {
+    let mut assets = AssetBackend::new(AssetLimits::default());
+    let image_bytes = png_1x1();
+    let image = assets
+        .compile_image(
+            "hero",
+            "assets/hero.png",
+            &image_bytes,
+            &AssetHash::sha256_bytes(&image_bytes),
+        )
+        .unwrap();
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><path d="M0 0 L32 0 L32 16 L0 16 Z"/></svg>"#;
+    let vector = assets
+        .compile_vector(
+            "logo",
+            "assets/logo.svg",
+            svg,
+            &AssetHash::sha256_bytes(svg),
+        )
+        .unwrap();
+    let root_id = RuntimeViewId::new("root");
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        root_id.clone(),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(128.0, 96.0)),
+        RuntimeVisual::Fill(Color::rgba(8, 10, 14, 255)),
+    ))
+    .with_child(
+        &root_id,
+        RuntimeViewNode::new(
+            RuntimeViewId::new("image"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(24.0, 24.0)),
+            RuntimeVisual::ImageAsset("hero".to_string()),
+        ),
+    )
+    .unwrap()
+    .with_child(
+        &root_id,
+        RuntimeViewNode::new(
+            RuntimeViewId::new("vector"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(32.0, 16.0)),
+            RuntimeVisual::VectorAsset("logo".to_string()),
+        ),
+    )
+    .unwrap()
+    .with_child(
+        &root_id,
+        RuntimeViewNode::new(
+            RuntimeViewId::new("meter"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(72.0, 18.0)),
+            RuntimeVisual::CustomSurface(
+                RuntimeCustomSurfaceVisual::new(CustomSurfaceCategory::Meter)
+                    .with_data_snapshot(CustomSurfaceDataSnapshot::new([0.2, 0.6, 1.0]).unwrap()),
+            ),
+        ),
+    )
+    .unwrap();
+    let frame = RuntimeSceneBridge::new(Viewport::new(128.0, 96.0))
+        .build(&tree)
+        .unwrap();
+
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 128, 96).unwrap();
+    backend.register_compiled_asset(&image).unwrap();
+    backend.register_compiled_asset(&vector).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.draw_runtime_scene_frame(&frame, 4, 1.0).unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+    assert!(count_changed_pixels(snapshot, 0x080a0e, Geometry::new(0.0, 0.0, 128.0, 96.0)) > 0);
+    assert!(backend.command_keys().iter().any(|key| {
+        key.starts_with("runtime-scene-frame:commands=") && key.contains(":frame=4:dpi=1")
+    }));
 }
 
 #[test]

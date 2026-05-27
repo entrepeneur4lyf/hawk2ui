@@ -2,12 +2,11 @@
 
 use hawk2ui_assets::{AssetKind, AssetRecord};
 use hawk2ui_host::SurfaceMetrics;
-use hawk2ui_render::{
-    BackendError, Color, CustomSurfaceDrawRequest, CustomSurfaceError, CustomSurfaceFrameContext,
-    Geometry, RendererBackend, Stroke, Transform,
+use hawk2ui_render::{BackendError, Color, RendererBackend, Transform};
+use hawk2ui_render_skia::{
+    RuntimeSceneAssetFallback, RuntimeSceneReplayOptions, SkiaRendererBackend, SkiaSurfaceConfig,
 };
-use hawk2ui_render_skia::{SkiaRendererBackend, SkiaSurfaceConfig};
-use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneFrame};
+use hawk2ui_runtime::RuntimeSceneFrame;
 use skia_safe::{
     AlphaType, Color as SkiaColor, ColorType, Font, ImageInfo, Paint, PaintStyle, Rect, surfaces,
 };
@@ -168,63 +167,13 @@ impl SoftwareFrameRenderer {
         backend
             .push_transform(Transform::affine(scale, 0.0, 0.0, scale, 0.0, 0.0))
             .map_err(|error| map_backend_error(&error))?;
-
-        for command in scene.draw_commands() {
-            match command {
-                RuntimeDrawCommand::Fill {
-                    geometry, color, ..
-                } => {
-                    backend
-                        .fill(*geometry, *color)
-                        .map_err(|error| map_backend_error(&error))?;
-                }
-                RuntimeDrawCommand::Text {
-                    geometry,
-                    text,
-                    font_size,
-                    color,
-                    ..
-                } => {
-                    if !font_size.is_finite() || *font_size <= 0.0 {
-                        return Err(WinitHostError::new(
-                            "desktop.frame.text-invalid",
-                            "runtime text font size must be finite and greater than zero",
-                        ));
-                    }
-                    backend
-                        .draw_text_at(
-                            text,
-                            geometry.x,
-                            geometry.y + *font_size,
-                            *font_size,
-                            *color,
-                        )
-                        .map_err(|error| map_backend_error(&error))?;
-                }
-                RuntimeDrawCommand::ImageAsset {
-                    geometry, asset_id, ..
-                } => draw_image_asset_or_placeholder(&mut backend, asset_id, *geometry)?,
-                RuntimeDrawCommand::VectorAsset {
-                    geometry, asset_id, ..
-                } => draw_vector_asset_or_placeholder(&mut backend, asset_id, *geometry)?,
-                RuntimeDrawCommand::CustomSurface {
-                    surface: custom_surface,
-                    data,
-                    ..
-                } => {
-                    let request = CustomSurfaceDrawRequest::new(
-                        custom_surface.clone(),
-                        CustomSurfaceFrameContext::new(0, scale)
-                            .map_err(|error| map_custom_surface_error(&error))?,
-                        data.clone(),
-                    )
-                    .map_err(|error| map_custom_surface_error(&error))?;
-                    backend
-                        .draw_custom_surface(&request)
-                        .map_err(|error| map_backend_error(&error))?;
-                }
-            }
-        }
+        backend
+            .draw_runtime_scene_frame_with_options(
+                scene,
+                RuntimeSceneReplayOptions::new(0, scale)
+                    .with_missing_asset_fallback(RuntimeSceneAssetFallback::Placeholder),
+            )
+            .map_err(|error| map_backend_error(&error))?;
 
         backend
             .end_frame(SOFTWARE_FRAME_SURFACE_ID)
@@ -252,41 +201,6 @@ fn register_runtime_assets(
         }
     }
     Ok(())
-}
-
-fn draw_image_asset_or_placeholder(
-    backend: &mut SkiaRendererBackend,
-    asset_id: &str,
-    geometry: Geometry,
-) -> Result<(), WinitHostError> {
-    match backend.draw_image_rect(asset_id, geometry) {
-        Ok(()) => Ok(()),
-        Err(error) if is_missing_asset_error(&error) => {
-            draw_asset_placeholder(backend, geometry, Color::rgba(80, 180, 255, 255))
-        }
-        Err(error) => Err(map_backend_error(&error)),
-    }
-}
-
-fn draw_vector_asset_or_placeholder(
-    backend: &mut SkiaRendererBackend,
-    asset_id: &str,
-    geometry: Geometry,
-) -> Result<(), WinitHostError> {
-    match backend.draw_vector_rect(asset_id, geometry) {
-        Ok(()) => Ok(()),
-        Err(error) if is_missing_asset_error(&error) => {
-            draw_asset_placeholder(backend, geometry, Color::rgba(255, 198, 74, 255))
-        }
-        Err(error) => Err(map_backend_error(&error)),
-    }
-}
-
-fn is_missing_asset_error(error: &BackendError) -> bool {
-    matches!(
-        error.diagnostic().rule(),
-        "skia.image.missing" | "skia.vector.missing"
-    )
 }
 
 /// Converts host metrics to non-zero physical frame dimensions.
@@ -395,32 +309,6 @@ fn surface_to_frame(
     SoftwareFrame::new(width, height, pixels)
 }
 
-fn draw_asset_placeholder(
-    backend: &mut SkiaRendererBackend,
-    geometry: Geometry,
-    accent: Color,
-) -> Result<(), WinitHostError> {
-    backend
-        .fill(geometry, Color::rgba(18, 24, 34, 120))
-        .map_err(|error| map_backend_error(&error))?;
-    backend
-        .stroke(geometry, Stroke::new(2.0))
-        .map_err(|error| map_backend_error(&error))?;
-    backend
-        .fill(
-            Geometry::new(geometry.x, geometry.y, geometry.width.max(1.0), 2.0),
-            accent,
-        )
-        .map_err(|error| map_backend_error(&error))?;
-    backend
-        .fill(
-            Geometry::new(geometry.x, geometry.y, 2.0, geometry.height.max(1.0)),
-            accent,
-        )
-        .map_err(|error| map_backend_error(&error))?;
-    Ok(())
-}
-
 #[allow(clippy::cast_possible_truncation)]
 fn scale_factor_to_f32(scale_factor: f64) -> Result<f32, WinitHostError> {
     if !scale_factor.is_finite() || scale_factor <= 0.0 {
@@ -456,8 +344,4 @@ fn map_backend_error(error: &BackendError) -> WinitHostError {
         error.diagnostic().rule(),
         error.diagnostic().message().to_string(),
     )
-}
-
-fn map_custom_surface_error(error: &CustomSurfaceError) -> WinitHostError {
-    WinitHostError::new(error.rule(), error.message().to_string())
 }

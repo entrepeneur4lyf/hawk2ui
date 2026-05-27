@@ -380,11 +380,16 @@ Acceptance:
 
 ### REM-RENDER-001: Connect Runtime Scene Frames To Host Presentation
 
+Status: Remediated in source.
+
 Evidence:
 
 - `crates/hawk2ui-runtime/src/view.rs` can build `RuntimeSceneFrame`.
 - `crates/hawk2ui-host-winit/src/software_frame.rs` renders a hard-coded default scene.
 - Winit runtime does not consume `RuntimeSceneFrame`.
+- `hawk2ui-render-skia::SkiaRendererBackend::draw_runtime_scene_frame` now consumes `RuntimeSceneFrame::draw_commands()` directly and lowers fill, text, image asset, vector asset, and custom surface commands into Skia.
+- `hawk2ui-host-winit::SoftwareFrameRenderer::render_scene_frame` now delegates runtime scene replay to the Skia backend instead of owning command semantics.
+- Winit desktop runtime accepts a compiled runtime tree from CLI build output and renders that tree for `run-desktop`; the hard-coded default scene remains only as an explicit no-runtime-tree fallback for direct host API use.
 
 Required remediation:
 
@@ -397,6 +402,17 @@ Acceptance:
 
 - Changing author/runtime tree content changes the visible native window output.
 - Tests prove fill/text scene output reaches pixels or backend commands.
+
+Remediation delivered:
+
+- Renderer-owned runtime scene replay centralizes draw command lowering in `hawk2ui-render-skia`.
+- Winit software presentation now uses the renderer-owned replay path for runtime scene frames.
+- Replay options carry frame index, DPI scale, and missing-asset fallback policy so desktop hosts can degrade missing assets visibly while headless/backend use can fail strictly.
+- Regression coverage proves a runtime scene containing fill, image, vector, and custom surface commands reaches visible Skia pixels through the renderer-owned replay path.
+
+Review check:
+
+- As the implementer delivering this product, I am satisfied with this remediation for production stability. Runtime scene presentation no longer depends on host-owned draw-command lowering, and production desktop launch renders compiled runtime tree output.
 
 ### REM-RENDER-002: Replace String Paint Commands With Typed Backend Commands
 
@@ -446,12 +462,18 @@ Acceptance:
 
 ### REM-RENDER-004: Complete Skia Backend Execution
 
+Status: Remediated in source.
+
 Evidence:
 
 - `hawk2ui-render-skia` draws several primitives.
 - `draw_vector` renders registered compiled vector path records through Skia and fails with a structured diagnostic when the vector asset is missing.
 - `apply_layer_effect` executes supported structured shadow/glow effects through Skia primitives and returns explicit diagnostics for unsupported effect strings.
 - Trait-level `draw_text` uses configurable default text placement, baseline, font size, color, and the resolved Skia typeface instead of hard-coded origin/default font rendering.
+- `draw_text_layout` renders production text layout lines produced by `hawk2ui-text`.
+- `draw_image_rect` renders registered compiled image assets into destination rectangles with scaling.
+- `draw_vector_rect` renders registered compiled vector assets into destination rectangles with clipping.
+- `draw_runtime_scene_frame` replays accepted runtime scene draw commands, including custom surfaces, through the Skia backend.
 
 Required remediation:
 
@@ -461,6 +483,16 @@ Required remediation:
 Acceptance:
 
 - Skia backend renders all accepted layer types through tests and visual fixtures.
+
+Remediation delivered:
+
+- Accepted layer/render command types are covered by Skia pixel tests: fills, strokes, paths, text, shaped text layouts, images, vectors, affine transforms, clips, opacity groups, structured effects, cached layers, custom surfaces, and runtime scene replay.
+- Missing image/vector assets can fail strictly or draw visible diagnostic placeholders depending on replay policy.
+- No nine-slice layer is currently part of the accepted runtime/render command surface, so no additional nine-slice backend path is required for this remediation.
+
+Review check:
+
+- As the implementer delivering this product, I am satisfied with this remediation for production stability. Skia now owns the complete accepted runtime render surface, with test coverage at both primitive and runtime-scene replay levels.
 
 ### REM-RENDER-005: Integrate Text Measurement With Layout And Rendering
 
