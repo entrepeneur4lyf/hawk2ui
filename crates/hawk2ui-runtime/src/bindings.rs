@@ -167,12 +167,11 @@ impl HostBindingRegistry {
     /// Creates a registry from binding records.
     #[must_use]
     pub fn new(bindings: impl IntoIterator<Item = HostBindingRecord>) -> Self {
-        Self {
-            bindings: bindings
-                .into_iter()
-                .map(|binding| (binding.name.clone(), binding))
-                .collect(),
+        let mut records = BTreeMap::new();
+        for binding in bindings {
+            records.entry(binding.name.clone()).or_insert(binding);
         }
+        Self { bindings: records }
     }
 
     /// Validates and records a host binding call.

@@ -137,6 +137,33 @@ fn host_bindings_deny_missing_capability() {
 }
 
 #[test]
+fn host_bindings_preserve_first_declaration_for_duplicate_names() {
+    let registry = HostBindingRegistry::new([
+        HostBindingRecord::new(
+            "platform.clipboard.write",
+            BindingSchema::new("object", "null", "ClipboardError"),
+        )
+        .requires(RuntimeCapability::ClipboardWrite),
+        HostBindingRecord::new(
+            "platform.clipboard.write",
+            BindingSchema::new("object", "null", "ClipboardError"),
+        ),
+    ]);
+
+    let error = registry
+        .call(
+            "platform.clipboard.write",
+            StructuredValue::object([("text", StructuredValue::string("hello"))]),
+            [],
+            LifecyclePhase::Update,
+        )
+        .expect_err("duplicate binding must not downgrade the protected declaration");
+
+    assert_eq!(error.code, "binding.capability-denied");
+    assert_eq!(error.capability, Some(RuntimeCapability::ClipboardWrite));
+}
+
+#[test]
 fn host_bindings_reject_schema_mismatch() {
     let registry = HostBindingRegistry::new([HostBindingRecord::new(
         "platform.clipboard.write",
