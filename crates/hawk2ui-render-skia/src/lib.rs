@@ -348,6 +348,43 @@ impl SkiaLayerCacheEntry {
     }
 }
 
+#[derive(Clone, Debug)]
+struct SkiaVectorPathRecord {
+    path: Path,
+    fill: Color,
+}
+
+#[derive(Clone, Debug)]
+struct SkiaVectorAsset {
+    paths: Vec<SkiaVectorPathRecord>,
+}
+
+/// Default text placement and style used by the trait-level text draw call.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SkiaTextStyle {
+    /// Logical x coordinate for the text origin.
+    pub x: f32,
+    /// Logical y coordinate for the text baseline.
+    pub baseline_y: f32,
+    /// Font size in logical pixels.
+    pub font_size: f32,
+    /// Text fill color.
+    pub color: Color,
+}
+
+impl SkiaTextStyle {
+    /// Creates a default text style for trait-level drawing.
+    #[must_use]
+    pub const fn new(x: f32, baseline_y: f32, font_size: f32, color: Color) -> Self {
+        Self {
+            x,
+            baseline_y,
+            font_size,
+            color,
+        }
+    }
+}
+
 impl SkiaFrameSnapshot {
     fn new(width: u32, height: u32, pixels: Vec<u32>) -> Result<Self, BackendError> {
         let expected = usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| {
@@ -408,10 +445,12 @@ pub struct SkiaRendererBackend {
     diagnostics: Vec<BackendDiagnostic>,
     skia_capabilities: SkiaRendererCapabilities,
     image_assets: BTreeMap<String, Image>,
+    vector_assets: BTreeMap<String, SkiaVectorAsset>,
     layer_caches: BTreeMap<String, SkiaLayerCacheEntry>,
     cache_invalidation_keys: Vec<String>,
     opacity_group_depth: usize,
     default_typeface: Option<Typeface>,
+    default_text_style: SkiaTextStyle,
 }
 
 impl SkiaRendererBackend {
@@ -430,10 +469,17 @@ impl SkiaRendererBackend {
             diagnostics: Vec::new(),
             skia_capabilities: SkiaRendererCapabilities::cpu_raster(),
             image_assets: BTreeMap::new(),
+            vector_assets: BTreeMap::new(),
             layer_caches: BTreeMap::new(),
             cache_invalidation_keys: Vec::new(),
             opacity_group_depth: 0,
             default_typeface: FontMgr::new().legacy_make_typeface(None, FontStyle::normal()),
+            default_text_style: SkiaTextStyle::new(
+                0.0,
+                18.0,
+                16.0,
+                Color::rgba(255, 255, 255, 255),
+            ),
         }
     }
 
@@ -569,6 +615,94 @@ impl SkiaRendererBackend {
         Ok(())
     }
 
+    /// Registers a compiled vector asset made of filled SVG path records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when the asset ID is empty, no paths are provided, or any path data
+    /// is invalid SVG path syntax.
+    pub fn register_vector_asset<P, I>(
+        &mut self,
+        id: impl Into<String>,
+        records: I,
+    ) -> Result<(), BackendError>
+    where
+        P: AsRef<str>,
+        I: IntoIterator<Item = (P, Color)>,
+    {
+        let id = id.into();
+        validate_asset_id(&id).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        let mut paths = Vec::new();
+        for (path, fill) in records {
+            let Some(path) = Path::from_svg(path.as_ref()) else {
+                return self.fail(
+                    "skia.vector.invalid-path",
+                    "compiled vector path data is not valid SVG path syntax",
+                );
+            };
+            paths.push(SkiaVectorPathRecord { path, fill });
+        }
+        if paths.is_empty() {
+            return self.fail(
+                "skia.vector.empty",
+                "compiled vector asset must contain at least one path",
+            );
+        }
+        self.vector_assets
+            .insert(id.clone(), SkiaVectorAsset { paths });
+        self.commands.push(format!("register-vector:{id}"));
+        Ok(())
+    }
+
+    /// Registers a compiled vector asset from path data using an opaque white fill.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when registration fails.
+    pub fn register_vector_paths<P, I>(
+        &mut self,
+        id: impl Into<String>,
+        paths: I,
+    ) -> Result<(), BackendError>
+    where
+        P: AsRef<str>,
+        I: IntoIterator<Item = P>,
+    {
+        self.register_vector_asset(
+            id,
+            paths
+                .into_iter()
+                .map(|path| (path, Color::rgba(255, 255, 255, 255))),
+        )
+    }
+
+    /// Sets default text placement and style for [`RendererBackend::draw_text`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when coordinates or font size cannot produce a valid text draw.
+    pub fn set_default_text_style(
+        &mut self,
+        x: f32,
+        baseline_y: f32,
+        font_size: f32,
+        color: Color,
+    ) -> Result<(), BackendError> {
+        validate_text_placement(x, baseline_y, font_size).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        self.default_text_style = SkiaTextStyle::new(x, baseline_y, font_size, color);
+        Ok(())
+    }
+
+    /// Returns default text placement and style for [`RendererBackend::draw_text`].
+    #[must_use]
+    pub const fn default_text_style(&self) -> SkiaTextStyle {
+        self.default_text_style
+    }
+
     /// Draws text at a concrete baseline position.
     ///
     /// # Errors
@@ -582,25 +716,7 @@ impl SkiaRendererBackend {
         font_size: f32,
         color: Color,
     ) -> Result<(), BackendError> {
-        self.require_active_frame()?;
-        if !x.is_finite() || !y.is_finite() || !font_size.is_finite() || font_size <= 0.0 {
-            return self.fail(
-                "skia.text.invalid-placement",
-                "text position and font size must be finite and font size must be greater than zero",
-            );
-        }
-        let Some(typeface) = self.default_typeface.clone() else {
-            return self.fail(
-                "skia.text.typeface-unavailable",
-                "system font manager did not provide a default typeface",
-            );
-        };
-        let font = Font::new(typeface, font_size);
-        self.with_active_surface(|surface| {
-            let mut paint = paint(color, PaintStyle::Fill);
-            paint.set_anti_alias(true);
-            surface.canvas().draw_str(text, (x, y), &font, &paint);
-        })?;
+        self.render_text_at(text, x, y, font_size, color)?;
         self.commands
             .push(format!("text-at:{text}:{x},{y}:{font_size}"));
         Ok(())
@@ -940,6 +1056,19 @@ impl SkiaRendererBackend {
     /// Returns [`BackendError`] when there is no active frame.
     pub fn draw_vector(&mut self, vector: &str) -> Result<(), BackendError> {
         self.require_active_frame()?;
+        let Some(asset) = self.vector_assets.get(vector).cloned() else {
+            return self.fail(
+                "skia.vector.missing",
+                "compiled vector asset is not registered with the renderer",
+            );
+        };
+        self.with_active_surface(|surface| {
+            for record in &asset.paths {
+                let mut paint = paint(record.fill, PaintStyle::Fill);
+                paint.set_anti_alias(true);
+                surface.canvas().draw_path(&record.path, &paint);
+            }
+        })?;
         self.commands.push(format!("vector:{vector}"));
         Ok(())
     }
@@ -996,6 +1125,39 @@ impl SkiaRendererBackend {
         } else {
             self.fail("skia.frame.missing", "drawing requires an active frame")
         }
+    }
+
+    fn render_text_at(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        color: Color,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        if !self.capabilities.text {
+            return self.fail(
+                "backend.capability.text.missing",
+                "backend does not support text rendering",
+            );
+        }
+        validate_text_placement(x, y, font_size).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        let Some(typeface) = self.default_typeface.clone() else {
+            return self.fail(
+                "skia.text.typeface-unavailable",
+                "system font manager did not provide a default typeface",
+            );
+        };
+        let font = Font::new(typeface, font_size);
+        self.with_active_surface(|surface| {
+            let mut paint = paint(color, PaintStyle::Fill);
+            paint.set_anti_alias(true);
+            surface.canvas().draw_str(text, (x, y), &font, &paint);
+        })?;
+        Ok(())
     }
 }
 
@@ -1149,20 +1311,14 @@ impl RendererBackend for SkiaRendererBackend {
     }
 
     fn draw_text(&mut self, text: &str) -> Result<(), BackendError> {
-        self.require_active_frame()?;
-        if !self.capabilities.text {
-            return self.fail(
-                "backend.capability.text.missing",
-                "backend does not support text rendering",
-            );
-        }
-        self.with_active_surface(|surface| {
-            let mut paint = paint(Color::rgba(255, 255, 255, 255), PaintStyle::Fill);
-            paint.set_anti_alias(true);
-            surface
-                .canvas()
-                .draw_str(text, (0.0, 0.0), &Font::default(), &paint);
-        })?;
+        let style = self.default_text_style;
+        self.render_text_at(
+            text,
+            style.x,
+            style.baseline_y,
+            style.font_size,
+            style.color,
+        )?;
         self.commands.push(format!("text:{text}"));
         Ok(())
     }
@@ -1347,6 +1503,17 @@ fn validate_surface_id(id: &str) -> Result<(), BackendError> {
     }
 }
 
+fn validate_asset_id(id: &str) -> Result<(), BackendError> {
+    if id.trim().is_empty() {
+        Err(BackendError::new(
+            "skia.asset.invalid-id",
+            "asset ID must not be empty",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_surface_size(width: u32, height: u32) -> Result<(), BackendError> {
     if width == 0 || height == 0 {
         Err(BackendError::new(
@@ -1382,6 +1549,17 @@ fn validate_geometry(rule: &'static str, geometry: Geometry) -> Result<(), Backe
         Err(BackendError::new(
             rule,
             "geometry coordinates and dimensions must be finite and dimensions must be greater than zero",
+        ))
+    }
+}
+
+fn validate_text_placement(x: f32, y: f32, font_size: f32) -> Result<(), BackendError> {
+    if x.is_finite() && y.is_finite() && font_size.is_finite() && font_size > 0.0 {
+        Ok(())
+    } else {
+        Err(BackendError::new(
+            "skia.text.invalid-placement",
+            "text position and font size must be finite and font size must be greater than zero",
         ))
     }
 }

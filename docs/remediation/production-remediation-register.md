@@ -352,14 +352,13 @@ Acceptance:
 Evidence:
 
 - `hawk2ui-render-skia` draws several primitives.
-- `draw_vector` only records a command.
+- `draw_vector` renders registered compiled vector path records through Skia and fails with a structured diagnostic when the vector asset is missing.
 - `apply_layer_effect` executes supported structured shadow/glow effects through Skia primitives and returns explicit diagnostics for unsupported effect strings.
-- Trait-level `draw_text` uses `(0.0, 0.0)` and `Font::default()`.
+- Trait-level `draw_text` uses configurable default text placement, baseline, font size, color, and the resolved Skia typeface instead of hard-coded origin/default font rendering.
 
 Required remediation:
 
-- Implement vector asset rendering from compiled vector records.
-- Implement text drawing with resolved font, position, baseline, color, DPI, and shaped layout.
+- Integrate shaped text layout output into the Skia text draw path so complex scripts, font fallback, and glyph metrics come from the production text stack.
 - Implement image scaling, caching, color handling, and nine-slice if accepted by spec.
 
 Acceptance:

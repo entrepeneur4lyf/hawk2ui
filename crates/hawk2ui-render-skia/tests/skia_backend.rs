@@ -1,4 +1,4 @@
-use hawk2ui_render::{BackendCapabilities, Geometry, RendererBackend, Transform};
+use hawk2ui_render::{BackendCapabilities, Color, Geometry, RendererBackend, Transform};
 use hawk2ui_render_skia::{SkiaRendererBackend, SkiaSurfaceConfig};
 
 #[test]
@@ -149,6 +149,47 @@ fn placed_text_and_images_render_into_target_regions() {
         0,
         "unaffected background corner should remain unchanged"
     );
+}
+
+#[test]
+fn trait_draw_text_uses_configured_default_text_style() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 128, 72).unwrap();
+    backend
+        .set_default_text_style(18.0, 42.0, 18.0, Color::rgba(240, 245, 255, 255))
+        .unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(8, 10, 14, 255)).unwrap();
+    backend.draw_text("Trait").unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 22.0, 72.0, 28.0)) > 0,
+        "trait-level text draw must use configured visible placement and color"
+    );
+}
+
+#[test]
+fn registered_vector_assets_render_pixels_through_trait_draw_vector() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 64, 48).unwrap();
+    backend
+        .register_vector_paths("logo", ["M10 10 L30 10 L30 30 L10 30 Z"])
+        .unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(8, 10, 14, 255)).unwrap();
+    backend.draw_vector("logo").unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+
+    assert!(
+        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(10.0, 10.0, 20.0, 20.0)) > 0,
+        "registered vector asset must render pixels in its path bounds"
+    );
+    assert!(backend.command_keys().contains(&"vector:logo".to_string()));
 }
 
 #[test]
@@ -454,6 +495,9 @@ fn skia_backend_reports_detailed_capabilities_and_vector_commands() {
     assert!(capabilities.dirty_regions.is_supported());
 
     backend.create_surface("main", 320, 180).unwrap();
+    backend
+        .register_vector_paths("logo", ["M10 10 L30 10 L30 30 L10 30 Z"])
+        .unwrap();
     backend.begin_frame("main").unwrap();
     backend.draw_vector("logo").unwrap();
     backend.end_frame("main").unwrap();
