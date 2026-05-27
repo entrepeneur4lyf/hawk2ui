@@ -39,6 +39,51 @@ fn baseview_parent_fixture_can_wrap_real_host_platform_handle_records() {
 }
 
 #[test]
+fn baseview_adapter_rejects_invalid_initial_metrics() {
+    let invalid_metrics = [
+        SurfaceMetrics::new(0.0, 180.0, 1.0),
+        SurfaceMetrics::new(320.0, 0.0, 1.0),
+        SurfaceMetrics::new(f64::NAN, 180.0, 1.0),
+        SurfaceMetrics::new(320.0, f64::INFINITY, 1.0),
+        SurfaceMetrics::new(320.0, 180.0, 0.0),
+        SurfaceMetrics::new(320.0, 180.0, f64::INFINITY),
+    ];
+
+    for metrics in invalid_metrics {
+        let error = BaseviewPluginAdapter::attach(
+            PluginEditorConfig::new("editor", PluginParentHandle::opaque("parent"), metrics),
+            BaseviewParentFixture::linux_xwayland(),
+        )
+        .expect_err("invalid metrics must not reach Baseview open options");
+
+        assert_eq!(error.rule(), "baseview.metrics.invalid");
+    }
+}
+
+#[test]
+fn baseview_adapter_ignores_invalid_live_metrics() {
+    let initial_metrics = SurfaceMetrics::new(320.0, 180.0, 1.0);
+    let mut adapter = BaseviewPluginAdapter::attach(
+        PluginEditorConfig::new(
+            "editor",
+            PluginParentHandle::opaque("parent"),
+            initial_metrics,
+        ),
+        BaseviewParentFixture::linux_xwayland(),
+    )
+    .expect("baseview editor attaches");
+    adapter.drain_events();
+
+    adapter.host_resize(SurfaceMetrics::new(0.0, 360.0, 2.0));
+    adapter.host_resize(SurfaceMetrics::new(640.0, f64::NAN, 2.0));
+    adapter.dpi_changed(0.0);
+    adapter.dpi_changed(f64::INFINITY);
+
+    assert_eq!(adapter.metrics(), initial_metrics);
+    assert!(adapter.drain_events().is_empty());
+}
+
+#[test]
 fn baseview_adapter_routes_resize_dpi_repaint_focus_keyboard_and_pointer() {
     let mut adapter = BaseviewPluginAdapter::attach(
         PluginEditorConfig::new(

@@ -167,6 +167,7 @@ impl BaseviewPluginAdapter {
         parent_fixture: BaseviewParentFixture,
     ) -> Result<Self, BaseviewHostError> {
         validate_baseview_parent(parent_fixture.handle())?;
+        validate_baseview_metrics(config.metrics)?;
         parent_fixture
             .handle()
             .validate_for(SurfaceOwnership::PluginEditor)
@@ -252,6 +253,23 @@ fn validate_baseview_parent(handle: HostPlatformHandle) -> Result<(), BaseviewHo
     }
 }
 
+fn validate_baseview_metrics(metrics: SurfaceMetrics) -> Result<(), BaseviewHostError> {
+    if metrics.logical_width.is_finite()
+        && metrics.logical_height.is_finite()
+        && metrics.scale_factor.is_finite()
+        && metrics.logical_width > 0.0
+        && metrics.logical_height > 0.0
+        && metrics.scale_factor > 0.0
+    {
+        Ok(())
+    } else {
+        Err(BaseviewHostError::new(
+            "baseview.metrics.invalid",
+            "baseview editor metrics must be finite and greater than zero",
+        ))
+    }
+}
+
 impl PluginHostAdapter for BaseviewPluginAdapter {
     fn metrics(&self) -> SurfaceMetrics {
         self.config.metrics
@@ -261,6 +279,9 @@ impl PluginHostAdapter for BaseviewPluginAdapter {
         if !self.accepts_host_event() {
             return;
         }
+        if validate_baseview_metrics(metrics).is_err() {
+            return;
+        }
         self.config.metrics = metrics;
         self.open_options.size = Size::new(metrics.logical_width, metrics.logical_height);
         self.events.push(PluginHostEvent::HostResize(metrics));
@@ -268,6 +289,14 @@ impl PluginHostAdapter for BaseviewPluginAdapter {
 
     fn dpi_changed(&mut self, scale_factor: f64) {
         if !self.accepts_host_event() {
+            return;
+        }
+        let metrics = SurfaceMetrics::new(
+            self.config.metrics.logical_width,
+            self.config.metrics.logical_height,
+            scale_factor,
+        );
+        if validate_baseview_metrics(metrics).is_err() {
             return;
         }
         self.config.metrics.scale_factor = scale_factor;
