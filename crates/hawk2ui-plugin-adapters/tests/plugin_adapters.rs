@@ -258,7 +258,10 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     assert!(Path::new(&output.lib_rs_path).is_file());
     let source = std::fs::read_to_string(&output.lib_rs_path).expect("generated source reads");
     assert!(source.contains("pub static clap_entry"));
+    assert!(source.contains("clap_plugin_factory"));
     assert!(source.contains("clap_plugin_entry"));
+    assert!(source.contains("get_plugin_descriptor"));
+    assert!(source.contains("create_plugin"));
 
     let target_dir = output_root.join("target");
     let status = std::process::Command::new("cargo")
@@ -285,6 +288,16 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
         library_bytes
             .windows("clap_entry".len())
             .any(|window| window == b"clap_entry")
+    );
+    assert!(
+        library_bytes
+            .windows("plugin-factory".len())
+            .any(|window| window == b"plugin-factory")
+    );
+    assert!(
+        library_bytes
+            .windows("com.hawk2ui.loadable".len())
+            .any(|window| window == b"com.hawk2ui.loadable")
     );
 }
 
