@@ -318,19 +318,23 @@ Acceptance:
 
 ### REM-RENDER-003: Complete Scene Graph Semantics
 
+Status: In progress; full affine transforms are remediated in source.
+
 Evidence:
 
-- `SceneNode` has layout, clip, translation-only transform, opacity, hit-test, accessibility refs, and invalidation flags.
-- Full effects, rich transforms, opacity groups, z-order semantics, layer attachment, and scene diffing are incomplete.
+- `SceneNode` has layout, clip, affine transform, opacity, hit-test, accessibility refs, and invalidation flags.
+- Full effects, opacity group semantics, layer attachment, scene diffing, and dirty-bounds/cache invalidation semantics remain incomplete.
 
 Required remediation:
 
-- Add full affine transforms, opacity group semantics, effect references, layer membership, scene diffing, and deterministic z-order traversal.
+- Add opacity group semantics, effect references, layer membership, scene diffing, and deterministic z-order traversal.
 - Wire invalidation reasons to dirty bounds and cache invalidation.
 
 Acceptance:
 
-- Scene graph tests cover transforms, clips, z-order, opacity, hit testing, invalidation, and accessibility geometry.
+- `crates/hawk2ui-render/tests/render_export.rs` covers full affine transform storage, point application, validation, and stable serialization.
+- `crates/hawk2ui-render-skia/tests/skia_backend.rs` proves affine transforms affect rendered pixels.
+- Remaining scene graph tests must cover clips, z-order, opacity groups, effects, layer attachment, hit testing, invalidation dirty bounds, and accessibility geometry.
 
 ### REM-RENDER-004: Complete Skia Backend Execution
 

@@ -85,6 +85,31 @@ fn frame_snapshot_reads_presented_pixels_and_enforces_lifecycle() {
 }
 
 #[test]
+fn skia_backend_applies_full_affine_transforms() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 48, 32).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend
+        .clear(hawk2ui_render::Color::rgba(0, 0, 0, 255))
+        .unwrap();
+    backend
+        .push_transform(Transform::affine(2.0, 0.0, 0.0, 1.0, 8.0, 4.0))
+        .unwrap();
+    backend
+        .fill(
+            Geometry::new(2.0, 2.0, 6.0, 6.0),
+            hawk2ui_render::Color::rgba(255, 0, 0, 255),
+        )
+        .unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+
+    assert_eq!(snapshot.pixel_at(5, 5), Some(0x000000));
+    assert_eq!(snapshot.pixel_at(13, 7), Some(0xff0000));
+}
+
+#[test]
 fn placed_text_and_images_render_into_target_regions() {
     let mut backend = SkiaRendererBackend::new();
     backend.create_surface("main", 128, 72).unwrap();

@@ -249,11 +249,7 @@ impl LayerKind {
                 "layer.clip.invalid",
                 "clip geometry must be finite with non-negative dimensions",
             )),
-            Self::Transform(transform)
-                if transform.translate_x.is_finite() && transform.translate_y.is_finite() =>
-            {
-                Ok(())
-            }
+            Self::Transform(transform) if transform.is_finite() => Ok(()),
             Self::Transform(_) => Err(LayerValidationError::new(
                 "layer.transform.invalid",
                 "transform coordinates must be finite",
@@ -297,8 +293,13 @@ impl LayerKind {
             }
             Self::Transform(transform) => {
                 format!(
-                    "transform({},{})",
-                    transform.translate_x, transform.translate_y
+                    "transform({},{},{},{},{},{})",
+                    transform.scale_x,
+                    transform.skew_x,
+                    transform.skew_y,
+                    transform.scale_y,
+                    transform.translate_x,
+                    transform.translate_y
                 )
             }
             Self::Text(text) => format!("text({})", text.0),

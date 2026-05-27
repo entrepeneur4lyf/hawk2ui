@@ -73,6 +73,40 @@ fn scene_graph_attaches_geometry_and_propagates_invalidation() {
 }
 
 #[test]
+fn scene_graph_preserves_full_affine_transforms_and_serializes_them_stably() {
+    let transform = Transform::affine(1.25, 0.5, -0.25, 0.75, 12.0, 18.0);
+    let graph = SceneGraph::new(SceneNode::new(SceneNodeId::new("root")).with_transform(transform));
+
+    graph
+        .validate()
+        .expect("finite affine transform must validate");
+
+    assert_eq!(
+        graph.node(&SceneNodeId::new("root")).unwrap().transform(),
+        transform
+    );
+    assert_eq!(transform.apply_to_point(8.0, 4.0), (24.0, 19.0));
+    assert_eq!(
+        hawk2ui_render::LayerKind::Transform(transform).stable_key(),
+        "transform(1.25,0.5,-0.25,0.75,12,18)"
+    );
+
+    let commands = hawk2ui_render::export_paint_commands(
+        &hawk2ui_render::LayerStack::new().with_layer(hawk2ui_render::PaintLayer::new(
+            "tilted",
+            0,
+            hawk2ui_render::LayerKind::Transform(transform),
+        )),
+    )
+    .expect("affine transform layer is renderable");
+
+    assert_eq!(
+        commands.serialize_stable(),
+        "draw-transform:tilted:1.25,0.5,-0.25,0.75,12,18"
+    );
+}
+
+#[test]
 fn scene_graph_rejects_invalid_node_records() {
     let error = SceneGraph::new(SceneNode::new(SceneNodeId::new("")))
         .validate()
@@ -240,7 +274,7 @@ fn backend_boundary_records_surface_lifecycle_and_frame_commands() {
             "text:Hello",
             "image:hero",
             "clip:0,0,80,40",
-            "transform:4,8",
+            "transform:1,0,0,1,4,8",
             "effect:shadow",
             "cache:card",
             "dirty:0,0,100,50",

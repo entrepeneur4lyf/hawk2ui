@@ -372,8 +372,13 @@ impl RendererBackend for RecordingBackend {
 
     fn push_transform(&mut self, transform: Transform) -> Result<(), BackendError> {
         self.commands.push(format!(
-            "transform:{},{}",
-            transform.translate_x, transform.translate_y
+            "transform:{},{},{},{},{},{}",
+            transform.scale_x,
+            transform.skew_x,
+            transform.skew_y,
+            transform.scale_y,
+            transform.translate_x,
+            transform.translate_y
         ));
         Ok(())
     }

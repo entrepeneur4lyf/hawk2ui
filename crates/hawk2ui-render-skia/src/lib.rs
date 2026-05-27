@@ -9,7 +9,7 @@ use hawk2ui_render::{
 };
 use skia_safe::{
     AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
-    FontMgr, FontStyle, IRect, Image, ImageInfo, MaskFilter, Paint, PaintStyle, Path, Rect,
+    FontMgr, FontStyle, IRect, Image, ImageInfo, MaskFilter, Matrix, Paint, PaintStyle, Path, Rect,
     Surface, TileMode, Typeface, gradient, surfaces,
 };
 
@@ -1182,13 +1182,26 @@ impl RendererBackend for SkiaRendererBackend {
             self.diagnostics.push(error.diagnostic().clone());
         })?;
         self.with_active_surface(|surface| {
-            surface
-                .canvas()
-                .translate((transform.translate_x, transform.translate_y));
+            surface.canvas().concat(&Matrix::new_all(
+                transform.scale_x,
+                transform.skew_x,
+                transform.translate_x,
+                transform.skew_y,
+                transform.scale_y,
+                transform.translate_y,
+                0.0,
+                0.0,
+                1.0,
+            ));
         })?;
         self.commands.push(format!(
-            "transform:{},{}",
-            transform.translate_x, transform.translate_y
+            "transform:{},{},{},{},{},{}",
+            transform.scale_x,
+            transform.skew_x,
+            transform.skew_y,
+            transform.scale_y,
+            transform.translate_x,
+            transform.translate_y
         ));
         Ok(())
     }
@@ -1298,7 +1311,7 @@ fn validate_blur(rule: &'static str, blur_radius: f32) -> Result<(), BackendErro
 }
 
 fn validate_transform(transform: Transform) -> Result<(), BackendError> {
-    if transform.translate_x.is_finite() && transform.translate_y.is_finite() {
+    if transform.is_finite() {
         Ok(())
     } else {
         Err(BackendError::new(

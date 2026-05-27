@@ -50,6 +50,14 @@ pub type HitTestGeometry = Geometry;
 /// Affine transform record.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
+    /// Horizontal scale.
+    pub scale_x: f32,
+    /// Horizontal skew.
+    pub skew_x: f32,
+    /// Vertical skew.
+    pub skew_y: f32,
+    /// Vertical scale.
+    pub scale_y: f32,
     /// X translation.
     pub translate_x: f32,
     /// Y translation.
@@ -61,6 +69,10 @@ impl Transform {
     #[must_use]
     pub const fn identity() -> Self {
         Self {
+            scale_x: 1.0,
+            skew_x: 0.0,
+            skew_y: 0.0,
+            scale_y: 1.0,
             translate_x: 0.0,
             translate_y: 0.0,
         }
@@ -70,9 +82,63 @@ impl Transform {
     #[must_use]
     pub const fn translate(translate_x: f32, translate_y: f32) -> Self {
         Self {
+            scale_x: 1.0,
+            skew_x: 0.0,
+            skew_y: 0.0,
+            scale_y: 1.0,
             translate_x,
             translate_y,
         }
+    }
+
+    /// Creates a full 2D affine transform.
+    #[must_use]
+    pub const fn affine(
+        scale_x: f32,
+        skew_x: f32,
+        skew_y: f32,
+        scale_y: f32,
+        translate_x: f32,
+        translate_y: f32,
+    ) -> Self {
+        Self {
+            scale_x,
+            skew_x,
+            skew_y,
+            scale_y,
+            translate_x,
+            translate_y,
+        }
+    }
+
+    /// Applies this affine transform to a point.
+    #[must_use]
+    pub fn apply_to_point(self, x: f32, y: f32) -> (f32, f32) {
+        (
+            self.scale_x
+                .mul_add(x, self.skew_x.mul_add(y, self.translate_x)),
+            self.skew_y
+                .mul_add(x, self.scale_y.mul_add(y, self.translate_y)),
+        )
+    }
+
+    /// Returns transform components in stable matrix order.
+    #[must_use]
+    pub const fn components(self) -> [f32; 6] {
+        [
+            self.scale_x,
+            self.skew_x,
+            self.skew_y,
+            self.scale_y,
+            self.translate_x,
+            self.translate_y,
+        ]
+    }
+
+    /// Returns whether all transform components are finite.
+    #[must_use]
+    pub fn is_finite(self) -> bool {
+        self.components().iter().all(|value| value.is_finite())
     }
 }
 
@@ -471,7 +537,7 @@ fn validate_geometry(node_id: &SceneNodeId, geometry: Geometry) -> Result<(), Sc
 }
 
 fn validate_transform(node_id: &SceneNodeId, transform: Transform) -> Result<(), SceneGraphError> {
-    if transform.translate_x.is_finite() && transform.translate_y.is_finite() {
+    if transform.is_finite() {
         Ok(())
     } else {
         Err(SceneGraphError::InvalidTransform(

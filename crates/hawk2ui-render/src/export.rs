@@ -181,8 +181,13 @@ fn command_key(layer_key: &str, kind: &PaintCommandKind) -> String {
         }
         PaintCommandKind::Transform(transform) => {
             format!(
-                "draw-transform:{layer_key}:{},{}",
-                transform.translate_x, transform.translate_y
+                "draw-transform:{layer_key}:{},{},{},{},{},{}",
+                transform.scale_x,
+                transform.skew_x,
+                transform.skew_y,
+                transform.scale_y,
+                transform.translate_x,
+                transform.translate_y
             )
         }
         PaintCommandKind::Text(text) => format!("draw-text:{layer_key}:{}", text.stable_value()),
