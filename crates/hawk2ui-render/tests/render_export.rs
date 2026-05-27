@@ -73,6 +73,37 @@ fn scene_graph_attaches_geometry_and_propagates_invalidation() {
 }
 
 #[test]
+fn scene_graph_records_dirty_bounds_reasons_and_cache_invalidation() {
+    let graph = SceneGraph::new(
+        SceneNode::new(SceneNodeId::new("root")).with_layout(Geometry::new(0.0, 0.0, 320.0, 200.0)),
+    )
+    .with_child(
+        SceneNodeId::new("root"),
+        SceneNode::new(SceneNodeId::new("meter"))
+            .with_layout(Geometry::new(10.0, 20.0, 120.0, 48.0))
+            .with_transform(Transform::translate(4.0, 8.0)),
+    )
+    .expect("meter child insertion succeeds")
+    .invalidate(&SceneNodeId::new("meter"), InvalidationReason::Paint)
+    .expect("paint invalidation succeeds");
+
+    let meter = graph.node(&SceneNodeId::new("meter")).expect("meter node");
+    let root = graph.node(&SceneNodeId::new("root")).expect("root node");
+
+    assert_eq!(meter.invalidation_reasons(), &[InvalidationReason::Paint]);
+    assert_eq!(
+        meter.dirty_bounds(),
+        Some(Geometry::new(14.0, 28.0, 120.0, 48.0))
+    );
+    assert_eq!(
+        root.dirty_bounds(),
+        Some(Geometry::new(14.0, 28.0, 120.0, 48.0))
+    );
+    assert!(meter.cache_invalidated());
+    assert!(root.cache_invalidated());
+}
+
+#[test]
 fn scene_graph_preserves_full_affine_transforms_and_serializes_them_stably() {
     let transform = Transform::affine(1.25, 0.5, -0.25, 0.75, 12.0, 18.0);
     let graph = SceneGraph::new(SceneNode::new(SceneNodeId::new("root")).with_transform(transform));

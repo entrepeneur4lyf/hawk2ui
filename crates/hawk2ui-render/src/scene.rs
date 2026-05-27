@@ -42,6 +42,16 @@ impl Geometry {
             height,
         }
     }
+
+    /// Returns the union of two geometry bounds.
+    #[must_use]
+    pub fn union(self, other: Self) -> Self {
+        let min_x = self.x.min(other.x);
+        let min_y = self.y.min(other.y);
+        let max_x = (self.x + self.width).max(other.x + other.width);
+        let max_y = (self.y + self.height).max(other.y + other.height);
+        Self::new(min_x, min_y, max_x - min_x, max_y - min_y)
+    }
 }
 
 /// Hit-test geometry.
@@ -183,6 +193,9 @@ pub struct SceneNode {
     hit_test: Option<HitTestGeometry>,
     accessibility_ref: Option<AccessibilityRef>,
     invalidated: bool,
+    invalidation_reasons: Vec<InvalidationReason>,
+    dirty_bounds: Option<Geometry>,
+    cache_invalidated: bool,
 }
 
 impl SceneNode {
@@ -199,6 +212,9 @@ impl SceneNode {
             hit_test: None,
             accessibility_ref: None,
             invalidated: false,
+            invalidation_reasons: Vec::new(),
+            dirty_bounds: None,
+            cache_invalidated: false,
         }
     }
 
@@ -305,8 +321,44 @@ impl SceneNode {
         self.invalidated
     }
 
-    fn mark_invalidated(&mut self) {
+    /// Returns invalidation reasons recorded for this node.
+    #[must_use]
+    pub fn invalidation_reasons(&self) -> &[InvalidationReason] {
+        &self.invalidation_reasons
+    }
+
+    /// Returns dirty bounds accumulated for this node.
+    #[must_use]
+    pub const fn dirty_bounds(&self) -> Option<Geometry> {
+        self.dirty_bounds
+    }
+
+    /// Returns whether cached layer content touching this node must be invalidated.
+    #[must_use]
+    pub const fn cache_invalidated(&self) -> bool {
+        self.cache_invalidated
+    }
+
+    fn mark_invalidated(&mut self, reason: InvalidationReason, dirty_bounds: Option<Geometry>) {
         self.invalidated = true;
+        if !self.invalidation_reasons.contains(&reason) {
+            self.invalidation_reasons.push(reason);
+        }
+        if let Some(dirty_bounds) = dirty_bounds {
+            self.dirty_bounds = Some(match self.dirty_bounds {
+                Some(existing) => existing.union(dirty_bounds),
+                None => dirty_bounds,
+            });
+        }
+        if reason.invalidates_cache() {
+            self.cache_invalidated = true;
+        }
+    }
+}
+
+impl InvalidationReason {
+    fn invalidates_cache(self) -> bool {
+        matches!(self, Self::Geometry | Self::Paint)
     }
 }
 
@@ -416,14 +468,20 @@ impl SceneGraph {
     pub fn invalidate(
         mut self,
         node_id: &SceneNodeId,
-        _reason: InvalidationReason,
+        reason: InvalidationReason,
     ) -> Result<Self, SceneGraphError> {
+        let dirty_bounds = self.node(node_id).and_then(|node| {
+            node.layout()
+                .map(|layout| transform_geometry(layout, node.transform()))
+        });
         let mut current = Some(node_id.clone());
         while let Some(id) = current.as_ref() {
             let Some(index) = self.index_of(id) else {
                 return Err(SceneGraphError::MissingNode(id.as_str().to_string()));
             };
-            self.entries[index].node.mark_invalidated();
+            self.entries[index]
+                .node
+                .mark_invalidated(reason, dirty_bounds);
             let parent = self.entries[index].parent.clone();
             current = parent;
         }
@@ -544,4 +602,18 @@ fn validate_transform(node_id: &SceneNodeId, transform: Transform) -> Result<(),
             node_id.as_str().to_string(),
         ))
     }
+}
+
+fn transform_geometry(geometry: Geometry, transform: Transform) -> Geometry {
+    let (x0, y0) = transform.apply_to_point(geometry.x, geometry.y);
+    let (x1, y1) = transform.apply_to_point(geometry.x + geometry.width, geometry.y);
+    let (x2, y2) = transform.apply_to_point(geometry.x, geometry.y + geometry.height);
+    let (x3, y3) =
+        transform.apply_to_point(geometry.x + geometry.width, geometry.y + geometry.height);
+
+    let min_x = x0.min(x1).min(x2).min(x3);
+    let min_y = y0.min(y1).min(y2).min(y3);
+    let max_x = x0.max(x1).max(x2).max(x3);
+    let max_y = y0.max(y1).max(y2).max(y3);
+    Geometry::new(min_x, min_y, max_x - min_x, max_y - min_y)
 }
