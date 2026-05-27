@@ -182,11 +182,19 @@ impl SoftwareFrameRenderer {
                         &paint,
                     );
                 }
-                RuntimeDrawCommand::ImageAsset { .. } | RuntimeDrawCommand::VectorAsset { .. } => {
-                    return Err(WinitHostError::new(
-                        "desktop.frame.asset-unregistered",
-                        "runtime asset draw commands require registered compiled asset payloads",
-                    ));
+                RuntimeDrawCommand::ImageAsset { geometry, .. } => {
+                    draw_asset_placeholder(
+                        surface.canvas(),
+                        scaled_rect(*geometry, scale),
+                        SkiaColor::from_argb(255, 80, 180, 255),
+                    );
+                }
+                RuntimeDrawCommand::VectorAsset { geometry, .. } => {
+                    draw_asset_placeholder(
+                        surface.canvas(),
+                        scaled_rect(*geometry, scale),
+                        SkiaColor::from_argb(255, 255, 198, 74),
+                    );
                 }
                 RuntimeDrawCommand::CustomSurface {
                     surface: custom_surface,
@@ -382,10 +390,28 @@ fn draw_custom_surface(
     }
 }
 
+fn draw_asset_placeholder(canvas: &skia_safe::Canvas, rect: Rect, accent: SkiaColor) {
+    let mut fill = Paint::default();
+    fill.set_style(PaintStyle::Fill);
+    fill.set_anti_alias(true);
+    fill.set_color(SkiaColor::from_argb(120, 18, 24, 34));
+    canvas.draw_rect(rect, &fill);
+
+    let mut stroke = Paint::default();
+    stroke.set_style(PaintStyle::Stroke);
+    stroke.set_anti_alias(true);
+    stroke.set_stroke_width(2.0);
+    stroke.set_color(accent);
+    canvas.draw_rect(rect, &stroke);
+    canvas.draw_line((rect.left, rect.top), (rect.right, rect.bottom), &stroke);
+    canvas.draw_line((rect.right, rect.top), (rect.left, rect.bottom), &stroke);
+}
+
 fn to_skia_color(color: hawk2ui_render::Color) -> SkiaColor {
     SkiaColor::from_argb(color.a, color.r, color.g, color.b)
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn scale_factor_to_f32(scale_factor: f64) -> Result<f32, WinitHostError> {
     if !scale_factor.is_finite() || scale_factor <= 0.0 {
         return Err(WinitHostError::new(
@@ -393,9 +419,7 @@ fn scale_factor_to_f32(scale_factor: f64) -> Result<f32, WinitHostError> {
             "scale factor must be finite and greater than zero",
         ));
     }
-    let scale = scale_factor.to_string().parse::<f32>().map_err(|_| {
-        WinitHostError::new("desktop.frame.invalid-scale", "scale factor is invalid")
-    })?;
+    let scale = scale_factor as f32;
     if scale.is_finite() && scale > 0.0 {
         Ok(scale)
     } else {

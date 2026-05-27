@@ -108,8 +108,8 @@ Evidence:
 
 - `docs/technical/crate-selection.md` marks `lightningcss` as preferred.
 - `docs/specs/0001-product-direction.md` says Lightning CSS should be the preferred primary style parser/transformer.
-- `crates/hawk2ui-style/Cargo.toml` has no `lightningcss` dependency.
-- `crates/hawk2ui-style/src/compile.rs` parses source with `split('}')`, `split(';')`, and `split_once(':')`.
+- `crates/hawk2ui-style/Cargo.toml` pins `lightningcss = "1.0.0-alpha.71"`.
+- `crates/hawk2ui-style/src/compile.rs` uses Lightning CSS parsing and still needs workspace-wide dependency stability policy coverage because the accepted parser line is alpha.
 
 Required remediation:
 
@@ -125,14 +125,20 @@ Acceptance:
 - Invalid CSS surfaces Lightning CSS-backed diagnostics.
 - Supported CSS lowers into current typed style values.
 
+Status:
+
+- Implemented Lightning CSS-backed parsing in `hawk2ui-style`.
+- Remaining release blocker is covered by `REM-CRATE-007`: alpha dependency pinning must be governed by a workspace compatibility policy, upgrade cadence, and release gate.
+
 ### REM-CRATE-002: Adopt Taffy For Layout
 
 Evidence:
 
 - `docs/technical/crate-selection.md` marks `taffy` as preferred stable.
 - `docs/specs/0001-product-direction.md` says Taffy should be the preferred primary layout engine.
-- `crates/hawk2ui-layout/Cargo.toml` has no `taffy` dependency.
-- `crates/hawk2ui-layout/src/compute.rs` implements a custom column/row layout loop.
+- `crates/hawk2ui-layout/Cargo.toml` pins `taffy = "0.10.0"` with `std`, `taffy_tree`, and `flexbox`.
+- `crates/hawk2ui-layout/src/compute.rs` computes layout through Taffy for the implemented flex path.
+- The Taffy `grid` feature is not enabled, while grid support remains a required product domain.
 
 Required remediation:
 
@@ -146,14 +152,21 @@ Acceptance:
 - Layout computation flows through Taffy.
 - Nested flex, constrained plugin sizes, scroll clips, text measurement, and absolute children are covered by tests.
 
+Status:
+
+- Implemented Taffy-backed flex layout and text measurement integration.
+- Grid support remains tracked by `REM-LAYOUT-003`.
+
 ### REM-CRATE-003: Implement Real Embedded JavaScript Runtime
 
 Evidence:
 
 - `docs/technical/crate-selection.md` says `boa_engine` is the first spike.
 - `docs/specs/0001-product-direction.md` separates Bun tooling from embedded runtime and names Boa as first runtime spike.
-- `crates/hawk2ui-script/Cargo.toml` has no JS runtime dependency.
-- `crates/hawk2ui-script/src/lib.rs` uses `compile_typescript` string replacement and `evaluate_expression_module` with `+` expression evaluation.
+- `crates/hawk2ui-script/Cargo.toml` depends on `boa_engine` by Git commit `8f5ef6542d641fd22320e51234e914b59e623717`, which is not publishable to crates.io and is not a release-grade dependency contract.
+- `crates/hawk2ui-script/Cargo.toml` pins OXC crates at `0.133.0`, which are fast-moving compiler crates and need explicit upgrade policy.
+- `crates/hawk2ui-script/src/lib.rs` evaluates JavaScript through Boa and calls `Context::run_jobs()`.
+- `ScriptBackend::create_promise`, `ScriptBackend::resolve_promise`, and `ScriptBackend::schedule_timer` are Rust-side records and are not wired into Boa promises, Boa job scheduling, or timer callback execution.
 
 Required remediation:
 
@@ -167,6 +180,11 @@ Acceptance:
 - Real JavaScript executes through the selected runtime.
 - TypeScript is compiled through a real transform path before runtime execution.
 - Runtime policy tests cover denied globals, host binding permissions, interruption, teardown, and promise/timer semantics.
+
+Status:
+
+- Implemented real Boa-backed JavaScript evaluation and OXC-backed TypeScript transform.
+- Remaining release blockers are covered by `REM-CRATE-007` and `REM-RUNTIME-001A`: the Boa Git dependency must move to a release-grade dependency contract, OXC upgrades must be governed, and promise/timer sidecars must be connected to the JavaScript runtime.
 
 ### REM-CRATE-004: Add AccessKit Host Bridge
 
@@ -224,6 +242,51 @@ Acceptance:
 
 - At least one plugin format can build a real loadable plugin editor bundle.
 - Realtime data tests prove audio-thread-safe behavior.
+
+### REM-CRATE-007: Define Workspace Dependency Stability Policy
+
+Evidence:
+
+- `crates/hawk2ui-script/Cargo.toml` depends on `boa_engine` by Git commit instead of a crates.io release.
+- `crates/hawk2ui-script/Cargo.toml` pins OXC crates at `0.133.0`.
+- `crates/hawk2ui-style/Cargo.toml` pins `lightningcss = "1.0.0-alpha.71"`.
+- `crates/hawk2ui-layout/Cargo.toml` pins `taffy = "0.10.0"`.
+- `crates/hawk2ui-render-skia/Cargo.toml` and `crates/hawk2ui-host-winit/Cargo.toml` pin `skia-safe = "0.97.0"`.
+- Cargo.lock provides local reproducibility, but there is no workspace policy for release eligibility, upgrade cadence, compatibility matrix updates, or how alpha/pre-1.0/git dependencies are accepted.
+
+Required remediation:
+
+- Define a workspace dependency policy covering crates.io-only publishability, Git dependency exceptions, alpha/pre-1.0 acceptance, lockfile update cadence, security advisories, and compatibility testing.
+- Replace the Boa Git dependency with a release-grade dependency contract before publishing, or isolate it behind a non-published adapter crate with explicit release rules.
+- Add dependency audit commands to the release gate.
+- Document accepted versions and upgrade triggers for Boa, OXC, Lightning CSS, Taffy, Skia, Winit, Baseview, and plugin crates.
+
+Acceptance:
+
+- The workspace can be published or packaged without accidental Git dependency blockers.
+- Every accepted alpha/pre-1.0 dependency has an owner, compatibility gate, and rollback plan.
+- Dependency upgrades require targeted compatibility tests for parser, layout, renderer, host, script, and plugin behavior.
+
+### REM-CRATE-008: Unify Diagnostic And Error Types
+
+Evidence:
+
+- Multiple crates define structurally similar rule/message error records, including script, host, style, layout, runtime, renderer, asset, and package boundaries.
+- This duplicates diagnostic shape and makes cross-crate consumer ergonomics worse as crate count grows.
+- Remediation already requires structured diagnostics across domains, but the common type boundary is not tracked explicitly.
+
+Required remediation:
+
+- Add a shared diagnostic/error type in `hawk2ui-core` or a dedicated diagnostics crate.
+- Preserve domain-specific error constructors while converting to the shared type at public boundaries.
+- Include rule/code, message, optional source span, optional cause chain, severity, and domain metadata.
+- Provide ergonomic `From` conversions and documentation for application authors.
+
+Acceptance:
+
+- Public APIs can expose a common diagnostic envelope without losing domain-specific detail.
+- CLI, runtime, host, renderer, and script errors can be reported uniformly.
+- Tests prove conversion preserves rule/code and message data.
 
 ## Product Direction Remediation
 
@@ -389,6 +452,7 @@ Evidence:
 - `hawk2ui-render` has compiled asset records.
 - `hawk2ui-render-skia` registers compiled image and vector payloads from `hawk2ui-assets::AssetRecord`.
 - Runtime scene output carries compiled image/vector asset draw commands and rejects raw path-like asset IDs at the render boundary.
+- `hawk2ui-host-winit` previously failed the whole frame when a runtime scene carried image/vector asset commands that were not registered with the software frame path.
 
 Required remediation:
 
@@ -398,6 +462,11 @@ Acceptance:
 
 - Raw asset paths are rejected at rendering boundaries.
 - Compiled image and vector assets render in desktop and headless tests.
+
+Status:
+
+- Winit software frame rendering now degrades missing runtime image/vector assets to visible placeholders instead of hard-failing the frame.
+- Remaining release blocker: compiled image/vector asset registration must flow into desktop and headless renderer preparation so placeholders are only used for explicit missing-asset diagnostics.
 
 ### REM-RENDER-007: Implement Custom Draw Surfaces
 
@@ -423,7 +492,7 @@ Status:
 - Implemented `RuntimeCustomSurfaceVisual` and `RuntimeDrawCommand::CustomSurface` so runtime
   view trees produce executable custom draw commands with resolved layout geometry.
 - Implemented Skia custom-surface hooks for meter-style and curve-style categories.
-- Implemented software desktop frame replay for runtime custom surfaces.
+- Implemented software desktop frame replay for runtime custom surfaces; this currently duplicates some custom surface drawing logic from `hawk2ui-render-skia` and is tracked by `REM-RENDER-009`.
 - Added tests proving validated custom-surface requests, runtime command emission, Skia pixel
   output, and desktop software-frame pixel output.
 
@@ -472,6 +541,25 @@ Review check:
   cadence is deterministic, host redraw policy is explicit, reduced motion does not silently animate,
   and no sleeps/blocking behavior was introduced. No corrective revision is required for this
   remediation item before moving to style remediation.
+
+### REM-RENDER-009: Remove Duplicate Custom Surface Drawing Implementations
+
+Evidence:
+
+- `hawk2ui-render-skia` implements custom surface drawing for meter-style and curve-style categories.
+- `hawk2ui-host-winit/src/software_frame.rs` independently implements similar custom surface drawing for software desktop frame replay.
+- Host code should not own renderer semantics because host abstraction remediation requires desktop and plugin hosts to share surface lifecycle while rendering remains in renderer-owned code.
+
+Required remediation:
+
+- Move runtime custom surface replay through the renderer backend API or extract a shared renderer-owned software path.
+- Keep host code responsible for native window lifecycle, frame target ownership, and presentation, not shape semantics.
+- Add tests proving Winit software frames and Skia backend output remain consistent for the same custom surface commands.
+
+Acceptance:
+
+- Custom surface drawing semantics have one renderer-owned implementation path.
+- Host code delegates custom drawing and does not duplicate meter/curve rendering rules.
 
 ## Style System Remediation
 
@@ -622,6 +710,27 @@ Review check:
   plugin host sizing has a deterministic negotiation path, and existing renderer-only callers remain
   compatible. No corrective revision is required before authoring/runtime remediation.
 
+### REM-LAYOUT-003: Enable And Implement Taffy Grid Support
+
+Evidence:
+
+- `docs/specs/grid-support.md` is listed as a required domain spec.
+- `crates/hawk2ui-layout/Cargo.toml` enables Taffy `std`, `taffy_tree`, and `flexbox`, but not `grid`.
+- Dashboard-style desktop applications and premium plugin editors need grid layout for dense controls, meters, inspectors, and responsive panels.
+
+Required remediation:
+
+- Enable the Taffy grid feature when implementing the accepted grid spec.
+- Add Hawk2UI-owned grid style records for rows, columns, gaps, placement, spanning, auto-flow, min/max content sizing, and unsupported syntax diagnostics.
+- Map those records into Taffy while preserving deterministic layout output.
+- Add authoring/style lowering for the accepted CSS grid subset.
+
+Acceptance:
+
+- Grid containers and children compute through Taffy in layout tests.
+- CSS/style grid declarations lower into typed layout records.
+- Unsupported grid syntax fails with structured diagnostics instead of silently degrading.
+
 ## Authoring And Framework Remediation
 
 ### REM-AUTH-001: Replace Framework String Scanners
@@ -744,6 +853,28 @@ Acceptance:
 
 - `hawk2ui run-desktop` runs a compiled app artifact through runtime, layout, render, and host surface.
 
+### REM-RUNTIME-001A: Wire Script Promises And Timers To JavaScript Runtime
+
+Evidence:
+
+- `ScriptBackend::create_promise`, `ScriptBackend::resolve_promise`, and `ScriptBackend::schedule_timer` maintain Rust-side records.
+- `ScriptBackend::evaluate_javascript` calls Boa `Context::run_jobs()`, but the sidecar promise/timer records do not create Boa promises, enqueue Boa jobs, or execute timer callbacks in JavaScript.
+- Runtime tests currently prove record-keeping semantics, not end-to-end JavaScript promise/timer execution.
+
+Required remediation:
+
+- Define the host event loop contract between Hawk2UI runtime scheduler and the embedded JavaScript runtime.
+- Implement promise creation/resolution through the selected JS runtime rather than sidecar-only records.
+- Implement deterministic timers that enqueue JavaScript callbacks under runtime control.
+- Ensure teardown cancels pending jobs and timers without leaking host handles.
+- Add interruption and resource-limit behavior for queued jobs.
+
+Acceptance:
+
+- JavaScript code can await a host-created promise and observe its resolution through the runtime job queue.
+- JavaScript timer callbacks execute deterministically in headless/runtime tests.
+- Teardown prevents further callback execution and reports structured diagnostics for invalid operations.
+
 ### REM-RUNTIME-002: Capability Policy Enforcement
 
 Evidence:
@@ -844,6 +975,7 @@ Evidence:
 
 - Winit opens a native window and handles resize/DPI/input/close.
 - It renders a hard-coded frame and does not handle actual app scene rendering, maximize repaint validation, menus, tray, dialogs, drag/drop, IME, or complete clipboard.
+- `scale_factor_to_f32` previously converted numeric DPI scale by string round-trip instead of direct checked numeric conversion.
 
 Required remediation:
 
@@ -853,6 +985,11 @@ Required remediation:
 Acceptance:
 
 - Manual and automated desktop lifecycle tests pass on Linux Wayland and other supported targets.
+
+Status:
+
+- `scale_factor_to_f32` now validates finite/positive input and then performs a direct `f64 as f32` conversion with post-cast validation.
+- Winit software frame rendering now accepts runtime scene image/vector asset commands and paints visible missing-asset placeholders instead of aborting frame presentation.
 
 ### REM-HOST-003: Complete Baseview Plugin Backend
 

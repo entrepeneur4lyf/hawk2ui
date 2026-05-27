@@ -84,6 +84,43 @@ fn software_frame_renders_runtime_custom_surface_commands() {
 }
 
 #[test]
+fn software_frame_degrades_missing_runtime_assets_to_visible_placeholders() {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(128.0, 96.0)),
+        RuntimeVisual::None,
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("image"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(64.0, 32.0)),
+            RuntimeVisual::ImageAsset("hero".to_string()),
+        ),
+    )
+    .expect("image attaches")
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("vector"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(64.0, 32.0)),
+            RuntimeVisual::VectorAsset("logo".to_string()),
+        ),
+    )
+    .expect("vector attaches");
+    let frame = RuntimeSceneBridge::new(Viewport::new(128.0, 96.0))
+        .build(&tree)
+        .expect("runtime scene frame should build");
+
+    let pixels = SoftwareFrameRenderer::default()
+        .render_scene_frame(&frame, 128, 96, 1.0)
+        .expect("missing assets should degrade without failing the frame");
+
+    assert!(pixels.pixels().iter().any(|pixel| *pixel != 0x00000000));
+}
+
+#[test]
 fn runtime_config_rejects_zero_size() {
     let config = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
         "app",
