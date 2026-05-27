@@ -14,7 +14,8 @@ pub use plugin::{
 };
 pub use scene::{SceneGeometry, SceneGeometryAttachment};
 pub use text::{
-    TestTextMeasurer, TextMeasureInput, TextMeasureKey, TextMeasureMode, TextMeasureResult,
+    HawkTextMeasurer, LayoutTextMeasurer, TestTextMeasurer, TextMeasureError, TextMeasureInput,
+    TextMeasureKey, TextMeasureMode, TextMeasureResult,
 };
 pub use tree::{
     BoxEdges, FlexDirection, LayoutNode, LayoutNodeId, LayoutSizing, LayoutStyle, LayoutTree,

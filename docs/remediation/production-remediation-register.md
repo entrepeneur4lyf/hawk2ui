@@ -369,14 +369,12 @@ Acceptance:
 
 Evidence:
 
-- `hawk2ui-text` uses Parley/fontdb/swash.
-- `hawk2ui-layout` does not use `hawk2ui-text`.
-- Runtime text nodes use fixed/default sizing.
+- `hawk2ui-layout` exposes `HawkTextMeasurer`, which adapts `hawk2ui-text` measurement into layout measurement records.
+- `LayoutTree::try_compute_layout_with_text_measurer` feeds text measurement into Taffy leaf sizing.
+- `RuntimeSceneBridge::build_with_text_measurer` attaches runtime text visuals to layout text measurement inputs before scene export.
 
 Required remediation:
 
-- Add a text measurement provider from `hawk2ui-text` into layout.
-- Feed measured text into Taffy.
 - Feed shaped text output into Skia drawing.
 
 Acceptance:

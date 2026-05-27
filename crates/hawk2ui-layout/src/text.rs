@@ -1,5 +1,7 @@
 //! Text measurement bridge.
 
+use hawk2ui_text::{LineBreakMode, TextBackend, TextLayoutInput, TruncationMode};
+
 /// Text measurement mode.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TextMeasureMode {
@@ -23,6 +25,7 @@ pub struct TextMeasureInput {
     text: String,
     font_family: String,
     font_size_px: f32,
+    dpi_scale: f32,
     mode: TextMeasureMode,
 }
 
@@ -39,6 +42,7 @@ impl TextMeasureInput {
             text: text.into(),
             font_family: font_family.into(),
             font_size_px,
+            dpi_scale: 1.0,
             mode,
         }
     }
@@ -59,6 +63,19 @@ impl TextMeasureInput {
     #[must_use]
     pub const fn font_size_px(&self) -> f32 {
         self.font_size_px
+    }
+
+    /// Sets the DPI scale used by production text measurement.
+    #[must_use]
+    pub const fn with_dpi_scale(mut self, dpi_scale: f32) -> Self {
+        self.dpi_scale = dpi_scale;
+        self
+    }
+
+    /// Returns the DPI scale used by production text measurement.
+    #[must_use]
+    pub const fn dpi_scale(&self) -> f32 {
+        self.dpi_scale
     }
 
     /// Returns the measurement mode.
@@ -115,6 +132,83 @@ impl TextMeasureResult {
     }
 }
 
+/// Text measurement error reported while feeding text sizing into layout.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TextMeasureError {
+    rule: String,
+    message: String,
+}
+
+impl TextMeasureError {
+    /// Creates a text measurement error.
+    #[must_use]
+    pub fn new(rule: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            rule: rule.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable diagnostic rule.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        &self.rule
+    }
+
+    /// Returns the human-readable diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+/// Text measurement provider used by layout.
+pub trait LayoutTextMeasurer {
+    /// Measures text for Taffy leaf sizing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TextMeasureError`] when the measurement backend rejects the input.
+    fn measure(&self, input: &TextMeasureInput) -> Result<TextMeasureResult, TextMeasureError>;
+}
+
+/// Production adapter from `hawk2ui-text` into layout measurement.
+pub struct HawkTextMeasurer {
+    backend: TextBackend,
+}
+
+impl HawkTextMeasurer {
+    /// Creates a production text measurer from a text backend.
+    #[must_use]
+    pub const fn new(backend: TextBackend) -> Self {
+        Self { backend }
+    }
+
+    /// Returns the underlying production text backend.
+    #[must_use]
+    pub const fn backend(&self) -> &TextBackend {
+        &self.backend
+    }
+}
+
+impl LayoutTextMeasurer for HawkTextMeasurer {
+    fn measure(&self, input: &TextMeasureInput) -> Result<TextMeasureResult, TextMeasureError> {
+        let layout_input = text_layout_input(input);
+        let layout = self.backend.layout(&layout_input).map_err(|error| {
+            TextMeasureError::new(
+                error.diagnostic().rule(),
+                error.diagnostic().message().to_string(),
+            )
+        })?;
+        Ok(TextMeasureResult::new(
+            layout.width_px(),
+            layout.height_px(),
+            layout.line_count(),
+            layout.truncated(),
+        ))
+    }
+}
+
 /// Deterministic text measurer used by layout tests and fixtures.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TestTextMeasurer {
@@ -164,10 +258,37 @@ impl TestTextMeasurer {
     }
 }
 
+impl LayoutTextMeasurer for TestTextMeasurer {
+    fn measure(&self, input: &TextMeasureInput) -> Result<TextMeasureResult, TextMeasureError> {
+        Ok(Self::measure(self, input))
+    }
+}
+
 impl Default for TestTextMeasurer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn text_layout_input(input: &TextMeasureInput) -> TextLayoutInput {
+    let mut layout_input =
+        TextLayoutInput::new(input.text(), input.font_family(), input.font_size_px())
+            .with_dpi_scale(input.dpi_scale())
+            .with_bidi(true);
+    match input.mode() {
+        TextMeasureMode::Intrinsic => {}
+        TextMeasureMode::Wrap { max_width } => {
+            layout_input = layout_input.with_line_break(LineBreakMode::Wrap {
+                max_width_px: max_width,
+            });
+        }
+        TextMeasureMode::Truncate { max_width } => {
+            layout_input = layout_input.with_truncation(TruncationMode::EndEllipsis {
+                max_width_px: max_width,
+            });
+        }
+    }
+    layout_input
 }
 
 fn wrapped_line_count(intrinsic_width: f32, max_width: f32) -> u32 {

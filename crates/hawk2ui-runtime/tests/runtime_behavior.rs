@@ -1,4 +1,6 @@
-use hawk2ui_layout::{BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue, Viewport};
+use hawk2ui_layout::{
+    BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue, TestTextMeasurer, Viewport,
+};
 use hawk2ui_render::{Color, Geometry, RendererBackend, SceneNodeId};
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend};
 use hawk2ui_runtime::{
@@ -642,6 +644,40 @@ fn runtime_scene_bridge_computes_layout_scene_and_paint_commands() {
             .paint_commands()
             .serialize_stable()
             .contains("draw-text:title:Runtime Scene")
+    );
+}
+
+#[test]
+fn runtime_scene_bridge_uses_text_measurement_for_intrinsic_text_geometry() {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(180.0, 96.0)),
+        RuntimeVisual::None,
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("label"),
+            LayoutStyle::custom_measured(),
+            RuntimeVisual::Text(
+                RuntimeTextVisual::new("Measured", 16.0, Color::rgba(255, 255, 255, 255))
+                    .with_font_family("Atkinson"),
+            ),
+        ),
+    )
+    .expect("label attaches");
+
+    let frame = RuntimeSceneBridge::new(Viewport::new(180.0, 96.0))
+        .build_with_text_measurer(
+            &tree,
+            &TestTextMeasurer::new().with_average_glyph_width(8.0),
+        )
+        .expect("runtime text layout uses measurement");
+
+    assert_eq!(
+        frame.geometry_for(&RuntimeViewId::new("label")).unwrap(),
+        Geometry::new(0.0, 0.0, 180.0, 19.0)
     );
 }
 

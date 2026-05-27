@@ -1,9 +1,11 @@
 use hawk2ui_layout::{
-    AnalyzerRegion, BoxEdges, FlexDirection, GeneratedParameterLayout, GraphRegion, LayoutNode,
-    LayoutNodeId, LayoutSizing, LayoutStyle, LayoutTree, LayoutValue, PluginEditorConstraints,
-    PluginEditorSize, SceneGeometryAttachment, TestTextMeasurer, TextMeasureInput, TextMeasureKey,
-    TextMeasureMode, TextMeasureResult, Viewport,
+    AnalyzerRegion, BoxEdges, FlexDirection, GeneratedParameterLayout, GraphRegion,
+    HawkTextMeasurer, LayoutNode, LayoutNodeId, LayoutSizing, LayoutStyle, LayoutTextMeasurer,
+    LayoutTree, LayoutValue, PluginEditorConstraints, PluginEditorSize, SceneGeometryAttachment,
+    TestTextMeasurer, TextMeasureInput, TextMeasureKey, TextMeasureMode, TextMeasureResult,
+    Viewport,
 };
+use hawk2ui_text::{FontCatalog, TextBackend};
 
 #[test]
 fn layout_tree_preserves_parent_child_relationships() {
@@ -303,6 +305,60 @@ fn text_measurement_keys_invalidate_by_text_and_font_metrics() {
     assert_ne!(base, text_changed);
     assert_ne!(base, font_changed);
     assert_ne!(base, size_changed);
+}
+
+#[test]
+fn hawk_text_measurer_uses_production_text_backend_metrics() {
+    let backend = TextBackend::new(
+        FontCatalog::new()
+            .with_system_family("Atkinson")
+            .with_fallback_family("Fallback Sans"),
+    );
+    let measurer = HawkTextMeasurer::new(backend);
+
+    let measured = measurer
+        .measure(
+            &TextMeasureInput::new(
+                "Hawk שלום 🦅",
+                "Atkinson",
+                16.0,
+                TextMeasureMode::Wrap { max_width: 80.0 },
+            )
+            .with_dpi_scale(2.0),
+        )
+        .expect("production text backend measures layout input");
+
+    assert!(measured.width <= 160.0);
+    assert!(measured.height >= 38.0);
+    assert!(measured.line_count >= 1);
+}
+
+#[test]
+fn layout_tree_feeds_text_measurements_into_taffy() {
+    let text_id = LayoutNodeId::new("title");
+    let tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(160.0, 96.0)),
+    ))
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(text_id.clone(), LayoutStyle::custom_measured()).with_text_measurement(
+            TextMeasureInput::new("Measured", "Atkinson", 16.0, TextMeasureMode::Intrinsic),
+        ),
+    )
+    .expect("text node attaches");
+
+    let output = tree
+        .try_compute_layout_with_text_measurer(
+            Viewport::new(160.0, 96.0),
+            &TestTextMeasurer::new().with_average_glyph_width(8.0),
+        )
+        .expect("layout computes with text measure function");
+    let geometry = output.geometry(&text_id).expect("text geometry exists");
+
+    assert_eq!(geometry.width, 160.0);
+    assert_eq!(geometry.height, 19.0);
 }
 
 #[test]

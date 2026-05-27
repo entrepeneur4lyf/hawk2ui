@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use hawk2ui_layout::{
-    ComputedGeometry, LayoutNode, LayoutNodeId, LayoutOutput, LayoutStyle, LayoutTree,
-    LayoutTreeError, Viewport,
+    ComputedGeometry, LayoutNode, LayoutNodeId, LayoutOutput, LayoutStyle, LayoutTextMeasurer,
+    LayoutTree, LayoutTreeError, TextMeasureInput, TextMeasureMode, Viewport,
 };
 use hawk2ui_render::{
     BackendError, Color, Geometry, InvalidationReason, LayerKind, LayerStack, LayerValidationError,
@@ -34,6 +34,7 @@ impl RuntimeViewId {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeTextVisual {
     text: String,
+    font_family: String,
     font_size: f32,
     color: Color,
 }
@@ -44,6 +45,7 @@ impl RuntimeTextVisual {
     pub fn new(text: impl Into<String>, font_size: f32, color: Color) -> Self {
         Self {
             text: text.into(),
+            font_family: "Hawk2UI Sans".to_string(),
             font_size,
             color,
         }
@@ -59,6 +61,19 @@ impl RuntimeTextVisual {
     #[must_use]
     pub const fn font_size(&self) -> f32 {
         self.font_size
+    }
+
+    /// Sets the preferred font family used by text measurement.
+    #[must_use]
+    pub fn with_font_family(mut self, font_family: impl Into<String>) -> Self {
+        self.font_family = font_family.into();
+        self
+    }
+
+    /// Returns the preferred font family.
+    #[must_use]
+    pub fn font_family(&self) -> &str {
+        &self.font_family
     }
 
     /// Returns the text color.
@@ -237,6 +252,35 @@ impl RuntimeSceneBridge {
         tree.validate_for_bridge()?;
         let layout_tree = tree.to_layout_tree()?;
         let layout = layout_tree.try_compute_layout(self.viewport)?;
+        let geometry = collect_geometry(tree, &layout)?;
+        let scene = tree.to_scene_graph(&layout)?;
+        let (layers, draw_commands) = tree.to_layers_and_draw_commands(&geometry);
+        let paint_commands = export_paint_commands(&layers)?;
+
+        Ok(RuntimeSceneFrame {
+            layout,
+            scene,
+            layers,
+            paint_commands,
+            draw_commands,
+            geometry,
+            invalidated_view_ids: tree.invalidated_view_ids(),
+        })
+    }
+
+    /// Builds a renderable runtime scene frame with text measurement feeding intrinsic layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when the tree cannot be converted or measured for layout.
+    pub fn build_with_text_measurer(
+        &self,
+        tree: &RuntimeViewTree,
+        measurer: &dyn LayoutTextMeasurer,
+    ) -> Result<RuntimeSceneFrame, RuntimeSceneError> {
+        tree.validate_for_bridge()?;
+        let layout_tree = tree.to_layout_tree()?;
+        let layout = layout_tree.try_compute_layout_with_text_measurer(self.viewport, measurer)?;
         let geometry = collect_geometry(tree, &layout)?;
         let scene = tree.to_scene_graph(&layout)?;
         let (layers, draw_commands) = tree.to_layers_and_draw_commands(&geometry);
@@ -508,10 +552,7 @@ impl RuntimeViewTree {
             .entries
             .first()
             .ok_or_else(|| RuntimeSceneError::MissingNode("root".to_string()))?;
-        let mut layout_tree = LayoutTree::new(LayoutNode::new(
-            LayoutNodeId::new(root.node.id().as_str()),
-            root.node.layout_style().clone(),
-        ));
+        let mut layout_tree = LayoutTree::new(layout_node_for(&root.node));
         for entry in self.entries.iter().skip(1) {
             let Some(parent_id) = entry.parent.as_ref() else {
                 return Err(RuntimeSceneError::MissingParent(
@@ -520,10 +561,7 @@ impl RuntimeViewTree {
             };
             layout_tree = layout_tree.with_child(
                 LayoutNodeId::new(parent_id.as_str()),
-                LayoutNode::new(
-                    LayoutNodeId::new(entry.node.id().as_str()),
-                    entry.node.layout_style().clone(),
-                ),
+                layout_node_for(&entry.node),
             )?;
         }
         Ok(layout_tree)
@@ -645,6 +683,23 @@ fn render_geometry(geometry: ComputedGeometry) -> Geometry {
     Geometry::new(geometry.x, geometry.y, geometry.width, geometry.height)
 }
 
+fn layout_node_for(node: &RuntimeViewNode) -> LayoutNode {
+    let layout_node = LayoutNode::new(
+        LayoutNodeId::new(node.id().as_str()),
+        node.layout_style().clone(),
+    );
+    if let RuntimeVisual::Text(text) = node.visual() {
+        layout_node.with_text_measurement(TextMeasureInput::new(
+            text.text(),
+            text.font_family(),
+            text.font_size(),
+            TextMeasureMode::Intrinsic,
+        ))
+    } else {
+        layout_node
+    }
+}
+
 fn geometry_for(
     geometry: &[(RuntimeViewId, Geometry)],
     view_id: &RuntimeViewId,
@@ -674,6 +729,13 @@ fn validate_runtime_node(node: &RuntimeViewNode) -> Result<(), RuntimeSceneError
     }
     if let RuntimeVisual::Text(text) = node.visual()
         && (!text.font_size().is_finite() || text.font_size() <= 0.0)
+    {
+        return Err(RuntimeSceneError::InvalidNode(
+            node.id().as_str().to_string(),
+        ));
+    }
+    if let RuntimeVisual::Text(text) = node.visual()
+        && text.font_family().trim().is_empty()
     {
         return Err(RuntimeSceneError::InvalidNode(
             node.id().as_str().to_string(),

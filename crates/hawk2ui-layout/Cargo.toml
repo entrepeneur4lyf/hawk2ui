@@ -17,4 +17,5 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+hawk2ui-text = { path = "../hawk2ui-text" }
 taffy = { version = "0.10.0", default-features = false, features = ["std", "taffy_tree", "flexbox"] }

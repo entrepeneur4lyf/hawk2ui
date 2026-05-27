@@ -307,18 +307,25 @@ impl LayoutStyle {
     }
 }
 
+use crate::TextMeasureInput;
+
 /// Layout node record.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutNode {
     id: LayoutNodeId,
     style: LayoutStyle,
+    text_measurement: Option<TextMeasureInput>,
 }
 
 impl LayoutNode {
     /// Creates a layout node.
     #[must_use]
     pub const fn new(id: LayoutNodeId, style: LayoutStyle) -> Self {
-        Self { id, style }
+        Self {
+            id,
+            style,
+            text_measurement: None,
+        }
     }
 
     /// Returns the node identifier.
@@ -331,6 +338,19 @@ impl LayoutNode {
     #[must_use]
     pub const fn style(&self) -> &LayoutStyle {
         &self.style
+    }
+
+    /// Attaches text measurement input used when this node is a measured leaf.
+    #[must_use]
+    pub fn with_text_measurement(mut self, input: TextMeasureInput) -> Self {
+        self.text_measurement = Some(input);
+        self
+    }
+
+    /// Returns text measurement input for this node, if present.
+    #[must_use]
+    pub const fn text_measurement(&self) -> Option<&TextMeasureInput> {
+        self.text_measurement.as_ref()
     }
 }
 

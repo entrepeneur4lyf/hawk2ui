@@ -1,7 +1,8 @@
 //! Deterministic layout calculation backend.
 
 use crate::{
-    BoxEdges, FlexDirection, LayoutNodeId, LayoutStyle, LayoutTree, LayoutTreeError, LayoutValue,
+    BoxEdges, FlexDirection, LayoutNodeId, LayoutStyle, LayoutTextMeasurer, LayoutTree,
+    LayoutTreeError, LayoutValue, TextMeasureError, TextMeasureInput,
 };
 use taffy::{
     AvailableSpace, Dimension, Display, LengthPercentage, LengthPercentageAuto, NodeId, Overflow,
@@ -112,25 +113,62 @@ impl LayoutTree {
     ///
     /// Returns [`LayoutTreeError`] when the viewport, tree records, style records, or layout backend fail.
     pub fn try_compute_layout(&self, viewport: Viewport) -> Result<LayoutOutput, LayoutTreeError> {
+        self.try_compute_layout_inner(viewport, None)
+    }
+
+    /// Computes layout geometry and feeds text measurement into Taffy leaf sizing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayoutTreeError`] when validation, text measurement, or Taffy computation fails.
+    pub fn try_compute_layout_with_text_measurer(
+        &self,
+        viewport: Viewport,
+        measurer: &dyn LayoutTextMeasurer,
+    ) -> Result<LayoutOutput, LayoutTreeError> {
+        self.try_compute_layout_inner(viewport, Some(measurer))
+    }
+
+    fn try_compute_layout_inner(
+        &self,
+        viewport: Viewport,
+        measurer: Option<&dyn LayoutTextMeasurer>,
+    ) -> Result<LayoutOutput, LayoutTreeError> {
         validate_viewport(viewport)?;
         self.validate()?;
         let Some(root) = self.root_id() else {
             return Err(LayoutTreeError::ComputeFailed("missing root".to_string()));
         };
-        let mut taffy = TaffyTree::new();
+        let mut taffy: TaffyTree<TextMeasureInput> = TaffyTree::new();
         let mut ids = Vec::new();
         let root_node = self
             .build_taffy_node(root, viewport, true, &mut taffy, &mut ids)
             .map_err(|error| LayoutTreeError::ComputeFailed(error.to_string()))?;
+        let mut measure_error = None;
         taffy
-            .compute_layout(
+            .compute_layout_with_measure(
                 root_node,
                 Size {
                     width: AvailableSpace::Definite(viewport.width),
                     height: AvailableSpace::Definite(viewport.height),
                 },
+                |known_dimensions, available_space, _node_id, context, _style| {
+                    measure_text_leaf(
+                        known_dimensions,
+                        available_space,
+                        context,
+                        measurer,
+                        &mut measure_error,
+                    )
+                },
             )
             .map_err(|error| LayoutTreeError::ComputeFailed(error.to_string()))?;
+        if let Some(error) = measure_error {
+            return Err(LayoutTreeError::ComputeFailed(format!(
+                "text measurement failed: {}",
+                error.rule()
+            )));
+        }
 
         let mut output = ComputedBuilder::default();
         for (layout_id, taffy_id) in ids {
@@ -167,7 +205,7 @@ impl LayoutTree {
         node_id: &LayoutNodeId,
         viewport: Viewport,
         is_root: bool,
-        taffy: &mut TaffyTree,
+        taffy: &mut TaffyTree<TextMeasureInput>,
         ids: &mut Vec<(LayoutNodeId, NodeId)>,
     ) -> Result<NodeId, taffy::TaffyError> {
         let Some(node) = self.node(node_id) else {
@@ -178,13 +216,15 @@ impl LayoutTree {
             .iter()
             .map(|child_id| self.build_taffy_node(child_id, viewport, false, taffy, ids))
             .collect::<Result<Vec<_>, _>>()?;
+        let style = taffy_style(node.style(), is_root.then_some(viewport));
         let taffy_id = if children.is_empty() {
-            taffy.new_leaf(taffy_style(node.style(), is_root.then_some(viewport)))?
+            if let Some(input) = node.text_measurement() {
+                taffy.new_leaf_with_context(style, input.clone())?
+            } else {
+                taffy.new_leaf(style)?
+            }
         } else {
-            taffy.new_with_children(
-                taffy_style(node.style(), is_root.then_some(viewport)),
-                &children,
-            )?
+            taffy.new_with_children(style, &children)?
         };
         ids.push((node_id.clone(), taffy_id));
         Ok(taffy_id)
@@ -195,6 +235,30 @@ impl LayoutTree {
 struct ComputedBuilder {
     geometry: Vec<(LayoutNodeId, ComputedGeometry)>,
     clips: Vec<(LayoutNodeId, ComputedGeometry)>,
+}
+
+fn measure_text_leaf(
+    known_dimensions: Size<Option<f32>>,
+    _available_space: Size<AvailableSpace>,
+    context: Option<&mut TextMeasureInput>,
+    measurer: Option<&dyn LayoutTextMeasurer>,
+    measure_error: &mut Option<TextMeasureError>,
+) -> Size<f32> {
+    let (Some(input), Some(measurer)) = (context, measurer) else {
+        return Size::ZERO;
+    };
+    match measurer.measure(input) {
+        Ok(result) => Size {
+            width: known_dimensions.width.unwrap_or(result.width),
+            height: known_dimensions.height.unwrap_or(result.height),
+        },
+        Err(error) => {
+            if measure_error.is_none() {
+                *measure_error = Some(error);
+            }
+            Size::ZERO
+        }
+    }
 }
 
 fn taffy_style(style: &LayoutStyle, root_viewport: Option<Viewport>) -> Style {
