@@ -92,6 +92,10 @@ pub enum RuntimeVisual {
     Fill(Color),
     /// Text visual.
     Text(RuntimeTextVisual),
+    /// Compiled image asset visual.
+    ImageAsset(String),
+    /// Compiled vector asset visual.
+    VectorAsset(String),
 }
 
 /// Retained runtime view node.
@@ -210,6 +214,24 @@ pub enum RuntimeDrawCommand {
         /// Text color.
         color: Color,
     },
+    /// Compiled image asset draw command.
+    ImageAsset {
+        /// View node that produced this command.
+        id: RuntimeViewId,
+        /// Resolved layout geometry.
+        geometry: Geometry,
+        /// Compiled asset identifier.
+        asset_id: String,
+    },
+    /// Compiled vector asset draw command.
+    VectorAsset {
+        /// View node that produced this command.
+        id: RuntimeViewId,
+        /// Resolved layout geometry.
+        geometry: Geometry,
+        /// Compiled asset identifier.
+        asset_id: String,
+    },
 }
 
 impl RuntimeDrawCommand {
@@ -217,7 +239,10 @@ impl RuntimeDrawCommand {
     #[must_use]
     pub const fn id(&self) -> &RuntimeViewId {
         match self {
-            Self::Fill { id, .. } | Self::Text { id, .. } => id,
+            Self::Fill { id, .. }
+            | Self::Text { id, .. }
+            | Self::ImageAsset { id, .. }
+            | Self::VectorAsset { id, .. } => id,
         }
     }
 
@@ -225,7 +250,10 @@ impl RuntimeDrawCommand {
     #[must_use]
     pub const fn geometry(&self) -> Geometry {
         match self {
-            Self::Fill { geometry, .. } | Self::Text { geometry, .. } => *geometry,
+            Self::Fill { geometry, .. }
+            | Self::Text { geometry, .. }
+            | Self::ImageAsset { geometry, .. }
+            | Self::VectorAsset { geometry, .. } => *geometry,
         }
     }
 }
@@ -631,6 +659,20 @@ impl RuntimeViewTree {
                         color: text.color(),
                     });
                 }
+                RuntimeVisual::ImageAsset(asset_id) => {
+                    draw_commands.push(RuntimeDrawCommand::ImageAsset {
+                        id: entry.node.id().clone(),
+                        geometry,
+                        asset_id: asset_id.clone(),
+                    });
+                }
+                RuntimeVisual::VectorAsset(asset_id) => {
+                    draw_commands.push(RuntimeDrawCommand::VectorAsset {
+                        id: entry.node.id().clone(),
+                        geometry,
+                        asset_id: asset_id.clone(),
+                    });
+                }
             }
         }
         (layers, draw_commands)
@@ -741,10 +783,27 @@ fn validate_runtime_node(node: &RuntimeViewNode) -> Result<(), RuntimeSceneError
             node.id().as_str().to_string(),
         ));
     }
+    match node.visual() {
+        RuntimeVisual::ImageAsset(asset_id) | RuntimeVisual::VectorAsset(asset_id) => {
+            if !is_valid_asset_id(asset_id) {
+                return Err(RuntimeSceneError::InvalidNode(
+                    node.id().as_str().to_string(),
+                ));
+            }
+        }
+        RuntimeVisual::None | RuntimeVisual::Fill(_) | RuntimeVisual::Text(_) => {}
+    }
     Ok(())
 }
 
 fn is_valid_runtime_id(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+}
+
+fn is_valid_asset_id(value: &str) -> bool {
     !value.trim().is_empty()
         && value.chars().all(|character| {
             character.is_ascii_alphanumeric() || character == '-' || character == '_'

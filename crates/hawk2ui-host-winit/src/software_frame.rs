@@ -181,6 +181,12 @@ impl SoftwareFrameRenderer {
                         &paint,
                     );
                 }
+                RuntimeDrawCommand::ImageAsset { .. } | RuntimeDrawCommand::VectorAsset { .. } => {
+                    return Err(WinitHostError::new(
+                        "desktop.frame.asset-unregistered",
+                        "runtime asset draw commands require registered compiled asset payloads",
+                    ));
+                }
             }
         }
 

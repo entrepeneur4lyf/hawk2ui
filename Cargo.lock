@@ -1704,7 +1704,9 @@ version = "0.1.0"
 name = "hawk2ui-render-skia"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-assets",
  "hawk2ui-render",
+ "image",
  "skia-safe",
 ]
 

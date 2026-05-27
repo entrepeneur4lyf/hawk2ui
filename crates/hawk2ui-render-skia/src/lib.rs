@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use hawk2ui_assets::{AssetKind as CompiledAssetKind, AssetRecord};
 use hawk2ui_render::{
     BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, Color, Geometry,
     RendererBackend, RendererCacheInvalidator, Stroke, Transform,
@@ -10,7 +11,7 @@ use hawk2ui_render::{
 use skia_safe::{
     AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
     FontMgr, FontStyle, IRect, Image, ImageInfo, MaskFilter, Matrix, Paint, PaintStyle, Path, Rect,
-    Surface, TileMode, Typeface, gradient, surfaces,
+    Surface, TileMode, Typeface, gradient, images, surfaces,
 };
 
 /// The canonical Cargo package name for this crate.
@@ -604,7 +605,8 @@ impl SkiaRendererBackend {
     ) -> Result<(), BackendError> {
         let id = id.into();
         let data = Data::new_copy(encoded_bytes);
-        let Some(image) = Image::from_encoded(data) else {
+        let Some(image) = Image::from_encoded(data).or_else(|| decode_raster_image(encoded_bytes))
+        else {
             return self.fail(
                 "skia.image.decode-failed",
                 "compiled image payload could not be decoded",
@@ -613,6 +615,34 @@ impl SkiaRendererBackend {
         self.image_assets.insert(id.clone(), image);
         self.commands.push(format!("register-image:{id}"));
         Ok(())
+    }
+
+    /// Registers a compiled asset payload from the production asset backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when the asset kind cannot be rendered or its compiled payload is
+    /// not accepted by Skia.
+    pub fn register_compiled_asset(&mut self, asset: &AssetRecord) -> Result<(), BackendError> {
+        match asset.kind() {
+            CompiledAssetKind::Image => {
+                self.register_image_asset(asset.id(), asset.compiled_bytes())
+            }
+            CompiledAssetKind::Vector => {
+                let svg = std::str::from_utf8(asset.compiled_bytes()).map_err(|_| {
+                    BackendError::new(
+                        "skia.vector.invalid-utf8",
+                        "compiled vector payload must be UTF-8 SVG",
+                    )
+                })?;
+                let paths = extract_svg_path_data(svg);
+                self.register_vector_paths(asset.id(), paths)
+            }
+            CompiledAssetKind::Font => self.fail(
+                "skia.asset.unsupported-kind",
+                "font assets are registered through the text/font stack, not drawn directly",
+            ),
+        }
     }
 
     /// Registers a compiled vector asset made of filled SVG path records.
@@ -1514,6 +1544,28 @@ fn validate_asset_id(id: &str) -> Result<(), BackendError> {
     }
 }
 
+fn extract_svg_path_data(svg: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for segment in svg.split("<path").skip(1) {
+        if let Some(value) = extract_svg_attribute(segment, "d") {
+            paths.push(value);
+        }
+    }
+    paths
+}
+
+fn extract_svg_attribute(segment: &str, attribute: &str) -> Option<String> {
+    let prefix = format!("{attribute}=");
+    let start = segment.find(&prefix)? + prefix.len();
+    let quote = segment[start..].chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let value_start = start + quote.len_utf8();
+    let value_end = segment[value_start..].find(quote)? + value_start;
+    Some(segment[value_start..value_end].to_string())
+}
+
 fn validate_surface_size(width: u32, height: u32) -> Result<(), BackendError> {
     if width == 0 || height == 0 {
         Err(BackendError::new(
@@ -1747,6 +1799,20 @@ fn create_raster_surface(width: u32, height: u32, dpi_scale: f32) -> Result<Surf
             "failed to allocate Skia CPU raster surface",
         )
     })
+}
+
+fn decode_raster_image(encoded_bytes: &[u8]) -> Option<Image> {
+    let decoded = image::load_from_memory(encoded_bytes).ok()?.to_rgba8();
+    let width = i32::try_from(decoded.width()).ok()?;
+    let height = i32::try_from(decoded.height()).ok()?;
+    let row_bytes = usize::try_from(u64::from(decoded.width()) * 4).ok()?;
+    let info = ImageInfo::new(
+        (width, height),
+        ColorType::RGBA8888,
+        AlphaType::Premul,
+        None,
+    );
+    images::raster_from_data(&info, Data::new_copy(decoded.as_raw()), row_bytes)
 }
 
 fn capture_frame_snapshot(surface: &mut SkiaSurface) -> Result<SkiaFrameSnapshot, BackendError> {

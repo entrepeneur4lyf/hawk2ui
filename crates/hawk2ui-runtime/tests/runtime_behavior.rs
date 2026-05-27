@@ -682,6 +682,62 @@ fn runtime_scene_bridge_uses_text_measurement_for_intrinsic_text_geometry() {
 }
 
 #[test]
+fn runtime_scene_bridge_emits_compiled_asset_draw_commands_and_rejects_raw_paths() {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(160.0, 96.0)),
+        RuntimeVisual::None,
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("hero"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(32.0, 24.0)),
+            RuntimeVisual::ImageAsset("hero".to_string()),
+        ),
+    )
+    .expect("image asset attaches")
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("logo"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(32.0, 24.0)),
+            RuntimeVisual::VectorAsset("logo".to_string()),
+        ),
+    )
+    .expect("vector asset attaches");
+
+    let frame = RuntimeSceneBridge::new(Viewport::new(160.0, 96.0))
+        .build(&tree)
+        .expect("asset visuals bridge into draw commands");
+
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::ImageAsset { asset_id, .. } if asset_id == "hero"
+        )
+    }));
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::VectorAsset { asset_id, .. } if asset_id == "logo"
+        )
+    }));
+
+    let raw_path_tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(32.0, 24.0)),
+        RuntimeVisual::ImageAsset("assets/hero.png".to_string()),
+    ));
+    let error = RuntimeSceneBridge::new(Viewport::new(160.0, 96.0))
+        .build(&raw_path_tree)
+        .expect_err("raw asset paths must not cross runtime render boundary");
+
+    assert_eq!(error, RuntimeSceneError::InvalidNode("root".into()));
+}
+
+#[test]
 fn runtime_scene_bridge_rejects_invalid_view_records_before_rendering() {
     let invalid_root = RuntimeViewTree::new(RuntimeViewNode::new(
         RuntimeViewId::new(""),
@@ -843,6 +899,7 @@ fn render_frame_with_skia(frame: &RuntimeSceneFrame, backend: &mut SkiaRendererB
                     *color,
                 )
                 .expect("text command renders"),
+            RuntimeDrawCommand::ImageAsset { .. } | RuntimeDrawCommand::VectorAsset { .. } => {}
         }
     }
 }

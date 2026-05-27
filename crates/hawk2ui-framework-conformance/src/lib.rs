@@ -794,6 +794,11 @@ fn render_runtime_frame_with_skia(
                     *color,
                 )
                 .map_err(|error| format!("{error:?}"))?,
+            RuntimeDrawCommand::ImageAsset { .. } | RuntimeDrawCommand::VectorAsset { .. } => {
+                return Err(
+                    "asset draw commands require registered compiled asset payloads".to_string(),
+                );
+            }
         }
     }
     Ok(())

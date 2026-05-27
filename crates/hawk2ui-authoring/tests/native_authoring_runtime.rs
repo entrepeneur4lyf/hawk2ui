@@ -400,6 +400,7 @@ fn render_runtime_frame_with_skia(frame: &RuntimeSceneFrame, backend: &mut SkiaR
                     *color,
                 )
                 .expect("text command renders"),
+            RuntimeDrawCommand::ImageAsset { .. } | RuntimeDrawCommand::VectorAsset { .. } => {}
         }
     }
 }

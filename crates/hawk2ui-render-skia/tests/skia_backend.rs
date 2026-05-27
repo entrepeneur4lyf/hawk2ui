@@ -1,5 +1,7 @@
+use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits};
 use hawk2ui_render::{BackendCapabilities, Color, Geometry, RendererBackend, Transform};
 use hawk2ui_render_skia::{SkiaRendererBackend, SkiaSurfaceConfig};
+use image::{ColorType, ImageEncoder};
 
 #[test]
 fn skia_backend_matches_recording_backend_for_core_frame_commands() {
@@ -190,6 +192,46 @@ fn registered_vector_assets_render_pixels_through_trait_draw_vector() {
         "registered vector asset must render pixels in its path bounds"
     );
     assert!(backend.command_keys().contains(&"vector:logo".to_string()));
+}
+
+#[test]
+fn compiled_asset_records_register_and_render_image_and_vector_pixels() {
+    let mut assets = AssetBackend::new(AssetLimits::default());
+    let image_bytes = png_1x1();
+    let image = assets
+        .compile_image(
+            "hero",
+            "assets/hero.png",
+            &image_bytes,
+            &AssetHash::sha256_bytes(&image_bytes),
+        )
+        .unwrap();
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><path d="M10 10 L30 10 L30 30 L10 30 Z"/></svg>"#;
+    let vector = assets
+        .compile_vector(
+            "logo",
+            "assets/logo.svg",
+            svg,
+            &AssetHash::sha256_bytes(svg),
+        )
+        .unwrap();
+
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 80, 48).unwrap();
+    backend.register_compiled_asset(&image).unwrap();
+    backend.register_compiled_asset(&vector).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(8, 10, 14, 255)).unwrap();
+    backend
+        .draw_image_rect("hero", Geometry::new(40.0, 8.0, 16.0, 16.0))
+        .unwrap();
+    backend.draw_vector("logo").unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+
+    assert!(count_changed_pixels(snapshot, 0x080a0e, Geometry::new(40.0, 8.0, 16.0, 16.0)) > 0);
+    assert!(count_changed_pixels(snapshot, 0x080a0e, Geometry::new(10.0, 10.0, 20.0, 20.0)) > 0);
 }
 
 #[test]
@@ -510,3 +552,12 @@ const ONE_BY_ONE_PNG: &[u8] = &[
     0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 15, 4, 0, 9, 251, 3,
     253, 167, 175, 213, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
+
+fn png_1x1() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut bytes);
+    encoder
+        .write_image(&[255, 0, 0, 255], 1, 1, ColorType::Rgba8.into())
+        .expect("test PNG encodes");
+    bytes
+}

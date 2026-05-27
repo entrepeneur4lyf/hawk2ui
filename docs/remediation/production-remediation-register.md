@@ -387,13 +387,12 @@ Evidence:
 
 - `hawk2ui-assets` compiles images/vectors/fonts into records.
 - `hawk2ui-render` has compiled asset records.
-- `hawk2ui-render-skia` can register image bytes but runtime scene output does not carry compiled asset draws end to end.
+- `hawk2ui-render-skia` registers compiled image and vector payloads from `hawk2ui-assets::AssetRecord`.
+- Runtime scene output carries compiled image/vector asset draw commands and rejects raw path-like asset IDs at the render boundary.
 
 Required remediation:
 
-- Connect asset manifest entries to runtime scene asset layers.
-- Register assets with renderer during surface/frame preparation.
-- Render image and vector layers from compiled asset IDs only.
+- Register assets with renderer during surface/frame preparation from compiled asset records.
 
 Acceptance:
 
