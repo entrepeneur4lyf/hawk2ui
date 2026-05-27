@@ -218,6 +218,37 @@ fn backend_boundary_reports_diagnostics_for_missing_capabilities() {
 }
 
 #[test]
+fn backend_boundary_rejects_invalid_surface_and_geometry_inputs() {
+    let mut backend =
+        hawk2ui_render::RecordingBackend::new(hawk2ui_render::BackendCapabilities::new());
+
+    let error = backend
+        .create_surface("", 800, 600)
+        .expect_err("empty surface IDs must fail");
+    assert_eq!(error.diagnostic().rule(), "backend.surface.id.invalid");
+
+    let error = backend
+        .create_surface("main", 0, 600)
+        .expect_err("zero surface dimensions must fail");
+    assert_eq!(error.diagnostic().rule(), "backend.surface.size.invalid");
+
+    let error = backend
+        .resize_surface("main", 800, 600, f32::NAN)
+        .expect_err("invalid DPI scales must fail");
+    assert_eq!(error.diagnostic().rule(), "backend.surface.dpi.invalid");
+
+    let error = backend
+        .mark_dirty(Geometry::new(0.0, 0.0, -1.0, 20.0))
+        .expect_err("invalid dirty geometry must fail");
+    assert_eq!(error.diagnostic().rule(), "backend.geometry.invalid");
+
+    assert!(
+        backend.command_keys().is_empty(),
+        "invalid backend inputs must not be recorded as commands"
+    );
+}
+
+#[test]
 fn render_export_produces_stable_paint_commands() {
     let stack = hawk2ui_render::LayerStack::new()
         .with_layer(hawk2ui_render::PaintLayer::new(

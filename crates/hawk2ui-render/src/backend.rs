@@ -264,6 +264,8 @@ impl RecordingBackend {
 
 impl RendererBackend for RecordingBackend {
     fn create_surface(&mut self, id: &str, width: u32, height: u32) -> Result<(), BackendError> {
+        validate_surface_id(id)?;
+        validate_surface_size(width, height)?;
         self.commands
             .push(format!("create-surface:{id}:{width}x{height}"));
         Ok(())
@@ -281,6 +283,9 @@ impl RendererBackend for RecordingBackend {
         height: u32,
         dpi_scale: f32,
     ) -> Result<(), BackendError> {
+        validate_surface_id(id)?;
+        validate_surface_size(width, height)?;
+        validate_dpi_scale(dpi_scale)?;
         self.commands
             .push(format!("resize-surface:{id}:{width}x{height}@{dpi_scale}"));
         Ok(())
@@ -305,6 +310,7 @@ impl RendererBackend for RecordingBackend {
     }
 
     fn fill(&mut self, geometry: Geometry, color: Color) -> Result<(), BackendError> {
+        validate_geometry(geometry)?;
         self.commands.push(format!(
             "fill:{},{},{},{}:{},{},{},{}",
             geometry.x,
@@ -320,6 +326,7 @@ impl RendererBackend for RecordingBackend {
     }
 
     fn stroke(&mut self, geometry: Geometry, stroke: Stroke) -> Result<(), BackendError> {
+        validate_geometry(geometry)?;
         self.commands.push(format!(
             "stroke:{},{},{},{}:{}",
             geometry.x, geometry.y, geometry.width, geometry.height, stroke.width
@@ -355,6 +362,7 @@ impl RendererBackend for RecordingBackend {
     }
 
     fn push_clip(&mut self, geometry: Geometry) -> Result<(), BackendError> {
+        validate_geometry(geometry)?;
         self.commands.push(format!(
             "clip:{},{},{},{}",
             geometry.x, geometry.y, geometry.width, geometry.height
@@ -381,6 +389,7 @@ impl RendererBackend for RecordingBackend {
     }
 
     fn mark_dirty(&mut self, geometry: Geometry) -> Result<(), BackendError> {
+        validate_geometry(geometry)?;
         self.commands.push(format!(
             "dirty:{},{},{},{}",
             geometry.x, geometry.y, geometry.width, geometry.height
@@ -391,5 +400,54 @@ impl RendererBackend for RecordingBackend {
 
     fn capabilities(&self) -> BackendCapabilities {
         self.capabilities
+    }
+}
+
+fn validate_surface_id(id: &str) -> Result<(), BackendError> {
+    if id.trim().is_empty() {
+        Err(BackendError::new(
+            "backend.surface.id.invalid",
+            "surface ID must not be empty",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_surface_size(width: u32, height: u32) -> Result<(), BackendError> {
+    if width == 0 || height == 0 {
+        Err(BackendError::new(
+            "backend.surface.size.invalid",
+            "surface dimensions must be greater than zero",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_dpi_scale(dpi_scale: f32) -> Result<(), BackendError> {
+    if !dpi_scale.is_finite() || dpi_scale <= 0.0 {
+        Err(BackendError::new(
+            "backend.surface.dpi.invalid",
+            "surface DPI scale must be finite and greater than zero",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_geometry(geometry: Geometry) -> Result<(), BackendError> {
+    if [geometry.x, geometry.y, geometry.width, geometry.height]
+        .iter()
+        .all(|value| value.is_finite())
+        && geometry.width >= 0.0
+        && geometry.height >= 0.0
+    {
+        Ok(())
+    } else {
+        Err(BackendError::new(
+            "backend.geometry.invalid",
+            "geometry values must be finite with non-negative dimensions",
+        ))
     }
 }
