@@ -13,7 +13,9 @@ pub use backend::{
     BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, RecordingBackend,
     RendererBackend,
 };
-pub use custom_surface::{CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory};
+pub use custom_surface::{
+    CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory, CustomSurfaceError,
+};
 pub use export::{PaintCommand, PaintCommandList, export_paint_commands};
 pub use layer::{
     Color, GlowLayer, GradientLayer, LayerKind, LayerStack, LayerValidationError, PaintLayer,

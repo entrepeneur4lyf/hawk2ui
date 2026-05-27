@@ -96,12 +96,20 @@ impl FontCatalog {
     fn contains_family(&self, family: &str) -> bool {
         self.system_families
             .iter()
-            .chain(self.app_fonts.iter().map(|font| &font.family))
-            .any(|candidate| candidate == family)
+            .any(|candidate| is_valid_font_family(candidate) && candidate == family)
+            || self.app_fonts.iter().any(|font| {
+                is_valid_font_family(&font.family)
+                    && !font.source_path.trim().is_empty()
+                    && !font.bytes.is_empty()
+                    && font.family == family
+            })
     }
 
     fn first_fallback(&self) -> Option<&str> {
-        self.fallback_families.first().map(String::as_str)
+        self.fallback_families
+            .iter()
+            .find(|family| is_valid_font_family(family))
+            .map(String::as_str)
     }
 }
 
@@ -399,6 +407,12 @@ impl TextBackend {
     ///
     /// Returns [`TextBackendError`] when no requested or fallback font is available.
     pub fn resolve_family(&self, family: &str) -> Result<String, TextBackendError> {
+        if !is_valid_font_family(family) {
+            return Err(TextBackendError::new(
+                "text.input.invalid-font-family",
+                "font family must not be empty",
+            ));
+        }
         if self.catalog.contains_family(family) {
             Ok(family.to_string())
         } else {
@@ -481,6 +495,7 @@ impl TextBackend {
         &self,
         input: &TextLayoutInput,
     ) -> Result<GlyphCacheKey, TextBackendError> {
+        validate_input(input)?;
         let resolved_family = self.resolve_family(&input.font_family)?;
         Ok(GlyphCacheKey {
             stable_key: format!(
@@ -534,6 +549,12 @@ fn validate_input(input: &TextLayoutInput) -> Result<(), TextBackendError> {
             "text must not be empty",
         ));
     }
+    if !is_valid_font_family(&input.font_family) {
+        return Err(TextBackendError::new(
+            "text.input.invalid-font-family",
+            "font family must not be empty",
+        ));
+    }
     if !input.size_px.is_finite() || input.size_px <= 0.0 {
         return Err(TextBackendError::new(
             "text.input.invalid-size",
@@ -544,6 +565,22 @@ fn validate_input(input: &TextLayoutInput) -> Result<(), TextBackendError> {
         return Err(TextBackendError::new(
             "text.input.invalid-dpi",
             "DPI scale must be finite and greater than zero",
+        ));
+    }
+    if let LineBreakMode::Wrap { max_width_px } = input.line_break
+        && (!max_width_px.is_finite() || max_width_px <= 0.0)
+    {
+        return Err(TextBackendError::new(
+            "text.input.invalid-wrap-width",
+            "wrap width must be finite and greater than zero",
+        ));
+    }
+    if let TruncationMode::EndEllipsis { max_width_px } = input.truncation
+        && (!max_width_px.is_finite() || max_width_px <= 0.0)
+    {
+        return Err(TextBackendError::new(
+            "text.input.invalid-truncation-width",
+            "truncation width must be finite and greater than zero",
         ));
     }
     Ok(())
@@ -630,6 +667,10 @@ fn is_rtl(character: char) -> bool {
 
 fn round_tenth(value: f32) -> f32 {
     (value * 10.0).round() / 10.0
+}
+
+fn is_valid_font_family(family: &str) -> bool {
+    !family.trim().is_empty()
 }
 
 #[cfg(test)]

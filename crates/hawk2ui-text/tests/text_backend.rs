@@ -82,3 +82,55 @@ fn text_backend_generates_stable_glyph_cache_invalidation_keys() {
     assert!(key.stable_key().contains("dpi=2"));
     assert_ne!(key, dpi_key);
 }
+
+#[test]
+fn text_backend_rejects_invalid_layout_and_cache_inputs() {
+    let backend = TextBackend::new(FontCatalog::new().with_system_family("Display"));
+
+    let error = backend
+        .layout(&TextLayoutInput::new("Amount", "", 18.0))
+        .expect_err("empty font families must fail");
+    assert_eq!(error.diagnostic().rule(), "text.input.invalid-font-family");
+
+    let error = backend
+        .layout(
+            &TextLayoutInput::new("Amount", "Display", 18.0)
+                .with_line_break(LineBreakMode::Wrap { max_width_px: 0.0 }),
+        )
+        .expect_err("non-positive wrap widths must fail");
+    assert_eq!(error.diagnostic().rule(), "text.input.invalid-wrap-width");
+
+    let error = backend
+        .layout(
+            &TextLayoutInput::new("Amount", "Display", 18.0).with_truncation(
+                TruncationMode::EndEllipsis {
+                    max_width_px: f32::NAN,
+                },
+            ),
+        )
+        .expect_err("non-finite truncation widths must fail");
+    assert_eq!(
+        error.diagnostic().rule(),
+        "text.input.invalid-truncation-width"
+    );
+
+    let error = backend
+        .glyph_cache_key(&TextLayoutInput::new("Amount", "Display", 18.0).with_dpi_scale(0.0))
+        .expect_err("cache keys must reject invalid DPI scales");
+    assert_eq!(error.diagnostic().rule(), "text.input.invalid-dpi");
+}
+
+#[test]
+fn text_backend_rejects_invalid_font_catalog_entries() {
+    let backend = TextBackend::new(
+        FontCatalog::new()
+            .with_system_family("")
+            .with_app_font("Display", "", Vec::new())
+            .with_fallback_family(""),
+    );
+
+    let error = backend
+        .resolve_family("Missing")
+        .expect_err("invalid catalog entries must not resolve");
+    assert_eq!(error.diagnostic().rule(), "text.font.missing");
+}

@@ -533,4 +533,34 @@ fn custom_surface_records_cover_categories_capabilities_and_frame_scheduling() {
     assert!(surface.invalidated());
     assert_eq!(surface.next_frame(), Some(42));
     assert!(surface.reports_capability(hawk2ui_render::CustomSurfaceCapability::RealtimeData));
+    assert_eq!(
+        surface.stable_key().expect("surface is valid"),
+        "scope:scope"
+    );
+}
+
+#[test]
+fn custom_surface_records_reject_invalid_identity_and_geometry() {
+    let error = hawk2ui_render::CustomDrawSurface::new(
+        "",
+        hawk2ui_render::CustomSurfaceCategory::Scope,
+        Geometry::new(20.0, 30.0, 320.0, 180.0),
+    )
+    .stable_key()
+    .expect_err("empty custom surface IDs must fail");
+    assert_eq!(error.rule(), "custom-surface.id.invalid");
+
+    let surface = hawk2ui_render::CustomDrawSurface::new(
+        "scope",
+        hawk2ui_render::CustomSurfaceCategory::Scope,
+        Geometry::new(20.0, 30.0, f32::NAN, 180.0),
+    );
+    let error = surface
+        .validate()
+        .expect_err("invalid custom surface geometry must fail");
+    assert_eq!(error.rule(), "custom-surface.geometry.invalid");
+    assert!(
+        !surface.hit_test(40.0, 40.0),
+        "invalid custom surface geometry must not hit-test"
+    );
 }

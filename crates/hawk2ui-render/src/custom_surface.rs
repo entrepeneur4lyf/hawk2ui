@@ -57,6 +57,36 @@ pub enum CustomSurfaceCapability {
     PointerInteraction,
 }
 
+/// Custom surface validation error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CustomSurfaceError {
+    rule: String,
+    message: String,
+}
+
+impl CustomSurfaceError {
+    /// Creates a custom surface error.
+    #[must_use]
+    pub fn new(rule: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            rule: rule.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable diagnostic rule.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        &self.rule
+    }
+
+    /// Returns the diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
 /// Custom draw surface record.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CustomDrawSurface {
@@ -112,6 +142,9 @@ impl CustomDrawSurface {
     /// Returns whether a point hits the reserved layout.
     #[must_use]
     pub fn hit_test(&self, x: f32, y: f32) -> bool {
+        if !x.is_finite() || !y.is_finite() || !is_valid_geometry(self.reserved_layout) {
+            return false;
+        }
         x >= self.reserved_layout.x
             && y >= self.reserved_layout.y
             && x <= self.reserved_layout.x + self.reserved_layout.width
@@ -142,9 +175,43 @@ impl CustomDrawSurface {
         self.capabilities.contains(&capability)
     }
 
-    /// Returns stable surface key.
-    #[must_use]
-    pub fn stable_key(&self) -> String {
-        format!("{}:{}", self.id, self.category.stable_key())
+    /// Validates custom surface identity and reserved geometry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CustomSurfaceError`] when the surface cannot be safely exported or hit-tested.
+    pub fn validate(&self) -> Result<(), CustomSurfaceError> {
+        if self.id.trim().is_empty() {
+            return Err(CustomSurfaceError::new(
+                "custom-surface.id.invalid",
+                "custom surface ID must not be empty",
+            ));
+        }
+        if !is_valid_geometry(self.reserved_layout) {
+            return Err(CustomSurfaceError::new(
+                "custom-surface.geometry.invalid",
+                "custom surface geometry must be finite with non-negative dimensions",
+            ));
+        }
+        Ok(())
     }
+
+    /// Returns stable surface key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CustomSurfaceError`] when the surface identity or geometry is invalid.
+    pub fn stable_key(&self) -> Result<String, CustomSurfaceError> {
+        self.validate()?;
+        Ok(format!("{}:{}", self.id, self.category.stable_key()))
+    }
+}
+
+fn is_valid_geometry(geometry: Geometry) -> bool {
+    geometry.x.is_finite()
+        && geometry.y.is_finite()
+        && geometry.width.is_finite()
+        && geometry.height.is_finite()
+        && geometry.width >= 0.0
+        && geometry.height >= 0.0
 }
