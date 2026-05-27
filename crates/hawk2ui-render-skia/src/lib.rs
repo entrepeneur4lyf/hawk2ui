@@ -410,6 +410,7 @@ pub struct SkiaRendererBackend {
     image_assets: BTreeMap<String, Image>,
     layer_caches: BTreeMap<String, SkiaLayerCacheEntry>,
     cache_invalidation_keys: Vec<String>,
+    opacity_group_depth: usize,
     default_typeface: Option<Typeface>,
 }
 
@@ -431,8 +432,27 @@ impl SkiaRendererBackend {
             image_assets: BTreeMap::new(),
             layer_caches: BTreeMap::new(),
             cache_invalidation_keys: Vec::new(),
+            opacity_group_depth: 0,
             default_typeface: FontMgr::new().legacy_make_typeface(None, FontStyle::normal()),
         }
+    }
+
+    /// Begins an opacity compositing group.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame or opacity is invalid.
+    pub fn begin_opacity_group(&mut self, opacity: f32) -> Result<(), BackendError> {
+        <Self as RendererBackend>::begin_opacity_group(self, opacity)
+    }
+
+    /// Ends the current opacity compositing group.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame or no opacity group is active.
+    pub fn end_opacity_group(&mut self) -> Result<(), BackendError> {
+        <Self as RendererBackend>::end_opacity_group(self)
     }
 
     /// Creates a configured surface.
@@ -1221,6 +1241,35 @@ impl RendererBackend for SkiaRendererBackend {
         Ok(())
     }
 
+    fn begin_opacity_group(&mut self, opacity: f32) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        validate_opacity(opacity).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        self.with_active_surface(|surface| {
+            surface.canvas().save_layer_alpha_f(None, opacity);
+        })?;
+        self.opacity_group_depth = self.opacity_group_depth.saturating_add(1);
+        self.commands.push(format!("begin-opacity-group:{opacity}"));
+        Ok(())
+    }
+
+    fn end_opacity_group(&mut self) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        if self.opacity_group_depth == 0 {
+            return self.fail(
+                "skia.opacity-group.unbalanced",
+                "cannot end opacity group because none is active",
+            );
+        }
+        self.with_active_surface(|surface| {
+            surface.canvas().restore();
+        })?;
+        self.opacity_group_depth -= 1;
+        self.commands.push("end-opacity-group".to_string());
+        Ok(())
+    }
+
     fn create_cache_handle(&mut self, id: &str) -> Result<BackendCacheHandle, BackendError> {
         self.require_active_frame()?;
         self.commands.push(format!("cache:{id}"));
@@ -1321,6 +1370,17 @@ fn validate_blur(rule: &'static str, blur_radius: f32) -> Result<(), BackendErro
         Err(BackendError::new(
             rule,
             "blur radius must be finite and greater than zero",
+        ))
+    }
+}
+
+fn validate_opacity(opacity: f32) -> Result<(), BackendError> {
+    if opacity.is_finite() && (0.0..=1.0).contains(&opacity) {
+        Ok(())
+    } else {
+        Err(BackendError::new(
+            "skia.opacity-group.invalid",
+            "opacity group alpha must be finite and within 0.0..=1.0",
         ))
     }
 }

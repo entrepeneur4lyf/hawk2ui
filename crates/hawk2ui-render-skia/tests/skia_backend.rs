@@ -223,6 +223,37 @@ fn vector_gradient_and_effects_render_pixels() {
 }
 
 #[test]
+fn opacity_group_composites_children_at_group_alpha() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 64, 48).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend
+        .clear(hawk2ui_render::Color::rgba(0, 0, 0, 255))
+        .unwrap();
+    backend.begin_opacity_group(0.5).unwrap();
+    backend
+        .fill(
+            Geometry::new(8.0, 8.0, 32.0, 24.0),
+            hawk2ui_render::Color::rgba(255, 0, 0, 255),
+        )
+        .unwrap();
+    backend.end_opacity_group().unwrap();
+    backend.end_frame("main").unwrap();
+
+    let pixel = backend
+        .frame_snapshot("main")
+        .unwrap()
+        .pixel_at(16, 16)
+        .expect("inside opacity group pixel exists");
+    let red = (pixel >> 16) & 0xff;
+    assert!(
+        (120..=136).contains(&red),
+        "group alpha must blend child pixels; pixel={pixel:#08x}, red={red}"
+    );
+    assert_ne!(pixel, 0xff0000, "child must not be drawn fully opaque");
+}
+
+#[test]
 fn cache_lifecycle_tracks_generation_and_invalidation() {
     let mut backend = SkiaRendererBackend::new();
     backend.create_surface("main", 96, 64).unwrap();

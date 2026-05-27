@@ -208,6 +208,18 @@ pub trait RendererBackend {
     ///
     /// Returns [`BackendError`] when the layer effect cannot be applied.
     fn apply_layer_effect(&mut self, effect: &str) -> Result<(), BackendError>;
+    /// Begins an opacity compositing group.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when the opacity is invalid or the backend cannot allocate a group.
+    fn begin_opacity_group(&mut self, opacity: f32) -> Result<(), BackendError>;
+    /// Ends the current opacity compositing group.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when no opacity group is active.
+    fn end_opacity_group(&mut self) -> Result<(), BackendError>;
     /// Creates a cache handle.
     ///
     /// # Errors
@@ -242,6 +254,7 @@ pub struct RecordingBackend {
     commands: Vec<String>,
     dirty_regions: Vec<Geometry>,
     cache_invalidation_keys: Vec<String>,
+    opacity_group_depth: usize,
 }
 
 impl RecordingBackend {
@@ -253,6 +266,7 @@ impl RecordingBackend {
             commands: Vec::new(),
             dirty_regions: Vec::new(),
             cache_invalidation_keys: Vec::new(),
+            opacity_group_depth: 0,
         }
     }
 
@@ -407,6 +421,25 @@ impl RendererBackend for RecordingBackend {
         Ok(())
     }
 
+    fn begin_opacity_group(&mut self, opacity: f32) -> Result<(), BackendError> {
+        validate_opacity(opacity)?;
+        self.opacity_group_depth = self.opacity_group_depth.saturating_add(1);
+        self.commands.push(format!("begin-opacity-group:{opacity}"));
+        Ok(())
+    }
+
+    fn end_opacity_group(&mut self) -> Result<(), BackendError> {
+        if self.opacity_group_depth == 0 {
+            return Err(BackendError::new(
+                "backend.opacity-group.unbalanced",
+                "cannot end opacity group because none is active",
+            ));
+        }
+        self.opacity_group_depth -= 1;
+        self.commands.push("end-opacity-group".to_string());
+        Ok(())
+    }
+
     fn create_cache_handle(&mut self, id: &str) -> Result<BackendCacheHandle, BackendError> {
         self.commands.push(format!("cache:{id}"));
         Ok(BackendCacheHandle::new(id))
@@ -481,6 +514,17 @@ fn validate_geometry(geometry: Geometry) -> Result<(), BackendError> {
         Err(BackendError::new(
             "backend.geometry.invalid",
             "geometry values must be finite with non-negative dimensions",
+        ))
+    }
+}
+
+fn validate_opacity(opacity: f32) -> Result<(), BackendError> {
+    if opacity.is_finite() && (0.0..=1.0).contains(&opacity) {
+        Ok(())
+    } else {
+        Err(BackendError::new(
+            "backend.opacity-group.invalid",
+            "opacity group alpha must be finite and within 0.0..=1.0",
         ))
     }
 }
