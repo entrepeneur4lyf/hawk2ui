@@ -1,6 +1,6 @@
 //! Runtime typed style table.
 
-use crate::{PropertyId, StyleValue};
+use crate::{CompiledStyleSheet, PropertyId, StyleValue, TokenSet, TokenValue};
 
 /// Runtime style diagnostic.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,6 +65,67 @@ impl RuntimeStyleTable {
     #[must_use]
     pub const fn new() -> Self {
         Self { values: Vec::new() }
+    }
+
+    /// Resolves ordered style references for a node into typed runtime values.
+    ///
+    /// Later style references have higher precedence when they declare the same property.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeStyleError`] when any referenced style rule is missing.
+    pub fn from_style_refs(
+        node_id: impl Into<String>,
+        sheet: &CompiledStyleSheet,
+        refs: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Self, RuntimeStyleError> {
+        Self::from_style_refs_with_value_map(node_id, sheet, refs, |value| Ok(value.clone()))
+    }
+
+    /// Resolves ordered style references and token-backed declarations for a node.
+    ///
+    /// Token references are converted to renderer-ready typed runtime values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeStyleError`] when any referenced style rule or token is missing.
+    pub fn from_style_refs_with_tokens(
+        node_id: impl Into<String>,
+        sheet: &CompiledStyleSheet,
+        refs: impl IntoIterator<Item = impl AsRef<str>>,
+        tokens: &TokenSet,
+    ) -> Result<Self, RuntimeStyleError> {
+        Self::from_style_refs_with_value_map(node_id, sheet, refs, |value| {
+            resolve_runtime_value(value, tokens)
+        })
+    }
+
+    fn from_style_refs_with_value_map(
+        node_id: impl Into<String>,
+        sheet: &CompiledStyleSheet,
+        refs: impl IntoIterator<Item = impl AsRef<str>>,
+        mut map_value: impl FnMut(&StyleValue) -> Result<StyleValue, RuntimeStyleError>,
+    ) -> Result<Self, RuntimeStyleError> {
+        let node_id = node_id.into();
+        let mut table = Self::new();
+        for style_ref in refs {
+            let style_ref = style_ref.as_ref();
+            let selector_key = format!("class({style_ref})");
+            let Some(rule) = sheet.rule(&selector_key) else {
+                return Err(RuntimeStyleError::new(
+                    "runtime-style.ref.missing",
+                    format!("style reference `{style_ref}` was not found in the compiled sheet"),
+                ));
+            };
+            for declaration in rule.declarations() {
+                table.set_value(
+                    node_id.clone(),
+                    declaration.property().clone(),
+                    map_value(declaration.value())?,
+                );
+            }
+        }
+        Ok(table)
     }
 
     /// Adds or replaces a typed style value.
@@ -141,4 +202,26 @@ impl Default for RuntimeStyleTable {
 struct NodeStyleValues {
     node_id: String,
     values: Vec<(PropertyId, StyleValue)>,
+}
+
+fn resolve_runtime_value(
+    value: &StyleValue,
+    tokens: &TokenSet,
+) -> Result<StyleValue, RuntimeStyleError> {
+    let StyleValue::TokenRef(token_name) = value else {
+        return Ok(value.clone());
+    };
+    let token = tokens.resolve(token_name).map_err(|error| {
+        RuntimeStyleError::new(
+            "runtime-style.token.missing",
+            error.diagnostic().message().to_string(),
+        )
+    })?;
+    match token.value() {
+        TokenValue::ColorRgba(r, g, b, a) => Ok(StyleValue::ColorRgba(*r, *g, *b, *a)),
+        TokenValue::LengthPx(value) => Ok(StyleValue::LengthPx(*value)),
+        TokenValue::DurationMs(value) => Ok(StyleValue::DurationMs(*value)),
+        TokenValue::Typography { size_px, .. } => Ok(StyleValue::LengthPx(*size_px)),
+        TokenValue::PreferenceHook(target) => Ok(StyleValue::TokenRef(target.clone())),
+    }
 }

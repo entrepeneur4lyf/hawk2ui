@@ -109,6 +109,12 @@ impl CompiledStyleRule {
             .iter()
             .find(|decl| decl.property.as_str() == property.as_str())
     }
+
+    /// Returns declarations in source order.
+    #[must_use]
+    pub fn declarations(&self) -> &[CompiledDeclaration] {
+        &self.declarations
+    }
 }
 
 /// Compiled style sheet.

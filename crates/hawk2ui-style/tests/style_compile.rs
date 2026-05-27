@@ -239,6 +239,93 @@ fn runtime_style_table_returns_typed_values_by_node_and_property() {
 }
 
 #[test]
+fn runtime_style_table_resolves_ordered_style_refs_with_later_precedence() {
+    let sheet = hawk2ui_style::compile_style_source(
+        r#"
+.surface {
+  opacity: 0.6;
+  font-size: 16px;
+}
+.intent-primary {
+  opacity: 0.9;
+}
+"#,
+    )
+    .expect("style source must compile");
+
+    let table = hawk2ui_style::RuntimeStyleTable::from_style_refs(
+        "button-1",
+        &sheet,
+        ["surface", "intent-primary"],
+    )
+    .expect("style refs must resolve");
+
+    assert_eq!(
+        table.typed_value("button-1", &PropertyId::new("font-size")),
+        Some(&StyleValue::LengthPx(16.0))
+    );
+    assert_eq!(
+        table.typed_value("button-1", &PropertyId::new("opacity")),
+        Some(&StyleValue::Number(0.9))
+    );
+}
+
+#[test]
+fn runtime_style_table_reports_missing_style_refs() {
+    let sheet = hawk2ui_style::compile_style_source(".surface { opacity: 0.6; }")
+        .expect("style source must compile");
+
+    let error = hawk2ui_style::RuntimeStyleTable::from_style_refs(
+        "button-1",
+        &sheet,
+        ["surface", "missing"],
+    )
+    .expect_err("missing style refs must fail");
+
+    assert_eq!(error.diagnostic().rule(), "runtime-style.ref.missing");
+    assert!(error.diagnostic().message().contains("missing"));
+}
+
+#[test]
+fn runtime_style_table_resolves_token_backed_declarations() {
+    let sheet =
+        hawk2ui_style::compile_style_source(".surface { background-color: token(color.surface); }")
+            .expect("style source must compile");
+    let tokens = hawk2ui_style::TokenSet::production().with_color("color.surface", 8, 10, 14, 255);
+
+    let table = hawk2ui_style::RuntimeStyleTable::from_style_refs_with_tokens(
+        "panel-1",
+        &sheet,
+        ["surface"],
+        &tokens,
+    )
+    .expect("style refs and tokens must resolve");
+
+    assert_eq!(
+        table.typed_value("panel-1", &PropertyId::new("background-color")),
+        Some(&StyleValue::ColorRgba(8, 10, 14, 255))
+    );
+}
+
+#[test]
+fn runtime_style_table_reports_missing_tokens() {
+    let sheet =
+        hawk2ui_style::compile_style_source(".surface { background-color: token(color.missing); }")
+            .expect("style source must compile");
+
+    let error = hawk2ui_style::RuntimeStyleTable::from_style_refs_with_tokens(
+        "panel-1",
+        &sheet,
+        ["surface"],
+        &hawk2ui_style::TokenSet::production(),
+    )
+    .expect_err("missing token must fail");
+
+    assert_eq!(error.diagnostic().rule(), "runtime-style.token.missing");
+    assert!(error.diagnostic().message().contains("color.missing"));
+}
+
+#[test]
 fn runtime_style_table_rejects_raw_string_values() {
     let error = hawk2ui_style::RuntimeStyleTable::new()
         .try_with_raw_value("button-1", "opacity", "0.8")
