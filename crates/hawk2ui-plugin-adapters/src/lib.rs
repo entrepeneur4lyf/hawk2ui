@@ -637,11 +637,7 @@ fn validate_request(request: &PackageRequest) -> Result<(), PackagePlanningError
             "output path must not be empty",
         ));
     }
-    if request.output.bundle_name.trim().is_empty()
-        || request.output.bundle_name.contains('/')
-        || request.output.bundle_name.contains('\\')
-        || request.output.bundle_name.contains('\0')
-    {
+    if !is_filesystem_segment(&request.output.bundle_name) {
         diagnostics.push(PackageDiagnostic::new(
             "package.bundle-name.invalid",
             "bundle name must be a single filesystem segment",

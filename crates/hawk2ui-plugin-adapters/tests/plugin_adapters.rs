@@ -427,3 +427,24 @@ fn plugin_adapters_reject_path_unsafe_metadata_names() {
             .any(|diagnostic| diagnostic.rule() == "package.display-name.invalid")
     );
 }
+
+#[test]
+fn plugin_adapters_reject_reserved_bundle_names() {
+    let request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.reserved", "Reserved", "Hawk2UI"),
+        BundleOutput::new("dist", "."),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap);
+
+    let error = PackageAdapterSet::new()
+        .plan(&request)
+        .expect_err("reserved bundle names must fail before materialization");
+
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.rule() == "package.bundle-name.invalid")
+    );
+}
