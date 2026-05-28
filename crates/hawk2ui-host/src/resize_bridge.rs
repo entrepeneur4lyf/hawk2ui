@@ -147,6 +147,7 @@ impl RendererResizeBridge {
             | DesktopHostEvent::ClipboardCapabilityChanged(_)
             | DesktopHostEvent::RepaintRequested(_)
             | DesktopHostEvent::ClipboardRequested(_)
+            | DesktopHostEvent::DialogRequested(_)
             | DesktopHostEvent::FramePresented { .. } => None,
         }
     }

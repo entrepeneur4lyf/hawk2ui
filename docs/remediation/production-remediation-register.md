@@ -1299,7 +1299,8 @@ Evidence:
 
 - Winit opens a native window and handles resize/DPI/input/close.
 - It renders compiled runtime scene output through the renderer-owned Skia replay path.
-- It still does not provide complete menus, tray, dialogs, drag/drop, IME, or OS clipboard behavior.
+- It still does not provide complete menus, tray, or platform-specific validation for all native
+  desktop integrations.
 - `scale_factor_to_f32` previously converted numeric DPI scale by string round-trip instead of direct checked numeric conversion.
 
 Required remediation:
@@ -1325,13 +1326,17 @@ Status:
 - Winit desktop clipboard requests now execute through a capability-checked native clipboard bridge
   with an `arboard` OS backend and deterministic fake-backend tests for read, write, clear, denial,
   and adapter event recording.
+- Winit desktop dialog requests now execute through a typed native dialog bridge with `rfd` as the
+  production backend, deterministic fake-backend tests for message/open/save/cancel behavior, and
+  adapter event recording after successful backend completion.
 
 Review check:
 
 - This remains partially open for production stability: close, resize, maximize, DPI, input, IME,
   drag/drop, occlusion, OS clipboard bridging, and runtime scene presentation are covered by
-  automated translation/runtime paths and manual smoke paths, but menus, tray, dialogs, and
-  platform-specific clipboard smoke coverage still need platform-backed implementation before
+  automated translation/runtime paths and manual smoke paths, and native dialogs now have a
+  platform-backed bridge. Menus, tray, and platform-specific clipboard/dialog smoke coverage still
+  need platform-backed implementation before
   `REM-HOST-002` can be closed.
 
 ### REM-HOST-003: Complete Baseview Plugin Backend

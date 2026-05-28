@@ -1,11 +1,12 @@
 use hawk2ui_host::{
-    ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
+    ClipboardCapability, DesktopDialogFileFilter, DesktopDialogLevel, DesktopDialogRequest,
+    DesktopDialogResponse, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
     HostPlatformHandle, KeyboardInput, LinuxWindowSystem, PointerInput, RendererResizeBridge,
     SurfaceClipboardRequest, SurfaceMetrics, WindowMode,
 };
 use hawk2ui_host_winit::{
     WinitClipboardBackend, WinitClipboardBridge, WinitClipboardResponse, WinitDesktopAdapter,
-    WinitEventTranslator, WinitPlatformFixture,
+    WinitDialogBackend, WinitDialogBridge, WinitEventTranslator, WinitPlatformFixture,
 };
 
 #[test]
@@ -277,6 +278,110 @@ fn winit_adapter_executes_clipboard_requests_through_native_bridge() {
     );
 }
 
+#[test]
+fn winit_dialog_bridge_executes_message_open_and_save_requests() {
+    let mut bridge = WinitDialogBridge::new(FakeDialogBackend {
+        next_open_file: Some("/tmp/preset.hawk".into()),
+        next_save_file: Some("/tmp/output.hawk".into()),
+        messages: Vec::new(),
+    });
+
+    assert_eq!(
+        bridge
+            .handle_request(DesktopDialogRequest::Message {
+                title: "Confirm".into(),
+                message: "Render complete".into(),
+                level: DesktopDialogLevel::Info,
+            })
+            .expect("message dialog succeeds"),
+        DesktopDialogResponse::Acknowledged
+    );
+    assert_eq!(
+        bridge
+            .handle_request(DesktopDialogRequest::OpenFile {
+                title: "Open preset".into(),
+                directory: Some("/tmp".into()),
+                filters: vec![DesktopDialogFileFilter::new("Hawk", ["hawk"])],
+            })
+            .expect("open dialog succeeds"),
+        DesktopDialogResponse::SelectedFile("/tmp/preset.hawk".into())
+    );
+    assert_eq!(
+        bridge
+            .handle_request(DesktopDialogRequest::SaveFile {
+                title: "Save preset".into(),
+                directory: Some("/tmp".into()),
+                file_name: Some("output.hawk".into()),
+                filters: vec![DesktopDialogFileFilter::new("Hawk", ["hawk"])],
+            })
+            .expect("save dialog succeeds"),
+        DesktopDialogResponse::SavedFile("/tmp/output.hawk".into())
+    );
+}
+
+#[test]
+fn winit_dialog_bridge_maps_native_cancellation() {
+    let mut bridge = WinitDialogBridge::new(FakeDialogBackend {
+        next_open_file: None,
+        next_save_file: None,
+        messages: Vec::new(),
+    });
+
+    assert_eq!(
+        bridge
+            .handle_request(DesktopDialogRequest::OpenFile {
+                title: "Open preset".into(),
+                directory: None,
+                filters: Vec::new(),
+            })
+            .expect("cancelled open dialog is a valid response"),
+        DesktopDialogResponse::Cancelled
+    );
+    assert_eq!(
+        bridge
+            .handle_request(DesktopDialogRequest::SaveFile {
+                title: "Save preset".into(),
+                directory: None,
+                file_name: None,
+                filters: Vec::new(),
+            })
+            .expect("cancelled save dialog is a valid response"),
+        DesktopDialogResponse::Cancelled
+    );
+}
+
+#[test]
+fn winit_adapter_executes_dialog_requests_through_native_bridge() {
+    let mut adapter = WinitDesktopAdapter::create_window(
+        DesktopWindowConfig::new("app", SurfaceMetrics::new(400.0, 300.0, 1.0)),
+        WinitPlatformFixture::linux(LinuxWindowSystem::Wayland),
+    )
+    .expect("window fixture creates");
+    adapter.drain_events();
+    let request = DesktopDialogRequest::Message {
+        title: "Ready".into(),
+        message: "Project loaded".into(),
+        level: DesktopDialogLevel::Info,
+    };
+    let mut bridge = WinitDialogBridge::new(FakeDialogBackend {
+        next_open_file: None,
+        next_save_file: None,
+        messages: Vec::new(),
+    });
+
+    assert_eq!(
+        adapter
+            .try_request_dialog(request.clone(), &mut bridge)
+            .expect("adapter dialog request succeeds"),
+        DesktopDialogResponse::Acknowledged
+    );
+
+    assert_eq!(
+        adapter.drain_events(),
+        vec![DesktopHostEvent::DialogRequested(request)]
+    );
+}
+
 #[derive(Clone, Debug)]
 struct FakeClipboardBackend {
     text: Option<String>,
@@ -295,6 +400,44 @@ impl WinitClipboardBackend for FakeClipboardBackend {
     fn clear_text(&mut self) -> Result<(), hawk2ui_host_winit::WinitHostError> {
         self.text = Some(String::new());
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct FakeDialogBackend {
+    next_open_file: Option<std::path::PathBuf>,
+    next_save_file: Option<std::path::PathBuf>,
+    messages: Vec<(String, String, DesktopDialogLevel)>,
+}
+
+impl WinitDialogBackend for FakeDialogBackend {
+    fn show_message(
+        &mut self,
+        title: String,
+        message: String,
+        level: DesktopDialogLevel,
+    ) -> Result<(), hawk2ui_host_winit::WinitHostError> {
+        self.messages.push((title, message, level));
+        Ok(())
+    }
+
+    fn open_file(
+        &mut self,
+        _title: String,
+        _directory: Option<std::path::PathBuf>,
+        _filters: Vec<DesktopDialogFileFilter>,
+    ) -> Result<Option<std::path::PathBuf>, hawk2ui_host_winit::WinitHostError> {
+        Ok(self.next_open_file.clone())
+    }
+
+    fn save_file(
+        &mut self,
+        _title: String,
+        _directory: Option<std::path::PathBuf>,
+        _file_name: Option<String>,
+        _filters: Vec<DesktopDialogFileFilter>,
+    ) -> Result<Option<std::path::PathBuf>, hawk2ui_host_winit::WinitHostError> {
+        Ok(self.next_save_file.clone())
     }
 }
 

@@ -1,5 +1,7 @@
 //! Desktop host lifecycle records.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -106,6 +108,87 @@ impl PointerInput {
     }
 }
 
+/// Severity level for a native desktop message dialog.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum DesktopDialogLevel {
+    /// Informational message.
+    Info,
+    /// Warning message.
+    Warning,
+    /// Error message.
+    Error,
+}
+
+/// File filter exposed to a native desktop file dialog.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DesktopDialogFileFilter {
+    /// Human-readable filter name shown by the platform picker.
+    pub name: String,
+    /// File extensions without a leading dot.
+    pub extensions: Vec<String>,
+}
+
+impl DesktopDialogFileFilter {
+    /// Creates a native file-dialog filter.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        extensions: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            extensions: extensions.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Native desktop dialog request.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum DesktopDialogRequest {
+    /// Show a native message dialog.
+    Message {
+        /// Dialog title.
+        title: String,
+        /// Dialog body.
+        message: String,
+        /// Message severity.
+        level: DesktopDialogLevel,
+    },
+    /// Open a native single-file picker.
+    OpenFile {
+        /// Dialog title.
+        title: String,
+        /// Optional starting directory.
+        directory: Option<PathBuf>,
+        /// File filters to expose to the platform picker.
+        filters: Vec<DesktopDialogFileFilter>,
+    },
+    /// Open a native save-file picker.
+    SaveFile {
+        /// Dialog title.
+        title: String,
+        /// Optional starting directory.
+        directory: Option<PathBuf>,
+        /// Optional initial file name.
+        file_name: Option<String>,
+        /// File filters to expose to the platform picker.
+        filters: Vec<DesktopDialogFileFilter>,
+    },
+}
+
+/// Native desktop dialog response.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum DesktopDialogResponse {
+    /// Message dialog was acknowledged.
+    Acknowledged,
+    /// User selected a file from an open-file picker.
+    SelectedFile(PathBuf),
+    /// User selected a file from a save-file picker.
+    SavedFile(PathBuf),
+    /// User cancelled the dialog.
+    Cancelled,
+}
+
 /// Desktop host event.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum DesktopHostEvent {
@@ -139,6 +222,8 @@ pub enum DesktopHostEvent {
     Resized(SurfaceMetrics),
     /// Clipboard operation was requested.
     ClipboardRequested(SurfaceClipboardRequest),
+    /// Native desktop dialog was requested.
+    DialogRequested(DesktopDialogRequest),
     /// Frame was presented to the host surface.
     FramePresented {
         /// Monotonic frame identifier.

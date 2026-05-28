@@ -4,9 +4,12 @@
 mod runtime;
 mod software_frame;
 
+use std::path::{Path, PathBuf};
+
 use hawk2ui_api::Diagnostic;
 use hawk2ui_host::{
-    ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
+    ClipboardCapability, DesktopDialogFileFilter, DesktopDialogLevel, DesktopDialogRequest,
+    DesktopDialogResponse, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
     HostPlatformHandle, KeyboardInput, LinuxWindowSystem, PointerInput, RepaintRequest,
     SurfaceClipboardRequest, SurfaceMetrics, SurfaceOwnership, WindowMode,
 };
@@ -334,6 +337,168 @@ impl<B: WinitClipboardBackend> WinitClipboardBridge<B> {
                 "desktop.clipboard.write-denied",
                 "desktop clipboard write requires write capability",
             )),
+        }
+    }
+}
+
+/// Backend boundary for native desktop dialog access.
+pub trait WinitDialogBackend {
+    /// Shows a native message dialog.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the platform dialog backend fails.
+    fn show_message(
+        &mut self,
+        title: String,
+        message: String,
+        level: DesktopDialogLevel,
+    ) -> Result<(), WinitHostError>;
+
+    /// Shows a native single-file open dialog.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the platform dialog backend fails.
+    fn open_file(
+        &mut self,
+        title: String,
+        directory: Option<PathBuf>,
+        filters: Vec<DesktopDialogFileFilter>,
+    ) -> Result<Option<PathBuf>, WinitHostError>;
+
+    /// Shows a native save-file dialog.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the platform dialog backend fails.
+    fn save_file(
+        &mut self,
+        title: String,
+        directory: Option<PathBuf>,
+        file_name: Option<String>,
+        filters: Vec<DesktopDialogFileFilter>,
+    ) -> Result<Option<PathBuf>, WinitHostError>;
+}
+
+/// Production native dialog backend backed by platform dialogs.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RfdDialogBackend;
+
+impl RfdDialogBackend {
+    /// Creates the default native dialog backend.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl WinitDialogBackend for RfdDialogBackend {
+    fn show_message(
+        &mut self,
+        title: String,
+        message: String,
+        level: DesktopDialogLevel,
+    ) -> Result<(), WinitHostError> {
+        let _result = rfd::MessageDialog::new()
+            .set_title(title)
+            .set_description(message)
+            .set_level(rfd_message_level(level))
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+        Ok(())
+    }
+
+    fn open_file(
+        &mut self,
+        title: String,
+        directory: Option<PathBuf>,
+        filters: Vec<DesktopDialogFileFilter>,
+    ) -> Result<Option<PathBuf>, WinitHostError> {
+        let dialog = configure_file_dialog(title, directory.as_deref(), filters);
+        Ok(dialog.pick_file())
+    }
+
+    fn save_file(
+        &mut self,
+        title: String,
+        directory: Option<PathBuf>,
+        file_name: Option<String>,
+        filters: Vec<DesktopDialogFileFilter>,
+    ) -> Result<Option<PathBuf>, WinitHostError> {
+        let mut dialog = configure_file_dialog(title, directory.as_deref(), filters);
+        if let Some(file_name) = file_name {
+            dialog = dialog.set_file_name(file_name);
+        }
+        Ok(dialog.save_file())
+    }
+}
+
+/// Native dialog bridge for Winit desktop hosts.
+#[derive(Clone, Debug)]
+pub struct WinitDialogBridge<B> {
+    backend: B,
+}
+
+impl<B: WinitDialogBackend> WinitDialogBridge<B> {
+    /// Creates a dialog bridge from a native backend.
+    #[must_use]
+    pub const fn new(backend: B) -> Self {
+        Self { backend }
+    }
+
+    /// Executes a native dialog request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when request validation or the native dialog backend fails.
+    pub fn handle_request(
+        &mut self,
+        request: DesktopDialogRequest,
+    ) -> Result<DesktopDialogResponse, WinitHostError> {
+        match request {
+            DesktopDialogRequest::Message {
+                title,
+                message,
+                level,
+            } => {
+                validate_dialog_title(&title)?;
+                validate_dialog_message(&message)?;
+                self.backend.show_message(title, message, level)?;
+                Ok(DesktopDialogResponse::Acknowledged)
+            }
+            DesktopDialogRequest::OpenFile {
+                title,
+                directory,
+                filters,
+            } => {
+                validate_dialog_title(&title)?;
+                validate_dialog_filters(&filters)?;
+                Ok(self
+                    .backend
+                    .open_file(title, directory, filters)?
+                    .map_or(DesktopDialogResponse::Cancelled, |path| {
+                        DesktopDialogResponse::SelectedFile(path)
+                    }))
+            }
+            DesktopDialogRequest::SaveFile {
+                title,
+                directory,
+                file_name,
+                filters,
+            } => {
+                validate_dialog_title(&title)?;
+                if let Some(file_name) = file_name.as_ref() {
+                    validate_dialog_file_name(file_name)?;
+                }
+                validate_dialog_filters(&filters)?;
+                Ok(self
+                    .backend
+                    .save_file(title, directory, file_name, filters)?
+                    .map_or(DesktopDialogResponse::Cancelled, |path| {
+                        DesktopDialogResponse::SavedFile(path)
+                    }))
+            }
         }
     }
 }
@@ -730,6 +895,23 @@ impl WinitDesktopAdapter {
         Ok(response)
     }
 
+    /// Executes a native dialog request through a dialog bridge.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the window is closed, request validation fails, or the
+    /// native dialog backend fails.
+    pub fn try_request_dialog<B: WinitDialogBackend>(
+        &mut self,
+        request: DesktopDialogRequest,
+        bridge: &mut WinitDialogBridge<B>,
+    ) -> Result<DesktopDialogResponse, WinitHostError> {
+        self.ensure_accepts_host_event()?;
+        let response = bridge.handle_request(request.clone())?;
+        self.events.push(DesktopHostEvent::DialogRequested(request));
+        Ok(response)
+    }
+
     fn set_mode(&mut self, mode: WindowMode) {
         if !self.accepts_host_event() || self.mode == mode {
             return;
@@ -830,6 +1012,91 @@ impl DesktopHostAdapter for WinitDesktopAdapter {
     fn dpi_changed(&mut self, scale_factor: f64) {
         let _ = self.try_dpi_changed(scale_factor);
     }
+}
+
+fn configure_file_dialog(
+    title: String,
+    directory: Option<&Path>,
+    filters: Vec<DesktopDialogFileFilter>,
+) -> rfd::FileDialog {
+    let mut dialog = rfd::FileDialog::new().set_title(title);
+    if let Some(directory) = directory {
+        dialog = dialog.set_directory(directory);
+    }
+    for filter in filters {
+        dialog = dialog.add_filter(filter.name, &filter.extensions);
+    }
+    dialog
+}
+
+fn rfd_message_level(level: DesktopDialogLevel) -> rfd::MessageLevel {
+    match level {
+        DesktopDialogLevel::Info => rfd::MessageLevel::Info,
+        DesktopDialogLevel::Warning => rfd::MessageLevel::Warning,
+        DesktopDialogLevel::Error => rfd::MessageLevel::Error,
+    }
+}
+
+fn validate_dialog_title(title: &str) -> Result<(), WinitHostError> {
+    if title.trim().is_empty() {
+        Err(WinitHostError::new(
+            "desktop.dialog.invalid-title",
+            "desktop dialog title must not be empty",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_dialog_message(message: &str) -> Result<(), WinitHostError> {
+    if message.trim().is_empty() {
+        Err(WinitHostError::new(
+            "desktop.dialog.invalid-message",
+            "desktop dialog message must not be empty",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_dialog_file_name(file_name: &str) -> Result<(), WinitHostError> {
+    if file_name.trim().is_empty()
+        || file_name.contains('/')
+        || file_name.contains('\\')
+        || file_name.contains('\0')
+    {
+        Err(WinitHostError::new(
+            "desktop.dialog.invalid-file-name",
+            "desktop dialog file name must be a non-empty file name, not a path",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_dialog_filters(filters: &[DesktopDialogFileFilter]) -> Result<(), WinitHostError> {
+    for filter in filters {
+        if filter.name.trim().is_empty() || filter.extensions.is_empty() {
+            return Err(WinitHostError::new(
+                "desktop.dialog.invalid-filter",
+                "desktop dialog filters require a non-empty name and at least one extension",
+            ));
+        }
+        for extension in &filter.extensions {
+            if extension.trim().is_empty()
+                || extension.starts_with('.')
+                || extension.contains('/')
+                || extension.contains('\\')
+                || extension.contains('\0')
+            {
+                return Err(WinitHostError::new(
+                    "desktop.dialog.invalid-filter",
+                    "desktop dialog filter extensions must not be empty and must omit path separators and leading dots",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_desktop_metrics(metrics: SurfaceMetrics) -> Result<(), WinitHostError> {

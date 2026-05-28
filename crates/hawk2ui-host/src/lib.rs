@@ -8,8 +8,9 @@ pub mod resize_bridge;
 pub mod surface;
 
 pub use desktop::{
-    ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig, KeyboardInput,
-    PointerInput, RecordingDesktopAdapter, WindowMode,
+    ClipboardCapability, DesktopDialogFileFilter, DesktopDialogLevel, DesktopDialogRequest,
+    DesktopDialogResponse, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
+    KeyboardInput, PointerInput, RecordingDesktopAdapter, WindowMode,
 };
 pub use platform::{
     HostPlatformHandle, LinuxWindowSystem, PlatformHandleDiagnostic, SurfaceOwnership,
