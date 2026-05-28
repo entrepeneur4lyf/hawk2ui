@@ -289,11 +289,31 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
         editor_descriptor
             .contains("runtime_artifact = \"Contents/Resources/hawk2ui-runtime-artifact.json\"")
     );
+    let generated_clap_cargo = root
+        .join("Contents")
+        .join("Resources")
+        .join("generated-clap")
+        .join("Cargo.toml");
+    let generated_clap_source = root
+        .join("Contents")
+        .join("Resources")
+        .join("generated-clap")
+        .join("src")
+        .join("lib.rs");
+    assert!(generated_clap_cargo.is_file());
+    assert!(generated_clap_source.is_file());
+    let generated_clap_source =
+        std::fs::read_to_string(&generated_clap_source).expect("generated CLAP source reads");
+    assert!(generated_clap_source.contains("hawk2ui_editor_descriptor"));
+    assert!(generated_clap_source.contains("Contents/Resources/hawk2ui-runtime-artifact.json"));
+    assert!(generated_clap_source.contains("host_adapter=baseview"));
 
     let hashes =
         std::fs::read_to_string(&outputs[0].hash_manifest_path).expect("hash manifest reads");
     assert!(hashes.contains("Contents/Resources/hawk2ui-runtime-artifact.json"));
     assert!(hashes.contains("Contents/Resources/hawk2ui-editor.toml"));
+    assert!(hashes.contains("Contents/Resources/generated-clap/Cargo.toml"));
+    assert!(hashes.contains("Contents/Resources/generated-clap/src/lib.rs"));
     assert_eq!(
         plan.verify_materialized(&outputs).status(),
         VerificationStatus::Passed

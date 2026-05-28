@@ -1459,6 +1459,10 @@ Status:
   window APIs: `host_adapter=baseview` prefers X11/XWayland on Linux and rejects native Wayland
   attachment, matching the current Baseview backend boundary instead of exposing an unsupported
   GUI path.
+- Runtime-backed CLAP package materialization now writes the generated CLAP `cdylib` Cargo scaffold
+  under `Contents/Resources/generated-clap`, embeds the same runtime editor descriptor payload used
+  by host-load tests, preserves generated parameter metadata in the scaffold source, and includes
+  both scaffold files in package hash verification.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:

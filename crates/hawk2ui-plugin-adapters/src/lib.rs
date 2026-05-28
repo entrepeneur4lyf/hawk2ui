@@ -387,6 +387,11 @@ impl ClapCdylibScaffold {
         self
     }
 
+    fn with_parameter_source(mut self, parameter_source: impl Into<String>) -> Self {
+        self.parameter_source = parameter_source.into();
+        self
+    }
+
     /// Embeds the generated `Hawk2UI` runtime editor descriptor exposed by the CLAP GUI library.
     #[must_use]
     pub fn with_runtime_editor_descriptor(
@@ -1229,6 +1234,9 @@ pub struct PackageTargetPlan {
     output_path: String,
     parameter_count: usize,
     runtime_artifact: Option<serde_json::Value>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    clap_parameter_source: String,
 }
 
 impl PackageTargetPlan {
@@ -1424,6 +1432,9 @@ impl PackageTargetPlan {
                     ClapPluginEntryPlan::from_metadata(&self.metadata).manifest(),
                 )?;
                 written.push(clap_entry_path);
+                let scaffold_output = self.write_clap_cdylib_scaffold(resources_path)?;
+                written.push(PathBuf::from(scaffold_output.cargo_toml_path));
+                written.push(PathBuf::from(scaffold_output.lib_rs_path));
             }
             PackageFormat::Vst3 => {
                 let info_path = output_path.join("Contents").join("Info.plist");
@@ -1514,6 +1525,13 @@ impl PackageTargetPlan {
                 files.push(output_path.join(format!("{}.clap", self.metadata.display_name)));
                 files.push(resources_path.join("clap.json"));
                 files.push(resources_path.join("clap-entry.toml"));
+                files.push(resources_path.join("generated-clap").join("Cargo.toml"));
+                files.push(
+                    resources_path
+                        .join("generated-clap")
+                        .join("src")
+                        .join("lib.rs"),
+                );
             }
             PackageFormat::Vst3 => {
                 files.push(output_path.join("Contents").join("Info.plist"));
@@ -1563,6 +1581,24 @@ impl PackageTargetPlan {
                 .iter()
                 .all(|path| path.is_file())
             && hash_manifest_matches(output_path, hash_manifest_path)
+    }
+
+    fn write_clap_cdylib_scaffold(
+        &self,
+        resources_path: &Path,
+    ) -> Result<ClapCdylibScaffoldOutput, PackageMaterializationError> {
+        let mut scaffold = ClapCdylibScaffold::from_metadata(&self.metadata)
+            .with_parameter_source(self.clap_parameter_source.clone());
+        if self.runtime_artifact.is_some() {
+            let descriptor = ClapRuntimeEditorDescriptor::new(
+                "Contents/Resources/hawk2ui-runtime-artifact.json",
+                "baseview",
+                "skia",
+            )
+            .map_err(|diagnostic| PackageMaterializationError { diagnostic })?;
+            scaffold = scaffold.with_runtime_editor_descriptor(descriptor);
+        }
+        scaffold.write_to(resources_path.join("generated-clap"))
     }
 }
 
@@ -1739,6 +1775,7 @@ impl PackageAdapterSet {
                 output_path: output_path(&request.output, *format),
                 parameter_count: request.parameters.parameters.len(),
                 runtime_artifact: request.runtime_artifact.clone(),
+                clap_parameter_source: clap_parameter_source(&request.parameters),
             })
             .collect();
         Ok(PackagePlan { targets })
