@@ -4,8 +4,9 @@ use hawk2ui_host::{
     PluginParentHandle, PointerInput, RendererResizeBridge, SurfaceMetrics,
 };
 use hawk2ui_host_baseview::{
-    BaseviewClapRuntimeEditor, BaseviewEventTranslator, BaseviewNativeParent,
-    BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
+    BaseviewClapRuntimeEditor, BaseviewClapRuntimeEditorHost, BaseviewEventTranslator,
+    BaseviewNativeParent, BaseviewNativeParentBackend, BaseviewParentFixture,
+    BaseviewPluginAdapter,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_plugin::{
@@ -626,6 +627,75 @@ fn baseview_clap_runtime_editor_attaches_presents_and_tears_down_live_session() 
         .present_runtime_frame()
         .expect_err("destroyed live editor must not render");
     assert_eq!(error.rule(), "baseview.editor.destroyed");
+}
+
+#[test]
+fn baseview_clap_runtime_editor_host_drives_callback_lifecycle_from_plugin_path() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": []
+        }
+    }));
+    let runtime_artifact =
+        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let output_root = temp_package_root("hawk2ui-baseview-clap-host-callback-lifecycle");
+    let request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.host-callback", "Host Callback", "Hawk2UI"),
+        BundleOutput::new(output_root.to_string_lossy(), "HostCallback"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds")
+        .materialize()
+        .expect("materialization succeeds");
+    let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostCallback.clap");
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+
+    let error = host.show().expect_err("show before create must fail");
+    assert_eq!(error.rule(), "baseview.clap-runtime-editor.not-attached");
+    host.create(ClapGuiWindowApi::X11, false)
+        .expect("host create resolves verified runtime session");
+    assert!(host.created());
+    assert!(!host.attached());
+
+    host.set_parent(
+        ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::X11, 42)
+            .expect("CLAP parent handle validates"),
+        "clap-host-callback-parent",
+    )
+    .expect("host set-parent attaches live Baseview editor");
+    assert!(host.attached());
+
+    let snapshot = host.show().expect("host show presents runtime frame");
+    assert_eq!((snapshot.width(), snapshot.height()), (320, 180));
+    assert_eq!(snapshot.pixel_at(10, 10), Some(0x1a6f4a));
+    assert_eq!(host.presented_frame_count(), 1);
+    assert!(host.visible());
+
+    host.hide().expect("host hide delegates to live editor");
+    assert!(!host.visible());
+    host.destroy()
+        .expect("host destroy delegates safe teardown");
+    assert!(!host.created());
+    assert!(!host.attached());
+    let error = host.show().expect_err("show after destroy must fail");
+    assert_eq!(error.rule(), "baseview.clap-runtime-editor.not-attached");
 }
 
 #[test]

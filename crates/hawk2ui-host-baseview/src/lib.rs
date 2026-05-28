@@ -9,7 +9,8 @@ use hawk2ui_host::{
     PointerInput, SurfaceMetrics, SurfaceOwnership,
 };
 use hawk2ui_plugin_adapters::{
-    ClapGuiParentHandle, ClapRuntimeEditorSession, PackageDiagnostic, PackageMaterializationError,
+    ClapGuiParentHandle, ClapGuiWindowApi, ClapRuntimeEditorSession, PackageDiagnostic,
+    PackageMaterializationError,
 };
 use hawk2ui_render::{Color, RendererBackend};
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend, SkiaSurfaceConfig};
@@ -20,12 +21,12 @@ use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle, XcbDisplayHandle,
     XcbWindowHandle, XlibDisplayHandle, XlibWindowHandle,
 };
-use std::ffi::c_void;
 #[cfg(target_os = "linux")]
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
+use std::{ffi::c_void, path::PathBuf};
 #[cfg(target_os = "linux")]
 use x11rb::{
     connection::Connection,
@@ -981,6 +982,179 @@ impl BaseviewClapRuntimeEditor {
     pub fn drain_events(&mut self) -> Vec<PluginHostEvent> {
         self.adapter.drain_events()
     }
+}
+
+/// Host-side CLAP GUI lifecycle bridge for a runtime-backed `Baseview` editor.
+#[derive(Debug)]
+pub struct BaseviewClapRuntimeEditorHost {
+    plugin_path: PathBuf,
+    linux_display_handle: Option<u64>,
+    session: Option<ClapRuntimeEditorSession>,
+    editor: Option<BaseviewClapRuntimeEditor>,
+    created_api: Option<ClapGuiWindowApi>,
+}
+
+impl BaseviewClapRuntimeEditorHost {
+    /// Creates a host lifecycle bridge for the CLAP plugin path received by the plugin host.
+    #[must_use]
+    pub fn new(plugin_path: impl Into<PathBuf>, linux_display_handle: Option<u64>) -> Self {
+        Self {
+            plugin_path: plugin_path.into(),
+            linux_display_handle,
+            session: None,
+            editor: None,
+            created_api: None,
+        }
+    }
+
+    /// Returns whether CLAP GUI create has resolved a verified runtime editor session.
+    #[must_use]
+    pub const fn created(&self) -> bool {
+        self.created_api.is_some()
+    }
+
+    /// Returns whether a live `Baseview` runtime editor is attached to a parent.
+    #[must_use]
+    pub const fn attached(&self) -> bool {
+        self.editor.is_some()
+    }
+
+    /// Returns whether the attached live editor is visible.
+    #[must_use]
+    pub fn visible(&self) -> bool {
+        self.editor
+            .as_ref()
+            .is_some_and(BaseviewClapRuntimeEditor::visible)
+    }
+
+    /// Returns the number of runtime scene frames presented by the live editor.
+    #[must_use]
+    pub fn presented_frame_count(&self) -> u64 {
+        self.editor
+            .as_ref()
+            .map_or(0, BaseviewClapRuntimeEditor::presented_frame_count)
+    }
+
+    /// Handles the CLAP GUI create callback by loading and verifying the runtime editor package.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the callback requests a floating editor, an unsupported
+    /// parent API, or the plugin path does not resolve to a verified runtime editor package.
+    pub fn create(
+        &mut self,
+        api: ClapGuiWindowApi,
+        is_floating: bool,
+    ) -> Result<(), BaseviewHostError> {
+        if is_floating {
+            return Err(BaseviewHostError::new(
+                "baseview.clap-runtime-editor.floating-unsupported",
+                "Baseview CLAP runtime editors must be embedded in a host parent",
+            ));
+        }
+        if api == ClapGuiWindowApi::Wayland {
+            return Err(BaseviewHostError::new(
+                "baseview.clap-runtime-editor.unsupported-api",
+                "Baseview CLAP runtime editors do not support native Wayland parent handles",
+            ));
+        }
+        let session = ClapRuntimeEditorSession::load_from_clap_plugin_path(&self.plugin_path)
+            .map_err(|error| baseview_error_from_materialization_error(&error))?;
+        self.session = Some(session);
+        self.editor = None;
+        self.created_api = Some(api);
+        Ok(())
+    }
+
+    /// Handles the CLAP GUI set-parent callback by attaching the live Baseview runtime editor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when create has not succeeded, the parent API does not match the
+    /// create API, or Baseview rejects the parent.
+    pub fn set_parent(
+        &mut self,
+        parent: ClapGuiParentHandle,
+        parent_fixture_id: &'static str,
+    ) -> Result<(), BaseviewHostError> {
+        let created_api = self.created_api.ok_or_else(not_created_error)?;
+        if parent.api() != created_api {
+            return Err(BaseviewHostError::new(
+                "baseview.clap-runtime-editor.parent-api-mismatch",
+                "CLAP runtime editor parent API must match the API used during create",
+            ));
+        }
+        let session = self.session.clone().ok_or_else(not_created_error)?;
+        let editor = BaseviewClapRuntimeEditor::attach(
+            session,
+            parent,
+            self.linux_display_handle,
+            parent_fixture_id,
+        )?;
+        self.editor = Some(editor);
+        Ok(())
+    }
+
+    /// Handles the CLAP GUI show callback by presenting the current verified runtime frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the editor is not attached or rendering fails.
+    pub fn show(&mut self) -> Result<&SkiaFrameSnapshot, BaseviewHostError> {
+        self.editor
+            .as_mut()
+            .ok_or_else(not_attached_error)?
+            .show_editor("clap gui show");
+        self.editor
+            .as_mut()
+            .ok_or_else(not_attached_error)?
+            .present_runtime_frame()
+    }
+
+    /// Handles the CLAP GUI hide callback.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the editor is not attached.
+    pub fn hide(&mut self) -> Result<(), BaseviewHostError> {
+        self.editor
+            .as_mut()
+            .ok_or_else(not_attached_error)?
+            .hide_editor("clap gui hide");
+        Ok(())
+    }
+
+    /// Handles the CLAP GUI destroy callback and clears the current live editor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the editor has not been created.
+    pub fn destroy(&mut self) -> Result<(), BaseviewHostError> {
+        if self.created_api.is_none() {
+            return Err(not_created_error());
+        }
+        if let Some(editor) = self.editor.as_mut() {
+            editor.destroy_editor("clap gui destroy");
+        }
+        self.editor = None;
+        self.session = None;
+        self.created_api = None;
+        Ok(())
+    }
+}
+
+fn not_created_error() -> BaseviewHostError {
+    BaseviewHostError::new(
+        "baseview.clap-runtime-editor.not-created",
+        "CLAP runtime editor create must succeed before this host callback",
+    )
+}
+
+fn not_attached_error() -> BaseviewHostError {
+    BaseviewHostError::new(
+        "baseview.clap-runtime-editor.not-attached",
+        "CLAP runtime editor parent must be attached before this host callback",
+    )
 }
 
 fn baseview_error_from_package_diagnostic(diagnostic: &PackageDiagnostic) -> BaseviewHostError {

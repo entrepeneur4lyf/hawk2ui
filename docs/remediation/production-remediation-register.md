@@ -1500,8 +1500,11 @@ Status:
   - Verified CLAP runtime editor sessions can now resolve the package root from a CLAP plugin path or a
     nested generated-library-adjacent path before performing the same hash and descriptor validation,
     giving plugin hosts a concrete entry point from the path they receive at load time.
-- Remaining work under this item is to connect the generated CLAP GUI callback state machine to the live
-  host-side `BaseviewClapRuntimeEditor` bridge at the plugin-host embedding boundary.
+  - `hawk2ui-host-baseview` now provides `BaseviewClapRuntimeEditorHost`, a host-side CLAP GUI
+    lifecycle bridge that drives create, set-parent, show, hide, and destroy callbacks from a plugin
+    path into the live `BaseviewClapRuntimeEditor` rendering path.
+- Remaining work under this item is to connect realtime visual channels and host parameter/state events
+  into the live CLAP editor bridge.
 
 Required remediation:
 
