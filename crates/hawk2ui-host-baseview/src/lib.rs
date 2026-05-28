@@ -1000,6 +1000,75 @@ pub struct BaseviewClapRuntimeEditorHost {
     latest_realtime_packets: Vec<RealtimeVisualPacket>,
 }
 
+/// Typed command surface for driving a CLAP runtime editor host bridge from an embedding layer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BaseviewClapRuntimeEditorHostCommand {
+    /// CLAP GUI create callback.
+    Create {
+        /// Requested CLAP GUI parent API.
+        api: ClapGuiWindowApi,
+        /// Whether the host requested a floating editor.
+        is_floating: bool,
+    },
+    /// CLAP GUI set-parent callback.
+    SetParent {
+        /// Validated CLAP parent handle.
+        parent: ClapGuiParentHandle,
+        /// Stable parent fixture ID for diagnostics and tests.
+        parent_fixture_id: &'static str,
+    },
+    /// CLAP GUI show callback.
+    Show,
+    /// CLAP GUI hide callback.
+    Hide,
+    /// CLAP GUI destroy callback.
+    Destroy,
+    /// Host parameter event.
+    ApplyParameter {
+        /// Stable parameter identifier.
+        parameter_id: String,
+        /// Typed parameter value.
+        value: ParameterValue,
+    },
+    /// Host state save request.
+    SaveState,
+    /// Host state load request.
+    LoadState(PluginStateEnvelope),
+}
+
+/// Typed response returned by [`BaseviewClapRuntimeEditorHostCommand`] dispatch.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BaseviewClapRuntimeEditorHostResponse {
+    /// Runtime editor session was created.
+    Created,
+    /// Runtime editor was attached to a parent.
+    ParentAttached,
+    /// Runtime frame was presented through Skia.
+    FramePresented {
+        /// Snapshot width in physical pixels.
+        width: u32,
+        /// Snapshot height in physical pixels.
+        height: u32,
+        /// Total frame count after presentation.
+        presented_frame_count: u64,
+    },
+    /// Runtime editor was hidden.
+    Hidden,
+    /// Runtime editor was destroyed.
+    Destroyed,
+    /// Parameter event was accepted.
+    ParameterApplied,
+    /// State was saved.
+    StateSaved(PluginStateEnvelope),
+    /// State was loaded.
+    StateLoaded,
+    /// Realtime visual packets were drained through the UI frame gate.
+    RealtimeVisualsDrained {
+        /// Number of packets drained into the latest packet batch.
+        packet_count: usize,
+    },
+}
+
 impl BaseviewClapRuntimeEditorHost {
     /// Creates a host lifecycle bridge for the CLAP plugin path received by the plugin host.
     #[must_use]
@@ -1053,6 +1122,79 @@ impl BaseviewClapRuntimeEditorHost {
     #[must_use]
     pub fn latest_realtime_visual_packets(&self) -> &[RealtimeVisualPacket] {
         &self.latest_realtime_packets
+    }
+
+    /// Dispatches a typed host bridge command into the live CLAP runtime editor bridge.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the command violates lifecycle ordering or when the
+    /// underlying live editor operation fails.
+    pub fn dispatch(
+        &mut self,
+        command: BaseviewClapRuntimeEditorHostCommand,
+    ) -> Result<BaseviewClapRuntimeEditorHostResponse, BaseviewHostError> {
+        match command {
+            BaseviewClapRuntimeEditorHostCommand::Create { api, is_floating } => {
+                self.create(api, is_floating)?;
+                Ok(BaseviewClapRuntimeEditorHostResponse::Created)
+            }
+            BaseviewClapRuntimeEditorHostCommand::SetParent {
+                parent,
+                parent_fixture_id,
+            } => {
+                self.set_parent(parent, parent_fixture_id)?;
+                Ok(BaseviewClapRuntimeEditorHostResponse::ParentAttached)
+            }
+            BaseviewClapRuntimeEditorHostCommand::Show => {
+                let (width, height) = {
+                    let snapshot = self.show()?;
+                    (snapshot.width(), snapshot.height())
+                };
+                Ok(BaseviewClapRuntimeEditorHostResponse::FramePresented {
+                    width,
+                    height,
+                    presented_frame_count: self.presented_frame_count(),
+                })
+            }
+            BaseviewClapRuntimeEditorHostCommand::Hide => {
+                self.hide()?;
+                Ok(BaseviewClapRuntimeEditorHostResponse::Hidden)
+            }
+            BaseviewClapRuntimeEditorHostCommand::Destroy => {
+                self.destroy()?;
+                Ok(BaseviewClapRuntimeEditorHostResponse::Destroyed)
+            }
+            BaseviewClapRuntimeEditorHostCommand::ApplyParameter {
+                parameter_id,
+                value,
+            } => {
+                self.apply_parameter_value(parameter_id, value)?;
+                Ok(BaseviewClapRuntimeEditorHostResponse::ParameterApplied)
+            }
+            BaseviewClapRuntimeEditorHostCommand::SaveState => Ok(
+                BaseviewClapRuntimeEditorHostResponse::StateSaved(self.save_state()?),
+            ),
+            BaseviewClapRuntimeEditorHostCommand::LoadState(state) => {
+                self.load_state(state)?;
+                Ok(BaseviewClapRuntimeEditorHostResponse::StateLoaded)
+            }
+        }
+    }
+
+    /// Dispatches a realtime visual drain through the typed host bridge response surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the live editor is not attached.
+    pub fn dispatch_realtime_visuals(
+        &mut self,
+        reader: &mut RealtimeVisualUiReader,
+        timestamp_ms: u64,
+        frame_gate: &mut RealtimeVisualFrameGate,
+    ) -> Result<BaseviewClapRuntimeEditorHostResponse, BaseviewHostError> {
+        let packet_count = self.drain_realtime_visuals(reader, timestamp_ms, frame_gate)?;
+        Ok(BaseviewClapRuntimeEditorHostResponse::RealtimeVisualsDrained { packet_count })
     }
 
     /// Handles the CLAP GUI create callback by loading and verifying the runtime editor package.

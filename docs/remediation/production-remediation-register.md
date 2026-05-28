@@ -1510,8 +1510,11 @@ Status:
     `RealtimeVisualFrameGate`, stores the latest UI-side packet batch for the attached editor, rejects
     drains before parent attachment, and preserves the realtime audio writer's no-allocation/no-blocking
     counters.
-- Remaining work under this item is to connect these host-side bridge records to generated CLAP binary
-  exports or a host ABI shim that can invoke them from an actual plugin host process.
+  - The live CLAP editor host bridge now exposes typed command/response dispatch records for create,
+    set-parent, show, hide, destroy, parameter apply, state save/load, and realtime visual drain
+    operations, giving generated plugin exports or host ABI shims a single stable invocation surface.
+- Remaining work under this item is to expose the typed host bridge dispatch surface through generated
+  CLAP binary exports where a host requires a C ABI rather than direct Rust integration.
 
 Required remediation:
 

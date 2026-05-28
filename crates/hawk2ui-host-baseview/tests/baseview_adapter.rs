@@ -4,9 +4,9 @@ use hawk2ui_host::{
     PluginParentHandle, PointerInput, RendererResizeBridge, SurfaceMetrics,
 };
 use hawk2ui_host_baseview::{
-    BaseviewClapRuntimeEditor, BaseviewClapRuntimeEditorHost, BaseviewEventTranslator,
-    BaseviewNativeParent, BaseviewNativeParentBackend, BaseviewParentFixture,
-    BaseviewPluginAdapter,
+    BaseviewClapRuntimeEditor, BaseviewClapRuntimeEditorHost, BaseviewClapRuntimeEditorHostCommand,
+    BaseviewClapRuntimeEditorHostResponse, BaseviewEventTranslator, BaseviewNativeParent,
+    BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_plugin::{
@@ -898,6 +898,113 @@ fn baseview_clap_runtime_editor_host_drains_realtime_visuals_with_frame_gate() {
 
     host.destroy().expect("destroy succeeds");
     assert!(host.latest_realtime_visual_packets().is_empty());
+}
+
+#[test]
+fn baseview_clap_runtime_editor_host_dispatches_typed_abi_commands() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": []
+        }
+    }));
+    let runtime_artifact =
+        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let output_root = temp_package_root("hawk2ui-baseview-clap-host-command-dispatch");
+    let request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.host-command", "Host Command", "Hawk2UI"),
+        BundleOutput::new(output_root.to_string_lossy(), "HostCommand"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds")
+        .materialize()
+        .expect("materialization succeeds");
+    let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostCommand.clap");
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+
+    assert_eq!(
+        host.dispatch(BaseviewClapRuntimeEditorHostCommand::Create {
+            api: ClapGuiWindowApi::X11,
+            is_floating: false,
+        })
+        .expect("create dispatch succeeds"),
+        BaseviewClapRuntimeEditorHostResponse::Created
+    );
+    assert_eq!(
+        host.dispatch(BaseviewClapRuntimeEditorHostCommand::SetParent {
+            parent: ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::X11, 42)
+                .expect("CLAP parent handle validates"),
+            parent_fixture_id: "clap-host-command-parent",
+        })
+        .expect("set-parent dispatch succeeds"),
+        BaseviewClapRuntimeEditorHostResponse::ParentAttached
+    );
+    assert_eq!(
+        host.dispatch(BaseviewClapRuntimeEditorHostCommand::ApplyParameter {
+            parameter_id: "gain".into(),
+            value: ParameterValue::Float(0.25),
+        })
+        .expect("parameter dispatch succeeds"),
+        BaseviewClapRuntimeEditorHostResponse::ParameterApplied
+    );
+    assert_eq!(
+        host.dispatch(BaseviewClapRuntimeEditorHostCommand::Show)
+            .expect("show dispatch succeeds"),
+        BaseviewClapRuntimeEditorHostResponse::FramePresented {
+            width: 320,
+            height: 180,
+            presented_frame_count: 1,
+        }
+    );
+    let (mut writer, mut reader) =
+        RealtimeVisualTransport::split_preallocated(4, FrameDropPolicy::DropNewest);
+    let mut gate = RealtimeVisualFrameGate::new(60).expect("valid realtime frame gate");
+    writer.audio_thread_push(RealtimeVisualPacket::meter("meter", 0.9));
+    assert_eq!(
+        host.dispatch_realtime_visuals(&mut reader, 0, &mut gate)
+            .expect("realtime dispatch succeeds"),
+        BaseviewClapRuntimeEditorHostResponse::RealtimeVisualsDrained { packet_count: 1 }
+    );
+    let saved = host
+        .dispatch(BaseviewClapRuntimeEditorHostCommand::SaveState)
+        .expect("save-state dispatch succeeds");
+    assert!(matches!(
+        saved,
+        BaseviewClapRuntimeEditorHostResponse::StateSaved(_)
+    ));
+    assert_eq!(
+        host.dispatch(BaseviewClapRuntimeEditorHostCommand::LoadState(
+            PluginStateEnvelope::new(1).parameter("gain", StateValue::Float(0.5)),
+        ))
+        .expect("load-state dispatch succeeds"),
+        BaseviewClapRuntimeEditorHostResponse::StateLoaded
+    );
+    assert_eq!(
+        host.dispatch(BaseviewClapRuntimeEditorHostCommand::Hide)
+            .expect("hide dispatch succeeds"),
+        BaseviewClapRuntimeEditorHostResponse::Hidden
+    );
+    assert_eq!(
+        host.dispatch(BaseviewClapRuntimeEditorHostCommand::Destroy)
+            .expect("destroy dispatch succeeds"),
+        BaseviewClapRuntimeEditorHostResponse::Destroyed
+    );
 }
 
 #[test]
