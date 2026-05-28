@@ -1899,6 +1899,9 @@ Evidence:
   safety, security gates, smoke apps, manuals, and packaging.
 - `xtask release-check` runs workspace checks, tests, smoke apps, docs, and dependency audit gates,
   and this command has passed after the latest hardening sweeps.
+- `rtk cargo clippy --workspace --tests -- -D warnings` now passes after test hygiene hardening
+  across API, accessibility, host, layout, render, style, smoke, conformance, plugin adapter, and
+  release tooling tests.
 
 Required remediation:
 

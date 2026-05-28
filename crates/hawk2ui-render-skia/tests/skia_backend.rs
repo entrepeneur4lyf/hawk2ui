@@ -50,7 +50,7 @@ fn skia_backend_tracks_surface_resize_dpi_frame_and_dirty_state() {
     let surface = backend.surface("main").expect("surface exists");
     assert_eq!(surface.width(), 800);
     assert_eq!(surface.height(), 600);
-    assert_eq!(surface.dpi_scale(), 2.0);
+    assert!((surface.dpi_scale() - 2.0).abs() < f32::EPSILON);
     assert_eq!(surface.pixel_width(), 1600);
     assert_eq!(surface.pixel_height(), 1200);
     assert_eq!(surface.presented_frames(), 1);
@@ -87,8 +87,8 @@ fn frame_snapshot_reads_presented_pixels_and_enforces_lifecycle() {
     assert_eq!(snapshot.width(), 16);
     assert_eq!(snapshot.height(), 16);
     assert_eq!(snapshot.pixels().len(), 16 * 16);
-    assert_eq!(snapshot.pixel_at(0, 0), Some(0x000000));
-    assert_eq!(snapshot.pixel_at(3, 3), Some(0xff0000));
+    assert_eq!(snapshot.pixel_at(0, 0), Some(0x0000_0000));
+    assert_eq!(snapshot.pixel_at(3, 3), Some(0x00ff_0000));
     assert_eq!(
         backend.surface("main").unwrap().presented_frames(),
         1,
@@ -117,8 +117,8 @@ fn skia_backend_applies_full_affine_transforms() {
 
     let snapshot = backend.frame_snapshot("main").unwrap();
 
-    assert_eq!(snapshot.pixel_at(5, 5), Some(0x000000));
-    assert_eq!(snapshot.pixel_at(13, 7), Some(0xff0000));
+    assert_eq!(snapshot.pixel_at(5, 5), Some(0x0000_0000));
+    assert_eq!(snapshot.pixel_at(13, 7), Some(0x00ff_0000));
 }
 
 #[test]
@@ -149,15 +149,15 @@ fn placed_text_and_images_render_into_target_regions() {
     let snapshot = backend.frame_snapshot("main").unwrap();
 
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 22.0, 72.0, 28.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(16.0, 22.0, 72.0, 28.0)) > 0,
         "placed text must affect pixels near its requested baseline"
     );
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(84.0, 24.0, 24.0, 24.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(84.0, 24.0, 24.0, 24.0)) > 0,
         "target-rectangle image draw must affect pixels in the requested rectangle"
     );
     assert_eq!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(0.0, 0.0, 8.0, 8.0)),
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(0.0, 0.0, 8.0, 8.0)),
         0,
         "unaffected background corner should remain unchanged"
     );
@@ -178,7 +178,7 @@ fn trait_draw_text_uses_configured_default_text_style() {
     let snapshot = backend.frame_snapshot("main").unwrap();
 
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 22.0, 72.0, 28.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(16.0, 22.0, 72.0, 28.0)) > 0,
         "trait-level text draw must use configured visible placement and color"
     );
 }
@@ -216,7 +216,11 @@ fn shaped_text_layout_renders_positioned_lines() {
     let snapshot = backend.frame_snapshot("main").unwrap();
 
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 22.0, 128.0, 72.0)) > 0,
+        count_changed_pixels(
+            snapshot,
+            0x0008_0a0e,
+            Geometry::new(16.0, 22.0, 128.0, 72.0)
+        ) > 0,
         "shaped layout lines must affect pixels in their measured region"
     );
     assert!(backend.command_keys().iter().any(|key| {
@@ -241,7 +245,7 @@ fn registered_vector_assets_render_pixels_through_trait_draw_vector() {
     let snapshot = backend.frame_snapshot("main").unwrap();
 
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(10.0, 10.0, 20.0, 20.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(10.0, 10.0, 20.0, 20.0)) > 0,
         "registered vector asset must render pixels in its path bounds"
     );
     assert!(backend.command_keys().contains(&"vector:logo".to_string()));
@@ -283,8 +287,8 @@ fn compiled_asset_records_register_and_render_image_and_vector_pixels() {
 
     let snapshot = backend.frame_snapshot("main").unwrap();
 
-    assert!(count_changed_pixels(snapshot, 0x080a0e, Geometry::new(40.0, 8.0, 16.0, 16.0)) > 0);
-    assert!(count_changed_pixels(snapshot, 0x080a0e, Geometry::new(10.0, 10.0, 20.0, 20.0)) > 0);
+    assert!(count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(40.0, 8.0, 16.0, 16.0)) > 0);
+    assert!(count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(10.0, 10.0, 20.0, 20.0)) > 0);
 }
 
 #[test]
@@ -358,7 +362,7 @@ fn skia_backend_replays_runtime_scene_frame_commands() {
     backend.end_frame("main").unwrap();
 
     let snapshot = backend.frame_snapshot("main").unwrap();
-    assert!(count_changed_pixels(snapshot, 0x080a0e, Geometry::new(0.0, 0.0, 128.0, 96.0)) > 0);
+    assert!(count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(0.0, 0.0, 128.0, 96.0)) > 0);
     assert!(backend.command_keys().iter().any(|key| {
         key.starts_with("runtime-scene-frame:commands=") && key.contains(":frame=4:dpi=1")
     }));
@@ -413,11 +417,11 @@ fn vector_gradient_and_effects_render_pixels() {
     let snapshot = backend.frame_snapshot("main").unwrap();
 
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(10.0, 10.0, 20.0, 20.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(10.0, 10.0, 20.0, 20.0)) > 0,
         "filled vector path must affect its path bounds"
     );
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(40.0, 10.0, 24.0, 20.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(40.0, 10.0, 24.0, 20.0)) > 0,
         "rounded rectangle must affect its requested bounds"
     );
     assert_ne!(
@@ -426,11 +430,11 @@ fn vector_gradient_and_effects_render_pixels() {
         "linear gradient should produce different start and end colors"
     );
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 50.0, 26.0, 18.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(16.0, 50.0, 26.0, 18.0)) > 0,
         "shadow must affect pixels in the offset blur region"
     );
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(50.0, 42.0, 30.0, 22.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(50.0, 42.0, 30.0, 22.0)) > 0,
         "glow must affect pixels around the source rectangle"
     );
 }
@@ -463,7 +467,7 @@ fn opacity_group_composites_children_at_group_alpha() {
         (120..=136).contains(&red),
         "group alpha must blend child pixels; pixel={pixel:#08x}, red={red}"
     );
-    assert_ne!(pixel, 0xff0000, "child must not be drawn fully opaque");
+    assert_ne!(pixel, 0x00ff_0000, "child must not be drawn fully opaque");
 }
 
 #[test]
@@ -484,11 +488,11 @@ fn apply_layer_effect_executes_supported_structured_effects() {
 
     let snapshot = backend.frame_snapshot("main").unwrap();
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 50.0, 26.0, 18.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(16.0, 50.0, 26.0, 18.0)) > 0,
         "structured shadow effect must render pixels"
     );
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(50.0, 42.0, 30.0, 22.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(50.0, 42.0, 30.0, 22.0)) > 0,
         "structured glow effect must render pixels"
     );
 }
@@ -538,7 +542,7 @@ fn cache_lifecycle_tracks_generation_and_invalidation() {
     backend.end_frame("main").unwrap();
     let snapshot = backend.frame_snapshot("main").unwrap();
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(56.0, 8.0, 18.0, 18.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(56.0, 8.0, 18.0, 18.0)) > 0,
         "cache replay before invalidation must draw real cached pixels"
     );
 }
@@ -569,7 +573,7 @@ fn custom_meter_surface_renders_pixels_and_records_frame_limited_draw() {
 
     let snapshot = backend.frame_snapshot("main").unwrap();
     assert!(
-        count_changed_pixels(snapshot, 0x080a0e, Geometry::new(16.0, 20.0, 96.0, 24.0)) > 0,
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(16.0, 20.0, 96.0, 24.0)) > 0,
         "custom meter draw hook must produce visible pixels"
     );
     assert!(
@@ -667,7 +671,11 @@ fn drive_core_frame(backend: &mut impl RendererBackend) {
     backend.teardown_surface("main").unwrap();
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 fn count_changed_pixels(
     snapshot: &hawk2ui_render_skia::SkiaFrameSnapshot,
     background: u32,

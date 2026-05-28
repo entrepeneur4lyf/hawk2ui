@@ -1,3 +1,5 @@
+#![allow(clippy::float_cmp)]
+
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_render::RendererBackend;
 use hawk2ui_render::{

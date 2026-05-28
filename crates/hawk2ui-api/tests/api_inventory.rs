@@ -1,4 +1,4 @@
-use hawk2ui_api::{ApiInventory, ApiModule, ApiTypeAudience, ApiTypeStatus};
+use hawk2ui_api::{ApiInventory, ApiModule, ApiTypeAudience, ApiTypeEntry, ApiTypeStatus};
 
 #[test]
 fn api_inventory_classifies_public_internal_feature_gated_and_test_only_types() {
@@ -66,7 +66,7 @@ fn api_contract_inventory_includes_all_surface_runtime_and_plugin_contracts() {
         .types()
         .iter()
         .filter(|ty| ty.status() == ApiTypeStatus::Public)
-        .map(|ty| ty.name())
+        .map(ApiTypeEntry::name)
         .collect::<Vec<_>>();
 
     for required in [

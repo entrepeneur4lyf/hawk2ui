@@ -1,3 +1,5 @@
+#![allow(clippy::float_cmp, clippy::similar_names)]
+
 use hawk2ui_layout::{
     AnalyzerRegion, BoxEdges, FlexDirection, GeneratedParameterLayout, GraphRegion,
     HawkTextMeasurer, LayoutAlignItems, LayoutGridAutoFlow, LayoutGridLine, LayoutGridStyle,

@@ -33,7 +33,7 @@ fn tree_records_preserve_shape_identity_bounds_and_hierarchy() {
 
     assert_eq!(tree.root.id, "root");
     assert_eq!(tree.root.children[0].id, "gain");
-    assert_eq!(tree.root.children[0].bounds.unwrap().width, 120.0);
+    assert!((tree.root.children[0].bounds.unwrap().width - 120.0).abs() < f64::EPSILON);
     assert_eq!(
         tree.find("enabled").unwrap().checked,
         Some(CheckedState::Checked)
@@ -140,16 +140,14 @@ fn host_export_updates_bounds_from_layout_geometry() {
         .unwrap();
 
     assert_eq!(exporter.surface_kind, A11yHostSurfaceKind::Desktop);
-    assert_eq!(
-        exporter
-            .tree()
-            .find("button")
-            .unwrap()
-            .bounds
-            .unwrap()
-            .width,
-        80.0
-    );
+    let button_width = exporter
+        .tree()
+        .find("button")
+        .unwrap()
+        .bounds
+        .unwrap()
+        .width;
+    assert!((button_width - 80.0).abs() < f64::EPSILON);
     assert!(exporter.export_snapshot().platform_services_enabled);
 }
 
@@ -261,7 +259,7 @@ use hawk2ui_a11y::{A11yPluginGuard, A11yPluginOperation, A11yThreadContext};
 
 #[test]
 fn plugin_accessibility_safety_denies_audio_thread_and_unstable_host_calls() {
-    let guard = A11yPluginGuard::default();
+    let guard = A11yPluginGuard;
 
     let audio = guard
         .ensure_allowed(
@@ -282,7 +280,7 @@ fn plugin_accessibility_safety_denies_audio_thread_and_unstable_host_calls() {
 
 #[test]
 fn plugin_accessibility_safety_allows_safe_editor_updates() {
-    let guard = A11yPluginGuard::default();
+    let guard = A11yPluginGuard;
 
     guard
         .ensure_allowed(A11yThreadContext::UiThread, A11yPluginOperation::TreeUpdate)

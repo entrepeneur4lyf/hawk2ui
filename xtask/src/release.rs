@@ -494,7 +494,7 @@ evidence = "target/release-evidence/manuals.txt"
         assert_eq!(criteria.criteria.len(), 2);
         assert!(criteria.contains("api-stability"));
         assert!(criteria.release_blockers().all(|criterion| {
-            criterion.blocking == BlockingLevel::Release && !criterion.evidence.as_str().is_empty()
+            criterion.blocking == BlockingLevel::Release && !criterion.evidence.is_empty()
         }));
     }
 
@@ -704,7 +704,7 @@ release_gate = true
 
     #[test]
     fn rejects_changelog_without_verification_evidence() {
-        let input = r#"
+        let input = r"
 # Changelog
 
 ## 0.1.0 - 2026-05-22
@@ -712,7 +712,7 @@ release_gate = true
 ### Added
 
 - Initial release.
-"#;
+";
 
         let error = Changelog::parse(input).expect_err("missing evidence must fail");
 

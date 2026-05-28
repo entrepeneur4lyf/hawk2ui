@@ -1,3 +1,5 @@
+#![allow(clippy::float_cmp)]
+
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_host::{
     ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig, FramePresenter,
@@ -374,7 +376,7 @@ fn platform_handles_diagnose_unsupported_surface_combinations() {
 fn renderer_resize_bridge_recreates_target_and_forces_redraw_on_maximize() {
     use hawk2ui_host::{RendererResizeBridge, RendererTargetRequest};
 
-    let bridge = RendererResizeBridge::default();
+    let bridge = RendererResizeBridge;
     let request = bridge
         .desktop_event_to_target_request(
             &DesktopHostEvent::ModeChanged(WindowMode::Maximized),
@@ -396,7 +398,7 @@ fn renderer_resize_bridge_recreates_target_and_forces_redraw_on_maximize() {
 fn renderer_resize_bridge_recreates_target_and_forces_redraw_on_dpi_change() {
     use hawk2ui_host::{HostSurfaceUpdateRequest, RendererResizeBridge, RendererTargetRequest};
 
-    let bridge = RendererResizeBridge::default();
+    let bridge = RendererResizeBridge;
     let metrics = SurfaceMetrics::new(800.0, 600.0, 1.75);
     let request = bridge
         .desktop_event_to_target_request(&DesktopHostEvent::DpiChanged(1.75), metrics)
@@ -431,7 +433,7 @@ fn renderer_resize_bridge_recreates_target_and_forces_redraw_on_dpi_change() {
 fn renderer_resize_bridge_invalidates_layout_for_surface_desktop_and_plugin_size_changes() {
     use hawk2ui_host::{HostSurfaceUpdateRequest, RendererResizeBridge, RendererTargetRequest};
 
-    let bridge = RendererResizeBridge::default();
+    let bridge = RendererResizeBridge;
     let resized = SurfaceMetrics::new(1024.0, 768.0, 1.5);
     let surface_update = bridge
         .surface_event_to_update_request(&SurfaceEvent::Resized(resized))

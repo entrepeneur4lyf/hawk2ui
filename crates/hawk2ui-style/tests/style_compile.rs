@@ -1,3 +1,5 @@
+#![allow(clippy::needless_raw_string_hashes)]
+
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_style::{
     PropertyGroup, PropertyId, PropertyRegistry, PropertyRequirement, Selector, StyleValue,

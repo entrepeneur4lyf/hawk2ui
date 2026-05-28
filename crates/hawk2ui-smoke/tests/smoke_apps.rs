@@ -3,7 +3,7 @@ use hawk2ui_smoke::{SmokeFixture, SmokeRunner, SmokeTargetKind};
 #[test]
 fn desktop_basic_builds_verifies_exports_scene_first_frame_and_window_lifecycle() {
     let fixture = SmokeFixture::from_workspace("examples/desktop-basic", SmokeTargetKind::Desktop);
-    let runner = SmokeRunner::default();
+    let runner = SmokeRunner;
 
     let result = runner
         .run_desktop_basic(&fixture)
@@ -24,7 +24,7 @@ fn desktop_basic_builds_verifies_exports_scene_first_frame_and_window_lifecycle(
 fn desktop_dashboard_exercises_layout_style_snapshot_focus_pointer_and_resize() {
     let fixture =
         SmokeFixture::from_workspace("examples/desktop-dashboard", SmokeTargetKind::Desktop);
-    let runner = SmokeRunner::default();
+    let runner = SmokeRunner;
 
     let result = runner
         .run_desktop_dashboard(&fixture)
@@ -49,7 +49,7 @@ fn desktop_dashboard_exercises_layout_style_snapshot_focus_pointer_and_resize() 
 fn plugin_synth_editor_exercises_editor_parameters_automation_state_and_destroy() {
     let fixture =
         SmokeFixture::from_workspace("examples/plugin-synth-editor", SmokeTargetKind::Plugin);
-    let runner = SmokeRunner::default();
+    let runner = SmokeRunner;
 
     let result = runner
         .run_plugin_synth_editor(&fixture)
@@ -85,7 +85,7 @@ fn plugin_synth_editor_exercises_editor_parameters_automation_state_and_destroy(
 fn plugin_meter_analyzer_proves_non_blocking_transport_and_ui_consumption() {
     let fixture =
         SmokeFixture::from_workspace("examples/plugin-meter-analyzer", SmokeTargetKind::Plugin);
-    let runner = SmokeRunner::default();
+    let runner = SmokeRunner;
 
     let result = runner
         .run_plugin_meter_analyzer(&fixture)
@@ -111,7 +111,7 @@ fn plugin_meter_analyzer_proves_non_blocking_transport_and_ui_consumption() {
 #[test]
 fn style_gallery_exports_deterministic_snapshots_for_all_sections() {
     let fixture = SmokeFixture::from_workspace("examples/style-gallery", SmokeTargetKind::Desktop);
-    let runner = SmokeRunner::default();
+    let runner = SmokeRunner;
 
     let result = runner
         .run_style_gallery(&fixture)
@@ -143,7 +143,7 @@ fn style_gallery_exports_deterministic_snapshots_for_all_sections() {
 fn security_denials_fail_before_runtime_surface_launch() {
     let fixture =
         SmokeFixture::from_workspace("examples/security-denials", SmokeTargetKind::Desktop);
-    let runner = SmokeRunner::default();
+    let runner = SmokeRunner;
 
     let result = runner
         .run_security_denials(&fixture)
@@ -166,7 +166,7 @@ fn security_denials_fail_before_runtime_surface_launch() {
 
 #[test]
 fn framework_examples_cover_all_public_framework_fixtures() {
-    let runner = SmokeRunner::default();
+    let runner = SmokeRunner;
 
     let result = runner
         .run_framework_examples()

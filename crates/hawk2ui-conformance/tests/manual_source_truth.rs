@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use hawk2ui_api::{ApiInventory, ApiModule, ApiTypeStatus};
+use hawk2ui_api::{ApiInventory, ApiModule, ApiTypeEntry, ApiTypeStatus};
 use hawk2ui_build::{HawkManifest, PackageTarget};
 use hawk2ui_cli::CommandCatalog;
 use hawk2ui_compat::{
@@ -239,7 +239,7 @@ fn manual_runtime_security_and_packaging_match_machine_readable_gates() {
         .types()
         .iter()
         .filter(|entry| entry.status() == ApiTypeStatus::Public)
-        .map(|entry| entry.name())
+        .map(ApiTypeEntry::name)
     {
         assert!(
             runtime.contains(public_type)

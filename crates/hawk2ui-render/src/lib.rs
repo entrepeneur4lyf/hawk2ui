@@ -9,6 +9,9 @@ pub mod layer;
 pub mod scene;
 pub mod text;
 
+pub use assets::{
+    AssetDiagnostic, AssetDrawRecord, AssetError, AssetKind, BackendRequirement, CompiledAsset,
+};
 pub use backend::{
     BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, RecordingBackend,
     RendererBackend, RendererCacheInvalidator,
@@ -50,6 +53,3 @@ mod tests {
         assert_eq!(crate_name(), "hawk2ui-render");
     }
 }
-pub use assets::{
-    AssetDiagnostic, AssetDrawRecord, AssetError, AssetKind, BackendRequirement, CompiledAsset,
-};

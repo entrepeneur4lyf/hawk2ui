@@ -81,7 +81,7 @@ mod tests {
         let surface = HostSurfaceContract::new(SurfaceKind::Desktop, metrics, true);
 
         assert_eq!(surface.kind, SurfaceKind::Desktop);
-        assert_eq!(surface.metrics.scale_factor, 2.0);
+        assert!((surface.metrics.scale_factor - 2.0).abs() < f32::EPSILON);
         assert!(surface.focused);
     }
 
@@ -95,7 +95,7 @@ mod tests {
         };
 
         assert_eq!(parameter.id.as_str(), "gain");
-        assert_eq!(parameter.default_normalized, 0.5);
+        assert!((parameter.default_normalized - 0.5).abs() < f32::EPSILON);
         assert!(parameter.automatable);
         assert_eq!(editor.default_width, 900);
         assert_eq!(editor.min_height, 360);
