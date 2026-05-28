@@ -54,10 +54,51 @@ fn collect_workspace_production_sources(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn production_source(source: &str) -> &str {
-    source
-        .find("\n#[cfg(test)]")
-        .map_or(source, |test_module_start| &source[..test_module_start])
+fn production_source(source: &str) -> String {
+    let mut output = String::with_capacity(source.len());
+    let mut cursor = 0;
+
+    while let Some(cfg_relative_start) = source[cursor..].find("\n#[cfg(test)]") {
+        let cfg_start = cursor + cfg_relative_start;
+        output.push_str(&source[cursor..cfg_start]);
+
+        let attr_start = cfg_start + 1;
+        let Some(mod_relative_start) = source[attr_start..].find("mod tests") else {
+            cursor = attr_start;
+            continue;
+        };
+        let mod_start = attr_start + mod_relative_start;
+        let Some(open_relative_brace) = source[mod_start..].find('{') else {
+            cursor = attr_start;
+            continue;
+        };
+        let open_brace = mod_start + open_relative_brace;
+        let Some(close_brace) = matching_brace(source, open_brace) else {
+            cursor = attr_start;
+            continue;
+        };
+        cursor = close_brace + 1;
+    }
+
+    output.push_str(&source[cursor..]);
+    output
+}
+
+fn matching_brace(source: &str, open_brace: usize) -> Option<usize> {
+    let mut depth = 0_usize;
+    for (offset, byte) in source[open_brace..].bytes().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open_brace + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[test]
@@ -70,7 +111,11 @@ fn production_source_does_not_use_panic_style_fallible_assumptions() {
         for forbidden in [
             ".expect(",
             ".unwrap(",
+            ".unwrap_err(",
             "panic!(",
+            "unreachable!(",
+            "assert!(",
+            "debug_assert!(",
             "todo!(",
             "unimplemented!(",
         ] {
@@ -81,4 +126,30 @@ fn production_source_does_not_use_panic_style_fallible_assumptions() {
             );
         }
     }
+}
+
+#[test]
+fn production_source_strips_test_modules_without_dropping_later_production_code() {
+    let source = r#"
+pub fn before() {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_only() {
+        panic!("test panic is outside production");
+    }
+}
+
+pub fn after() {
+    panic!("production panic remains visible");
+}
+"#;
+
+    let production = production_source(source);
+
+    assert!(production.contains("pub fn before()"));
+    assert!(production.contains("pub fn after()"));
+    assert!(!production.contains("fn test_only()"));
+    assert!(production.contains("panic!(\"production panic remains visible\")"));
 }

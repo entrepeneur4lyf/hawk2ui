@@ -19,9 +19,10 @@ fn assert_contains(input: &str, required: &str) {
 }
 
 #[test]
-fn verification_gates_fast_script_matches_ci_fast_scope() {
+fn verification_gate_definitions_fast_script_matches_ci_fast_scope() {
     let script = read_workspace_file("scripts/check-fast.sh");
 
+    // Conformance tests assert gate definitions stay wired; CI executes these scripts.
     for required in [
         "cargo fmt --all -- --check",
         "cargo check --workspace",
@@ -35,9 +36,10 @@ fn verification_gates_fast_script_matches_ci_fast_scope() {
 }
 
 #[test]
-fn verification_gates_full_script_runs_release_blocking_checks() {
+fn verification_gate_definitions_full_script_lists_release_blocking_checks() {
     let script = read_workspace_file("scripts/check.sh");
 
+    // This is a definition drift check. Script execution remains owned by CI and release runs.
     for required in [
         "cargo fmt --all -- --check",
         "cargo clippy --workspace -- -D warnings",
@@ -54,9 +56,10 @@ fn verification_gates_full_script_runs_release_blocking_checks() {
 }
 
 #[test]
-fn verification_gates_ci_has_named_jobs_for_each_gate_family() {
+fn verification_gate_definitions_ci_has_named_jobs_for_each_gate_family() {
     let workflow = read_workspace_file(".github/workflows/ci.yml");
 
+    // This checks required CI job declarations, not the outcome of a live CI run.
     for required in [
         "name: format",
         "name: clippy",
@@ -74,9 +77,10 @@ fn verification_gates_ci_has_named_jobs_for_each_gate_family() {
 }
 
 #[test]
-fn verification_gates_docs_cover_commit_release_ci_troubleshooting_and_blockers() {
+fn verification_gate_definitions_docs_cover_commit_release_ci_troubleshooting_and_blockers() {
     let docs = read_workspace_file("docs/development/verification.md");
 
+    // Manual conformance is intentionally structural; source-of-truth behavior is in scripts.
     for required in [
         "## Before Every Commit",
         "## Before Every Release",

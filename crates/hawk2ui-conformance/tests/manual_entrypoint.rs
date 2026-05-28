@@ -12,6 +12,16 @@ fn read_workspace_file(path: &str) -> String {
     })
 }
 
+fn section_body<'manual>(manual: &'manual str, heading: &str) -> &'manual str {
+    let start = manual
+        .find(heading)
+        .unwrap_or_else(|| panic!("manual must contain `{heading}`"))
+        + heading.len();
+    let tail = &manual[start..];
+    tail.find("\n## ")
+        .map_or(tail.trim(), |next_heading| tail[..next_heading].trim())
+}
+
 #[test]
 fn manual_entrypoint_covers_required_product_domains() {
     let manual = read_workspace_file("manual/README.md");
@@ -26,5 +36,12 @@ fn manual_entrypoint_covers_required_product_domains() {
         "## Troubleshooting",
     ] {
         assert!(manual.contains(heading), "manual must contain `{heading}`");
+        if heading.starts_with("## ") {
+            let body = section_body(&manual, heading);
+            assert!(
+                body.contains("](") && body.len() >= 48,
+                "manual section `{heading}` must contain explanatory copy and link to concrete user-facing manual pages"
+            );
+        }
     }
 }

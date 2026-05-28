@@ -15,6 +15,7 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
+hawk2ui-assets = { version = "0.1.0", path = "../hawk2ui-assets" }
 hawk2ui-authoring = { version = "0.1.0", path = "../hawk2ui-authoring" }
 hawk2ui-build = { version = "0.1.0", path = "../hawk2ui-build" }
 hawk2ui-cli = { version = "0.1.0", path = "../hawk2ui-cli" }
@@ -22,6 +23,7 @@ hawk2ui-compat = { version = "0.1.0", path = "../hawk2ui-compat" }
 hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
+hawk2ui-security = { version = "0.1.0", path = "../hawk2ui-security" }
 hawk2ui-style = { version = "0.1.0", path = "../hawk2ui-style" }
 
 [lints]
