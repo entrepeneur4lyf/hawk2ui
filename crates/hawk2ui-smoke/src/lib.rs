@@ -15,6 +15,16 @@ use hawk2ui_framework_react::{ReactElementTree, ReactIntegration};
 use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
 use hawk2ui_framework_svelte::{SvelteComponentSource, SvelteIntegration};
 use hawk2ui_framework_vue::{VueIntegration, VueSingleFileComponent};
+use hawk2ui_host::{PluginEditorConfig, PluginHostAdapter, PluginParentHandle, SurfaceMetrics};
+use hawk2ui_host_baseview::{
+    BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
+};
+use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
+use hawk2ui_render::Color;
+use hawk2ui_runtime::{
+    RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
+    RuntimeVisual,
+};
 use serde::{Deserialize, Serialize};
 
 /// Smoke target kind.
@@ -134,6 +144,14 @@ pub struct PluginEditorSmokeResult {
     pub preset_id: String,
     /// Whether the plugin editor attempted process quit.
     pub requested_process_quit: bool,
+    /// Native parent backend validated for the `Baseview` adapter.
+    pub native_parent_backend: String,
+    /// Number of frames presented through the `Baseview` adapter.
+    pub baseview_presented_frames: u64,
+    /// Physical size of the presented `Baseview` frame.
+    pub baseview_surface_size: [u32; 2],
+    /// Whether the presented `Baseview` frame contains visible scene pixels.
+    pub baseview_visible_pixel: bool,
 }
 
 /// Smoke run result for realtime visual fixture.
@@ -332,6 +350,30 @@ impl SmokeRunner {
                 ));
             }
         }
+        let mut adapter = BaseviewPluginAdapter::attach(
+            PluginEditorConfig::new(
+                "plugin-synth-editor",
+                PluginParentHandle::opaque("smoke-plugin-parent"),
+                SurfaceMetrics::new(640.0, 360.0, 1.0),
+            ),
+            BaseviewParentFixture::linux_xwayland(),
+        )
+        .map_err(|error| format!("baseview smoke attach failed: {}", error.rule()))?;
+        adapter
+            .try_host_resize(SurfaceMetrics::new(640.0, 360.0, 1.5))
+            .map_err(|error| format!("baseview smoke resize failed: {}", error.rule()))?;
+        adapter
+            .try_dpi_changed(1.5)
+            .map_err(|error| format!("baseview smoke dpi failed: {}", error.rule()))?;
+        let native_parent = adapter
+            .native_parent()
+            .map_err(|error| format!("baseview smoke parent failed: {}", error.rule()))?;
+        let scene = plugin_editor_scene_frame()?;
+        let snapshot = adapter
+            .render_scene_frame(&scene)
+            .map_err(|error| format!("baseview smoke render failed: {}", error.rule()))?
+            .clone();
+        adapter.destroy_editor("plugin smoke complete");
         Ok(PluginEditorSmokeResult {
             fixture_name: fixture.name(),
             editor_events: vec![
@@ -350,6 +392,10 @@ impl SmokeRunner {
             state_roundtrip: true,
             preset_id: "factory.bright-pad".into(),
             requested_process_quit: false,
+            native_parent_backend: native_parent_backend_label(native_parent.backend()).into(),
+            baseview_presented_frames: adapter.presented_frame_count(),
+            baseview_surface_size: [snapshot.width(), snapshot.height()],
+            baseview_visible_pixel: snapshot.pixels().contains(&PLUGIN_SMOKE_FILL_PIXEL),
         })
     }
 
@@ -782,6 +828,30 @@ fn solid_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleCo
 
 fn runtime_tree_has_example_children(tree: &hawk2ui_runtime::RuntimeViewTree) -> bool {
     tree.root_id().as_str() == "root" && tree.children_of(tree.root_id()).len() == 2
+}
+
+fn plugin_editor_scene_frame() -> Result<RuntimeSceneFrame, String> {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("plugin-editor-root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(640.0, 360.0)),
+        RuntimeVisual::Fill(Color::rgba(26, 111, 74, 255)),
+    ));
+    RuntimeSceneBridge::new(Viewport::new(640.0, 360.0))
+        .build(&tree)
+        .map_err(|error| format!("plugin editor scene build failed: {error:?}"))
+}
+
+const PLUGIN_SMOKE_FILL_PIXEL: u32 = 0x001a_6f4a;
+
+const fn native_parent_backend_label(backend: BaseviewNativeParentBackend) -> &'static str {
+    match backend {
+        BaseviewNativeParentBackend::Windows => "windows",
+        BaseviewNativeParentBackend::MacOs => "macos",
+        BaseviewNativeParentBackend::X11 => "x11",
+        BaseviewNativeParentBackend::Xcb => "xcb",
+        BaseviewNativeParentBackend::XWayland => "xwayland",
+    }
 }
 
 fn workspace_root() -> PathBuf {

@@ -1818,6 +1818,10 @@ dependencies = [
  "hawk2ui-framework-solid",
  "hawk2ui-framework-svelte",
  "hawk2ui-framework-vue",
+ "hawk2ui-host",
+ "hawk2ui-host-baseview",
+ "hawk2ui-layout",
+ "hawk2ui-render",
  "hawk2ui-runtime",
  "serde",
 ]

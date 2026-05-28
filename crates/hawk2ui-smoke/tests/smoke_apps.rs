@@ -75,6 +75,10 @@ fn plugin_synth_editor_exercises_editor_parameters_automation_state_and_destroy(
     assert!(result.state_roundtrip);
     assert_eq!(result.preset_id, "factory.bright-pad");
     assert!(!result.requested_process_quit);
+    assert_eq!(result.native_parent_backend, "xwayland");
+    assert_eq!(result.baseview_presented_frames, 1);
+    assert_eq!(result.baseview_surface_size, [960, 540]);
+    assert!(result.baseview_visible_pixel);
 }
 
 #[test]
