@@ -372,11 +372,13 @@ impl AssetBackend {
         })?;
         validate_vector(svg)?;
         let options = usvg::Options::default();
-        let _tree = usvg::Tree::from_data(bytes, &options).map_err(|_| {
+        let tree = usvg::Tree::from_data(bytes, &options).map_err(|_| {
             AssetBackendError::new("asset.vector.parse-failed", "SVG parsing failed")
         })?;
-        let path_count = svg.matches("<path").count();
-        let compiled_bytes = normalize_svg_payload(svg).into_bytes();
+        let path_count = count_vector_paths(tree.root());
+        let compiled_payload = normalize_svg_payload(&tree)?;
+        validate_vector(&compiled_payload)?;
+        let compiled_bytes = compiled_payload.into_bytes();
         let compiled_hash = AssetHash::sha256_bytes(&compiled_bytes);
         let asset = self.record(AssetRecordDraft {
             id: id.into(),
@@ -586,12 +588,27 @@ fn encode_lossless_webp(image: &image::DynamicImage) -> Result<Vec<u8>, AssetBac
     Ok(encoded)
 }
 
-fn normalize_svg_payload(svg: &str) -> String {
-    svg.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+fn count_vector_paths(group: &usvg::Group) -> usize {
+    group
+        .children()
+        .iter()
+        .map(|node| match node {
+            usvg::Node::Group(child) => count_vector_paths(child),
+            usvg::Node::Path(_) => 1,
+            usvg::Node::Image(_) | usvg::Node::Text(_) => 0,
+        })
+        .sum()
+}
+
+fn normalize_svg_payload(tree: &usvg::Tree) -> Result<String, AssetBackendError> {
+    let payload = tree.to_string(&usvg::WriteOptions::default());
+    if payload.trim().is_empty() {
+        return Err(AssetBackendError::new(
+            "asset.vector.empty-output",
+            "SVG lowering produced an empty payload",
+        ));
+    }
+    Ok(payload)
 }
 
 #[cfg(test)]

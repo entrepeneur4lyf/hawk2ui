@@ -198,15 +198,25 @@ Production status: Not production ready.
 
 Evidence:
 
-- `crates/hawk2ui-assets/src/lib.rs:283` validates and decodes image bytes but does not re-encode a sanitized WebP output payload.
-- `crates/hawk2ui-assets/src/lib.rs:313` parses vectors and records counts but does not produce a lowered/sanitized vector payload.
-- `crates/hawk2ui-assets/src/lib.rs:520` rejects a small substring denylist for SVG/script risks.
+- Initial review found that asset processing decoded images without a normalized payload and
+  preserved original SVG text after basic token checks.
 
 Impact:
 
-Image metadata stripping, WebP conversion, and SVG sanitization are not fully implemented. Denylist scanning is not sufficient for hostile SVG or malformed asset inputs.
+Unnormalized image/vector payloads can preserve metadata or hostile markup across the build
+boundary.
 
-Production status: Not production ready.
+Remediation:
+
+- Image compilation now decodes source image bytes, enforces size/pixel limits, and emits a
+  lossless WebP compiled payload with a separate compiled-content hash.
+- Vector compilation now validates source SVG, parses it through `usvg::Tree`, serializes the parsed
+  tree through `usvg::WriteOptions`, validates the lowered payload, records lowered path count from
+  the parsed tree, and hashes the compiled sanitized payload instead of preserving original markup.
+- Tests assert that safe vectors compile into UTF-8 SVG output with path content and without unsafe
+  original markup, while executable SVG content fails closed.
+
+Production status: Remediated at asset normalization boundary.
 
 ### 10. Filesystem And Network Policy Enforcement Are Not Hardened
 

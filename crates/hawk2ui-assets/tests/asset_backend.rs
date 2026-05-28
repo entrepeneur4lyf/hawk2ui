@@ -50,7 +50,7 @@ fn asset_backend_rejects_oversized_assets_and_invalid_hashes() {
 #[test]
 fn asset_backend_validates_and_lowers_vectors() {
     let safe_svg = br#"<svg viewBox="0 0 10 10"><path d="M0 0L10 10"/></svg>"#;
-    let unsafe_svg = br#"<svg><script>alert(1)</script></svg>"#;
+    let unsafe_svg = br"<svg><script>alert(1)</script></svg>";
     let mut backend = AssetBackend::new(AssetLimits::default());
 
     let vector = backend
@@ -65,6 +65,12 @@ fn asset_backend_validates_and_lowers_vectors() {
     assert_eq!(vector.kind(), AssetKind::Vector);
     assert!(vector.sanitized());
     assert_eq!(vector.vector_lowering().unwrap().path_count(), 1);
+    let lowered_svg =
+        std::str::from_utf8(vector.compiled_bytes()).expect("lowered vector remains UTF-8 SVG");
+    assert!(lowered_svg.starts_with("<svg"));
+    assert!(lowered_svg.contains("<path"));
+    assert!(!lowered_svg.contains("viewBox=\"0 0 10 10\""));
+    assert!(!lowered_svg.contains("<script"));
 
     let error = backend
         .compile_vector(

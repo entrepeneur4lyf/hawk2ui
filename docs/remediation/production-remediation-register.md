@@ -1683,6 +1683,11 @@ Evidence:
 
 - Security source, sandbox, assets, secrets, trust records exist.
 - Full source validation, runtime sandbox enforcement, package trust, and untrusted package handling are incomplete.
+- Image assets are decoded, limit-checked, re-encoded into sanitized lossless WebP payloads, and
+  hashed at the compiled-payload boundary.
+- Vector assets are parsed through `usvg::Tree`, serialized from the parsed tree, validated again
+  after lowering, and hashed from the sanitized compiled payload instead of preserving original SVG
+  source text.
 
 Required remediation:
 
@@ -1692,6 +1697,19 @@ Required remediation:
 Acceptance:
 
 - Security denial fixtures exercise real runtime/build/package code paths.
+
+Status:
+
+- Remediated for source validation, capability-gated runtime platform calls, asset normalization,
+  package trust records, artifact signature verification, and package integrity diagnostics.
+- Remaining security work should be tracked only where it ties to incomplete host/plugin/native
+  adapter surfaces, not as a generic asset or package-integrity gap.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this security-model slice for production
+  stability: source, platform policy, asset payload normalization, and package trust boundaries now
+  fail closed with stable diagnostics and verified payload hashes.
 
 ### REM-SEC-002: Complete Package Integrity
 
