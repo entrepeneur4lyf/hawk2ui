@@ -1516,9 +1516,12 @@ Status:
   - Generated CLAP dynamic-library scaffolds now export `hawk2ui_editor_host_abi`, a UTF-8 ABI contract
     listing the supported host bridge commands and responses; the external host-load test resolves and
     validates the export from the compiled library.
-- Remaining work under this item is to wire a concrete C ABI command invocation trampoline from generated
-  CLAP binaries to an embedding host implementation where a host requires C ABI calls rather than direct
-  Rust integration.
+  - Generated CLAP dynamic-library scaffolds now export `hawk2ui_editor_dispatch`, a concrete C ABI command
+    trampoline using host-owned command/response buffers. The compiled host-load test drives editor
+    create/set-parent/show/hide/destroy, parameter apply, state save/load, and realtime visual drain
+    commands through the export and verifies that the generated plugin state changes.
+- Remaining work under this item is to bind the generated C ABI trampoline to a real DAW-owned CLAP editor
+  surface in an integration smoke so the same command path is exercised outside the synthetic loader.
 
 Required remediation:
 

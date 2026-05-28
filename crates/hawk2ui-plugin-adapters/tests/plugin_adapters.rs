@@ -877,14 +877,47 @@ fn main() {
                 "response=state_saved",
                 "response=state_loaded",
                 "response=realtime_visuals_drained",
+                "function=hawk2ui_editor_dispatch",
             ] {
                 assert!(
                     host_abi.contains(required_entry),
                     "host ABI missing {required_entry}"
                 );
             }
+            let editor_dispatch: libloading::Symbol<
+                unsafe extern "C" fn(*const u8, usize, *mut u8, usize, *mut usize) -> bool,
+            > = library
+                .get(b"hawk2ui_editor_dispatch\0")
+                .expect("editor dispatch export resolves");
             let editor_state: libloading::Symbol<unsafe extern "C" fn() -> Hawk2uiEditorState> =
                 library.get(b"hawk2ui_editor_state\0").expect("editor state export resolves");
+            assert_editor_state(editor_state(), false, false, false, 1024, 640);
+            let create_response = dispatch_editor(
+                *editor_dispatch,
+                "command=create\napi=x11\nfloating=false\n",
+            );
+            assert!(create_response.contains("response=created"));
+            assert_editor_state(editor_state(), true, false, false, 1024, 640);
+            let blocked_show_response = dispatch_editor(*editor_dispatch, "command=show\n");
+            assert!(blocked_show_response.contains("error=editor-not-attached"));
+            assert_editor_state(editor_state(), true, false, false, 1024, 640);
+            let attach_response = dispatch_editor(
+                *editor_dispatch,
+                "command=set_parent\napi=x11\nparent=1\n",
+            );
+            assert!(attach_response.contains("response=parent_attached"));
+            assert_editor_state(editor_state(), true, true, false, 1024, 640);
+            let show_response = dispatch_editor(*editor_dispatch, "command=show\n");
+            assert!(show_response.contains("response=frame_presented"));
+            assert!(show_response.contains("width=1024"));
+            assert!(show_response.contains("height=640"));
+            assert!(show_response.contains("presented_frame_count=1"));
+            assert_editor_state(editor_state(), true, true, true, 1024, 640);
+            let hide_response = dispatch_editor(*editor_dispatch, "command=hide\n");
+            assert!(hide_response.contains("response=hidden"));
+            assert_editor_state(editor_state(), true, true, false, 1024, 640);
+            let destroy_response = dispatch_editor(*editor_dispatch, "command=destroy\n");
+            assert!(destroy_response.contains("response=destroyed"));
             assert_editor_state(editor_state(), false, false, false, 1024, 640);
             assert!((gui.create.expect("gui create"))(plugin, preferred_api, false));
             assert_editor_state(editor_state(), true, false, false, 1024, 640);
@@ -1001,9 +1034,64 @@ fn main() {
               1,
               &mut loaded_value,
           ));
-          assert_eq!(loaded_value, 3.5);
-      }
-  }
+            assert_eq!(loaded_value, 3.5);
+            let applied_response = dispatch_editor(
+                *editor_dispatch,
+                "command=apply_parameter\nparameter_id=1\nvalue=4.25\n",
+            );
+            assert!(applied_response.contains("response=parameter_applied"));
+            let mut dispatched_value = f64::NAN;
+            assert!((params.get_value.expect("dispatched param value"))(
+                plugin,
+                1,
+                &mut dispatched_value,
+            ));
+            assert_eq!(dispatched_value, 4.25);
+            let saved_response = dispatch_editor(*editor_dispatch, "command=save_state\n");
+            assert!(saved_response.contains("response=state_saved"));
+            assert!(saved_response.contains("param.1.bits="));
+            let load_command = format!(
+                "command=load_state\nparam.1.bits={}\n",
+                1.75f64.to_bits()
+            );
+            let loaded_response = dispatch_editor(*editor_dispatch, &load_command);
+            assert!(loaded_response.contains("response=state_loaded"));
+            let mut c_abi_loaded_value = f64::NAN;
+            assert!((params.get_value.expect("c abi loaded param value"))(
+                plugin,
+                1,
+                &mut c_abi_loaded_value,
+            ));
+            assert_eq!(c_abi_loaded_value, 1.75);
+            let visual_response = dispatch_editor(
+                *editor_dispatch,
+                "command=drain_realtime_visuals\npacket_count=2\n",
+            );
+            assert!(visual_response.contains("response=realtime_visuals_drained"));
+            assert!(visual_response.contains("packet_count=2"));
+        }
+    }
+
+    unsafe fn dispatch_editor(
+        dispatch: unsafe extern "C" fn(*const u8, usize, *mut u8, usize, *mut usize) -> bool,
+        command: &str,
+    ) -> String {
+        let mut response = [0u8; 4096];
+        let mut response_len = 0usize;
+        assert!(unsafe {
+            dispatch(
+                command.as_ptr(),
+                command.len(),
+                response.as_mut_ptr(),
+                response.len(),
+                &mut response_len,
+            )
+        });
+        assert!(response_len <= response.len());
+        std::str::from_utf8(&response[..response_len])
+            .expect("dispatch response is utf8")
+            .to_owned()
+    }
 
   struct ReadCursor {
       bytes: Vec<u8>,
