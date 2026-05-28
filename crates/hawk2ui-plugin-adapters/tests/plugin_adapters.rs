@@ -633,9 +633,26 @@ fn main() {
             &mut preferred_api,
             &mut is_floating,
         ));
-        assert!(!preferred_api.is_null());
-        assert!(!is_floating);
-        assert!((gui.create.expect("gui create"))(plugin, preferred_api, false));
+          assert!(!preferred_api.is_null());
+          assert!(!is_floating);
+          #[cfg(target_os = "linux")]
+          {
+              assert_eq!(
+                  CStr::from_ptr(preferred_api).to_bytes(),
+                  clap_sys::ext::gui::CLAP_WINDOW_API_X11.to_bytes()
+              );
+              assert!((gui.is_api_supported.expect("x11 supported"))(
+                  plugin,
+                  clap_sys::ext::gui::CLAP_WINDOW_API_X11.as_ptr(),
+                  false,
+              ));
+              assert!(!(gui.is_api_supported.expect("wayland unsupported for baseview"))(
+                  plugin,
+                  clap_sys::ext::gui::CLAP_WINDOW_API_WAYLAND.as_ptr(),
+                  false,
+              ));
+          }
+          assert!((gui.create.expect("gui create"))(plugin, preferred_api, false));
         assert!(!(gui.show.expect("gui show before parent"))(plugin));
         let parent = clap_sys::ext::gui::clap_window {
             api: preferred_api,

@@ -1094,22 +1094,38 @@ unsafe extern "C" fn gui_hide(_plugin: *const clap_plugin) -> bool {
     was_created
 }
 
-fn is_supported_window_api(api: *const c_char) -> bool {
-    cstr_matches(api, CLAP_WINDOW_API_WAYLAND)
-        || cstr_matches(api, CLAP_WINDOW_API_X11)
-        || cstr_matches(api, CLAP_WINDOW_API_COCOA)
-        || cstr_matches(api, CLAP_WINDOW_API_WIN32)
-}
-
-fn cstr_matches(value: *const c_char, expected: &CStr) -> bool {
-    !value.is_null() && unsafe { CStr::from_ptr(value) }.to_bytes() == expected.to_bytes()
-}
-
-fn preferred_window_api() -> *const c_char {
-    #[cfg(target_os = "linux")]
-    {
-        CLAP_WINDOW_API_WAYLAND.as_ptr()
+    fn is_supported_window_api(api: *const c_char) -> bool {
+        if descriptor_declares_baseview_host_adapter() {
+            return cstr_matches(api, CLAP_WINDOW_API_X11)
+                || cstr_matches(api, CLAP_WINDOW_API_COCOA)
+                || cstr_matches(api, CLAP_WINDOW_API_WIN32);
+        }
+        cstr_matches(api, CLAP_WINDOW_API_WAYLAND)
+            || cstr_matches(api, CLAP_WINDOW_API_X11)
+            || cstr_matches(api, CLAP_WINDOW_API_COCOA)
+            || cstr_matches(api, CLAP_WINDOW_API_WIN32)
     }
+
+    fn cstr_matches(value: *const c_char, expected: &CStr) -> bool {
+        !value.is_null() && unsafe { CStr::from_ptr(value) }.to_bytes() == expected.to_bytes()
+    }
+
+    fn descriptor_declares_baseview_host_adapter() -> bool {
+        const HOST_ADAPTER_BASEVIEW: &[u8] = b"host_adapter=baseview";
+        EDITOR_DESCRIPTOR_BYTES
+            .windows(HOST_ADAPTER_BASEVIEW.len())
+            .any(|window| window == HOST_ADAPTER_BASEVIEW)
+    }
+
+    fn preferred_window_api() -> *const c_char {
+        #[cfg(target_os = "linux")]
+        {
+            if descriptor_declares_baseview_host_adapter() {
+                CLAP_WINDOW_API_X11.as_ptr()
+            } else {
+                CLAP_WINDOW_API_WAYLAND.as_ptr()
+            }
+        }
     #[cfg(target_os = "macos")]
     {
         CLAP_WINDOW_API_COCOA.as_ptr()

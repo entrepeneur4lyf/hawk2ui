@@ -1455,6 +1455,10 @@ Status:
 - The generated CLAP editor descriptor is now backed by a typed `ClapRuntimeEditorDescriptor`
   record with validation for safe relative runtime artifact paths, host adapter IDs, and renderer
   IDs before it can be embedded into the dynamic library scaffold.
+- Generated CLAP GUI scaffolds now honor the selected editor host adapter when advertising native
+  window APIs: `host_adapter=baseview` prefers X11/XWayland on Linux and rejects native Wayland
+  attachment, matching the current Baseview backend boundary instead of exposing an unsupported
+  GUI path.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:
