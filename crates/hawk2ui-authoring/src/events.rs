@@ -154,6 +154,45 @@ impl EventKind {
     }
 }
 
+impl std::str::FromStr for EventKind {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "pointer.press" => Ok(Self::Pointer(PointerEventKind::Press)),
+            "pointer.release" => Ok(Self::Pointer(PointerEventKind::Release)),
+            "pointer.move" => Ok(Self::Pointer(PointerEventKind::Move)),
+            "pointer.drag" => Ok(Self::Pointer(PointerEventKind::Drag)),
+            "keyboard.key-down" => Ok(Self::Keyboard(KeyboardEventKind::KeyDown)),
+            "keyboard.key-up" => Ok(Self::Keyboard(KeyboardEventKind::KeyUp)),
+            "keyboard.text-input" => Ok(Self::Keyboard(KeyboardEventKind::TextInput)),
+            "focus.focus-in" => Ok(Self::Focus(FocusEventKind::FocusIn)),
+            "focus.focus-out" => Ok(Self::Focus(FocusEventKind::FocusOut)),
+            "input.value-changed" => Ok(Self::Input(InputEventKind::ValueChanged)),
+            "input.value-committed" => Ok(Self::Input(InputEventKind::ValueCommitted)),
+            "resize" => Ok(Self::Resize),
+            "lifecycle.mounted" => Ok(Self::Lifecycle(LifecycleEventKind::Mounted)),
+            "lifecycle.suspended" => Ok(Self::Lifecycle(LifecycleEventKind::Suspended)),
+            "lifecycle.resumed" => Ok(Self::Lifecycle(LifecycleEventKind::Resumed)),
+            "lifecycle.hot-reloaded" => Ok(Self::Lifecycle(LifecycleEventKind::HotReloaded)),
+            "lifecycle.error-boundary" => Ok(Self::Lifecycle(LifecycleEventKind::ErrorBoundary)),
+            "lifecycle.shutdown" => Ok(Self::Lifecycle(LifecycleEventKind::Shutdown)),
+            "lifecycle.unmounted" => Ok(Self::Lifecycle(LifecycleEventKind::Unmounted)),
+            _ => value
+                .strip_prefix("component.")
+                .filter(|name| !name.is_empty())
+                .map(|name| Self::CustomComponent(name.to_string()))
+                .or_else(|| {
+                    value
+                        .strip_prefix("plugin-parameter.")
+                        .filter(|name| !name.is_empty())
+                        .map(|name| Self::PluginParameter(name.to_string()))
+                })
+                .ok_or(()),
+        }
+    }
+}
+
 /// Stable handler reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HandlerRef(String);

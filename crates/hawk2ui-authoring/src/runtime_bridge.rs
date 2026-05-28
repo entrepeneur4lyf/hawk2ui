@@ -1,16 +1,21 @@
 //! Native authoring to runtime view bridge.
 
+use hawk2ui_api::Diagnostic;
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle};
-use hawk2ui_render::Color;
+use hawk2ui_render::{Color, CustomSurfaceCategory};
 use hawk2ui_runtime::{
-    RuntimeSceneError, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
-    RuntimeVisual,
+    RuntimeCustomSurfaceVisual, RuntimeSceneError, RuntimeTextVisual, RuntimeViewId,
+    RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
 };
 use hawk2ui_style::{
     CompiledStyleSheet, PropertyId, RuntimeStyleError, RuntimeStyleTable, StyleValue, TokenSet,
 };
 
-use crate::{ElementKind, NativeAuthoringArtifact, NativeAuthoringElement, PropValue, StyleRef};
+use crate::{
+    AuthoringArtifact, ElementKind, NativeAuthoringArtifact, NativeAuthoringElement, NativeChild,
+    PropValue, StyleRef,
+};
+use crate::{limits::MAX_AUTHORING_TREE_DEPTH, operation_keys};
 
 /// Converts native authoring records into runtime view records.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -35,6 +40,58 @@ impl NativeRuntimeBridge {
     ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
         let mut bridged = Self::bridge_element_with_style_resources(artifact.root(), None)?;
         bridged.operation_keys = artifact.operation_keys().to_vec();
+        Ok(bridged)
+    }
+
+    /// Bridges a source-compiled authoring artifact into a runtime tree.
+    ///
+    /// The line compiler emits component records. This adapter materializes the first compiled
+    /// component as a view root and lowers its default slot children, preserving events targeted at
+    /// the component root.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeRuntimeBridgeError`] when the artifact has compiler diagnostics, has no
+    /// components, or contains invalid runtime records.
+    pub fn bridge_authoring_artifact(
+        self,
+        artifact: &AuthoringArtifact,
+    ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
+        if let Some(diagnostic) = artifact.diagnostics().first() {
+            return Err(Self::diagnostic_error(
+                "native-runtime.authoring.diagnostic",
+                diagnostic,
+            ));
+        }
+        let Some(component) = artifact.components().first() else {
+            return Err(NativeRuntimeBridgeError::new(
+                "native-runtime.authoring.empty",
+                "compiled authoring artifact contains no components",
+            ));
+        };
+
+        let mut root = NativeAuthoringElement::new(component.id().as_str(), ElementKind::View);
+        for event in artifact
+            .events()
+            .iter()
+            .filter(|event| event.target().as_str() == component.id().as_str())
+        {
+            root = root.with_event(
+                event.event().clone(),
+                event.handler().as_str(),
+                event.payload_fields().iter().copied(),
+            );
+        }
+        if let Some(default_slot) = component.slot("default") {
+            for child in default_slot.iter() {
+                root = root.with_child(NativeChild::ordered(element_node_to_native(child)));
+            }
+        }
+
+        let mut bridged = Self::bridge_element_with_style_resources(&root, None)?;
+        let mut operation_keys = vec![operation_keys::mount_component_key(component.id().as_str())];
+        operation_keys.extend(artifact.events().iter().map(operation_keys::bind_event_key));
+        bridged.operation_keys = operation_keys;
         Ok(bridged)
     }
 
@@ -160,13 +217,27 @@ impl NativeRuntimeBridge {
                 tree,
                 &mut metadata,
                 styles,
+                1,
             )?;
         }
         Ok(NativeRuntimeBridgeArtifact {
             runtime_tree: tree,
             metadata,
-            operation_keys: Vec::new(),
+            operation_keys: element_operation_keys(root),
         })
+    }
+
+    fn diagnostic_error(
+        rule: &str,
+        diagnostic: &crate::AuthoringDiagnostic,
+    ) -> NativeRuntimeBridgeError {
+        NativeRuntimeBridgeError::new(
+            rule,
+            format!(
+                "compiled authoring artifact contains diagnostic `{}`: {}",
+                diagnostic.rule, diagnostic.message
+            ),
+        )
     }
 }
 
@@ -307,6 +378,12 @@ impl From<RuntimeStyleError> for NativeRuntimeBridgeError {
     }
 }
 
+impl From<NativeRuntimeBridgeError> for Diagnostic {
+    fn from(error: NativeRuntimeBridgeError) -> Self {
+        Self::error(error.rule, error.message)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct StyleResources<'a> {
     sheet: &'a CompiledStyleSheet,
@@ -320,7 +397,14 @@ fn bridge_child(
     mut tree: RuntimeViewTree,
     metadata: &mut Vec<NativeRuntimeNodeMetadata>,
     styles: Option<StyleResources<'_>>,
+    depth: usize,
 ) -> Result<RuntimeViewTree, NativeRuntimeBridgeError> {
+    if depth > MAX_AUTHORING_TREE_DEPTH {
+        return Err(NativeRuntimeBridgeError::new(
+            "native-runtime.tree.depth-exceeded",
+            format!("native authoring tree exceeds maximum depth of {MAX_AUTHORING_TREE_DEPTH}"),
+        ));
+    }
     tree = tree.with_child(
         &RuntimeViewId::new(parent_id),
         runtime_node(element, false, styles)?,
@@ -333,6 +417,7 @@ fn bridge_child(
             tree,
             metadata,
             styles,
+            depth + 1,
         )?;
     }
     Ok(tree)
@@ -422,6 +507,9 @@ fn visual(
         ElementKind::View | ElementKind::Button => Ok(color_prop(element, "background")?
             .or_else(|| styled_color(element, styles, "background-color"))
             .map_or(RuntimeVisual::None, RuntimeVisual::Fill)),
+        ElementKind::CustomSurface => Ok(RuntimeVisual::CustomSurface(
+            RuntimeCustomSurfaceVisual::new(custom_surface_category(element)?),
+        )),
     }
 }
 
@@ -518,10 +606,8 @@ fn narrow_number(
     if !value.is_finite() || !valid_domain {
         return Err(invalid_number(name, domain));
     }
-    let narrowed = value
-        .to_string()
-        .parse::<f32>()
-        .map_err(|_| invalid_number(name, domain))?;
+    #[allow(clippy::cast_possible_truncation)]
+    let narrowed = value as f32;
     if narrowed.is_finite() {
         Ok(narrowed)
     } else {
@@ -583,6 +669,54 @@ fn invalid_color(name: &str) -> NativeRuntimeBridgeError {
 const fn default_height(kind: ElementKind) -> f32 {
     match kind {
         ElementKind::Text => 28.0,
-        ElementKind::Button | ElementKind::View => 40.0,
+        ElementKind::Button | ElementKind::View | ElementKind::CustomSurface => 40.0,
+    }
+}
+
+fn element_node_to_native(node: &crate::ElementNode) -> NativeAuthoringElement {
+    let mut element = NativeAuthoringElement::new(node.id().as_str(), node.kind());
+    for (name, value) in node.props() {
+        element = element.with_prop(name, value.clone());
+    }
+    element
+}
+
+fn element_operation_keys(root: &NativeAuthoringElement) -> Vec<String> {
+    let mut keys = Vec::new();
+    collect_element_operation_keys(root, &mut keys);
+    keys
+}
+
+fn collect_element_operation_keys(element: &NativeAuthoringElement, keys: &mut Vec<String>) {
+    keys.push(operation_keys::mount_element_key(element.id()));
+    for child in element.children() {
+        collect_element_operation_keys(child.element(), keys);
+    }
+}
+
+fn custom_surface_category(
+    element: &NativeAuthoringElement,
+) -> Result<CustomSurfaceCategory, NativeRuntimeBridgeError> {
+    let Some(category) = string_prop(element, "surface_category") else {
+        return Err(NativeRuntimeBridgeError::new(
+            "native-runtime.custom-surface.category-missing",
+            "custom surface elements require a `surface_category` string property",
+        ));
+    };
+    match category.as_str() {
+        "knob" => Ok(CustomSurfaceCategory::Knob),
+        "slider" => Ok(CustomSurfaceCategory::Slider),
+        "meter" => Ok(CustomSurfaceCategory::Meter),
+        "scope" => Ok(CustomSurfaceCategory::Scope),
+        "analyzer" => Ok(CustomSurfaceCategory::Analyzer),
+        "eq-curve" => Ok(CustomSurfaceCategory::EqCurve),
+        "modulation" => Ok(CustomSurfaceCategory::Modulation),
+        "timeline" => Ok(CustomSurfaceCategory::Timeline),
+        "graph-editor" => Ok(CustomSurfaceCategory::GraphEditor),
+        "inspector-panel" => Ok(CustomSurfaceCategory::InspectorPanel),
+        _ => Err(NativeRuntimeBridgeError::new(
+            "native-runtime.custom-surface.category-invalid",
+            format!("custom surface category `{category}` is not supported"),
+        )),
     }
 }

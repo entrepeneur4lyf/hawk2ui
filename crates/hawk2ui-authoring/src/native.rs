@@ -2,10 +2,13 @@
 
 use std::collections::BTreeSet;
 
+use hawk2ui_api::Diagnostic;
+
 use crate::{
     AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementId, ElementKind, ElementNode,
     EventBinding, EventKind, HandlerRef, LifecycleEventKind, PropValue,
 };
+use crate::{limits::MAX_AUTHORING_TREE_DEPTH, operation_keys};
 
 /// Stable style reference emitted by native authoring code.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,18 +109,6 @@ impl NativeLifecycleEvent {
             Self::ErrorBoundary => LifecycleEventKind::ErrorBoundary,
             Self::Shutdown => LifecycleEventKind::Shutdown,
             Self::Unmounted => LifecycleEventKind::Unmounted,
-        }
-    }
-
-    const fn operation_key(self) -> &'static str {
-        match self {
-            Self::Mounted => "mounted",
-            Self::Suspended => "suspended",
-            Self::Resumed => "resumed",
-            Self::HotReloaded => "hot-reloaded",
-            Self::ErrorBoundary => "error-boundary",
-            Self::Shutdown => "shutdown",
-            Self::Unmounted => "unmounted",
         }
     }
 
@@ -370,10 +361,30 @@ pub struct NativeAuthoringError {
 }
 
 impl NativeAuthoringError {
+    /// Creates a native authoring error from release-blocking diagnostics.
+    #[must_use]
+    pub fn from_diagnostics(diagnostics: Vec<AuthoringDiagnostic>) -> Self {
+        Self { diagnostics }
+    }
+
     /// Returns diagnostics that caused native authoring finalization to fail.
     #[must_use]
     pub fn diagnostics(&self) -> &[AuthoringDiagnostic] {
         &self.diagnostics
+    }
+}
+
+impl From<NativeAuthoringError> for Diagnostic {
+    fn from(error: NativeAuthoringError) -> Self {
+        let mut diagnostics = error.diagnostics.into_iter();
+        if let Some(first) = diagnostics.next() {
+            first.into()
+        } else {
+            Self::error(
+                "native.authoring.error",
+                "native authoring failed without structured diagnostics",
+            )
+        }
     }
 }
 
@@ -416,9 +427,9 @@ impl NativeAuthoringRuntime {
         };
 
         let mut diagnostics = Vec::new();
-        validate_element(&root, &mut diagnostics);
+        validate_element(&root, &mut diagnostics, 0);
         if !diagnostics.is_empty() {
-            return Err(NativeAuthoringError { diagnostics });
+            return Err(NativeAuthoringError::from_diagnostics(diagnostics));
         }
 
         let mut events = Vec::new();
@@ -449,7 +460,19 @@ impl NativeAuthoringRuntime {
     }
 }
 
-fn validate_element(element: &NativeAuthoringElement, diagnostics: &mut Vec<AuthoringDiagnostic>) {
+fn validate_element(
+    element: &NativeAuthoringElement,
+    diagnostics: &mut Vec<AuthoringDiagnostic>,
+    depth: usize,
+) {
+    if depth > MAX_AUTHORING_TREE_DEPTH {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "native.tree.depth-exceeded",
+            format!("native authoring tree exceeds maximum depth of {MAX_AUTHORING_TREE_DEPTH}"),
+        ));
+        return;
+    }
     let mut keys = BTreeSet::new();
     for child in &element.children {
         if let Some(key) = &child.key
@@ -461,7 +484,7 @@ fn validate_element(element: &NativeAuthoringElement, diagnostics: &mut Vec<Auth
                 format!("duplicate native child key `{key}`"),
             ));
         }
-        validate_element(&child.element, diagnostics);
+        validate_element(&child.element, diagnostics, depth + 1);
     }
 
     for asset in &element.asset_refs {
@@ -505,11 +528,10 @@ fn collect_lifecycle(
             EventKind::Lifecycle(event.event_kind()),
             binding.handler.clone(),
         ));
-        operation_keys.push(format!(
-            "lifecycle:{}:{}:{}",
-            event.operation_key(),
-            element.node.id().as_str(),
-            binding.handler.as_str()
+        operation_keys.push(operation_keys::native_lifecycle_key(
+            event,
+            element.node.id(),
+            &binding.handler,
         ));
     }
     for child in &element.children {
@@ -518,7 +540,7 @@ fn collect_lifecycle(
 }
 
 fn collect_mounts(element: &NativeAuthoringElement, operation_keys: &mut Vec<String>) {
-    operation_keys.push(format!("mount-element:{}", element.node.id().as_str()));
+    operation_keys.push(operation_keys::mount_element_key(element.node.id()));
     for child in &element.children {
         collect_mounts(&child.element, operation_keys);
     }
@@ -538,10 +560,9 @@ fn collect_events(
         for field in &binding.payload_fields {
             event = event.with_payload(*field);
         }
-        operation_keys.push(format!(
-            "bind-event:{}:{}",
-            element.node.id().as_str(),
-            binding.event.stable_key()
+        operation_keys.push(operation_keys::bind_event_parts_key(
+            element.node.id(),
+            &binding.event,
         ));
         events.push(event);
     }

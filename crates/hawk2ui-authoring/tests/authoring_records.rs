@@ -4,6 +4,8 @@ use hawk2ui_authoring::{
     ElementNode, EventKind, EventPayloadField, FrameworkNativeNode, FrameworkNativeProgram,
     HandlerRef, KeyedChild, NativeLifecycleEvent, NativeRef, PointerEventKind, PropValue, StyleRef,
 };
+use hawk2ui_render::CustomSurfaceCategory;
+use hawk2ui_runtime::RuntimeVisual;
 
 #[test]
 fn authoring_diagnostic_converts_to_shared_diagnostic() {
@@ -134,6 +136,7 @@ fn component_records_keep_custom_controls_and_surfaces_distinct() {
         hawk2ui_authoring::SurfaceId::new("scope-surface"),
         hawk2ui_authoring::SurfacePurpose::CustomDraw,
     )
+    .with_category(CustomSurfaceCategory::Scope)
     .with_reference("feed", "oscilloscope");
 
     assert_ne!(control.id().as_str(), surface.id().as_str());
@@ -142,6 +145,11 @@ fn component_records_keep_custom_controls_and_surfaces_distinct() {
         hawk2ui_authoring::SurfacePurpose::CustomDraw
     );
     assert_eq!(surface.reference("feed"), Some("oscilloscope"));
+    assert_eq!(surface.category(), Some(CustomSurfaceCategory::Scope));
+    assert!(matches!(
+        surface.runtime_visual(),
+        RuntimeVisual::CustomSurface(_)
+    ));
 }
 
 #[test]
@@ -312,6 +320,62 @@ fn compile_basic_fixture_emits_component_text_children_and_click_event() {
 }
 
 #[test]
+fn source_compiler_parses_all_stable_event_domains() {
+    let source = r"
+component EventSink id=event-sink {
+  on keyboard.key-down handleKeyDown
+  on keyboard.key-up handleKeyUp
+  on keyboard.text-input handleText
+  on focus.focus-in handleFocusIn
+  on focus.focus-out handleFocusOut
+  on input.value-changed handleValueChanged
+  on input.value-committed handleValueCommitted
+  on resize handleResize
+  on lifecycle.mounted handleMounted
+  on lifecycle.suspended handleSuspended
+  on lifecycle.resumed handleResumed
+  on lifecycle.hot-reloaded handleHotReloaded
+  on lifecycle.error-boundary handleError
+  on lifecycle.shutdown handleShutdown
+  on lifecycle.unmounted handleUnmounted
+  on component.knob.drag handleKnobDrag
+  on plugin-parameter.gain handleGain
+}
+";
+    let mut diagnostics = Vec::new();
+
+    let artifact = hawk2ui_authoring::compile_authoring_source(source, &mut diagnostics);
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(
+        artifact
+            .events()
+            .iter()
+            .map(|event| event.event().stable_key())
+            .collect::<Vec<_>>(),
+        [
+            "keyboard.key-down",
+            "keyboard.key-up",
+            "keyboard.text-input",
+            "focus.focus-in",
+            "focus.focus-out",
+            "input.value-changed",
+            "input.value-committed",
+            "resize",
+            "lifecycle.mounted",
+            "lifecycle.suspended",
+            "lifecycle.resumed",
+            "lifecycle.hot-reloaded",
+            "lifecycle.error-boundary",
+            "lifecycle.shutdown",
+            "lifecycle.unmounted",
+            "component.knob.drag",
+            "plugin-parameter.gain",
+        ]
+    );
+}
+
+#[test]
 fn adapter_contract_records_equivalent_operations_for_framework_labels() {
     for framework in ["native", "svelte", "react", "vue", "solid"] {
         let mut adapter = hawk2ui_authoring::RecordingNativeRendererAdapter::new(framework);
@@ -337,7 +401,40 @@ fn adapter_contract_records_equivalent_operations_for_framework_labels() {
             adapter.operation_keys(),
             ["mount-element:root", "bind-event:root:pointer.press"]
         );
+        assert_eq!(adapter.operations().len(), 2);
     }
+}
+
+#[test]
+fn recording_adapter_preserves_component_and_surface_operations() {
+    let mut adapter = hawk2ui_authoring::RecordingNativeRendererAdapter::new("solid");
+
+    adapter
+        .apply(hawk2ui_authoring::NodeOperation::MountComponent(
+            hawk2ui_authoring::ComponentInstance::new(
+                hawk2ui_authoring::ComponentId::new("meter-control"),
+                "MeterControl",
+            ),
+        ))
+        .expect("component mount records");
+    adapter
+        .apply(hawk2ui_authoring::NodeOperation::DeclareSurface(
+            hawk2ui_authoring::CustomSurfaceDeclaration::new(
+                hawk2ui_authoring::SurfaceId::new("meter-surface"),
+                hawk2ui_authoring::SurfacePurpose::CustomDraw,
+            )
+            .with_category(CustomSurfaceCategory::Meter),
+        ))
+        .expect("surface declaration records");
+
+    assert_eq!(
+        adapter.operation_keys(),
+        [
+            "mount-component:meter-control",
+            "declare-surface:meter-surface"
+        ]
+    );
+    assert_eq!(adapter.operations().len(), 2);
 }
 
 #[test]
@@ -424,6 +521,7 @@ fn custom_renderer_protocol_records_full_node_lifecycle_surface() {
         .expect("remove node should be accepted");
 
     assert_eq!(protocol.framework_label(), "react");
+    assert_eq!(protocol.operations().len(), 12);
     assert_eq!(
         protocol.operation_keys(),
         [

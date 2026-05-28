@@ -4,7 +4,7 @@ use hawk2ui_authoring::{
     PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_layout::Viewport;
-use hawk2ui_render::{Color, Geometry, RendererBackend};
+use hawk2ui_render::{Color, CustomSurfaceCategory, Geometry, RendererBackend};
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend};
 use hawk2ui_runtime::RuntimeViewId;
 use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneFrame};
@@ -102,6 +102,21 @@ fn native_authoring_runtime_reports_source_diagnostics_for_duplicate_keys_and_in
         rules,
         ["native.child-key.duplicate", "native.asset.path-invalid",]
     );
+}
+
+#[test]
+fn native_authoring_runtime_rejects_excessive_tree_depth() {
+    let mut root = NativeAuthoringElement::new("leaf", ElementKind::View);
+    for depth in (0..514).rev() {
+        root = NativeAuthoringElement::new(format!("node-{depth}"), ElementKind::View)
+            .with_child(NativeChild::ordered(root));
+    }
+    let mut runtime = NativeAuthoringRuntime::new("too-deep");
+    runtime.mount(root);
+
+    let error = runtime.finish().expect_err("deep tree must be rejected");
+
+    assert_eq!(error.diagnostics()[0].rule, "native.tree.depth-exceeded");
 }
 
 #[test]
@@ -217,6 +232,67 @@ fn native_runtime_bridge_converts_authoring_artifact_to_runtime_view_tree() {
     );
     assert_eq!(bridged.metadata_for("root").unwrap().refs(), ["root_ref"]);
     assert_eq!(bridged.operation_keys(), artifact.operation_keys());
+}
+
+#[test]
+fn native_runtime_bridge_lowers_source_compiled_components_to_runtime_tree() {
+    let source = "\
+component CounterCard id=counter-card {
+  text title \"Counter\"
+  on pointer.press handlePress
+}
+";
+    let mut diagnostics = Vec::new();
+    let artifact = hawk2ui_authoring::compile_authoring_source(source, &mut diagnostics);
+
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_authoring_artifact(&artifact)
+        .expect("source compiled artifact bridges");
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(bridged.runtime_tree().root_id().as_str(), "counter-card");
+    assert_eq!(
+        bridged
+            .runtime_tree()
+            .children_of(&RuntimeViewId::new("counter-card"))
+            .iter()
+            .map(RuntimeViewId::as_str)
+            .collect::<Vec<_>>(),
+        ["title"]
+    );
+    assert_eq!(
+        bridged.operation_keys(),
+        [
+            "mount-component:counter-card",
+            "bind-event:counter-card:pointer.press"
+        ]
+    );
+}
+
+#[test]
+fn native_runtime_bridge_lowers_custom_surface_elements_to_runtime_visuals() {
+    let element = NativeAuthoringElement::new("meter", ElementKind::CustomSurface)
+        .with_prop("surface_category", PropValue::String("meter".to_string()))
+        .with_prop("width", PropValue::Number(96.0))
+        .with_prop("height", PropValue::Number(24.0));
+
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_element(&element)
+        .expect("custom surface bridges");
+    let frame = RuntimeSceneBridge::new(Viewport::new(120.0, 48.0))
+        .build(bridged.runtime_tree())
+        .expect("custom surface frame builds");
+
+    let surface = frame
+        .draw_commands()
+        .iter()
+        .find_map(|command| match command {
+            RuntimeDrawCommand::CustomSurface { surface, .. } => Some(surface),
+            _ => None,
+        })
+        .expect("custom surface command is emitted");
+
+    assert_eq!(surface.category(), CustomSurfaceCategory::Meter);
 }
 
 #[test]

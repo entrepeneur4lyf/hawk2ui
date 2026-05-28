@@ -4,7 +4,7 @@ use hawk2ui_api::Diagnostic;
 
 use crate::{
     ChildList, ComponentId, ComponentInstance, ElementId, ElementKind, ElementNode, EventBinding,
-    EventKind, HandlerRef, PointerEventKind, PropValue,
+    EventKind, HandlerRef, PropValue,
 };
 
 /// Authoring diagnostic severity.
@@ -257,11 +257,5 @@ struct CurrentComponent {
 }
 
 fn parse_event(event_name: &str) -> Option<EventKind> {
-    match event_name {
-        "pointer.press" => Some(EventKind::Pointer(PointerEventKind::Press)),
-        "pointer.release" => Some(EventKind::Pointer(PointerEventKind::Release)),
-        "pointer.move" => Some(EventKind::Pointer(PointerEventKind::Move)),
-        "pointer.drag" => Some(EventKind::Pointer(PointerEventKind::Drag)),
-        _ => None,
-    }
+    event_name.parse().ok()
 }

@@ -1,5 +1,8 @@
 //! Component and custom surface authoring records.
 
+use hawk2ui_render::CustomSurfaceCategory;
+use hawk2ui_runtime::{RuntimeCustomSurfaceVisual, RuntimeVisual};
+
 use crate::{ChildList, PropValue};
 
 /// Stable component instance identifier.
@@ -127,6 +130,7 @@ pub enum SurfacePurpose {
 pub struct CustomSurfaceDeclaration {
     id: SurfaceId,
     purpose: SurfacePurpose,
+    category: Option<CustomSurfaceCategory>,
     references: Vec<(String, String)>,
 }
 
@@ -137,8 +141,16 @@ impl CustomSurfaceDeclaration {
         Self {
             id,
             purpose,
+            category: None,
             references: Vec::new(),
         }
+    }
+
+    /// Sets the renderer category used when lowering this declaration to a runtime visual.
+    #[must_use]
+    pub const fn with_category(mut self, category: CustomSurfaceCategory) -> Self {
+        self.category = Some(category);
+        self
     }
 
     /// Adds or replaces a named surface reference.
@@ -160,10 +172,27 @@ impl CustomSurfaceDeclaration {
         self.purpose
     }
 
+    /// Returns the optional renderer category for this custom surface.
+    #[must_use]
+    pub const fn category(&self) -> Option<CustomSurfaceCategory> {
+        self.category
+    }
+
     /// Returns a named reference target by name.
     #[must_use]
     pub fn reference(&self, name: &str) -> Option<&str> {
         find_value(&self.references, name).map(String::as_str)
+    }
+
+    /// Lowers the declaration to a runtime custom-surface visual.
+    #[must_use]
+    pub fn runtime_visual(&self) -> RuntimeVisual {
+        RuntimeVisual::CustomSurface(RuntimeCustomSurfaceVisual::new(self.category.unwrap_or(
+            match self.purpose {
+                SurfacePurpose::CustomDraw => CustomSurfaceCategory::Scope,
+                SurfacePurpose::NativeHost => CustomSurfaceCategory::InspectorPanel,
+            },
+        )))
     }
 }
 

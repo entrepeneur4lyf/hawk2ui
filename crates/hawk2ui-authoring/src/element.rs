@@ -29,6 +29,8 @@ pub enum ElementKind {
     Text,
     /// Button control.
     Button,
+    /// Host-rendered custom draw surface.
+    CustomSurface,
 }
 
 /// Authoring property value.
@@ -96,6 +98,12 @@ impl ElementNode {
             .iter()
             .find_map(|(prop_name, value)| (prop_name == name).then_some(value))
     }
+
+    /// Returns all typed properties in author-declared order.
+    #[must_use]
+    pub fn props(&self) -> &[(String, PropValue)] {
+        &self.props
+    }
 }
 
 /// Child node with a stable author-provided key.
@@ -147,6 +155,15 @@ impl DuplicateChildKeyError {
     #[must_use]
     pub fn duplicate_key(&self) -> &str {
         &self.duplicate_key
+    }
+}
+
+impl From<DuplicateChildKeyError> for hawk2ui_api::Diagnostic {
+    fn from(error: DuplicateChildKeyError) -> Self {
+        Self::error(
+            "authoring.children.duplicate-key",
+            format!("duplicate child key `{}`", error.duplicate_key),
+        )
     }
 }
 

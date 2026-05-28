@@ -2,12 +2,15 @@
 
 use std::collections::BTreeSet;
 
+use hawk2ui_api::Diagnostic;
+
 use crate::{
     AssetRef, ComponentInstance, CustomSurfaceDeclaration, ElementId, ElementKind, ElementNode,
     EventBinding, HandlerRef, NativeAuthoringArtifact, NativeAuthoringElement,
     NativeAuthoringError, NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef,
     PropValue, StyleRef,
 };
+use crate::{limits::MAX_AUTHORING_TREE_DEPTH, operation_keys};
 
 /// Typed native node emitted by a framework compiler boundary.
 #[derive(Clone, Debug, PartialEq)]
@@ -214,7 +217,7 @@ impl FrameworkNativeProgram {
         framework_label: &str,
     ) -> Result<Vec<String>, CustomRendererError> {
         let mut protocol = CustomRendererProtocol::new(framework_label);
-        emit_node_operations(&mut protocol, None, None, &self.root)?;
+        emit_node_operations(&mut protocol, None, None, &self.root, 0)?;
         protocol.apply(CustomRendererOperation::Commit {
             root: self.root.id.clone(),
         })?;
@@ -236,7 +239,8 @@ impl FrameworkNativeProgram {
             &self.root,
             include_default_visual_props,
             true,
-        ));
+            0,
+        )?);
         runtime.finish()
     }
 }
@@ -257,16 +261,14 @@ pub enum NodeOperation {
 impl NodeOperation {
     fn stable_key(&self) -> String {
         match self {
-            Self::MountElement(node) => format!("mount-element:{}", node.id().as_str()),
+            Self::MountElement(node) => operation_keys::mount_element_key(node.id()),
             Self::MountComponent(component) => {
-                format!("mount-component:{}", component.id().as_str())
+                operation_keys::mount_component_key(component.id().as_str())
             }
-            Self::DeclareSurface(surface) => format!("declare-surface:{}", surface.id().as_str()),
-            Self::BindEvent(binding) => format!(
-                "bind-event:{}:{}",
-                binding.target().as_str(),
-                binding.event().stable_key()
-            ),
+            Self::DeclareSurface(surface) => {
+                operation_keys::declare_surface_key(surface.id().as_str())
+            }
+            Self::BindEvent(binding) => operation_keys::bind_event_key(binding),
         }
     }
 }
@@ -356,43 +358,27 @@ pub enum CustomRendererOperation {
 impl CustomRendererOperation {
     fn stable_key(&self) -> String {
         match self {
-            Self::CreateNode { id, kind } => {
-                format!("create-node:{}:{}", id.as_str(), element_kind_key(*kind))
-            }
-            Self::SetProp { id, name, .. } => format!("set-prop:{}:{name}", id.as_str()),
+            Self::CreateNode { id, kind } => operation_keys::create_node_key(id, *kind),
+            Self::SetProp { id, name, .. } => operation_keys::set_prop_key(id, name),
             Self::SetStyleRef { id, style_ref } => {
-                format!("set-style:{}:{}", id.as_str(), style_ref.name())
+                operation_keys::set_style_key(id, style_ref.name())
             }
             Self::SetAssetRef { id, asset_ref } => {
-                format!("set-asset:{}:{}", id.as_str(), asset_ref.path())
+                operation_keys::set_asset_key(id, asset_ref.path())
             }
-            Self::SetRef { id, reference } => {
-                format!("set-ref:{}:{}", id.as_str(), reference.name())
+            Self::SetRef { id, reference } => operation_keys::set_ref_key(id, reference.name()),
+            Self::BindEvent { binding } => operation_keys::bind_event_key(binding),
+            Self::BindLifecycle { id, event, handler } => {
+                operation_keys::bind_lifecycle_key(id, *event, handler)
             }
-            Self::BindEvent { binding } => format!(
-                "bind-event:{}:{}",
-                binding.target().as_str(),
-                binding.event().stable_key()
-            ),
-            Self::BindLifecycle { id, event, handler } => format!(
-                "bind-lifecycle:{}:{}:{}",
-                id.as_str(),
-                lifecycle_key(*event),
-                handler.as_str()
-            ),
-            Self::AppendChild { parent, child, key } => match key {
-                Some(key) => format!(
-                    "append-child:{}:{}:key:{key}",
-                    parent.as_str(),
-                    child.as_str()
-                ),
-                None => format!("append-child:{}:{}", parent.as_str(), child.as_str()),
-            },
+            Self::AppendChild { parent, child, key } => {
+                operation_keys::append_child_key(parent, child, key.as_deref())
+            }
             Self::EnterErrorBoundary { id, handler } => {
-                format!("error-boundary:{}:{}", id.as_str(), handler.as_str())
+                operation_keys::error_boundary_key(id, handler)
             }
-            Self::Commit { root } => format!("commit:{}", root.as_str()),
-            Self::RemoveNode { id } => format!("remove-node:{}", id.as_str()),
+            Self::Commit { root } => operation_keys::commit_key(root),
+            Self::RemoveNode { id } => operation_keys::remove_node_key(id),
         }
     }
 }
@@ -427,11 +413,18 @@ impl CustomRendererError {
     }
 }
 
+impl From<CustomRendererError> for Diagnostic {
+    fn from(error: CustomRendererError) -> Self {
+        Self::error(error.rule, error.message)
+    }
+}
+
 /// Public custom renderer protocol used by framework integrations.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CustomRendererProtocol {
     framework_label: String,
     live_nodes: BTreeSet<ElementId>,
+    operations: Vec<CustomRendererOperation>,
     operation_keys: Vec<String>,
 }
 
@@ -442,6 +435,7 @@ impl CustomRendererProtocol {
         Self {
             framework_label: framework_label.into(),
             live_nodes: BTreeSet::new(),
+            operations: Vec::new(),
             operation_keys: Vec::new(),
         }
     }
@@ -454,15 +448,16 @@ impl CustomRendererProtocol {
     pub fn apply(&mut self, operation: CustomRendererOperation) -> Result<(), CustomRendererError> {
         self.validate_operation(&operation)?;
         let operation_key = operation.stable_key();
-        match operation {
+        match &operation {
             CustomRendererOperation::CreateNode { id, .. } => {
-                self.live_nodes.insert(id);
+                self.live_nodes.insert(id.clone());
             }
             CustomRendererOperation::RemoveNode { id } => {
-                self.live_nodes.remove(&id);
+                self.live_nodes.remove(id);
             }
             _ => {}
         }
+        self.operations.push(operation);
         self.operation_keys.push(operation_key);
         Ok(())
     }
@@ -477,6 +472,12 @@ impl CustomRendererProtocol {
     #[must_use]
     pub fn operation_keys(&self) -> &[String] {
         &self.operation_keys
+    }
+
+    /// Returns typed operations in application order.
+    #[must_use]
+    pub fn operations(&self) -> &[CustomRendererOperation] {
+        &self.operations
     }
 
     fn validate_operation(
@@ -524,6 +525,7 @@ impl CustomRendererProtocol {
 /// Native renderer adapter error.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdapterError {
+    rule: String,
     message: String,
 }
 
@@ -532,14 +534,36 @@ impl AdapterError {
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
         Self {
+            rule: "adapter.error".to_string(),
             message: message.into(),
         }
+    }
+
+    /// Creates an adapter error with a stable diagnostic rule.
+    #[must_use]
+    pub fn with_rule(rule: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            rule: rule.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable diagnostic rule.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        &self.rule
     }
 
     /// Returns the adapter error message.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
+    }
+}
+
+impl From<AdapterError> for Diagnostic {
+    fn from(error: AdapterError) -> Self {
+        Self::error(error.rule, error.message)
     }
 }
 
@@ -554,9 +578,10 @@ pub trait NativeRendererAdapter {
 }
 
 /// Recording adapter used by conformance and framework contract tests.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RecordingNativeRendererAdapter {
     framework_label: String,
+    operations: Vec<NodeOperation>,
     operation_keys: Vec<String>,
 }
 
@@ -566,6 +591,7 @@ impl RecordingNativeRendererAdapter {
     pub fn new(framework_label: impl Into<String>) -> Self {
         Self {
             framework_label: framework_label.into(),
+            operations: Vec::new(),
             operation_keys: Vec::new(),
         }
     }
@@ -590,10 +616,17 @@ impl RecordingNativeRendererAdapter {
     pub fn operation_keys(&self) -> &[String] {
         &self.operation_keys
     }
+
+    /// Returns typed operations in application order.
+    #[must_use]
+    pub fn operations(&self) -> &[NodeOperation] {
+        &self.operations
+    }
 }
 
 impl NativeRendererAdapter for RecordingNativeRendererAdapter {
     fn apply(&mut self, operation: NodeOperation) -> Result<(), AdapterError> {
+        self.operations.push(operation.clone());
         self.operation_keys.push(operation.stable_key());
         Ok(())
     }
@@ -604,7 +637,14 @@ fn emit_node_operations(
     parent: Option<&ElementId>,
     append_key: Option<&str>,
     node: &FrameworkNativeNode,
+    depth: usize,
 ) -> Result<(), CustomRendererError> {
+    if depth > MAX_AUTHORING_TREE_DEPTH {
+        return Err(CustomRendererError::new(
+            "custom-renderer.tree.depth-exceeded",
+            format!("framework node tree exceeds maximum depth of {MAX_AUTHORING_TREE_DEPTH}"),
+        ));
+    }
     protocol.apply(CustomRendererOperation::CreateNode {
         id: node.id.clone(),
         kind: node.kind,
@@ -640,11 +680,18 @@ fn emit_node_operations(
         })?;
     }
     for (event, handler) in &node.lifecycle {
-        protocol.apply(CustomRendererOperation::BindLifecycle {
-            id: node.id.clone(),
-            event: *event,
-            handler: HandlerRef::new(handler.as_str()),
-        })?;
+        if *event == NativeLifecycleEvent::ErrorBoundary {
+            protocol.apply(CustomRendererOperation::EnterErrorBoundary {
+                id: node.id.clone(),
+                handler: HandlerRef::new(handler.as_str()),
+            })?;
+        } else {
+            protocol.apply(CustomRendererOperation::BindLifecycle {
+                id: node.id.clone(),
+                event: *event,
+                handler: HandlerRef::new(handler.as_str()),
+            })?;
+        }
     }
     if let Some(parent) = parent {
         protocol.apply(CustomRendererOperation::AppendChild {
@@ -654,7 +701,13 @@ fn emit_node_operations(
         })?;
     }
     for (child_key, child) in &node.children {
-        emit_node_operations(protocol, Some(&node.id), child_key.as_deref(), child)?;
+        emit_node_operations(
+            protocol,
+            Some(&node.id),
+            child_key.as_deref(),
+            child,
+            depth + 1,
+        )?;
     }
     Ok(())
 }
@@ -663,7 +716,19 @@ fn framework_node_to_native_element(
     node: &FrameworkNativeNode,
     include_default_visual_props: bool,
     is_root: bool,
-) -> NativeAuthoringElement {
+    depth: usize,
+) -> Result<NativeAuthoringElement, NativeAuthoringError> {
+    if depth > MAX_AUTHORING_TREE_DEPTH {
+        return Err(NativeAuthoringError::from_diagnostics(vec![
+            crate::AuthoringDiagnostic::new(
+                crate::AuthoringDiagnosticSeverity::Error,
+                "native.tree.depth-exceeded",
+                format!(
+                    "native authoring tree exceeds maximum depth of {MAX_AUTHORING_TREE_DEPTH}"
+                ),
+            ),
+        ]));
+    }
     let mut element = NativeAuthoringElement::new(node.id.as_str(), node.kind);
     if include_default_visual_props && is_root {
         element = element.with_prop("background", PropValue::String("#080a0e".to_string()));
@@ -691,13 +756,13 @@ fn framework_node_to_native_element(
         element = element.with_lifecycle(*event, handler.as_str());
     }
     for (key, child) in &node.children {
-        let child_element = framework_node_to_native_element(child, false, false);
+        let child_element = framework_node_to_native_element(child, false, false, depth + 1)?;
         element = element.with_child(match key.as_deref().or_else(|| child.key()) {
             Some(key) => NativeChild::keyed(key, child_element),
             None => NativeChild::ordered(child_element),
         });
     }
-    element
+    Ok(element)
 }
 
 fn missing_node(id: &ElementId) -> CustomRendererError {
@@ -705,24 +770,4 @@ fn missing_node(id: &ElementId) -> CustomRendererError {
         "custom-renderer.node.missing",
         format!("custom renderer node `{}` does not exist", id.as_str()),
     )
-}
-
-fn element_kind_key(kind: ElementKind) -> &'static str {
-    match kind {
-        ElementKind::View => "view",
-        ElementKind::Text => "text",
-        ElementKind::Button => "button",
-    }
-}
-
-fn lifecycle_key(event: NativeLifecycleEvent) -> &'static str {
-    match event {
-        NativeLifecycleEvent::Mounted => "mounted",
-        NativeLifecycleEvent::Suspended => "suspended",
-        NativeLifecycleEvent::Resumed => "resumed",
-        NativeLifecycleEvent::HotReloaded => "hot-reloaded",
-        NativeLifecycleEvent::ErrorBoundary => "error-boundary",
-        NativeLifecycleEvent::Shutdown => "shutdown",
-        NativeLifecycleEvent::Unmounted => "unmounted",
-    }
 }
