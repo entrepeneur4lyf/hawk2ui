@@ -1503,8 +1503,15 @@ Status:
   - `hawk2ui-host-baseview` now provides `BaseviewClapRuntimeEditorHost`, a host-side CLAP GUI
     lifecycle bridge that drives create, set-parent, show, hide, and destroy callbacks from a plugin
     path into the live `BaseviewClapRuntimeEditor` rendering path.
-- Remaining work under this item is to connect realtime visual channels and host parameter/state events
-  into the live CLAP editor bridge.
+  - The live CLAP editor host bridge now accepts typed host parameter events after create, persists them
+    across attach/show/hide, saves them into `PluginStateEnvelope`, restores host state, rejects invalid
+    values, and clears state on destroy.
+  - The live CLAP editor host bridge now drains `RealtimeVisualUiReader` packets through
+    `RealtimeVisualFrameGate`, stores the latest UI-side packet batch for the attached editor, rejects
+    drains before parent attachment, and preserves the realtime audio writer's no-allocation/no-blocking
+    counters.
+- Remaining work under this item is to connect these host-side bridge records to generated CLAP binary
+  exports or a host ABI shim that can invoke them from an actual plugin host process.
 
 Required remediation:
 

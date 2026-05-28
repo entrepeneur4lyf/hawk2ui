@@ -24,6 +24,7 @@ pedantic = "warn"
 baseview = "0.1.1"
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
+hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
 hawk2ui-plugin-adapters = { version = "0.1.0", path = "../hawk2ui-plugin-adapters" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
 hawk2ui-render-skia = { version = "0.1.0", path = "../hawk2ui-render-skia" }
@@ -36,5 +37,4 @@ x11rb = "0.13.2"
 
 [dev-dependencies]
 hawk2ui-build = { version = "0.1.0", path = "../hawk2ui-build" }
-hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
 serde_json = "1"

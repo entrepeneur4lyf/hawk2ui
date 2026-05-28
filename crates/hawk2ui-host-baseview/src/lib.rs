@@ -8,6 +8,10 @@ use hawk2ui_host::{
     HostPlatformHandle, KeyboardInput, PluginEditorConfig, PluginHostAdapter, PluginHostEvent,
     PointerInput, SurfaceMetrics, SurfaceOwnership,
 };
+use hawk2ui_plugin::{
+    ParameterValue, PluginStateEnvelope, RealtimeVisualFrameGate, RealtimeVisualPacket,
+    RealtimeVisualUiReader, StateValue,
+};
 use hawk2ui_plugin_adapters::{
     ClapGuiParentHandle, ClapGuiWindowApi, ClapRuntimeEditorSession, PackageDiagnostic,
     PackageMaterializationError,
@@ -26,7 +30,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
-use std::{ffi::c_void, path::PathBuf};
+use std::{collections::BTreeMap, ffi::c_void, path::PathBuf};
 #[cfg(target_os = "linux")]
 use x11rb::{
     connection::Connection,
@@ -992,6 +996,8 @@ pub struct BaseviewClapRuntimeEditorHost {
     session: Option<ClapRuntimeEditorSession>,
     editor: Option<BaseviewClapRuntimeEditor>,
     created_api: Option<ClapGuiWindowApi>,
+    parameter_values: BTreeMap<String, ParameterValue>,
+    latest_realtime_packets: Vec<RealtimeVisualPacket>,
 }
 
 impl BaseviewClapRuntimeEditorHost {
@@ -1004,6 +1010,8 @@ impl BaseviewClapRuntimeEditorHost {
             session: None,
             editor: None,
             created_api: None,
+            parameter_values: BTreeMap::new(),
+            latest_realtime_packets: Vec::new(),
         }
     }
 
@@ -1035,6 +1043,18 @@ impl BaseviewClapRuntimeEditorHost {
             .map_or(0, BaseviewClapRuntimeEditor::presented_frame_count)
     }
 
+    /// Returns the current editor-side value for a host parameter.
+    #[must_use]
+    pub fn parameter_value(&self, parameter_id: &str) -> Option<&ParameterValue> {
+        self.parameter_values.get(parameter_id)
+    }
+
+    /// Returns the latest realtime visual packet batch drained by the UI side.
+    #[must_use]
+    pub fn latest_realtime_visual_packets(&self) -> &[RealtimeVisualPacket] {
+        &self.latest_realtime_packets
+    }
+
     /// Handles the CLAP GUI create callback by loading and verifying the runtime editor package.
     ///
     /// # Errors
@@ -1063,6 +1083,8 @@ impl BaseviewClapRuntimeEditorHost {
         self.session = Some(session);
         self.editor = None;
         self.created_api = Some(api);
+        self.parameter_values.clear();
+        self.latest_realtime_packets.clear();
         Ok(())
     }
 
@@ -1139,7 +1161,96 @@ impl BaseviewClapRuntimeEditorHost {
         self.editor = None;
         self.session = None;
         self.created_api = None;
+        self.parameter_values.clear();
+        self.latest_realtime_packets.clear();
         Ok(())
+    }
+
+    /// Applies a host parameter event to the live editor-side state cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when create has not succeeded, the parameter ID is invalid, or
+    /// the value is non-finite.
+    pub fn apply_parameter_value(
+        &mut self,
+        parameter_id: impl Into<String>,
+        value: ParameterValue,
+    ) -> Result<(), BaseviewHostError> {
+        self.ensure_created()?;
+        let parameter_id = parameter_id.into();
+        validate_parameter_event(&parameter_id, &value)?;
+        self.parameter_values.insert(parameter_id, value);
+        if let Some(editor) = self.editor.as_mut() {
+            editor.show_editor("clap parameter changed");
+        }
+        Ok(())
+    }
+
+    /// Saves the current editor-side parameter state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when create has not succeeded.
+    pub fn save_state(&self) -> Result<PluginStateEnvelope, BaseviewHostError> {
+        self.ensure_created()?;
+        let mut state = PluginStateEnvelope::new(1);
+        for (parameter_id, value) in &self.parameter_values {
+            state = state.parameter(parameter_id.clone(), state_value_from_parameter(value));
+        }
+        Ok(state)
+    }
+
+    /// Loads host-provided state into the editor-side parameter cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when create has not succeeded or the state contains unsupported
+    /// parameter values.
+    pub fn load_state(&mut self, state: PluginStateEnvelope) -> Result<(), BaseviewHostError> {
+        self.ensure_created()?;
+        let mut values = BTreeMap::new();
+        for (parameter_id, value) in state.parameter_state {
+            let parameter_value = parameter_value_from_state(&value)?;
+            validate_parameter_event(&parameter_id, &parameter_value)?;
+            values.insert(parameter_id, parameter_value);
+        }
+        self.parameter_values = values;
+        if let Some(editor) = self.editor.as_mut() {
+            editor.show_editor("clap state loaded");
+        }
+        Ok(())
+    }
+
+    /// Drains realtime visual packets into the live editor bridge when the UI frame gate is due.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the live editor is not attached.
+    pub fn drain_realtime_visuals(
+        &mut self,
+        reader: &mut RealtimeVisualUiReader,
+        timestamp_ms: u64,
+        frame_gate: &mut RealtimeVisualFrameGate,
+    ) -> Result<usize, BaseviewHostError> {
+        let editor = self.editor.as_mut().ok_or_else(not_attached_error)?;
+        let Some(packets) = reader.ui_drain_due(timestamp_ms, frame_gate) else {
+            return Ok(0);
+        };
+        let packet_count = packets.len();
+        if packet_count > 0 {
+            editor.show_editor("clap realtime visuals drained");
+            self.latest_realtime_packets = packets;
+        }
+        Ok(packet_count)
+    }
+
+    fn ensure_created(&self) -> Result<(), BaseviewHostError> {
+        if self.created_api.is_some() {
+            Ok(())
+        } else {
+            Err(not_created_error())
+        }
     }
 }
 
@@ -1155,6 +1266,48 @@ fn not_attached_error() -> BaseviewHostError {
         "baseview.clap-runtime-editor.not-attached",
         "CLAP runtime editor parent must be attached before this host callback",
     )
+}
+
+fn validate_parameter_event(
+    parameter_id: &str,
+    value: &ParameterValue,
+) -> Result<(), BaseviewHostError> {
+    if parameter_id.trim().is_empty() {
+        return Err(BaseviewHostError::new(
+            "baseview.clap-runtime-editor.parameter-invalid",
+            "CLAP runtime editor parameter events require a non-empty parameter ID",
+        ));
+    }
+    match value {
+        ParameterValue::Float(value) if !value.is_finite() => Err(BaseviewHostError::new(
+            "baseview.clap-runtime-editor.parameter-invalid",
+            "CLAP runtime editor parameter float values must be finite",
+        )),
+        ParameterValue::Float(_) | ParameterValue::Bool(_) | ParameterValue::Choice(_) => Ok(()),
+    }
+}
+
+fn state_value_from_parameter(value: &ParameterValue) -> StateValue {
+    match value {
+        ParameterValue::Float(value) => StateValue::Float(*value),
+        ParameterValue::Bool(value) => StateValue::Bool(*value),
+        ParameterValue::Choice(value) => StateValue::Float(f64::from(*value)),
+    }
+}
+
+fn parameter_value_from_state(value: &StateValue) -> Result<ParameterValue, BaseviewHostError> {
+    match value {
+        StateValue::Float(value) if value.is_finite() => Ok(ParameterValue::Float(*value)),
+        StateValue::Float(_) => Err(BaseviewHostError::new(
+            "baseview.clap-runtime-editor.parameter-invalid",
+            "CLAP runtime editor state float values must be finite",
+        )),
+        StateValue::Bool(value) => Ok(ParameterValue::Bool(*value)),
+        StateValue::String(_) => Err(BaseviewHostError::new(
+            "baseview.clap-runtime-editor.parameter-invalid",
+            "CLAP runtime editor parameter state does not accept string values",
+        )),
+    }
 }
 
 fn baseview_error_from_package_diagnostic(diagnostic: &PackageDiagnostic) -> BaseviewHostError {

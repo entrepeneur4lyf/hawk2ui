@@ -10,7 +10,9 @@ use hawk2ui_host_baseview::{
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_plugin::{
-    BundleOutput, FormatMetadata, ParameterModel, PluginEditor, PluginEditorSize,
+    BundleOutput, FormatMetadata, FrameDropPolicy, ParameterModel, ParameterValue, PluginEditor,
+    PluginEditorSize, PluginStateEnvelope, RealtimeVisualFrameGate, RealtimeVisualPacket,
+    RealtimeVisualTransport, StateValue,
 };
 use hawk2ui_plugin_adapters::{
     ClapGuiParentHandle, ClapGuiWindowApi, ClapRuntimeEditorSession, PackageAdapterSet,
@@ -696,6 +698,206 @@ fn baseview_clap_runtime_editor_host_drives_callback_lifecycle_from_plugin_path(
     assert!(!host.attached());
     let error = host.show().expect_err("show after destroy must fail");
     assert_eq!(error.rule(), "baseview.clap-runtime-editor.not-attached");
+}
+
+#[test]
+fn baseview_clap_runtime_editor_host_tracks_parameter_and_state_events() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": []
+        }
+    }));
+    let runtime_artifact =
+        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let output_root = temp_package_root("hawk2ui-baseview-clap-host-parameter-state");
+    let request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.host-state", "Host State", "Hawk2UI"),
+        BundleOutput::new(output_root.to_string_lossy(), "HostState"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds")
+        .materialize()
+        .expect("materialization succeeds");
+    let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostState.clap");
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+
+    let error = host
+        .apply_parameter_value("gain", ParameterValue::Float(0.5))
+        .expect_err("parameter events before create are rejected");
+    assert_eq!(error.rule(), "baseview.clap-runtime-editor.not-created");
+
+    host.create(ClapGuiWindowApi::X11, false)
+        .expect("host create resolves verified runtime session");
+    host.apply_parameter_value("gain", ParameterValue::Float(0.5))
+        .expect("created host accepts finite parameter value");
+    host.apply_parameter_value("bypass", ParameterValue::Bool(true))
+        .expect("created host accepts boolean parameter value");
+    assert_eq!(
+        host.parameter_value("gain"),
+        Some(&ParameterValue::Float(0.5))
+    );
+
+    host.set_parent(
+        ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::X11, 42)
+            .expect("CLAP parent handle validates"),
+        "clap-host-state-parent",
+    )
+    .expect("host set-parent attaches live Baseview editor");
+    host.show().expect("host show presents runtime frame");
+    host.hide().expect("host hide preserves parameter state");
+    assert_eq!(
+        host.parameter_value("bypass"),
+        Some(&ParameterValue::Bool(true))
+    );
+
+    let saved = host.save_state().expect("host saves state after create");
+    assert_eq!(
+        saved.parameter_state.get("gain"),
+        Some(&StateValue::Float(0.5))
+    );
+    assert_eq!(
+        saved.parameter_state.get("bypass"),
+        Some(&StateValue::Bool(true))
+    );
+
+    let replacement = PluginStateEnvelope::new(1)
+        .parameter("gain", StateValue::Float(0.75))
+        .parameter("bypass", StateValue::Bool(false));
+    host.load_state(replacement)
+        .expect("host loads parameter state after create");
+    assert_eq!(
+        host.parameter_value("gain"),
+        Some(&ParameterValue::Float(0.75))
+    );
+    assert_eq!(
+        host.parameter_value("bypass"),
+        Some(&ParameterValue::Bool(false))
+    );
+
+    let error = host
+        .apply_parameter_value("gain", ParameterValue::Float(f64::NAN))
+        .expect_err("non-finite float parameters are rejected");
+    assert_eq!(
+        error.rule(),
+        "baseview.clap-runtime-editor.parameter-invalid"
+    );
+
+    host.destroy().expect("destroy succeeds");
+    let error = host
+        .save_state()
+        .expect_err("state save after destroy is rejected");
+    assert_eq!(error.rule(), "baseview.clap-runtime-editor.not-created");
+}
+
+#[test]
+fn baseview_clap_runtime_editor_host_drains_realtime_visuals_with_frame_gate() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": []
+        }
+    }));
+    let runtime_artifact =
+        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let output_root = temp_package_root("hawk2ui-baseview-clap-host-realtime");
+    let request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.host-realtime", "Host Realtime", "Hawk2UI"),
+        BundleOutput::new(output_root.to_string_lossy(), "HostRealtime"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds")
+        .materialize()
+        .expect("materialization succeeds");
+    let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostRealtime.clap");
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+    let (mut writer, mut reader) =
+        RealtimeVisualTransport::split_preallocated(4, FrameDropPolicy::DropNewest);
+    let mut gate = RealtimeVisualFrameGate::new(60).expect("valid realtime frame gate");
+
+    let error = host
+        .drain_realtime_visuals(&mut reader, 0, &mut gate)
+        .expect_err("realtime drains before attach are rejected");
+    assert_eq!(error.rule(), "baseview.clap-runtime-editor.not-attached");
+
+    host.create(ClapGuiWindowApi::X11, false)
+        .expect("host create resolves verified runtime session");
+    host.set_parent(
+        ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::X11, 42)
+            .expect("CLAP parent handle validates"),
+        "clap-host-realtime-parent",
+    )
+    .expect("host set-parent attaches live Baseview editor");
+
+    let push = writer.audio_thread_push(RealtimeVisualPacket::meter("meter", 0.8));
+    assert!(push.accepted);
+    assert_eq!(push.dropped_frames, 0);
+    assert_eq!(writer.allocation_count(), 0);
+    assert_eq!(writer.blocking_wait_count(), 0);
+    assert_eq!(
+        host.drain_realtime_visuals(&mut reader, 0, &mut gate)
+            .expect("first realtime drain is due"),
+        1
+    );
+    assert_eq!(
+        host.latest_realtime_visual_packets(),
+        &[RealtimeVisualPacket::meter("meter", 0.8)]
+    );
+
+    writer.audio_thread_push(RealtimeVisualPacket::analyzer("analyzer", vec![0.1, 0.4]));
+    assert_eq!(
+        host.drain_realtime_visuals(&mut reader, 1, &mut gate)
+            .expect("early realtime drain is gated"),
+        0
+    );
+    assert_eq!(
+        host.latest_realtime_visual_packets(),
+        &[RealtimeVisualPacket::meter("meter", 0.8)]
+    );
+    assert_eq!(
+        host.drain_realtime_visuals(&mut reader, 17, &mut gate)
+            .expect("next realtime drain is due"),
+        1
+    );
+    assert_eq!(
+        host.latest_realtime_visual_packets(),
+        &[RealtimeVisualPacket::analyzer("analyzer", vec![0.1, 0.4])]
+    );
+
+    host.destroy().expect("destroy succeeds");
+    assert!(host.latest_realtime_visual_packets().is_empty());
 }
 
 #[test]
