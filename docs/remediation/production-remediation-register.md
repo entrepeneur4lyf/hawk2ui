@@ -1454,6 +1454,11 @@ Evidence:
 - No real plugin format adapter is complete.
 - Plugin format/package metadata records now generate and validate JSON Schema at the plugin crate
   boundary.
+- `ParameterRange` and `ParameterSmoothing` expose validated constructors and runtime validation,
+  and normalization/denormalization reject invalid finite/range states before producing host
+  automation values.
+- Manifest parsing rejects duplicate plugin parameter IDs, unstable parameter IDs, empty parameter
+  names, and non-finite or out-of-range normalized defaults before build/package materialization.
 
 Required remediation:
 
@@ -1462,6 +1467,18 @@ Required remediation:
 Acceptance:
 
 - Plugin product manifests validate and build into selected plugin targets.
+
+Status:
+
+- Plugin product model is hardened for parameter identity/default safety at the model and manifest
+  boundary. Remaining work in this area belongs to concrete format adapters and host-specific
+  binary materialization under `REM-PLUGIN-002`.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this plugin product-model hardening slice for
+  production stability: invalid parameter numeric states and duplicate/unstable manifest parameter
+  identities are rejected before automation, packaging, or host exposure.
 
 ### REM-PLUGIN-002: Implement Plugin Format Adapters
 

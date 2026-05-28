@@ -246,7 +246,17 @@ Impact:
 
 Invalid manifests or API calls can create NaN/infinite values or bad parameter automation behavior.
 
-Production status: Needs correction before production use.
+Remediation:
+
+- `ParameterRange` now provides validated construction and validation for finite min/max/default
+  values, strict max greater than min, and default containment.
+- `ParameterSmoothing` now validates finite non-negative durations.
+- Parameter normalization and denormalization validate ranges and finite values before computing
+  host normalized values.
+- Manifest parsing rejects duplicate parameter IDs, unstable parameter IDs, empty parameter names,
+  and non-finite or out-of-range normalized defaults.
+
+Production status: Remediated at model and manifest boundary.
 
 ### 12. Documentation Exists, But It Documents Incomplete Behavior As If It Were Product Behavior
 

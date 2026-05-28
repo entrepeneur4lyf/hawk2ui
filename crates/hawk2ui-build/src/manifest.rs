@@ -5,6 +5,9 @@ use std::collections::BTreeSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+const NORMALIZED_PARAMETER_MIN: f64 = 0.0;
+const NORMALIZED_PARAMETER_MAX: f64 = 1.0;
+
 /// Supported package target class.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -248,6 +251,23 @@ impl HawkManifest {
                 "parameters require [plugin] metadata",
             ));
         }
+        let mut parameter_ids = BTreeSet::new();
+        for parameter in &self.parameters {
+            require_non_empty("parameter.id", &parameter.id)?;
+            require_non_empty("parameter.name", &parameter.name)?;
+            if !is_stable_id(&parameter.id) {
+                return Err(ManifestError::InvalidPluginParameter(parameter.id.clone()));
+            }
+            if !parameter.default.is_finite()
+                || !(NORMALIZED_PARAMETER_MIN..=NORMALIZED_PARAMETER_MAX)
+                    .contains(&parameter.default)
+            {
+                return Err(ManifestError::InvalidPluginParameter(parameter.id.clone()));
+            }
+            if !parameter_ids.insert(parameter.id.clone()) {
+                return Err(ManifestError::DuplicateParameter(parameter.id.clone()));
+            }
+        }
 
         if let Some(package) = &self.package {
             require_non_empty("package.name", &package.name)?;
@@ -285,6 +305,13 @@ fn require_non_empty(field: &'static str, value: &str) -> Result<(), ManifestErr
     }
 }
 
+fn is_stable_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|ch| {
+            ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-')
+        })
+}
+
 /// Manifest validation error.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ManifestError {
@@ -300,10 +327,14 @@ pub enum ManifestError {
     DuplicateAsset(String),
     /// Duplicate preset ID.
     DuplicatePreset(String),
+    /// Duplicate parameter ID.
+    DuplicateParameter(String),
     /// Invalid capability key.
     InvalidCapability(String),
     /// Invalid plugin metadata.
     InvalidPluginMetadata(&'static str),
+    /// Invalid plugin parameter metadata.
+    InvalidPluginParameter(String),
     /// Manifest failed generated JSON Schema validation.
     SchemaValidation {
         /// JSON pointer to the invalid manifest value.

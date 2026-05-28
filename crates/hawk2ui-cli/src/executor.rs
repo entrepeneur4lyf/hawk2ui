@@ -897,6 +897,10 @@ fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {
             "manifest.preset.duplicate",
             format!("duplicate preset declaration: {preset}"),
         ),
+        ManifestError::DuplicateParameter(parameter) => CliDiagnostic::error(
+            "manifest.parameter.duplicate",
+            format!("duplicate parameter declaration: {parameter}"),
+        ),
         ManifestError::InvalidCapability(capability) => CliDiagnostic::error(
             "manifest.capability.invalid",
             format!("invalid capability key: {capability}"),
@@ -904,6 +908,10 @@ fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {
         ManifestError::InvalidPluginMetadata(message) => {
             CliDiagnostic::error("manifest.plugin.invalid", message)
         }
+        ManifestError::InvalidPluginParameter(parameter) => CliDiagnostic::error(
+            "manifest.parameter.invalid",
+            format!("invalid plugin parameter declaration: {parameter}"),
+        ),
         ManifestError::SchemaValidation { path, message } => CliDiagnostic::error(
             "manifest.schema.invalid",
             format!(

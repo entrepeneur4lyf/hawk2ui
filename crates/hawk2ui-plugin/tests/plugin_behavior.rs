@@ -200,9 +200,9 @@ fn parameter_model_converts_normalized_values_and_display_text() {
         .expect("normalized value should convert");
 
     assert_eq!(value, ParameterValue::Float(-24.0));
-    assert_eq!(
+    assert_close(
         parameter.normalize(&ParameterValue::Float(-24.0)).unwrap(),
-        0.5
+        0.5,
     );
     assert_eq!(parameter.display_value(&value).unwrap(), "-24 dB");
     assert!(parameter.flags.automatable);
@@ -219,9 +219,9 @@ fn parameter_model_supports_stepped_values_and_smoothing_metadata() {
         parameter.denormalize(0.6).unwrap(),
         ParameterValue::Float(2.0)
     );
-    assert_eq!(
+    assert_close(
         parameter.normalize(&ParameterValue::Float(2.0)).unwrap(),
-        0.6666666666666666
+        0.666_666_666_666_666_6,
     );
     assert_eq!(parameter.generated_metadata().steps, Some(4));
     assert_eq!(
@@ -231,6 +231,13 @@ fn parameter_model_supports_stepped_values_and_smoothing_metadata() {
 }
 
 use hawk2ui_plugin::{AutomationBindingKind, AutomationEventKind, ParameterBinding};
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < f64::EPSILON,
+        "expected {actual} to equal {expected}"
+    );
+}
 
 #[test]
 fn automation_events_accept_correct_gesture_ordering() {

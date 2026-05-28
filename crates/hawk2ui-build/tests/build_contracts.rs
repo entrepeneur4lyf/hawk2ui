@@ -263,6 +263,71 @@ name = "linux-wayland"
 }
 
 #[test]
+fn manifest_validation_rejects_invalid_plugin_parameters() {
+    let single = r#"
+[identity]
+id = "com.hawk2ui.bad-plugin"
+name = "Bad Plugin"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.bad-plugin"
+name = "Bad Plugin"
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+default = 0.5
+"#;
+    let duplicate = r#"
+[identity]
+id = "com.hawk2ui.bad-plugin"
+name = "Bad Plugin"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.bad-plugin"
+name = "Bad Plugin"
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+default = 0.5
+
+[[parameters]]
+id = "gain"
+name = "Gain Copy"
+default = 0.25
+"#;
+    let invalid_id = single.replace("id = \"gain\"", "id = \"Bad Id\"");
+    let empty_name = single.replace("name = \"Gain\"", "name = \"   \"");
+    let out_of_range = single.replace("default = 0.5", "default = 2.0");
+
+    assert_eq!(
+        HawkManifest::parse(duplicate).expect_err("duplicate parameters must fail"),
+        ManifestError::DuplicateParameter("gain".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&invalid_id).expect_err("invalid parameter id must fail"),
+        ManifestError::InvalidPluginParameter("Bad Id".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&empty_name).expect_err("empty parameter name must fail"),
+        ManifestError::MissingField("parameter.name")
+    );
+    assert_eq!(
+        HawkManifest::parse(&out_of_range).expect_err("invalid normalized default must fail"),
+        ManifestError::InvalidPluginParameter("gain".into())
+    );
+}
+
+#[test]
 fn sealed_artifact_hashes_manifest_snapshot_stably() {
     let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
     let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest);
