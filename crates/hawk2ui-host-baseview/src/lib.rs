@@ -1,7 +1,7 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 //! `Baseview`-backed embedded plugin host adapter for `Hawk2UI`.
 
-use baseview::{Size, WindowOpenOptions, WindowScalePolicy};
+use baseview::{Size, Window, WindowHandle, WindowHandler, WindowOpenOptions, WindowScalePolicy};
 use hawk2ui_host::{
     HostPlatformHandle, KeyboardInput, PluginEditorConfig, PluginHostAdapter, PluginHostEvent,
     PointerInput, SurfaceMetrics, SurfaceOwnership,
@@ -9,6 +9,12 @@ use hawk2ui_host::{
 use hawk2ui_render::{Color, RendererBackend};
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend, SkiaSurfaceConfig};
 use hawk2ui_runtime::RuntimeSceneFrame;
+use raw_window_handle::{
+    AppKitDisplayHandle, AppKitWindowHandle, HasRawDisplayHandle, HasRawWindowHandle,
+    RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle, XcbDisplayHandle,
+    XcbWindowHandle, XlibDisplayHandle, XlibWindowHandle,
+};
+use std::ffi::c_void;
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-host-baseview";
@@ -66,6 +72,15 @@ impl BaseviewParentFixture {
         Self {
             id: "macos-nsview-parent",
             handle: HostPlatformHandle::macos_ns_view(5),
+        }
+    }
+
+    /// Creates a macOS `NSView` parent fixture with the owning `NSWindow`.
+    #[must_use]
+    pub const fn macos_ns_view_in_window() -> Self {
+        Self {
+            id: "macos-nsview-window-parent",
+            handle: HostPlatformHandle::macos_ns_view_in_window(5, 6),
         }
     }
 
@@ -143,6 +158,183 @@ impl BaseviewHostError {
     #[must_use]
     pub fn rule(&self) -> &str {
         &self.rule
+    }
+}
+
+/// Native parent backend used by Baseview's `open_parented` entry point.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BaseviewNativeParentBackend {
+    /// Windows HWND parent.
+    Windows,
+    /// macOS `AppKit` parent.
+    MacOs,
+    /// Linux Xlib parent.
+    X11,
+    /// Linux XCB parent.
+    Xcb,
+    /// `XWayland` parent exposed through `Xlib` handles.
+    XWayland,
+}
+
+/// A validated parent handle that can be passed to `baseview::Window::open_parented`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BaseviewNativeParent {
+    handle: HostPlatformHandle,
+    backend: BaseviewNativeParentBackend,
+}
+
+impl BaseviewNativeParent {
+    /// Creates a Baseview-native parent from a host platform handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when Baseview cannot safely attach to the handle.
+    pub fn try_from_handle(handle: HostPlatformHandle) -> Result<Self, BaseviewHostError> {
+        validate_baseview_parent(handle)?;
+        let backend = match handle {
+            HostPlatformHandle::WindowsHwnd { hwnd } => {
+                require_nonzero_handle(hwnd)?;
+                BaseviewNativeParentBackend::Windows
+            }
+            HostPlatformHandle::MacOsNsView { .. } => {
+                return Err(BaseviewHostError::new(
+                    "baseview.native-parent.invalid",
+                    "baseview macOS attachment requires both NSWindow and NSView handles",
+                ));
+            }
+            HostPlatformHandle::MacOsNsViewInWindow { ns_window, ns_view } => {
+                require_nonzero_handle(ns_window)?;
+                require_nonzero_handle(ns_view)?;
+                BaseviewNativeParentBackend::MacOs
+            }
+            HostPlatformHandle::MacOsNsWindow { .. } => {
+                return Err(BaseviewHostError::new(
+                    "baseview.native-parent.invalid",
+                    "baseview plugin editors must attach to a child NSView, not a top-level NSWindow",
+                ));
+            }
+            HostPlatformHandle::LinuxWayland { .. } => unreachable!("validated above"),
+            HostPlatformHandle::LinuxX11 { display, window } => {
+                require_nonzero_handle(display)?;
+                require_nonzero_handle(window)?;
+                BaseviewNativeParentBackend::X11
+            }
+            HostPlatformHandle::LinuxXcb { connection, window } => {
+                require_nonzero_handle(connection)?;
+                require_xcb_window(window)?;
+                BaseviewNativeParentBackend::Xcb
+            }
+            HostPlatformHandle::LinuxXWayland { display, window } => {
+                require_nonzero_handle(display)?;
+                require_nonzero_handle(window)?;
+                BaseviewNativeParentBackend::XWayland
+            }
+        };
+        Ok(Self { handle, backend })
+    }
+
+    /// Returns the original host handle.
+    #[must_use]
+    pub const fn handle(&self) -> HostPlatformHandle {
+        self.handle
+    }
+
+    /// Returns the Baseview backend used for this parent.
+    #[must_use]
+    pub const fn backend(&self) -> BaseviewNativeParentBackend {
+        self.backend
+    }
+
+    fn ensure_supported_on_current_target(&self) -> Result<(), BaseviewHostError> {
+        let supported = matches!(
+            self.backend,
+            BaseviewNativeParentBackend::X11
+                | BaseviewNativeParentBackend::Xcb
+                | BaseviewNativeParentBackend::XWayland
+        ) && cfg!(target_os = "linux")
+            || self.backend == BaseviewNativeParentBackend::MacOs && cfg!(target_os = "macos")
+            || self.backend == BaseviewNativeParentBackend::Windows && cfg!(target_os = "windows");
+        if supported {
+            Ok(())
+        } else {
+            Err(BaseviewHostError::new(
+                "baseview.native-parent.target-mismatch",
+                "baseview parent handle backend does not match the current target OS",
+            ))
+        }
+    }
+}
+
+// SAFETY: Baseview 0.1 accepts `raw-window-handle` 0.5 parent values by contract.
+// `BaseviewNativeParent` is constructed only after validating that every pointer/window ID
+// required by the selected backend is non-zero and representable on this target.
+#[allow(unsafe_code)]
+unsafe impl HasRawWindowHandle for BaseviewNativeParent {
+    fn raw_window_handle(&self) -> RawWindowHandle {
+        match self.handle {
+            HostPlatformHandle::WindowsHwnd { hwnd } => {
+                let mut handle = Win32WindowHandle::empty();
+                handle.hwnd = handle_to_ptr(hwnd);
+                RawWindowHandle::Win32(handle)
+            }
+            HostPlatformHandle::MacOsNsViewInWindow { ns_window, ns_view } => {
+                let mut handle = AppKitWindowHandle::empty();
+                handle.ns_window = handle_to_ptr(ns_window);
+                handle.ns_view = handle_to_ptr(ns_view);
+                RawWindowHandle::AppKit(handle)
+            }
+            HostPlatformHandle::LinuxX11 { window, .. }
+            | HostPlatformHandle::LinuxXWayland { window, .. } => {
+                let mut handle = XlibWindowHandle::empty();
+                handle.window = window;
+                RawWindowHandle::Xlib(handle)
+            }
+            HostPlatformHandle::LinuxXcb { window, .. } => {
+                let mut handle = XcbWindowHandle::empty();
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    handle.window = window as u32;
+                }
+                RawWindowHandle::Xcb(handle)
+            }
+            HostPlatformHandle::MacOsNsView { .. }
+            | HostPlatformHandle::MacOsNsWindow { .. }
+            | HostPlatformHandle::LinuxWayland { .. } => {
+                unreachable!("BaseviewNativeParent rejects unsupported parent handles")
+            }
+        }
+    }
+}
+
+// SAFETY: The display handle is derived from the same validated parent record as the window
+// handle. The selected variants match Baseview's platform backend expectations.
+#[allow(unsafe_code)]
+unsafe impl HasRawDisplayHandle for BaseviewNativeParent {
+    fn raw_display_handle(&self) -> RawDisplayHandle {
+        match self.handle {
+            HostPlatformHandle::WindowsHwnd { .. } => {
+                RawDisplayHandle::Windows(WindowsDisplayHandle::empty())
+            }
+            HostPlatformHandle::MacOsNsViewInWindow { .. } => {
+                RawDisplayHandle::AppKit(AppKitDisplayHandle::empty())
+            }
+            HostPlatformHandle::LinuxX11 { display, .. }
+            | HostPlatformHandle::LinuxXWayland { display, .. } => {
+                let mut handle = XlibDisplayHandle::empty();
+                handle.display = handle_to_ptr(display);
+                RawDisplayHandle::Xlib(handle)
+            }
+            HostPlatformHandle::LinuxXcb { connection, .. } => {
+                let mut handle = XcbDisplayHandle::empty();
+                handle.connection = handle_to_ptr(connection);
+                RawDisplayHandle::Xcb(handle)
+            }
+            HostPlatformHandle::MacOsNsView { .. }
+            | HostPlatformHandle::MacOsNsWindow { .. }
+            | HostPlatformHandle::LinuxWayland { .. } => {
+                unreachable!("BaseviewNativeParent rejects unsupported parent handles")
+            }
+        }
     }
 }
 
@@ -245,6 +437,37 @@ impl BaseviewPluginAdapter {
     #[must_use]
     pub const fn open_options(&self) -> &WindowOpenOptions {
         &self.open_options
+    }
+
+    /// Returns the validated native parent for Baseview attachment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the recorded parent is not sufficient for native
+    /// Baseview attachment.
+    pub fn native_parent(&self) -> Result<BaseviewNativeParent, BaseviewHostError> {
+        BaseviewNativeParent::try_from_handle(self.parent_fixture.handle())
+    }
+
+    /// Opens a real Baseview child window against the validated native parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the editor is destroyed, the parent handle is invalid, or
+    /// the parent handle backend does not match the current target OS.
+    pub fn open_parented_window<H, B>(&self, build: B) -> Result<WindowHandle, BaseviewHostError>
+    where
+        H: WindowHandler + 'static,
+        B: FnOnce(&mut Window) -> H + Send + 'static,
+    {
+        self.ensure_accepts_host_event()?;
+        let native_parent = self.native_parent()?;
+        native_parent.ensure_supported_on_current_target()?;
+        Ok(Window::open_parented(
+            &native_parent,
+            self.open_options.clone(),
+            build,
+        ))
     }
 
     /// Drains host events.
@@ -361,6 +584,7 @@ fn validate_baseview_parent(handle: HostPlatformHandle) -> Result<(), BaseviewHo
         )),
         HostPlatformHandle::WindowsHwnd { .. }
         | HostPlatformHandle::MacOsNsView { .. }
+        | HostPlatformHandle::MacOsNsViewInWindow { .. }
         | HostPlatformHandle::MacOsNsWindow { .. }
         | HostPlatformHandle::LinuxX11 { .. }
         | HostPlatformHandle::LinuxXcb { .. }
@@ -409,6 +633,34 @@ fn map_backend_error(error: &hawk2ui_render::BackendError) -> BaseviewHostError 
         format!("baseview.render.{}", error.diagnostic().rule()),
         error.diagnostic().message(),
     )
+}
+
+fn require_nonzero_handle(handle: u64) -> Result<(), BaseviewHostError> {
+    if usize::try_from(handle).ok().is_some_and(|value| value != 0) {
+        Ok(())
+    } else {
+        Err(BaseviewHostError::new(
+            "baseview.native-parent.invalid",
+            "baseview native parent handles must be non-zero and representable as pointer-sized values",
+        ))
+    }
+}
+
+fn require_xcb_window(handle: u64) -> Result<(), BaseviewHostError> {
+    if u32::try_from(handle).ok().is_some_and(|value| value != 0) {
+        Ok(())
+    } else {
+        Err(BaseviewHostError::new(
+            "baseview.native-parent.invalid",
+            "baseview XCB window handles must be non-zero and fit xcb_window_t",
+        ))
+    }
+}
+
+fn handle_to_ptr(handle: u64) -> *mut c_void {
+    #[allow(clippy::cast_possible_truncation)]
+    let value = handle as usize;
+    value as *mut c_void
 }
 
 impl PluginHostAdapter for BaseviewPluginAdapter {

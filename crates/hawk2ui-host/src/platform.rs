@@ -62,6 +62,13 @@ pub enum HostPlatformHandle {
         /// Raw handle value captured as an integer for safe records.
         ns_view: u64,
     },
+    /// macOS `NSView` paired with its owning `NSWindow`.
+    MacOsNsViewInWindow {
+        /// Raw owning `NSWindow` handle captured as an integer for safe records.
+        ns_window: u64,
+        /// Raw child `NSView` handle captured as an integer for safe records.
+        ns_view: u64,
+    },
     /// macOS `NSWindow`.
     MacOsNsWindow {
         /// Raw handle value captured as an integer for safe records.
@@ -110,6 +117,12 @@ impl HostPlatformHandle {
         Self::MacOsNsView { ns_view }
     }
 
+    /// Creates a macOS `NSView` handle record paired with its owning `NSWindow`.
+    #[must_use]
+    pub const fn macos_ns_view_in_window(ns_window: u64, ns_view: u64) -> Self {
+        Self::MacOsNsViewInWindow { ns_window, ns_view }
+    }
+
     /// Creates a macOS `NSWindow` handle record.
     #[must_use]
     pub const fn macos_ns_window(ns_window: u64) -> Self {
@@ -148,9 +161,10 @@ impl HostPlatformHandle {
             Self::LinuxX11 { .. } => Some(LinuxWindowSystem::X11),
             Self::LinuxXcb { .. } => Some(LinuxWindowSystem::Xcb),
             Self::LinuxXWayland { .. } => Some(LinuxWindowSystem::XWayland),
-            Self::WindowsHwnd { .. } | Self::MacOsNsView { .. } | Self::MacOsNsWindow { .. } => {
-                None
-            }
+            Self::WindowsHwnd { .. }
+            | Self::MacOsNsView { .. }
+            | Self::MacOsNsViewInWindow { .. }
+            | Self::MacOsNsWindow { .. } => None,
         }
     }
 
@@ -164,11 +178,12 @@ impl HostPlatformHandle {
         ownership: SurfaceOwnership,
     ) -> Result<(), PlatformHandleDiagnostic> {
         match (self, ownership) {
-            (Self::MacOsNsView { .. }, SurfaceOwnership::DesktopWindow) => {
-                Err(PlatformHandleDiagnostic::ownership_mismatch(
-                    "macOS NSView cannot own a desktop top-level window",
-                ))
-            }
+            (
+                Self::MacOsNsView { .. } | Self::MacOsNsViewInWindow { .. },
+                SurfaceOwnership::DesktopWindow,
+            ) => Err(PlatformHandleDiagnostic::ownership_mismatch(
+                "macOS NSView cannot own a desktop top-level window",
+            )),
             (Self::MacOsNsWindow { .. }, SurfaceOwnership::PluginEditor) => {
                 Err(PlatformHandleDiagnostic::ownership_mismatch(
                     "macOS plugin editors must attach to NSView-compatible child surfaces",

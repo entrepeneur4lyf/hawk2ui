@@ -2,12 +2,17 @@ use hawk2ui_host::{
     HostPlatformHandle, KeyboardInput, PluginEditorConfig, PluginHostAdapter, PluginHostEvent,
     PluginParentHandle, PointerInput, RendererResizeBridge, SurfaceMetrics,
 };
-use hawk2ui_host_baseview::{BaseviewParentFixture, BaseviewPluginAdapter};
+use hawk2ui_host_baseview::{
+    BaseviewNativeParent, BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
+};
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_render::Color;
 use hawk2ui_runtime::{
     RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
     RuntimeVisual,
+};
+use raw_window_handle::{
+    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 
 #[test]
@@ -42,6 +47,139 @@ fn baseview_parent_fixture_can_wrap_real_host_platform_handle_records() {
         .expect("baseview editor attaches to XCB-compatible parent record");
 
     assert_eq!(adapter.parent_fixture().id(), "host-xcb-parent");
+}
+
+#[test]
+fn baseview_native_parent_maps_x11_xcb_xwayland_and_windows_raw_handles() {
+    let x11 = BaseviewNativeParent::try_from_handle(HostPlatformHandle::linux_x11(100, 200))
+        .expect("x11 parent is supported");
+    assert_eq!(x11.handle(), HostPlatformHandle::linux_x11(100, 200));
+    assert_eq!(x11.backend(), BaseviewNativeParentBackend::X11);
+    assert!(matches!(
+        x11.raw_display_handle(),
+        RawDisplayHandle::Xlib(display) if display.display as usize == 100
+    ));
+    assert!(matches!(
+        x11.raw_window_handle(),
+        RawWindowHandle::Xlib(window) if window.window == 200
+    ));
+
+    let xcb = BaseviewNativeParent::try_from_handle(HostPlatformHandle::linux_xcb(300, 400))
+        .expect("xcb parent is supported");
+    assert_eq!(xcb.backend(), BaseviewNativeParentBackend::Xcb);
+    assert!(matches!(
+        xcb.raw_display_handle(),
+        RawDisplayHandle::Xcb(display) if display.connection as usize == 300
+    ));
+    assert!(matches!(
+        xcb.raw_window_handle(),
+        RawWindowHandle::Xcb(window) if window.window == 400
+    ));
+
+    let xwayland =
+        BaseviewNativeParent::try_from_handle(HostPlatformHandle::linux_xwayland(500, 600))
+            .expect("xwayland parent maps through x11 handles");
+    assert_eq!(xwayland.backend(), BaseviewNativeParentBackend::XWayland);
+    assert!(matches!(
+        xwayland.raw_window_handle(),
+        RawWindowHandle::Xlib(window) if window.window == 600
+    ));
+
+    let windows = BaseviewNativeParent::try_from_handle(HostPlatformHandle::windows_hwnd(700))
+        .expect("windows HWND parent is supported");
+    assert_eq!(windows.backend(), BaseviewNativeParentBackend::Windows);
+    assert!(matches!(
+        windows.raw_window_handle(),
+        RawWindowHandle::Win32(window) if window.hwnd as usize == 700
+    ));
+
+    let macos = BaseviewNativeParent::try_from_handle(HostPlatformHandle::macos_ns_view_in_window(
+        800, 900,
+    ))
+    .expect("macOS AppKit parent is supported when NSWindow and NSView are present");
+    assert_eq!(macos.backend(), BaseviewNativeParentBackend::MacOs);
+    assert!(matches!(
+        macos.raw_window_handle(),
+        RawWindowHandle::AppKit(window)
+            if window.ns_window as usize == 800 && window.ns_view as usize == 900
+    ));
+}
+
+#[test]
+fn baseview_native_parent_requires_real_nonzero_supported_parent_handles() {
+    let invalid_handles = [
+        HostPlatformHandle::linux_x11(0, 200),
+        HostPlatformHandle::linux_x11(100, 0),
+        HostPlatformHandle::linux_xcb(0, 200),
+        HostPlatformHandle::linux_xcb(100, 0),
+        HostPlatformHandle::linux_xcb(100, u64::from(u32::MAX) + 1),
+        HostPlatformHandle::linux_xwayland(0, 200),
+        HostPlatformHandle::linux_xwayland(100, 0),
+        HostPlatformHandle::windows_hwnd(0),
+        HostPlatformHandle::macos_ns_view(0),
+        HostPlatformHandle::macos_ns_view(900),
+        HostPlatformHandle::macos_ns_view_in_window(0, 900),
+        HostPlatformHandle::macos_ns_view_in_window(800, 0),
+    ];
+
+    for handle in invalid_handles {
+        let error = BaseviewNativeParent::try_from_handle(handle)
+            .expect_err("zero native handles must not be passed to baseview");
+        assert_eq!(error.rule(), "baseview.native-parent.invalid");
+    }
+
+    let error = BaseviewNativeParent::try_from_handle(HostPlatformHandle::linux_wayland(100, 200))
+        .expect_err("baseview 0.1 does not support native Wayland parent handles");
+    assert_eq!(error.rule(), "baseview.platform.unsupported");
+}
+
+#[test]
+fn baseview_adapter_exposes_native_parent_and_open_options_for_real_attachment() {
+    let adapter = BaseviewPluginAdapter::attach(
+        PluginEditorConfig::new(
+            "editor",
+            PluginParentHandle::opaque("parent"),
+            SurfaceMetrics::new(320.0, 180.0, 1.5),
+        ),
+        BaseviewParentFixture::linux_xwayland(),
+    )
+    .expect("baseview editor attaches");
+
+    let native_parent = adapter
+        .native_parent()
+        .expect("adapter exposes raw native parent");
+    assert_eq!(
+        native_parent.backend(),
+        BaseviewNativeParentBackend::XWayland
+    );
+    assert_eq!(adapter.open_options().title, "editor");
+    assert_eq!(adapter.open_options().size.width, 320.0);
+    assert_eq!(adapter.open_options().size.height, 180.0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn baseview_open_parented_rejects_cross_target_parent_before_creating_window() {
+    let adapter = BaseviewPluginAdapter::attach(
+        PluginEditorConfig::new(
+            "editor",
+            PluginParentHandle::opaque("parent"),
+            SurfaceMetrics::new(320.0, 180.0, 1.0),
+        ),
+        BaseviewParentFixture::from_platform_handle(
+            "windows-parent",
+            HostPlatformHandle::windows_hwnd(700),
+        ),
+    )
+    .expect("recorded Windows parent is valid but not openable on Linux");
+
+    let result = adapter.open_parented_window(|_| NoopWindowHandler);
+    assert!(result.is_err());
+    let error = result
+        .err()
+        .expect("target mismatch must be reported before Baseview tries to open a window");
+
+    assert_eq!(error.rule(), "baseview.native-parent.target-mismatch");
 }
 
 #[test]
@@ -313,4 +451,18 @@ fn runtime_scene_frame(width: f32, height: f32, color: Color) -> RuntimeSceneFra
     RuntimeSceneBridge::new(Viewport::new(width, height))
         .build(&tree)
         .expect("runtime scene frame builds")
+}
+
+struct NoopWindowHandler;
+
+impl baseview::WindowHandler for NoopWindowHandler {
+    fn on_frame(&mut self, _window: &mut baseview::Window) {}
+
+    fn on_event(
+        &mut self,
+        _window: &mut baseview::Window,
+        _event: baseview::Event,
+    ) -> baseview::EventStatus {
+        baseview::EventStatus::Ignored
+    }
 }

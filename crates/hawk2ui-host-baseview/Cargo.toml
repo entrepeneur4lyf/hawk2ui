@@ -13,8 +13,12 @@ description = "Baseview-backed embedded plugin host adapter for Hawk2UI."
 name = "hawk2ui_host_baseview"
 path = "src/lib.rs"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
 
 [dependencies]
 baseview = "0.1.1"
@@ -23,3 +27,4 @@ hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
 hawk2ui-render-skia = { version = "0.1.0", path = "../hawk2ui-render-skia" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
+raw-window-handle = "0.5"

@@ -34,9 +34,9 @@ Source-truth status as of 2026-05-27:
 - Winit opens a native window and renders compiled runtime scene output through the Skia renderer
   path, with a fallback diagnostic frame only for direct host API use without a runtime tree,
 - CLAP package/scaffold generation exists and is host-loaded by tests, but the attached plugin GUI
-  does not yet render a live Hawk2UI scene inside a real Baseview/editor surface,
-- Baseview support is still headless-safe fixture/recording coverage rather than real parented
-  window attachment,
+  still needs a smoke-tested live Hawk2UI scene inside a real DAW-owned editor surface,
+- Baseview support now has a real `open_parented` path from validated host handles; remaining work is
+  binding the live surface presentation into plugin smoke coverage,
 - accessibility model/export/action dispatch and schema catalog/export are implemented, while
   OS-specific accessibility attachment remains host-backend work.
 
@@ -1330,7 +1330,8 @@ Review check:
 Evidence:
 
 - Baseview dependency exists.
-- `BaseviewPluginAdapter` uses parent fixtures and records events; it does not open/attach a real editor surface.
+- `BaseviewPluginAdapter` uses parent fixtures, records events, validates native parent handles,
+  and exposes a real `baseview::Window::open_parented` attachment path.
 - Source imports Baseview open-option types and validates parent handles, metrics, resize, DPI,
   focus, pointer, keyboard, repaint, and teardown contracts through fixture tests.
 - `BaseviewPluginAdapter::render_scene_frame` now replays a `RuntimeSceneFrame` through the Skia
@@ -1339,13 +1340,13 @@ Evidence:
 
 Status:
 
-- Partially open: fixture/contract coverage and runtime-scene Skia presentation exist, but no source
-  path currently opens a real parented Baseview editor surface or binds the retained Skia snapshot
-  to an actual DAW-owned native child surface.
+- Partially open: fixture/contract coverage, runtime-scene Skia presentation, raw native parent
+  validation, and a real Baseview `open_parented` source path exist. The retained Skia snapshot
+  still needs live binding into an actual DAW-owned native child surface and smoke coverage.
 
 Required remediation:
 
-- Implement real Baseview parented editor attachment.
+- Complete smoke coverage around real Baseview parented editor attachment.
 - Connect the attached surface to the Hawk2UI runtime-scene-to-Skia rendering path.
 - Route host resize, DPI, focus, pointer, keyboard, repaint, show/hide, and teardown.
 - Ensure plugin editor teardown never exits process.

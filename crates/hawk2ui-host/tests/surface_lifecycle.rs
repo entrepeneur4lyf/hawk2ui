@@ -292,27 +292,28 @@ fn platform_handles_support_windows_macos_wayland_x11_xcb_and_xwayland() {
     let handles = [
         HostPlatformHandle::windows_hwnd(1),
         HostPlatformHandle::macos_ns_view(2),
-        HostPlatformHandle::macos_ns_window(3),
-        HostPlatformHandle::linux_wayland(4, 5),
-        HostPlatformHandle::linux_x11(6, 7),
-        HostPlatformHandle::linux_xcb(8, 9),
-        HostPlatformHandle::linux_xwayland(10, 11),
+        HostPlatformHandle::macos_ns_view_in_window(3, 4),
+        HostPlatformHandle::macos_ns_window(5),
+        HostPlatformHandle::linux_wayland(6, 7),
+        HostPlatformHandle::linux_x11(8, 9),
+        HostPlatformHandle::linux_xcb(10, 11),
+        HostPlatformHandle::linux_xwayland(12, 13),
     ];
 
     assert_eq!(
-        handles[3].linux_window_system(),
+        handles[4].linux_window_system(),
         Some(LinuxWindowSystem::Wayland)
     );
     assert_eq!(
-        handles[4].linux_window_system(),
+        handles[5].linux_window_system(),
         Some(LinuxWindowSystem::X11)
     );
     assert_eq!(
-        handles[5].linux_window_system(),
+        handles[6].linux_window_system(),
         Some(LinuxWindowSystem::Xcb)
     );
     assert_eq!(
-        handles[6].linux_window_system(),
+        handles[7].linux_window_system(),
         Some(LinuxWindowSystem::XWayland)
     );
     assert!(
