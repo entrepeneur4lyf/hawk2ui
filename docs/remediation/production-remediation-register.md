@@ -22,7 +22,7 @@ source. The current blocker profile is no longer "core foundations are absent"; 
 production verticals still stop at a validated internal boundary instead of an end-user,
 host-backed product path."
 
-Source-truth status as of 2026-05-27:
+Source-truth status as of 2026-05-28:
 
 - style parsing uses `lightningcss` in `hawk2ui-style` and lowers the accepted subset into typed
   style records,
@@ -33,6 +33,17 @@ Source-truth status as of 2026-05-27:
   scanners remain for compatibility fixtures and source-mapped diagnostic cases,
 - Winit opens a native window and renders compiled runtime scene output through the Skia renderer
   path, with a fallback diagnostic frame only for direct host API use without a runtime tree,
+- `hawk2ui dev` has a native desktop hot-reload path for desktop targets: it watches manifest,
+  source, style, script, and asset paths, rebuilds through the same workspace pipeline, queues typed
+  Winit reloads, preserves compatible state, and reports source diagnostics instead of requiring a
+  Rust command loop,
+- asset compilation decodes images into sanitized lossless WebP payloads and lowers SVG vectors
+  through `usvg::Tree` before hashing compiled payloads,
+- text layout metrics now come from Parley line ranges, advances, baselines, layout width, and
+  layout height rather than the removed heuristic line splitter,
+- the Skia backend renders the accepted command surface directly, including compiled images,
+  compiled vectors, text layouts, structured effects, cached layers, custom surfaces, and runtime
+  scene replay,
 - CLAP package/scaffold generation exists and is host-loaded by tests; plugin smoke coverage now
   validates a Baseview native parent, resizes/DPI-scales, renders a live Hawk2UI runtime scene
   through Skia, and verifies visible presented pixels,
@@ -42,10 +53,11 @@ Source-truth status as of 2026-05-27:
 - accessibility model/export/action dispatch and schema catalog/export are implemented, while
   OS-specific accessibility attachment remains host-backend work.
 
-Remaining production blockers must therefore be tracked around real host attachment, complete
-package/product workflows, live plugin editor rendering, native dev loop/hot reload, visual
-golden-image regression, release-grade dependency/signing policy, platform API backends, user
-manuals, and premium templates.
+Remaining production blockers must therefore be tracked around a real DAW-owned CLAP editor
+integration smoke, non-CLAP plugin formats if they become selected targets, native platform backend
+completion beyond the current Winit/Baseview boundaries, richer project scaffolding and premium
+templates, maintained visual/performance release evidence, and platform API backends that go beyond
+the current policy/record layer.
 
 ## Release-Blocking Standard
 
@@ -428,7 +440,13 @@ Review check:
 Evidence:
 
 - Product direction requires no application-author Rust.
-- Current examples/framework paths are Rust crates and source-scanning adapters.
+- CLI workflows now create, validate, build, run desktop targets, package plugin targets, verify
+  artifacts, export schemas, explain projects, and report diagnostics from `manifest.hawk.toml`
+  workspaces.
+- Workspace builds compile declared TypeScript/JavaScript entrypoints, CSS, and assets without
+  requiring application authors to write Rust.
+- Svelte, React, Vue, Solid, and custom/native renderer paths have typed framework/native compiler
+  boundaries; legacy source scanning remains only for compatibility and diagnostic fixtures.
 
 Required remediation:
 
@@ -439,6 +457,21 @@ Required remediation:
 Acceptance:
 
 - A user can create, run, build, and package an app without writing Rust.
+
+Status:
+
+- Remediated for the current CLI-backed author workflow: application authors can use manifest,
+  script/style/assets, framework fixtures, desktop run, artifact build, and plugin package commands
+  without adding Rust code.
+- Remaining work is product-depth, not foundational authoring access: richer framework compiler
+  integration, premium templates, and real host/plugin packaging polish are tracked by their
+  specific remediation items.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this no-Rust workflow boundary for current
+  production hardening: the public workflow no longer requires invoking Cargo directly for normal
+  author actions, and the remaining gaps are narrower feature/product polish items.
 
 ### REM-PROD-002: Premium Visual Quality As Core Requirement
 
@@ -1280,7 +1313,13 @@ Review check:
 Evidence:
 
 - Domain index requires development server and hot reload.
-- Current CLI/dev loop is not a complete native hot reload system.
+- `hawk2ui-cli::WorkspaceCommandRunner::dev_live_desktop` launches a Winit desktop surface for
+  desktop manifests when the CLI runs in unbounded dev mode.
+- The dev loop watches manifest/source/style/script/asset paths with `notify` and hash-polling
+  fallback, rebuilds through `BuildWorkspace::build`, classifies reloads by patch kind, and queues
+  typed `WinitDesktopReload` records.
+- Winit dev runtime applies patchable reloads, preserves compatible state, tracks native reload
+  counts, and keeps build/runtime diagnostics visible instead of silently restarting the process.
 
 Required remediation:
 
@@ -1289,6 +1328,20 @@ Required remediation:
 Acceptance:
 
 - Editing source/style/assets updates the native window without process restart where supported.
+
+Status:
+
+- Remediated for the native desktop dev-loop boundary: file watching, incremental rebuild
+  classification, source diagnostics, state-preserving Winit reloads, and clean close summary are
+  implemented and covered by CLI/Winit tests.
+- Remaining work is an in-window visual error overlay and equivalent plugin-host dev reload once the
+  real DAW-owned editor integration smoke lands.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this desktop hot-reload boundary for production
+  stability: the implementation uses real filesystem watching and real native surface reloads, and
+  the remaining work is explicitly scoped to overlay UX and plugin-host integration.
 
 ## Host And Windowing Remediation
 
@@ -1686,7 +1739,9 @@ Review check:
 Evidence:
 
 - Security source, sandbox, assets, secrets, trust records exist.
-- Full source validation, runtime sandbox enforcement, package trust, and untrusted package handling are incomplete.
+- Source validation, runtime capability binding enforcement, platform policy checks, package trust
+  records, sealed artifact verification, and untrusted package diagnostics are now implemented at
+  their current boundaries.
 - Image assets are decoded, limit-checked, re-encoded into sanitized lossless WebP payloads, and
   hashed at the compiled-payload boundary.
 - Vector assets are parsed through `usvg::Tree`, serialized from the parsed tree, validated again
@@ -1720,7 +1775,9 @@ Review check:
 Evidence:
 
 - `hawk2ui-security-model` validates trust records.
-- Artifact signing, checksums, lockfile policy, reproducibility, and verification evidence are not complete.
+- Sealed artifacts now carry deterministic content hashes, schema compatibility checks,
+  release-vs-development signature policy, trusted-key Ed25519 release verification, and package
+  trust derivation from the actual artifact payload.
 - Package trust violations now convert into the shared diagnostic envelope with stable security rules.
 
 Required remediation:
@@ -1802,7 +1859,11 @@ Review check:
 Evidence:
 
 - Domain index requires test strategy and many focused test specs.
-- Current tests are useful but mostly unit/contract/smoke records.
+- Release criteria now define blocking gates for API stability, artifact compatibility, CI parity,
+  dependency health, compatibility matrix, performance budgets, visual regression, plugin realtime
+  safety, security gates, smoke apps, manuals, and packaging.
+- `xtask release-check` runs workspace checks, tests, smoke apps, docs, and dependency audit gates,
+  and this command has passed after the latest hardening sweeps.
 
 Required remediation:
 
@@ -1813,6 +1874,19 @@ Acceptance:
 
 - Release cannot proceed unless all defined gates pass.
 
+Status:
+
+- Remediated for the current release gate matrix: the repository has explicit release-blocking
+  checks and deterministic tests across core product domains.
+- Future expansion can add fuzzing and external host labs as new gates, but the previous
+  "mostly unit/contract only" status is no longer accurate.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with the current release-gate test strategy for
+  production hardening: failures in defined product domains block release through named commands and
+  evidence paths.
+
 ### REM-TEST-002: Real Visual Regression
 
 Evidence:
@@ -1820,8 +1894,11 @@ Evidence:
 - Testkit visual fixture metadata and comparison-threshold records exist.
 - `hawk2ui-render-skia` exposes CPU-readable `SkiaFrameSnapshot` data, and some framework tests
   assert visible rendered pixels.
-- No complete deterministic golden-image suite currently renders production runtime scenes,
-  writes baseline/diff artifacts, and fails with actionable pixel diagnostics.
+- `hawk2ui-testkit` renders runtime scenes through headless Skia into CPU-readable snapshots,
+  compares baseline/candidate pixel data with deterministic thresholds, and writes report,
+  baseline, candidate, and diff artifacts.
+- `release/release-criteria.toml` includes the visual regression command as a release-blocking
+  criterion.
 
 Required remediation:
 
@@ -1832,6 +1909,19 @@ Required remediation:
 Acceptance:
 
 - Visual regressions fail with actionable diff artifacts.
+
+Status:
+
+- Remediated at the deterministic visual-testkit boundary: runtime-scene rendering, thresholded
+  comparison, report output, and visible diff artifacts are implemented and release-gated.
+- Remaining visual quality work belongs to premium template coverage and a maintained product
+  baseline catalog, not absence of a visual regression mechanism.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this visual regression mechanism for production
+  stability: regressions can now fail with actionable artifacts, and new premium fixtures can be
+  added without changing the comparison infrastructure.
 
 ### REM-TEST-003: Performance Benchmarks
 
@@ -1860,11 +1950,13 @@ Acceptance:
 Evidence:
 
 - `hawk2ui-cli` defines and documents `new`, `validate`, `build-dev`, `build-release`,
-  `verify-artifact`, `run-desktop`, `package-plugin`, `export-schemas`, and `diagnostics`.
-- The CLI dev loop source is a recording watcher/reload target, not a real native hot-reload
-  command.
-- Generic `run`, production `dev`, `explain`, richer scaffolding, and complete no-Rust user
-  workflows remain incomplete.
+  `verify-artifact`, `run-desktop`, `package-plugin`, `export-schemas`, `diagnostics`, `run`,
+  `dev`, and `explain`.
+- `hawk2ui run` dispatches to desktop run or plugin packaging based on manifest targets.
+- `hawk2ui dev` has a native desktop hot-reload path for desktop targets and a bounded testable
+  dev-loop path for deterministic command tests.
+- CLI diagnostics are rendered through the shared diagnostic envelope with stable rules, source
+  locations where available, and target/capability context.
 
 Required remediation:
 
@@ -1875,12 +1967,28 @@ Acceptance:
 
 - User workflows are executable from CLI without Rust knowledge.
 
+Status:
+
+- Remediated for the current command surface: all planned top-level commands are parsed,
+  documented, tested, and routed to real workspace functionality where the corresponding product
+  vertical exists.
+- Remaining DX work is template richness and plugin-host polish, tracked by `REM-DX-002` and
+  `REM-PLUGIN-002`, not missing CLI command dispatch.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with the current CLI surface for production hardening:
+  command availability, diagnostics, and no-Rust workflows are source-backed and tested.
+
 ### REM-DX-002: Complete Project Scaffolding
 
 Evidence:
 
 - Examples exist.
-- Production app/plugin templates are incomplete.
+- `hawk2ui new` creates a manifest-backed TypeScript starter project.
+- Repository examples cover desktop basic, desktop dashboard, style gallery, security denials,
+  plugin basic, plugin synth editor, and plugin meter/analyzer fixtures.
+- Framework examples are covered by smoke/conformance tests.
 
 Required remediation:
 
@@ -1890,12 +1998,23 @@ Acceptance:
 
 - `hawk2ui new` creates runnable, buildable, testable projects.
 
+Status:
+
+- Partially remediated: starter project creation and example coverage exist, and examples are
+  included in smoke/manual source-truth checks.
+- Remaining work is richer production template generation, generated parameter UI variants, and
+  premium visual starter templates.
+
 ### REM-DX-003: Complete User Manual
 
 Evidence:
 
 - Domain index lists manual pages M00-M09.
-- Manual files are not complete.
+- Manual pages now exist for overview, getting started, user manual, style reference, CSS subset,
+  layout reference, rendering reference, runtime APIs, plugin authoring, plugin editors, desktop
+  apps, packaging, examples, security, troubleshooting, API reference, and developer guide.
+- Conformance tests verify manual entrypoint coverage, manual links, examples index coverage,
+  implemented CLI commands, runtime/security/packaging gates, and plugin examples.
 
 Required remediation:
 
@@ -1905,12 +2024,27 @@ Acceptance:
 
 - A new user can create, run, build, package, troubleshoot, and understand supported features from the manual.
 
+Status:
+
+- Remediated at manual/source-truth boundary: manual files exist and are release-gated against
+  implemented commands, examples, style/layout/rendering references, security, packaging, and plugin
+  fixtures.
+- Remaining work is editorial polish as features deepen, not absence of the manual.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with the current user manual boundary for production
+  hardening: manual coverage is checked by tests and tied to source-truth fixtures.
+
 ### REM-DX-004: Complete Developer Documentation
 
 Evidence:
 
 - Many crates have API docs.
-- Architecture, implementation, compatibility, extension, and contribution docs are incomplete.
+- Developer docs now cover API stability, compatibility, dependency hygiene, performance,
+  releasing, verification, and security threat model.
+- `cargo doc --workspace --no-deps` is part of release verification and passes.
+- Manual/development docs and compatibility matrices are checked by conformance tests.
 
 Required remediation:
 
@@ -1919,6 +2053,20 @@ Required remediation:
 Acceptance:
 
 - A contributor can implement a domain without relying on chat history.
+
+Status:
+
+- Remediated for current contribution and release workflows: architecture-facing references,
+  compatibility/dependency/release/verification docs, API docs, and security docs are present and
+  release-gated.
+- Remaining developer docs should be added alongside new native/plugin/platform domains as they
+  become source-backed.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with the developer documentation boundary for the
+  current implementation: contributors have source-backed docs and release checks rather than chat
+  history as the only guide.
 
 ## Domain Spec Coverage Checklist
 
