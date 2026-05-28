@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use hawk2ui_api::Diagnostic;
 use serde::Deserialize;
 
 /// Compatibility support status for a release target.
@@ -14,6 +15,24 @@ pub enum ReleaseStatus {
     Blocked,
     /// Target is known but not supported.
     Unsupported,
+}
+
+impl ReleaseStatus {
+    /// Returns true when this target is accepted by release gates.
+    #[must_use]
+    pub const fn is_supported(self) -> bool {
+        matches!(self, Self::Supported)
+    }
+
+    /// Returns a stable status label for diagnostics.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Supported => "supported",
+            Self::Blocked => "blocked",
+            Self::Unsupported => "unsupported",
+        }
+    }
 }
 
 /// Host surface kind represented by a target.
@@ -104,6 +123,15 @@ impl CoverageStatus {
     pub const fn is_covered(self) -> bool {
         matches!(self, Self::Covered)
     }
+
+    /// Returns a stable coverage label for diagnostics.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Covered => "covered",
+            Self::Missing => "missing",
+        }
+    }
 }
 
 /// One plugin host compatibility row.
@@ -127,6 +155,26 @@ pub struct PluginHostCompatibility {
     pub automation: CoverageStatus,
     /// Whether realtime visual data transport is covered.
     pub realtime_visual_data: CoverageStatus,
+}
+
+impl PluginHostCompatibility {
+    /// Returns host lifecycle coverage fields that are not release-covered.
+    #[must_use]
+    pub fn missing_coverage_fields(&self) -> Vec<&'static str> {
+        [
+            ("host_attachment", self.host_attachment),
+            ("resize", self.resize),
+            ("dpi", self.dpi),
+            ("keyboard_focus", self.keyboard_focus),
+            ("accessibility", self.accessibility),
+            ("state", self.state),
+            ("automation", self.automation),
+            ("realtime_visual_data", self.realtime_visual_data),
+        ]
+        .into_iter()
+        .filter_map(|(field, status)| (!status.is_covered()).then_some(field))
+        .collect()
+    }
 }
 
 /// Plugin host compatibility matrix.
@@ -188,28 +236,55 @@ impl CompatibilityMatrix {
         Ok(matrix)
     }
 
-    /// Returns true when a target exists.
+    /// Returns true when a release-supported target exists.
     #[must_use]
     pub fn contains_target(&self, target: &str) -> bool {
-        self.targets.iter().any(|row| row.name == target)
+        self.targets
+            .iter()
+            .any(|row| row.name == target && row.release.is_supported())
     }
 
-    /// Returns an unsupported-target diagnostic for missing targets.
+    /// Returns a target row by stable target name.
+    #[must_use]
+    pub fn target(&self, target: &str) -> Option<&TargetCompatibility> {
+        self.targets.iter().find(|row| row.name == target)
+    }
+
+    /// Returns release-supported target names.
+    #[must_use]
+    pub fn supported_targets(&self) -> Vec<&str> {
+        self.targets
+            .iter()
+            .filter(|row| row.release.is_supported())
+            .map(|row| row.name.as_str())
+            .collect()
+    }
+
+    /// Returns an unsupported-target diagnostic for missing or non-release-supported targets.
     #[must_use]
     pub fn unsupported_target_diagnostic(&self, target: &str) -> Option<String> {
-        if self.contains_target(target) {
-            return None;
+        if let Some(row) = self.target(target) {
+            if row.release.is_supported() {
+                return None;
+            }
+            return Some(format!(
+                "unsupported target '{target}' is declared as {}. Supported targets: {}",
+                row.release.as_str(),
+                self.supported_targets().join(", ")
+            ));
         }
 
-        let supported = self
-            .targets
-            .iter()
-            .map(|row| row.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
+        let supported = self.supported_targets().join(", ");
         Some(format!(
             "unsupported target '{target}'. Supported targets: {supported}"
         ))
+    }
+
+    /// Returns a shared unsupported-target diagnostic for missing or non-release-supported targets.
+    #[must_use]
+    pub fn unsupported_target_shared_diagnostic(&self, target: &str) -> Option<Diagnostic> {
+        self.unsupported_target_diagnostic(target)
+            .map(|message| Diagnostic::error("compat.target.unsupported", message))
     }
 
     fn validate(&self) -> Result<(), MatrixError> {
@@ -259,6 +334,29 @@ impl GraphicsCompatibilityMatrix {
         })
     }
 
+    /// Returns an unsupported-feature diagnostic for a backend/feature pair.
+    #[must_use]
+    pub fn unsupported_feature_diagnostic(
+        &self,
+        backend: &str,
+        feature: &str,
+    ) -> Option<Diagnostic> {
+        let Some(row) = self.backends.iter().find(|row| row.backend == backend) else {
+            return Some(Diagnostic::error(
+                "compat.graphics.backend-unknown",
+                format!("graphics backend '{backend}' is not declared"),
+            ));
+        };
+        let feature_supported =
+            row.supported && row.features.iter().any(|candidate| candidate == feature);
+        (!feature_supported).then(|| {
+            Diagnostic::error(
+                &row.diagnostic,
+                format!("graphics backend '{backend}' does not support feature '{feature}'"),
+            )
+        })
+    }
+
     fn validate(&self) -> Result<(), MatrixError> {
         let mut names = BTreeSet::new();
         for backend in &self.backends {
@@ -271,7 +369,10 @@ impl GraphicsCompatibilityMatrix {
                 });
             }
             if !names.insert(backend.backend.clone()) {
-                return Err(MatrixError::DuplicateTarget(backend.backend.clone()));
+                return Err(MatrixError::DuplicateKey {
+                    kind: "graphics backend",
+                    key: backend.backend.clone(),
+                });
             }
         }
         Ok(())
@@ -299,12 +400,35 @@ impl HostCompatibilityMatrix {
         self.hosts.iter().find(|host| host.format == format)
     }
 
+    /// Returns diagnostics for missing host lifecycle coverage.
+    #[must_use]
+    pub fn missing_coverage_diagnostics(&self, format: &str) -> Vec<Diagnostic> {
+        let Some(host) = self.host(format) else {
+            return vec![Diagnostic::error(
+                "compat.host.missing",
+                format!("plugin host compatibility row is missing for format '{format}'"),
+            )];
+        };
+        host.missing_coverage_fields()
+            .into_iter()
+            .map(|field| {
+                Diagnostic::error(
+                    "compat.host.coverage-missing",
+                    format!("plugin host format '{format}' is missing coverage for {field}"),
+                )
+            })
+            .collect()
+    }
+
     fn validate(&self) -> Result<(), MatrixError> {
         let mut formats = BTreeSet::new();
         for host in &self.hosts {
             require_field("host", &host.format, "format")?;
             if !formats.insert(host.format.clone()) {
-                return Err(MatrixError::DuplicateTarget(host.format.clone()));
+                return Err(MatrixError::DuplicateKey {
+                    kind: "plugin host format",
+                    key: host.format.clone(),
+                });
             }
         }
         Ok(())
@@ -336,6 +460,17 @@ impl PackageCompatibilityMatrix {
             .find(|package| package.output == output)
     }
 
+    /// Returns a diagnostic when a package output is not declared.
+    #[must_use]
+    pub fn missing_package_diagnostic(&self, output: &str) -> Option<Diagnostic> {
+        self.package(output).is_none().then(|| {
+            Diagnostic::error(
+                "compat.package.missing",
+                format!("package output '{output}' is not declared"),
+            )
+        })
+    }
+
     fn validate(&self) -> Result<(), MatrixError> {
         let mut outputs = BTreeSet::new();
         for package in &self.packages {
@@ -344,7 +479,10 @@ impl PackageCompatibilityMatrix {
             require_field(&package.output, &package.platform, "platform")?;
             require_field(&package.output, &package.verify_command, "verify_command")?;
             if !outputs.insert(package.output.clone()) {
-                return Err(MatrixError::DuplicateTarget(package.output.clone()));
+                return Err(MatrixError::DuplicateKey {
+                    kind: "package output",
+                    key: package.output.clone(),
+                });
             }
         }
         Ok(())
@@ -369,6 +507,13 @@ pub enum MatrixError {
     Parse(String),
     /// Two or more target rows use the same stable name.
     DuplicateTarget(String),
+    /// Two or more non-target rows use the same stable key.
+    DuplicateKey {
+        /// Matrix row kind.
+        kind: &'static str,
+        /// Duplicated stable key.
+        key: String,
+    },
     /// A matrix row is missing a required field.
     MissingRequiredField {
         /// Row identifier.
@@ -376,4 +521,27 @@ pub enum MatrixError {
         /// Missing field name.
         field: &'static str,
     },
+}
+
+impl From<MatrixError> for Diagnostic {
+    fn from(error: MatrixError) -> Self {
+        match error {
+            MatrixError::Parse(message) => Diagnostic::error(
+                "compat.matrix.parse-failed",
+                format!("compatibility matrix could not be parsed: {message}"),
+            ),
+            MatrixError::DuplicateTarget(target) => Diagnostic::error(
+                "compat.matrix.duplicate-target",
+                format!("duplicate compatibility target row: {target}"),
+            ),
+            MatrixError::DuplicateKey { kind, key } => Diagnostic::error(
+                "compat.matrix.duplicate-key",
+                format!("duplicate {kind} row: {key}"),
+            ),
+            MatrixError::MissingRequiredField { row, field } => Diagnostic::error(
+                "compat.matrix.missing-field",
+                format!("compatibility matrix row '{row}' is missing required field '{field}'"),
+            ),
+        }
+    }
 }

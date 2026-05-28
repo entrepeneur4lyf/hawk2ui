@@ -1643,6 +1643,7 @@ dependencies = [
 name = "hawk2ui-compat"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-api",
  "serde",
  "toml 0.8.23",
 ]

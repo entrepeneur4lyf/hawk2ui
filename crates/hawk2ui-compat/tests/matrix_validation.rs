@@ -2,8 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use hawk2ui_compat::{
-    CompatibilityMatrix, GraphicsCompatibilityMatrix, HostCompatibilityMatrix,
-    PackageCompatibilityMatrix, ReleaseStatus, SurfaceKind,
+    CompatibilityMatrix, CoverageStatus, GraphicsCompatibilityMatrix, HostCompatibilityMatrix,
+    MatrixError, PackageCompatibilityMatrix, ReleaseStatus, SurfaceKind,
 };
 
 fn workspace_root() -> PathBuf {
@@ -87,6 +87,12 @@ fn graphics_matrix_maps_every_render_feature_to_a_supported_backend() {
             "missing supported graphics feature {feature}"
         );
     }
+
+    let diagnostic = matrix
+        .unsupported_feature_diagnostic("skia-cpu-raster", "gpu-rendering")
+        .expect("unsupported feature should produce diagnostic");
+    assert_eq!(diagnostic.rule.as_str(), "backend.capability.unsupported");
+    assert!(diagnostic.message.contains("gpu-rendering"));
 }
 
 #[test]
@@ -121,7 +127,47 @@ fn plugin_host_matrix_declares_editor_lifecycle_state_and_realtime_coverage() {
             host.realtime_visual_data.is_covered(),
             "{format} missing realtime visual data coverage"
         );
+        assert!(
+            matrix.missing_coverage_diagnostics(format).is_empty(),
+            "{format} should not have missing coverage diagnostics"
+        );
     }
+}
+
+#[test]
+fn plugin_host_matrix_reports_missing_coverage() {
+    let matrix = HostCompatibilityMatrix {
+        hosts: vec![hawk2ui_compat::PluginHostCompatibility {
+            format: "clap".into(),
+            host_attachment: CoverageStatus::Covered,
+            resize: CoverageStatus::Missing,
+            dpi: CoverageStatus::Covered,
+            keyboard_focus: CoverageStatus::Missing,
+            accessibility: CoverageStatus::Covered,
+            state: CoverageStatus::Covered,
+            automation: CoverageStatus::Covered,
+            realtime_visual_data: CoverageStatus::Covered,
+        }],
+    };
+
+    let diagnostics = matrix.missing_coverage_diagnostics("clap");
+    assert_eq!(diagnostics.len(), 2);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("resize"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.rule.as_str() == "compat.host.coverage-missing")
+    );
+    assert_eq!(
+        matrix.missing_coverage_diagnostics("unknown")[0]
+            .rule
+            .as_str(),
+        "compat.host.missing"
+    );
 }
 
 #[test]
@@ -149,6 +195,40 @@ fn packaging_matrix_declares_outputs_and_verification_commands() {
             "{output} missing verification command"
         );
     }
+
+    let missing = matrix
+        .missing_package_diagnostic("plugin-aax")
+        .expect("missing package output should produce diagnostic");
+    assert_eq!(missing.rule.as_str(), "compat.package.missing");
+}
+
+#[test]
+fn non_target_duplicate_keys_report_precise_matrix_errors() {
+    let duplicate_graphics = r#"
+        [[backends]]
+        backend = "skia-cpu-raster"
+        supported = true
+        features = ["cpu-raster"]
+        diagnostic = "backend.unsupported"
+
+        [[backends]]
+        backend = "skia-cpu-raster"
+        supported = true
+        features = ["cpu-raster"]
+        diagnostic = "backend.unsupported"
+    "#;
+
+    let error = GraphicsCompatibilityMatrix::parse(duplicate_graphics)
+        .expect_err("duplicate graphics backend should fail");
+    assert_eq!(
+        error,
+        MatrixError::DuplicateKey {
+            kind: "graphics backend",
+            key: "skia-cpu-raster".into()
+        }
+    );
+    let diagnostic: hawk2ui_api::Diagnostic = error.into();
+    assert_eq!(diagnostic.rule.as_str(), "compat.matrix.duplicate-key");
 }
 
 #[test]
