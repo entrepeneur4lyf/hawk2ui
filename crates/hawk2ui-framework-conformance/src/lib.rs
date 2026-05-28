@@ -2,7 +2,7 @@
 //! Shared framework conformance harness for `Hawk2UI` native, `Svelte`, `React`, `Vue`, and `Solid` integrations.
 
 use hawk2ui_authoring::{
-    AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkNativeNode,
+    AssetRef, AuthoringDiagnostic, ElementKind, EventKind, EventPayloadField, FrameworkNativeNode,
     FrameworkNativeProgram, HandlerRef, NativeAuthoringElement, NativeAuthoringRuntime,
     NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
     PointerEventKind, PropValue, StyleRef,
@@ -52,7 +52,6 @@ pub struct ConformanceSnapshot {
     style_refs: Vec<String>,
     asset_paths: Vec<String>,
     event_keys: Vec<String>,
-    state_updates: Vec<String>,
 }
 
 impl ConformanceSnapshot {
@@ -98,34 +97,14 @@ impl ConformanceSnapshot {
         &self.event_keys
     }
 
-    /// Returns normalized state update keys.
-    #[must_use]
-    pub fn state_updates(&self) -> &[String] {
-        &self.state_updates
+    fn is_equivalent_to(&self, other: &Self) -> bool {
+        self.root_id == other.root_id
+            && self.keyed_children == other.keyed_children
+            && self.refs == other.refs
+            && self.style_refs == other.style_refs
+            && self.asset_paths == other.asset_paths
+            && self.event_keys == other.event_keys
     }
-
-    fn comparable(&self) -> ComparableSnapshot {
-        ComparableSnapshot {
-            root_id: self.root_id.clone(),
-            keyed_children: self.keyed_children.clone(),
-            refs: self.refs.clone(),
-            style_refs: self.style_refs.clone(),
-            asset_paths: self.asset_paths.clone(),
-            event_keys: self.event_keys.clone(),
-            state_updates: self.state_updates.clone(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ComparableSnapshot {
-    root_id: String,
-    keyed_children: Vec<String>,
-    refs: Vec<String>,
-    style_refs: Vec<String>,
-    asset_paths: Vec<String>,
-    event_keys: Vec<String>,
-    state_updates: Vec<String>,
 }
 
 /// Conformance run report.
@@ -150,15 +129,16 @@ impl FrameworkConformanceReport {
             .collect()
     }
 
-    /// Returns whether every framework emitted the same normalized native contract.
+    /// Returns whether every framework emitted the same normalized native contract from its real
+    /// source-lowering path.
     #[must_use]
     pub fn is_equivalent(&self) -> bool {
-        let Some(first) = self.snapshots.first().map(ConformanceSnapshot::comparable) else {
+        let Some(first) = self.snapshots.first() else {
             return false;
         };
         self.snapshots
             .iter()
-            .all(|snapshot| snapshot.comparable() == first)
+            .all(|snapshot| snapshot.is_equivalent_to(first))
     }
 }
 
@@ -399,10 +379,13 @@ impl FrameworkConformanceHarness {
                 svelte_invalid_asset_failure()?,
                 svelte_invalid_layout_failure()?,
                 svelte_unsupported_event_failure()?,
+                react_invalid_asset_failure()?,
                 react_invalid_layout_failure()?,
                 react_unsupported_event_failure()?,
+                vue_invalid_asset_failure()?,
                 vue_invalid_layout_failure()?,
                 vue_unsupported_event_failure()?,
+                solid_invalid_asset_failure()?,
                 solid_invalid_layout_failure()?,
                 solid_unsupported_event_failure()?,
             ],
@@ -461,15 +444,14 @@ fn native_snapshot() -> Result<ConformanceSnapshot, String> {
             .iter()
             .map(|event| event.event().stable_key())
             .collect(),
-        state_updates: vec!["state:items".into()],
     })
 }
 
 fn svelte_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = SvelteIntegration::new()
-        .compile(SvelteComponentSource::from_native_program(
+        .compile(SvelteComponentSource::new(
             "src/App.svelte",
-            framework_native_program("svelte.asset", "onDestroy"),
+            svelte_conformance_source(),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
@@ -488,15 +470,14 @@ fn svelte_snapshot() -> Result<ConformanceSnapshot, String> {
             .iter()
             .map(|event| event.event().stable_key())
             .collect(),
-        state_updates: vec!["state:items".into()],
     })
 }
 
 fn react_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = ReactIntegration::new()
-        .render(ReactElementTree::from_native_program(
+        .render(ReactElementTree::new(
             "src/App.tsx",
-            framework_native_program("react.asset", "onUnmount"),
+            react_conformance_source(),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
@@ -515,15 +496,14 @@ fn react_snapshot() -> Result<ConformanceSnapshot, String> {
             .iter()
             .map(|event| event.event().stable_key())
             .collect(),
-        state_updates: vec!["state:items".into()],
     })
 }
 
 fn vue_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = VueIntegration::new()
-        .render(VueSingleFileComponent::from_native_program(
+        .render(VueSingleFileComponent::new(
             "src/App.vue",
-            framework_native_program("vue.asset", "onUnmounted"),
+            vue_conformance_source(),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
@@ -542,15 +522,14 @@ fn vue_snapshot() -> Result<ConformanceSnapshot, String> {
             .iter()
             .map(|event| event.event().stable_key())
             .collect(),
-        state_updates: vec!["state:items".into()],
     })
 }
 
 fn solid_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = SolidIntegration::new()
-        .render(SolidComponentSource::from_native_program(
+        .render(SolidComponentSource::new(
             "src/App.tsx",
-            framework_native_program("solid.asset", "onCleanup"),
+            solid_conformance_source(),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
@@ -569,7 +548,6 @@ fn solid_snapshot() -> Result<ConformanceSnapshot, String> {
             .iter()
             .map(|event| event.event().stable_key())
             .collect(),
-        state_updates: vec!["state:items".into()],
     })
 }
 
@@ -585,7 +563,7 @@ fn svelte_diagnostic() -> Result<FrameworkDiagnosticEvidence, String> {
     Ok(diagnostic_evidence(
         FrameworkKind::Svelte,
         error.source_map().author_file(),
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "Svelte diagnostic fixture")?,
     ))
 }
 
@@ -601,7 +579,7 @@ fn react_diagnostic() -> Result<FrameworkDiagnosticEvidence, String> {
     Ok(diagnostic_evidence(
         FrameworkKind::React,
         error.source_map().author_file(),
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "React diagnostic fixture")?,
     ))
 }
 
@@ -617,7 +595,7 @@ fn vue_diagnostic() -> Result<FrameworkDiagnosticEvidence, String> {
     Ok(diagnostic_evidence(
         FrameworkKind::Vue,
         error.source_map().author_file(),
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "Vue diagnostic fixture")?,
     ))
 }
 
@@ -633,7 +611,7 @@ fn solid_diagnostic() -> Result<FrameworkDiagnosticEvidence, String> {
     Ok(diagnostic_evidence(
         FrameworkKind::Solid,
         error.source_map().author_file(),
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "Solid diagnostic fixture")?,
     ))
 }
 
@@ -647,6 +625,16 @@ fn diagnostic_evidence(
         author_file: author_file.to_string(),
         rule: rule.to_string(),
     }
+}
+
+fn first_diagnostic_rule<'a>(
+    diagnostics: &'a [AuthoringDiagnostic],
+    context: &str,
+) -> Result<&'a str, String> {
+    diagnostics
+        .first()
+        .map(|diagnostic| diagnostic.rule.as_str())
+        .ok_or_else(|| format!("{context} returned no diagnostics"))
 }
 
 fn runtime_evidence_from_native() -> Result<FrameworkRuntimeEvidence, String> {
@@ -745,6 +733,10 @@ fn runtime_evidence(
     backend
         .end_frame("conformance")
         .map_err(|error| format!("{error:?}"))?;
+    let frames_presented = backend
+        .surface("conformance")
+        .map(hawk2ui_render_skia::SkiaSurface::presented_frames)
+        .ok_or_else(|| "renderer surface missing after frame presentation".to_string())?;
 
     let snapshot = backend
         .frame_snapshot("conformance")
@@ -756,7 +748,7 @@ fn runtime_evidence(
         framework,
         root_id,
         child_ids,
-        frames_presented: 1,
+        frames_presented,
         changed_pixels: count_changed_pixels(snapshot, CONFORMANCE_BACKGROUND, title_geometry),
         operation_keys: operation_keys.to_vec(),
     })
@@ -793,6 +785,56 @@ fn runtime_text_child(id: &str) -> NativeAuthoringElement {
         .with_prop("color", PropValue::String("#ffffff".to_string()))
         .with_prop("width", PropValue::Number(160.0))
         .with_prop("height", PropValue::Number(32.0))
+}
+
+fn svelte_conformance_source() -> &'static str {
+    r#"
+<script>
+  let items = [{ id: 'title' }, { id: 'cta' }];
+</script>
+
+<hawk-view id="root" use:ref="root_ref" class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>
+  {#each items as item (item.id)}
+    <hawk-text id={item.id}>{item.id}</hawk-text>
+  {/each}
+</hawk-view>
+"#
+}
+
+fn react_conformance_source() -> &'static str {
+    r#"
+export function App() {
+  const items = [{ id: 'title' }, { id: 'cta' }];
+  return <hawk-view id="root" ref="root_ref" className="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>
+    {items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}
+  </hawk-view>;
+}
+"#
+}
+
+fn vue_conformance_source() -> &'static str {
+    r#"
+<script setup>
+const items = [{ id: 'title' }, { id: 'cta' }];
+</script>
+
+<template>
+  <hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted">
+    <hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text>
+  </hawk-view>
+</template>
+"#
+}
+
+fn solid_conformance_source() -> &'static str {
+    r#"
+export function App() {
+  const [items] = createSignal([{ id: 'title' }, { id: 'cta' }]);
+  return <hawk-view id="root" ref={root_ref} class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}>
+    <For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For>
+  </hawk-view>;
+}
+"#
 }
 
 fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
@@ -924,7 +966,7 @@ fn native_duplicate_key_failure() -> Result<FrameworkFailureEvidence, String> {
     Ok(failure_evidence(
         FrameworkKind::Native,
         "duplicate-keyed-child",
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
     ))
 }
 
@@ -940,7 +982,7 @@ fn svelte_invalid_asset_failure() -> Result<FrameworkFailureEvidence, String> {
     Ok(failure_evidence(
         FrameworkKind::Svelte,
         "invalid-asset-path",
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
     ))
 }
 
@@ -956,7 +998,7 @@ fn svelte_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     Ok(failure_evidence(
         FrameworkKind::Svelte,
         "invalid-layout-number",
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
     ))
 }
 
@@ -972,7 +1014,7 @@ fn svelte_unsupported_event_failure() -> Result<FrameworkFailureEvidence, String
     Ok(failure_evidence(
         FrameworkKind::Svelte,
         "unsupported-event",
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
     ))
 }
 
@@ -988,7 +1030,23 @@ fn react_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     Ok(failure_evidence(
         FrameworkKind::React,
         "invalid-layout-number",
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
+    ))
+}
+
+fn react_invalid_asset_failure() -> Result<FrameworkFailureEvidence, String> {
+    let error = ReactIntegration::new()
+        .render(ReactElementTree::new(
+            "src/Broken.tsx",
+            r#"<hawk-view data-asset="../secret.svg" />"#,
+        ))
+        .map_or_else(Ok, |_| {
+            Err("unsafe React asset path fixture was accepted".to_string())
+        })?;
+    Ok(failure_evidence(
+        FrameworkKind::React,
+        "invalid-asset-path",
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
     ))
 }
 
@@ -1004,7 +1062,7 @@ fn react_unsupported_event_failure() -> Result<FrameworkFailureEvidence, String>
     Ok(failure_evidence(
         FrameworkKind::React,
         "unsupported-event",
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
     ))
 }
 
@@ -1020,7 +1078,23 @@ fn vue_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     Ok(failure_evidence(
         FrameworkKind::Vue,
         "invalid-layout-number",
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
+    ))
+}
+
+fn vue_invalid_asset_failure() -> Result<FrameworkFailureEvidence, String> {
+    let error = VueIntegration::new()
+        .render(VueSingleFileComponent::new(
+            "src/Broken.vue",
+            r#"<template><hawk-view data-asset="../secret.svg" /></template>"#,
+        ))
+        .map_or_else(Ok, |_| {
+            Err("unsafe Vue asset path fixture was accepted".to_string())
+        })?;
+    Ok(failure_evidence(
+        FrameworkKind::Vue,
+        "invalid-asset-path",
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
     ))
 }
 
@@ -1036,7 +1110,7 @@ fn vue_unsupported_event_failure() -> Result<FrameworkFailureEvidence, String> {
     Ok(failure_evidence(
         FrameworkKind::Vue,
         "unsupported-event",
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
     ))
 }
 
@@ -1052,7 +1126,23 @@ fn solid_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     Ok(failure_evidence(
         FrameworkKind::Solid,
         "invalid-layout-number",
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
+    ))
+}
+
+fn solid_invalid_asset_failure() -> Result<FrameworkFailureEvidence, String> {
+    let error = SolidIntegration::new()
+        .render(SolidComponentSource::new(
+            "src/Broken.tsx",
+            r#"<hawk-view data-asset="../secret.svg" />"#,
+        ))
+        .map_or_else(Ok, |_| {
+            Err("unsafe Solid asset path fixture was accepted".to_string())
+        })?;
+    Ok(failure_evidence(
+        FrameworkKind::Solid,
+        "invalid-asset-path",
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
     ))
 }
 
@@ -1068,7 +1158,7 @@ fn solid_unsupported_event_failure() -> Result<FrameworkFailureEvidence, String>
     Ok(failure_evidence(
         FrameworkKind::Solid,
         "unsupported-event",
-        error.diagnostics()[0].rule.as_str(),
+        first_diagnostic_rule(error.diagnostics(), "framework failure fixture")?,
     ))
 }
 
@@ -1094,5 +1184,27 @@ mod tests {
     #[test]
     fn exposes_crate_identity() {
         assert_eq!(crate_name(), "hawk2ui-framework-conformance");
+    }
+
+    #[test]
+    fn equivalence_rejects_divergent_snapshot_fields() {
+        let baseline = ConformanceSnapshot {
+            framework: FrameworkKind::Svelte,
+            root_id: "root".into(),
+            keyed_children: vec!["title".into()],
+            refs: vec!["root_ref".into()],
+            style_refs: vec!["surface.card".into()],
+            asset_paths: vec!["assets/logo.svg".into()],
+            event_keys: vec!["pointer.press".into()],
+        };
+        let mut divergent = baseline.clone();
+        divergent.framework = FrameworkKind::React;
+        divergent.keyed_children = vec!["cta".into()];
+
+        let report = FrameworkConformanceReport {
+            snapshots: vec![baseline, divergent],
+        };
+
+        assert!(!report.is_equivalent());
     }
 }

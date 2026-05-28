@@ -1,7 +1,7 @@
 use hawk2ui_framework_conformance::{FrameworkConformanceHarness, FrameworkKind};
 
 #[test]
-fn framework_conformance_outputs_equivalent_records_for_lifecycle_state_events_refs_keyed_children_styles_and_assets()
+fn framework_conformance_outputs_equivalent_records_for_lifecycle_events_refs_keyed_children_styles_and_assets()
  {
     let report = FrameworkConformanceHarness::new()
         .run_all()
@@ -33,7 +33,6 @@ fn framework_conformance_outputs_equivalent_records_for_lifecycle_state_events_r
             snapshot.event_keys(),
             ["pointer.press", "lifecycle.mounted", "lifecycle.unmounted"]
         );
-        assert_eq!(snapshot.state_updates(), ["state:items"]);
     }
 }
 
@@ -112,6 +111,11 @@ fn framework_conformance_failure_matrix_rejects_invalid_contracts() {
     ));
     assert!(report.has_failure(
         FrameworkKind::React,
+        "invalid-asset-path",
+        "react.asset.path-invalid"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::React,
         "unsupported-event",
         "react.event.unsupported"
     ));
@@ -122,6 +126,11 @@ fn framework_conformance_failure_matrix_rejects_invalid_contracts() {
     ));
     assert!(report.has_failure(
         FrameworkKind::Vue,
+        "invalid-asset-path",
+        "vue.asset.path-invalid"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::Vue,
         "unsupported-event",
         "vue.event.unsupported"
     ));
@@ -129,6 +138,11 @@ fn framework_conformance_failure_matrix_rejects_invalid_contracts() {
         FrameworkKind::Vue,
         "invalid-layout-number",
         "vue.runtime-bridge.failed"
+    ));
+    assert!(report.has_failure(
+        FrameworkKind::Solid,
+        "invalid-asset-path",
+        "solid.asset.path-invalid"
     ));
     assert!(report.has_failure(
         FrameworkKind::Solid,
