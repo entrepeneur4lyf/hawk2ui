@@ -100,6 +100,12 @@ fn plugin_meter_analyzer_proves_non_blocking_transport_and_ui_consumption() {
     assert_eq!(result.dropped_frames, 1);
     assert_eq!(result.blocking_waits, 0);
     assert_eq!(result.allocations_on_audio_thread, 0);
+    assert_eq!(result.transport_capacity, 4);
+    assert_eq!(result.frame_gate_hz, 60);
+    assert_eq!(
+        result.drained_channels,
+        vec!["meter", "analyzer", "scope", "modulation"]
+    );
 }
 
 #[test]

@@ -1342,6 +1342,9 @@ Evidence:
 - The plugin synth smoke fixture now creates a Baseview adapter, validates an `XWayland` parent,
   applies resize/DPI, renders a runtime scene, and verifies the presented physical size and visible
   pixels.
+- The plugin meter/analyzer smoke fixture now drives the actual preallocated realtime visual
+  transport, frame gate, drop accounting, and UI drain path instead of returning constants from the
+  trace file alone.
 
 Status:
 

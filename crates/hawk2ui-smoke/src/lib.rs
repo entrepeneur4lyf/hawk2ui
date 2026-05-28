@@ -20,6 +20,9 @@ use hawk2ui_host_baseview::{
     BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
+use hawk2ui_plugin::{
+    FrameDropPolicy, RealtimeVisualFrameGate, RealtimeVisualPacket, RealtimeVisualTransport,
+};
 use hawk2ui_render::Color;
 use hawk2ui_runtime::{
     RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
@@ -169,6 +172,12 @@ pub struct RealtimeVisualSmokeResult {
     pub blocking_waits: usize,
     /// Allocations observed on audio thread.
     pub allocations_on_audio_thread: usize,
+    /// Preallocated realtime transport capacity.
+    pub transport_capacity: usize,
+    /// UI frame gate target rate.
+    pub frame_gate_hz: u16,
+    /// Channels drained by the UI side.
+    pub drained_channels: Vec<String>,
 }
 
 /// Smoke run result for style gallery fixture.
@@ -428,18 +437,43 @@ impl SmokeRunner {
                 return Err(format!("realtime trace missing evidence: {required}"));
             }
         }
+        let mut transport = RealtimeVisualTransport::preallocated(4, FrameDropPolicy::DropNewest);
+        let packets = realtime_smoke_packets();
+        let mut accepted_writes = 0;
+        let mut dropped_frames = 0;
+        for packet in packets {
+            let push = transport.audio_thread_push(packet);
+            if push.accepted {
+                accepted_writes += 1;
+            }
+            dropped_frames += push.dropped_frames;
+        }
+        let mut frame_gate = RealtimeVisualFrameGate::new(60)
+            .map_err(|error| format!("realtime frame gate failed: {}", error.code))?;
+        if !frame_gate.should_present_at(0) {
+            return Err("realtime frame gate rejected the initial presentation timestamp".into());
+        }
+        let skipped = transport.ui_drain_due(1, &mut frame_gate);
+        if skipped.is_some() {
+            return Err("realtime frame gate drained before the first due frame".into());
+        }
+        let drained = transport.ui_drain_due(17, &mut frame_gate).ok_or_else(|| {
+            "realtime frame gate did not drain at the expected timestamp".to_string()
+        })?;
+        let drained_channels = drained
+            .iter()
+            .map(|packet| packet.channel_id.clone())
+            .collect::<Vec<_>>();
         Ok(RealtimeVisualSmokeResult {
-            channels: vec![
-                "meter".into(),
-                "analyzer".into(),
-                "scope".into(),
-                "modulation".into(),
-            ],
-            audio_writes: 5,
-            ui_frames_consumed: 4,
-            dropped_frames: 1,
-            blocking_waits: 0,
-            allocations_on_audio_thread: 0,
+            channels: drained_channels.clone(),
+            audio_writes: accepted_writes + dropped_frames,
+            ui_frames_consumed: drained.len(),
+            dropped_frames,
+            blocking_waits: transport.blocking_wait_count(),
+            allocations_on_audio_thread: transport.allocation_count(),
+            transport_capacity: transport.capacity(),
+            frame_gate_hz: frame_gate.target_hz(),
+            drained_channels,
         })
     }
 
@@ -843,6 +877,16 @@ fn plugin_editor_scene_frame() -> Result<RuntimeSceneFrame, String> {
 }
 
 const PLUGIN_SMOKE_FILL_PIXEL: u32 = 0x001a_6f4a;
+
+fn realtime_smoke_packets() -> Vec<RealtimeVisualPacket> {
+    vec![
+        RealtimeVisualPacket::meter("meter", 0.8),
+        RealtimeVisualPacket::analyzer("analyzer", vec![0.1, 0.4, 0.9]),
+        RealtimeVisualPacket::scope("scope", vec![-0.2, 0.0, 0.2]),
+        RealtimeVisualPacket::modulation("modulation", 0.35),
+        RealtimeVisualPacket::meter("overflow", 1.0),
+    ]
+}
 
 const fn native_parent_backend_label(backend: BaseviewNativeParentBackend) -> &'static str {
     match backend {
