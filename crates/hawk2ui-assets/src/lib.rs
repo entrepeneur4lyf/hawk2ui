@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 //! Production asset decoding, validation, lowering, hashing, and cache invalidation for `Hawk2UI`.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 
-use image::{ExtendedColorType, GenericImageView, codecs::webp::WebPEncoder};
+use image::{ExtendedColorType, GenericImageView, ImageReader, Limits, codecs::webp::WebPEncoder};
 use sha2::{Digest, Sha256};
 
 /// The canonical Cargo package name for this crate.
@@ -295,6 +295,12 @@ impl AssetBackendError {
     }
 }
 
+impl From<AssetBackendError> for hawk2ui_api::Diagnostic {
+    fn from(error: AssetBackendError) -> Self {
+        hawk2ui_api::Diagnostic::error(error.diagnostic.rule, error.diagnostic.message)
+    }
+}
+
 /// Production asset backend.
 #[derive(Debug)]
 pub struct AssetBackend {
@@ -330,9 +336,7 @@ impl AssetBackend {
     ) -> Result<AssetRecord, AssetBackendError> {
         self.verify_bytes(bytes)?;
         verify_hash(bytes, expected_hash)?;
-        let image = image::load_from_memory(bytes).map_err(|_| {
-            AssetBackendError::new("asset.image.decode-failed", "image decoding failed")
-        })?;
+        let image = decode_limited_image(bytes, self.limits)?;
         let (width, height) = image.dimensions();
         self.verify_pixels(width, height)?;
         let compiled_bytes = encode_lossless_webp(&image)?;
@@ -371,11 +375,11 @@ impl AssetBackend {
             AssetBackendError::new("asset.vector.invalid-utf8", "vector must be UTF-8 SVG")
         })?;
         validate_vector(svg)?;
-        let options = usvg::Options::default();
+        let options = hardened_svg_options();
         let tree = usvg::Tree::from_data(bytes, &options).map_err(|_| {
             AssetBackendError::new("asset.vector.parse-failed", "SVG parsing failed")
         })?;
-        let path_count = count_vector_paths(tree.root());
+        let path_count = count_vector_paths(tree.root())?;
         let compiled_payload = normalize_svg_payload(&tree)?;
         validate_vector(&compiled_payload)?;
         let compiled_bytes = compiled_payload.into_bytes();
@@ -400,7 +404,7 @@ impl AssetBackend {
     ///
     /// # Errors
     ///
-    /// Returns [`AssetBackendError`] when limits or hash verification fails.
+    /// Returns [`AssetBackendError`] when limits, hash verification, or font parsing fails.
     pub fn load_font(
         &mut self,
         id: impl Into<String>,
@@ -410,7 +414,15 @@ impl AssetBackend {
     ) -> Result<AssetRecord, AssetBackendError> {
         self.verify_bytes(bytes)?;
         verify_hash(bytes, expected_hash)?;
-        self.font_database.load_font_data(bytes.to_vec());
+        let loaded_faces = self
+            .font_database
+            .load_font_source(fontdb::Source::Binary(Arc::new(bytes.to_vec())));
+        if loaded_faces.is_empty() {
+            return Err(AssetBackendError::new(
+                "asset.font.parse-failed",
+                "font parsing produced no usable faces",
+            ));
+        }
         let compiled_hash = AssetHash::sha256_bytes(bytes);
         let asset = self.record(AssetRecordDraft {
             id: id.into(),
@@ -422,7 +434,7 @@ impl AssetBackend {
             width: None,
             height: None,
             vector_lowering: None,
-            sanitized: true,
+            sanitized: false,
             metadata_stripped: false,
         });
         Ok(asset)
@@ -483,12 +495,12 @@ impl AssetBackend {
                 .entry(id.to_string())
                 .or_insert_with(|| AssetGeneration {
                     hash: hash.to_string(),
-                    generation: 0,
+                    generation: 1,
                 });
         if generation.hash != hash {
             generation.hash = hash.to_string();
+            generation.generation = generation.generation.saturating_add(1);
         }
-        generation.generation = generation.generation.saturating_add(1);
         generation.generation
     }
 }
@@ -549,7 +561,6 @@ fn validate_vector(svg: &str) -> Result<(), AssetBackendError> {
         "<audio",
         "<video",
         "<image",
-        "<use",
         "<animate",
         "onload=",
         "onclick=",
@@ -557,16 +568,122 @@ fn validate_vector(svg: &str) -> Result<(), AssetBackendError> {
         "onerror=",
         "javascript:",
         "data:text/html",
-        "href=",
-        "xlink:href",
         "@import",
-        "url(",
         "<foreignobject",
     ];
     if unsafe_tokens.iter().any(|token| lower.contains(token)) {
         Err(AssetBackendError::new(
             "asset.vector.unsafe-content",
             "SVG contains executable or externalized content",
+        ))
+    } else if contains_external_reference(&lower) {
+        Err(AssetBackendError::new(
+            "asset.vector.external-reference",
+            "SVG contains an external reference",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn contains_external_reference(svg: &str) -> bool {
+    contains_external_url(svg)
+        || contains_external_href(svg, "href")
+        || contains_external_href(svg, "xlink:href")
+}
+
+fn contains_external_url(svg: &str) -> bool {
+    let mut remaining = svg;
+    while let Some(index) = remaining.find("url(") {
+        let after = &remaining[index + 4..];
+        let trimmed = after.trim_start_matches([' ', '\t', '\n', '\r', '\'', '"']);
+        if !trimmed.starts_with('#') {
+            return true;
+        }
+        remaining = after;
+    }
+    false
+}
+
+fn contains_external_href(svg: &str, attribute: &str) -> bool {
+    let mut remaining = svg;
+    let needle = format!("{attribute}=");
+    while let Some(index) = remaining.find(&needle) {
+        let after = &remaining[index + needle.len()..];
+        let trimmed = after.trim_start_matches([' ', '\t', '\n', '\r']);
+        let Some(quote) = trimmed
+            .chars()
+            .next()
+            .filter(|quote| matches!(quote, '"' | '\''))
+        else {
+            return true;
+        };
+        let value = &trimmed[quote.len_utf8()..];
+        if !value.starts_with('#') {
+            return true;
+        }
+        remaining = value;
+    }
+    false
+}
+
+fn hardened_svg_options() -> usvg::Options<'static> {
+    usvg::Options {
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_data: Box::new(|_, _, _| None),
+            resolve_string: Box::new(|_, _| None),
+        },
+        ..Default::default()
+    }
+}
+
+fn decode_limited_image(
+    bytes: &[u8],
+    limits: AssetLimits,
+) -> Result<image::DynamicImage, AssetBackendError> {
+    let reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| {
+            AssetBackendError::new("asset.image.decode-failed", "image decoding failed")
+        })?;
+    let Some(format) = reader.format() else {
+        return Err(AssetBackendError::new(
+            "asset.image.decode-failed",
+            "image decoding failed",
+        ));
+    };
+    let (width, height) = reader.into_dimensions().map_err(|_| {
+        AssetBackendError::new("asset.image.decode-failed", "image decoding failed")
+    })?;
+    verify_pixels_against_limits(width, height, limits)?;
+
+    let image_limits = image_limits(limits);
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    reader.limits(image_limits);
+    reader
+        .decode()
+        .map_err(|_| AssetBackendError::new("asset.image.decode-failed", "image decoding failed"))
+}
+
+fn image_limits(limits: AssetLimits) -> Limits {
+    let max_dimension = u32::try_from(limits.max_pixels).unwrap_or(u32::MAX);
+    let mut image_limits = Limits::default();
+    image_limits.max_image_width = Some(max_dimension);
+    image_limits.max_image_height = Some(max_dimension);
+    image_limits.max_alloc = limits.max_pixels.checked_mul(4);
+    image_limits
+}
+
+fn verify_pixels_against_limits(
+    width: u32,
+    height: u32,
+    limits: AssetLimits,
+) -> Result<(), AssetBackendError> {
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels > limits.max_pixels {
+        Err(AssetBackendError::new(
+            "asset.limit.pixels-exceeded",
+            "decoded image exceeds maximum pixel count",
         ))
     } else {
         Ok(())
@@ -588,16 +705,26 @@ fn encode_lossless_webp(image: &image::DynamicImage) -> Result<Vec<u8>, AssetBac
     Ok(encoded)
 }
 
-fn count_vector_paths(group: &usvg::Group) -> usize {
-    group
-        .children()
-        .iter()
-        .map(|node| match node {
-            usvg::Node::Group(child) => count_vector_paths(child),
-            usvg::Node::Path(_) => 1,
-            usvg::Node::Image(_) | usvg::Node::Text(_) => 0,
-        })
-        .sum()
+fn count_vector_paths(root: &usvg::Group) -> Result<usize, AssetBackendError> {
+    const MAX_VECTOR_GROUP_DEPTH: usize = 256;
+    let mut count = 0usize;
+    let mut stack = vec![(root, 0usize)];
+    while let Some((group, depth)) = stack.pop() {
+        if depth > MAX_VECTOR_GROUP_DEPTH {
+            return Err(AssetBackendError::new(
+                "asset.vector.max-depth",
+                "SVG group nesting exceeds maximum depth",
+            ));
+        }
+        for node in group.children() {
+            match node {
+                usvg::Node::Group(child) => stack.push((child, depth + 1)),
+                usvg::Node::Path(_) => count = count.saturating_add(1),
+                usvg::Node::Image(_) | usvg::Node::Text(_) => {}
+            }
+        }
+    }
+    Ok(count)
 }
 
 fn normalize_svg_payload(tree: &usvg::Tree) -> Result<String, AssetBackendError> {

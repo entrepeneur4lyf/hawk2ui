@@ -18,6 +18,7 @@ workspace = true
 
 [dependencies]
 fontdb = "0.23.0"
+hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "ico", "tiff", "webp"] }
 sha2 = "0.11.0"

@@ -1582,6 +1582,7 @@ name = "hawk2ui-assets"
 version = "0.1.0"
 dependencies = [
  "fontdb",
+ "hawk2ui-api",
  "hawk2ui-render",
  "image",
  "sha2 0.11.0",
