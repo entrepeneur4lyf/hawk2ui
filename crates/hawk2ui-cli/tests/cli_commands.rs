@@ -47,6 +47,18 @@ fn cli_commands_parse_known_commands_and_reject_invalid_command() {
         CliCommand::ExportSchemas
     );
     assert_eq!(
+        catalog
+            .parse([
+                "hawk2ui",
+                "verify-artifact",
+                "target/hawk2ui/release/hawk2ui-artifact.hawk"
+            ])
+            .unwrap(),
+        CliCommand::VerifyArtifact {
+            path: Some("target/hawk2ui/release/hawk2ui-artifact.hawk".into())
+        }
+    );
+    assert_eq!(
         catalog.parse(["hawk2ui", "explain"]).unwrap(),
         CliCommand::Explain
     );
@@ -153,7 +165,11 @@ fn workspace_new_project_creates_buildable_desktop_and_plugin_scaffold() {
 
     let package = WorkspaceCommandRunner::new(&root).execute(CliCommand::PackagePlugin);
     assert_eq!(package.exit_code, CliExitCode::Success);
-    assert!(package.stdout.contains("verification-status: passed"));
+    assert!(
+        package
+            .stdout
+            .contains("layout-verification-status: passed")
+    );
 }
 
 #[test]
@@ -305,6 +321,50 @@ path = "assets/logo.svg"
     assert!(execution.stdout.contains("compiled-styles: 1"));
     assert!(execution.stdout.contains("compiled-assets: 1"));
     assert!(execution.stdout.contains("content-hash: sha256:"));
+    assert!(execution.stdout.contains("artifact-path: "));
+    assert!(
+        root.join("target/hawk2ui/release/hawk2ui-artifact.hawk")
+            .is_file()
+    );
+}
+
+#[test]
+fn workspace_verify_artifact_reads_written_container_and_rejects_tampering() {
+    let root = temp_cli_workspace("verify-artifact");
+    write_desktop_project(&root, "com.hawk2ui.cli-verify", "CLI Verify");
+
+    let build = WorkspaceCommandRunner::new(&root).execute(CliCommand::BuildRelease);
+    assert_eq!(build.exit_code, CliExitCode::Success);
+    let artifact_path = root.join("target/hawk2ui/release/hawk2ui-artifact.hawk");
+
+    let verify = WorkspaceCommandRunner::new(&root).execute(CliCommand::VerifyArtifact {
+        path: Some(artifact_path.display().to_string()),
+    });
+    assert_eq!(verify.exit_code, CliExitCode::Success);
+    assert!(verify.stdout.contains("verified artifact container"));
+    assert!(
+        verify
+            .stdout
+            .contains("signature-status: unsigned-development")
+    );
+
+    let mut bytes = fs::read(&artifact_path).expect("artifact container should be readable");
+    let last = bytes
+        .last_mut()
+        .expect("artifact container should not be empty");
+    *last ^= 0x01;
+    fs::write(&artifact_path, bytes).expect("tampered artifact should be written");
+
+    let tampered = WorkspaceCommandRunner::new(&root).execute(CliCommand::VerifyArtifact {
+        path: Some(artifact_path.display().to_string()),
+    });
+    assert_eq!(tampered.exit_code, CliExitCode::Verification);
+    assert!(
+        tampered.diagnostics[0]
+            .rule
+            .starts_with("artifact.container")
+            || tampered.diagnostics[0].rule.starts_with("artifact.schema")
+    );
 }
 
 #[test]
@@ -437,9 +497,18 @@ default = 0.5
     assert!(
         execution
             .stdout
-            .contains("materialized plugin package outputs")
+            .contains("materialized plugin package layouts")
     );
-    assert!(execution.stdout.contains("verification-status: passed"));
+    assert!(
+        execution
+            .stdout
+            .contains("layout-verification-status: passed")
+    );
+    assert!(
+        execution
+            .stdout
+            .contains("host-loadable-binaries: not-produced-by-this-command")
+    );
     for extension in ["clap", "vst3", "component", "app"] {
         let package_root = root
             .join("target/hawk2ui")

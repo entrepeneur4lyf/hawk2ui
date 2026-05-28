@@ -11,8 +11,9 @@ use std::{
 
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits, AssetRecord};
 use hawk2ui_build::{
-    ArtifactSchemaVersion, AssetCompilationError, BuildWorkspace, BuildWorkspaceError,
-    BuildWorkspaceOutput, CompiledScriptRecord, HawkManifest, ManifestError, PackageTarget,
+    ArtifactSchemaVersion, ArtifactSignaturePolicy, AssetCompilationError, BuildDiagnostic,
+    BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput, CompiledScriptRecord, HawkManifest,
+    ManifestError, PackageTarget, SealedArtifact, SealedArtifactError,
 };
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
@@ -39,6 +40,32 @@ use crate::{
     DevPatchPlan, DevWatchKind, DevWatchedPath, FileSystemWatcher, NotifyFileSystemWatcher,
     RecordingReloadTarget, RecordingWatcher,
 };
+
+const ARTIFACT_SCHEMA_VERSION: ArtifactSchemaVersion = ArtifactSchemaVersion::new(1, 0);
+const MAX_ARTIFACT_CONTAINER_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_RUNTIME_ASSET_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BuildProfile {
+    Development,
+    Production,
+}
+
+impl BuildProfile {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Development => "development",
+            Self::Production => "production",
+        }
+    }
+
+    const fn output_dir(self) -> &'static str {
+        match self {
+            Self::Development => "dev",
+            Self::Production => "release",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct DesktopEntryAppModel {
@@ -269,9 +296,9 @@ impl WorkspaceCommandRunner {
             CliCommand::Run => self.run(),
             CliCommand::Dev => self.dev(),
             CliCommand::Validate => self.validate(),
-            CliCommand::BuildDev => self.build("development"),
-            CliCommand::BuildRelease => self.build("production"),
-            CliCommand::VerifyArtifact => self.verify_artifact(),
+            CliCommand::BuildDev => self.build(BuildProfile::Development),
+            CliCommand::BuildRelease => self.build(BuildProfile::Production),
+            CliCommand::VerifyArtifact { path } => self.verify_artifact(path.as_deref()),
             CliCommand::RunDesktop => self.run_desktop(),
             CliCommand::PackagePlugin => self.package_plugin(),
             CliCommand::ExportSchemas => Self::export_schemas(),
@@ -544,14 +571,29 @@ impl WorkspaceCommandRunner {
         }
     }
 
-    fn build(&self, profile: &str) -> CommandExecution {
+    fn build(&self, profile: BuildProfile) -> CommandExecution {
         let output = match self.build_workspace() {
             Ok(output) => output,
             Err(execution) => return execution,
         };
+        if !output.verification.is_release_ready() {
+            let diagnostics = output
+                .verification
+                .diagnostics
+                .iter()
+                .map(build_diagnostic_to_cli)
+                .collect();
+            return CommandExecution::failure(CliExitCode::Verification, diagnostics);
+        }
+        let artifact_path = match self.write_artifact_container(&output, profile) {
+            Ok(path) => path,
+            Err(execution) => return execution,
+        };
         CommandExecution::success(format!(
-            "built {profile} artifact for {}\nmanifest-hash: {}\ncontent-hash: {}\ncompiled-scripts: {}\ncompiled-styles: {}\ncompiled-assets: {}\n",
+            "built {} artifact for {}\nartifact-path: {}\nmanifest-hash: {}\ncontent-hash: {}\ncompiled-scripts: {}\ncompiled-styles: {}\ncompiled-assets: {}\nverification-status: release-ready\nsignature-policy: unsigned-development\n",
+            profile.label(),
             output.manifest.identity.id,
+            artifact_path.display(),
             output.artifact.hashes.manifest.0,
             output.artifact.hashes.content.0,
             output.artifact.compiled_scripts.len(),
@@ -577,37 +619,36 @@ impl WorkspaceCommandRunner {
         }
     }
 
-    fn verify_artifact(&self) -> CommandExecution {
-        let output = match self.build_workspace() {
-            Ok(output) => output,
-            Err(execution) => return execution,
+    fn verify_artifact(&self, path: Option<&str>) -> CommandExecution {
+        let artifact_path = path.map_or_else(
+            || self.artifact_output_path(BuildProfile::Production),
+            PathBuf::from,
+        );
+        let bytes = match read_artifact_container_bytes(&artifact_path) {
+            Ok(bytes) => bytes,
+            Err(error) => return error,
         };
-        if output
-            .artifact
-            .ensure_compatible_with(ArtifactSchemaVersion::new(1, 0))
-            .is_err()
-        {
-            return CommandExecution::failure(
-                CliExitCode::Verification,
-                vec![CliDiagnostic::error(
-                    "artifact.schema.incompatible",
-                    "sealed artifact schema is incompatible",
-                )],
-            );
-        }
-        let expected_hash = output.artifact.content_hash();
-        if expected_hash != output.artifact.hashes.content {
-            return CommandExecution::failure(
-                CliExitCode::Verification,
-                vec![CliDiagnostic::error(
-                    "artifact.hash.mismatch",
-                    "sealed artifact content hash does not match stable payload",
-                )],
-            );
-        }
+        let artifact = match SealedArtifact::from_container_bytes(
+            &bytes,
+            ARTIFACT_SCHEMA_VERSION,
+            ArtifactSignaturePolicy::AllowUnsignedDevelopment,
+        ) {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                return CommandExecution::failure(
+                    CliExitCode::Verification,
+                    vec![
+                        sealed_artifact_error_diagnostic(error)
+                            .file(artifact_path.display().to_string()),
+                    ],
+                );
+            }
+        };
         CommandExecution::success(format!(
-            "verified artifact {}\n",
-            output.artifact.hashes.content.0
+            "verified artifact container\npath: {}\ncontent-hash: {}\nsignature-status: {}\n",
+            artifact_path.display(),
+            artifact.hashes.content.0,
+            artifact_signature_status(&artifact),
         ))
     }
 
@@ -713,7 +754,10 @@ impl WorkspaceCommandRunner {
                     .diagnostics()
                     .iter()
                     .map(|diagnostic| {
-                        CliDiagnostic::error(diagnostic.rule(), "plugin package planning failed")
+                        CliDiagnostic::error(
+                            diagnostic.rule(),
+                            format!("plugin package planning failed: {}", diagnostic.message()),
+                        )
                     })
                     .collect();
                 return CommandExecution::failure(CliExitCode::Validation, diagnostics);
@@ -735,13 +779,14 @@ impl WorkspaceCommandRunner {
                 vec![package_verification_diagnostic()],
             );
         }
-        let mut stdout = String::from("materialized plugin package outputs:\n");
+        let mut stdout = String::from("materialized plugin package layouts:\n");
         for target in &outputs {
             stdout.push_str("- ");
             stdout.push_str(&target.output_path);
             stdout.push('\n');
         }
-        stdout.push_str("verification-status: passed\n");
+        stdout.push_str("layout-verification-status: passed\n");
+        stdout.push_str("host-loadable-binaries: not-produced-by-this-command\n");
         CommandExecution::success(stdout)
     }
 
@@ -821,7 +866,7 @@ impl WorkspaceCommandRunner {
 
     fn build_workspace(&self) -> Result<BuildWorkspaceOutput, CommandExecution> {
         BuildWorkspace::load(&self.root)
-            .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+            .and_then(|workspace| workspace.build(ARTIFACT_SCHEMA_VERSION))
             .map_err(|error| {
                 CommandExecution::failure(
                     CliExitCode::Validation,
@@ -830,9 +875,65 @@ impl WorkspaceCommandRunner {
             })
     }
 
+    fn write_artifact_container(
+        &self,
+        output: &BuildWorkspaceOutput,
+        profile: BuildProfile,
+    ) -> Result<PathBuf, CommandExecution> {
+        let artifact_path = self.artifact_output_path(profile);
+        let bytes = output
+            .artifact
+            .to_container_bytes(ArtifactSignaturePolicy::AllowUnsignedDevelopment)
+            .map_err(|error| {
+                CommandExecution::failure(
+                    CliExitCode::Verification,
+                    vec![sealed_artifact_error_diagnostic(error)],
+                )
+            })?;
+        if let Some(parent) = artifact_path.parent()
+            && let Err(error) = fs::create_dir_all(parent)
+        {
+            return Err(io_failure(
+                "artifact.output.create-dir-failed",
+                parent,
+                &error,
+            ));
+        }
+        fs::write(&artifact_path, bytes)
+            .map_err(|error| io_failure("artifact.output.write-failed", &artifact_path, &error))?;
+        Ok(artifact_path)
+    }
+
+    fn artifact_output_path(&self, profile: BuildProfile) -> PathBuf {
+        self.root
+            .join("target/hawk2ui")
+            .join(profile.output_dir())
+            .join("hawk2ui-artifact.hawk")
+    }
+
     fn manifest_path(&self) -> PathBuf {
         self.root.join("manifest.hawk.toml")
     }
+}
+
+fn read_artifact_container_bytes(path: &Path) -> Result<Vec<u8>, CommandExecution> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| io_failure("artifact.container.read-failed", path, &error))?;
+    if metadata.len() > MAX_ARTIFACT_CONTAINER_BYTES {
+        return Err(CommandExecution::failure(
+            CliExitCode::Verification,
+            vec![
+                 CliDiagnostic::error(
+                     "artifact.container.too-large",
+                     format!(
+                         "sealed artifact container exceeds maximum supported size of {MAX_ARTIFACT_CONTAINER_BYTES} bytes"
+                     ),
+                 )
+                .file(path.display().to_string()),
+            ],
+        ));
+    }
+    fs::read(path).map_err(|error| io_failure("artifact.container.read-failed", path, &error))
 }
 
 fn parameter_model(manifest: &HawkManifest) -> Result<ParameterModel, Vec<CliDiagnostic>> {
@@ -998,7 +1099,10 @@ fn asset_compilation_diagnostic(error: AssetCompilationError, root: &Path) -> Cl
 fn package_materialization_diagnostic(error: &PackageMaterializationError) -> CliDiagnostic {
     CliDiagnostic::error(
         error.diagnostic().rule(),
-        "plugin package materialization failed",
+        format!(
+            "plugin package materialization failed: {}",
+            error.diagnostic().message()
+        ),
     )
 }
 
@@ -1014,6 +1118,34 @@ fn io_failure(rule: &str, path: &Path, error: &std::io::Error) -> CommandExecuti
         CliExitCode::Runtime,
         vec![CliDiagnostic::error(rule, error.to_string()).file(path.display().to_string())],
     )
+}
+
+fn build_diagnostic_to_cli(diagnostic: &BuildDiagnostic) -> CliDiagnostic {
+    let mut cli = CliDiagnostic::error(&diagnostic.rule, &diagnostic.message);
+    if let Some(location) = &diagnostic.location {
+        cli = cli.file(location.file_path.clone());
+    }
+    cli
+}
+
+fn sealed_artifact_error_diagnostic(error: SealedArtifactError) -> CliDiagnostic {
+    let diagnostic = match error {
+        SealedArtifactError::IncompatibleSchema { diagnostic, .. }
+        | SealedArtifactError::SchemaGeneration { diagnostic }
+        | SealedArtifactError::SchemaValidation { diagnostic }
+        | SealedArtifactError::ContainerSerialization { diagnostic }
+        | SealedArtifactError::ContainerVerification { diagnostic }
+        | SealedArtifactError::SignaturePolicy { diagnostic }
+        | SealedArtifactError::SignatureVerification { diagnostic } => diagnostic,
+    };
+    CliDiagnostic::error(diagnostic.rule, diagnostic.message)
+}
+
+fn artifact_signature_status(artifact: &SealedArtifact) -> &'static str {
+    match artifact.signature.status {
+        hawk2ui_build::ArtifactSignatureStatus::Unsigned => "unsigned-development",
+        hawk2ui_build::ArtifactSignatureStatus::Verified => "verified",
+    }
 }
 
 fn write_project_file(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -1211,6 +1343,20 @@ fn read_runtime_asset_bytes(root: &Path, path: &str) -> Result<Vec<u8>, Box<CliD
         return Err(Box::new(CliDiagnostic::error(
             "asset.path.unsafe",
             format!("runtime asset path escapes the project: {path}"),
+        )));
+    }
+    let metadata = fs::metadata(&resolved).map_err(|error| {
+        Box::new(CliDiagnostic::error(
+            "asset.read-failed",
+            format!("failed to inspect runtime asset {path}: {error}"),
+        ))
+    })?;
+    if metadata.len() > MAX_RUNTIME_ASSET_BYTES {
+        return Err(Box::new(CliDiagnostic::error(
+            "asset.too-large",
+            format!(
+                "runtime asset {path} exceeds maximum supported size of {MAX_RUNTIME_ASSET_BYTES} bytes"
+            ),
         )));
     }
     fs::read(&resolved).map_err(|error| {
@@ -1467,10 +1613,11 @@ fn json_number_prop(value: &serde_json::Value, name: &str) -> Result<f32, String
     let serde_json::Value::Number(number) = value else {
         return Err(format!("prop '{name}' must be a number"));
     };
-    let parsed = number
-        .to_string()
-        .parse::<f32>()
-        .map_err(|_| format!("prop '{name}' cannot be represented as a 32-bit float"))?;
+    let Some(value) = number.as_f64() else {
+        return Err(format!("prop '{name}' cannot be represented as a number"));
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let parsed = value as f32;
     if !parsed.is_finite() {
         return Err(format!("prop '{name}' must be finite"));
     }
@@ -1524,12 +1671,8 @@ fn runtime_dimension_to_f32(value: f64) -> Result<f32, Box<CliDiagnostic>> {
             "runtime scene dimensions must be finite and greater than zero",
         )));
     }
-    let value = value.to_string().parse::<f32>().map_err(|_| {
-        Box::new(CliDiagnostic::error(
-            "desktop.runtime-scene.invalid-dimension",
-            "runtime scene dimension cannot be represented by the layout engine",
-        ))
-    })?;
+    #[allow(clippy::cast_possible_truncation)]
+    let value = value as f32;
     if value.is_finite() && value > 0.0 {
         Ok(value)
     } else {

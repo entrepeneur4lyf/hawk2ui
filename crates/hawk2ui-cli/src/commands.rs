@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::CliDiagnostic;
 
 /// CLI command.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CliCommand {
     /// Create a new project.
     NewProject,
@@ -19,8 +19,11 @@ pub enum CliCommand {
     BuildDev,
     /// Build a production artifact.
     BuildRelease,
-    /// Verify a sealed artifact.
-    VerifyArtifact,
+    /// Verify a sealed artifact container.
+    VerifyArtifact {
+        /// Optional artifact container path. Defaults to the release build output.
+        path: Option<String>,
+    },
     /// Run a desktop app.
     RunDesktop,
     /// Package plugin targets.
@@ -42,7 +45,7 @@ impl CliCommand {
             "validate" => Some(Self::Validate),
             "build-dev" => Some(Self::BuildDev),
             "build-release" => Some(Self::BuildRelease),
-            "verify-artifact" => Some(Self::VerifyArtifact),
+            "verify-artifact" => Some(Self::VerifyArtifact { path: None }),
             "run-desktop" => Some(Self::RunDesktop),
             "package-plugin" => Some(Self::PackagePlugin),
             "export-schemas" => Some(Self::ExportSchemas),
@@ -99,10 +102,22 @@ impl CommandCatalog {
                 message: "missing command".into(),
             });
         };
-        CliCommand::from_name(command_name.as_ref()).ok_or_else(|| CliError {
+        let mut command = CliCommand::from_name(command_name.as_ref()).ok_or_else(|| CliError {
             exit_code: CliExitCode::Usage,
             message: format!("unknown command: {}", command_name.as_ref()),
-        })
+        })?;
+        if let CliCommand::VerifyArtifact { path } = &mut command
+            && let Some(value) = args.next()
+        {
+            *path = Some(value.as_ref().to_string());
+        }
+        if let Some(extra) = args.next() {
+            return Err(CliError {
+                exit_code: CliExitCode::Usage,
+                message: format!("unexpected argument: {}", extra.as_ref()),
+            });
+        }
+        Ok(command)
     }
 
     /// Renders top-level help text.
@@ -116,11 +131,11 @@ impl CommandCatalog {
             "  run              Build and run the default native target",
             "  dev              Watch, rebuild, validate, and hot-reload the native surface",
             "  validate         Validate manifests, sources, and capabilities",
-            "  build-dev        Build a development artifact",
-            "  build-release    Build a production artifact",
-            "  verify-artifact  Verify a sealed artifact",
+            "  build-dev        Build and write a development sealed artifact",
+            "  build-release    Build and write a production sealed artifact",
+            "  verify-artifact  Verify a sealed artifact container",
             "  run-desktop      Run a desktop native surface",
-            "  package-plugin   Package CLAP, VST3, AU, and standalone targets",
+            "  package-plugin   Materialize CLAP, VST3, AU, and standalone package layouts",
             "  export-schemas   Export the central generated JSON Schema catalog",
             "  diagnostics      Render structured diagnostics",
             "  explain          Explain project targets, capabilities, and next commands",

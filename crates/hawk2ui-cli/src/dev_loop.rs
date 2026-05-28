@@ -2,10 +2,11 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs::Metadata,
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver},
-    time::{Duration, Instant},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -13,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::CliDiagnostic;
 use hawk2ui_host_winit::DesktopErrorOverlay;
+
+const MAX_WATCH_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Development loop event.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -245,6 +248,18 @@ impl FileSystemWatcher {
 
     fn snapshot(&self, file: &str) -> FileSnapshot {
         let path = self.root.join(file);
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            return FileSnapshot {
+                exists: false,
+                content_hash: 0,
+            };
+        };
+        if metadata.len() > MAX_WATCH_SNAPSHOT_BYTES {
+            return FileSnapshot {
+                exists: true,
+                content_hash: metadata_snapshot_hash(&metadata),
+            };
+        }
         match std::fs::read(path) {
             Ok(bytes) => FileSnapshot {
                 exists: true,
@@ -256,6 +271,18 @@ impl FileSystemWatcher {
             },
         }
     }
+}
+
+fn metadata_snapshot_hash(metadata: &Metadata) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    metadata.len().hash(&mut hasher);
+    if let Ok(modified) = metadata.modified()
+        && let Ok(duration) = modified.duration_since(UNIX_EPOCH)
+    {
+        duration.as_secs().hash(&mut hasher);
+        duration.subsec_nanos().hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Error reported by the native filesystem watcher.
