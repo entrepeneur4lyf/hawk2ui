@@ -17,7 +17,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-boa_engine = { git = "https://github.com/boa-dev/boa", rev = "8f5ef6542d641fd22320e51234e914b59e623717" }
+boa_engine = "0.21.1"
 hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
 oxc_allocator = "0.133.0"
 oxc_codegen = "0.133.0"

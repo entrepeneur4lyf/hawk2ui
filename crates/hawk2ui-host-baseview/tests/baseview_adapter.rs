@@ -876,7 +876,7 @@ fn baseview_clap_runtime_editor_host_drains_realtime_visuals_with_frame_gate() {
         &[RealtimeVisualPacket::meter("meter", 0.8)]
     );
 
-    writer.audio_thread_push(RealtimeVisualPacket::analyzer("analyzer", vec![0.1, 0.4]));
+    let _ = writer.audio_thread_push(RealtimeVisualPacket::analyzer("analyzer", vec![0.1, 0.4]));
     assert_eq!(
         host.drain_realtime_visuals(&mut reader, 1, &mut gate)
             .expect("early realtime drain is gated"),
@@ -975,7 +975,7 @@ fn baseview_clap_runtime_editor_host_dispatches_typed_abi_commands() {
     let (mut writer, mut reader) =
         RealtimeVisualTransport::split_preallocated(4, FrameDropPolicy::DropNewest);
     let mut gate = RealtimeVisualFrameGate::new(60).expect("valid realtime frame gate");
-    writer.audio_thread_push(RealtimeVisualPacket::meter("meter", 0.9));
+    let _ = writer.audio_thread_push(RealtimeVisualPacket::meter("meter", 0.9));
     assert_eq!(
         host.dispatch_realtime_visuals(&mut reader, 0, &mut gate)
             .expect("realtime dispatch succeeds"),

@@ -1,11 +1,20 @@
 [[dependencies]]
 name = "boa_engine"
-source = "git"
-version = "8f5ef6542d641fd22320e51234e914b59e623717"
+source = "crates-io"
+version = "0.21.1"
 owner = "runtime"
-risk = "Git dependency; not crates.io publishable; release blocker until replaced by a crates.io version or isolated from published crates."
-release_blocker = true
+risk = "Accepted Boa runtime release; upgrades must preserve sandbox, host bindings, timer/promise jobs, and TypeScript execution semantics."
+release_blocker = false
 upgrade_gate = "cargo test -p hawk2ui-script && cargo test -p hawk2ui-runtime script"
+
+[[dependencies]]
+name = "parley"
+source = "crates-io"
+version = "0.7.0"
+owner = "text"
+risk = "Accepted text layout engine release pinned to remain compatible with Boa's ICU dependency line; upgrades must preserve shaping, bidi, wrapping, fallback, and high-DPI metrics."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-text && cargo test -p hawk2ui-layout hawk_text_measurer_uses_production_text_backend_metrics"
 
 [[dependencies]]
 name = "oxc_allocator"

@@ -612,6 +612,7 @@ compatibility_notes_required = true
 
         for dependency in [
             "boa_engine",
+            "parley",
             "oxc_allocator",
             "lightningcss",
             "taffy",
@@ -623,9 +624,19 @@ compatibility_notes_required = true
             );
         }
         assert!(
-            policy.release_blockers().any(|entry| {
-                entry.name == "boa_engine" && entry.source == DependencySource::Git
-            })
+            policy
+                .dependencies
+                .iter()
+                .any(|entry| entry.name == "boa_engine"
+                    && entry.source == DependencySource::CratesIo
+                    && !entry.release_blocker),
+            "Boa must use a crates.io dependency contract"
+        );
+        assert!(
+            policy
+                .release_blockers()
+                .all(|entry| entry.source != DependencySource::Git),
+            "Git dependencies must be removed or isolated before release"
         );
     }
 

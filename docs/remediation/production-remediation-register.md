@@ -27,8 +27,8 @@ Source-truth status as of 2026-05-27:
 - style parsing uses `lightningcss` in `hawk2ui-style` and lowers the accepted subset into typed
   style records,
 - layout computation uses `taffy` in `hawk2ui-layout` with `flexbox` and `grid` features enabled,
-- script execution uses Boa plus OXC TypeScript transformation in `hawk2ui-script`, but the Boa
-  dependency is pinned to a Git revision and remains a release-policy blocker,
+- script execution uses crates.io `boa_engine` plus OXC TypeScript transformation in `hawk2ui-script`,
+  with Parley pinned to the compatible text-stack release line,
 - framework adapters have an explicit native compiler boundary and conformance path; legacy source
   scanners remain for compatibility fixtures and source-mapped diagnostic cases,
 - Winit opens a native window and renders compiled runtime scene output through the Skia renderer
@@ -182,7 +182,9 @@ Evidence:
 
 - `docs/technical/crate-selection.md` says `boa_engine` is the first spike.
 - `docs/specs/0001-product-direction.md` separates Bun tooling from embedded runtime and names Boa as first runtime spike.
-- `crates/hawk2ui-script/Cargo.toml` depends on `boa_engine` by Git commit `8f5ef6542d641fd22320e51234e914b59e623717`, which is not publishable to crates.io and is not a release-grade dependency contract.
+- `crates/hawk2ui-script/Cargo.toml` now depends on crates.io `boa_engine = "0.21.1"` instead of the
+  previous Git revision; `crates/hawk2ui-text/Cargo.toml` pins `parley = "0.7.0"` to keep the text
+  stack compatible with Boa's accepted ICU dependency line.
 - `crates/hawk2ui-script/Cargo.toml` pins OXC crates at `0.133.0`, which are fast-moving compiler crates and need explicit upgrade policy.
 - `crates/hawk2ui-script/src/lib.rs` evaluates JavaScript through Boa and calls `Context::run_jobs()`.
 - `ScriptBackend::execute_module_with_host_jobs` projects Rust-owned promise/timer records into
@@ -205,6 +207,8 @@ Acceptance:
 Status:
 
 - Implemented real Boa-backed JavaScript evaluation and OXC-backed TypeScript transform.
+- Replaced the previous Boa Git dependency with the crates.io `boa_engine = "0.21.1"` release and
+  verified script/text/layout behavior against the compatible Parley release line.
 - Dependency stability is governed by `REM-CRATE-007`; JavaScript promise/timer integration is
   remediated under `REM-RUNTIME-001A`.
 
@@ -333,15 +337,15 @@ Acceptance:
 
 Evidence:
 
-- `crates/hawk2ui-script/Cargo.toml` depends on `boa_engine` by Git commit instead of a crates.io release.
+- `crates/hawk2ui-script/Cargo.toml` depends on crates.io `boa_engine = "0.21.1"`.
+- `crates/hawk2ui-text/Cargo.toml` pins `parley = "0.7.0"` because newer Parley releases require an
+  ICU line that conflicts with the accepted Boa release.
 - `crates/hawk2ui-script/Cargo.toml` pins OXC crates at `0.133.0`.
 - `crates/hawk2ui-style/Cargo.toml` pins `lightningcss = "1.0.0-alpha.71"`.
 - `crates/hawk2ui-layout/Cargo.toml` pins `taffy = "0.10.0"`.
 - `crates/hawk2ui-render-skia/Cargo.toml` and `crates/hawk2ui-host-winit/Cargo.toml` pin `skia-safe = "0.97.0"`.
 - `release/dependency-policy.toml` records dependency owners, risks, release blockers, and upgrade
-  gates for Boa, OXC, Lightning CSS, Taffy, Skia, and CLAP.
-- The Boa Git dependency remains explicitly release-blocking until replaced by a crates.io release
-  dependency or isolated from publishable crates.
+  gates for Boa, Parley, OXC, Lightning CSS, Taffy, Skia, and CLAP.
 
 Required remediation:
 
@@ -361,18 +365,21 @@ Acceptance:
 Status:
 
 - Added `release/dependency-policy.toml` as the machine-readable dependency stability policy for
-  Boa, OXC, Lightning CSS, Taffy, and Skia.
+  Boa, Parley, OXC, Lightning CSS, Taffy, and Skia.
 - Added xtask validation for dependency policy entries, duplicate detection, required fields, and
   Git dependency release-blocker enforcement.
 - Full `xtask release-check` now validates the dependency policy before changelog and script gates.
 - Updated dependency hygiene documentation and release criteria so dependency health includes the
   policy gate in addition to `cargo deny`.
+- Replaced the Boa Git dependency with crates.io `boa_engine = "0.21.1"`, pinned Parley to the
+  compatible `0.7.0` text-stack release line, and updated `cargo deny` policy for the accepted OSI
+  licenses and the Boa transitive `paste` advisory.
 
 Review check:
 
 - As the delivering engineer, I am satisfied with this remediation slice for production readiness:
-  dependency risk is no longer tracked only in prose, the current Boa Git dependency is explicitly
-  release-blocked, and high-risk dependency upgrades have owner and test-gate metadata.
+  dependency risk is no longer tracked only in prose, the JavaScript runtime no longer depends on a
+  Git source, and high-risk dependency upgrades have owner and test-gate metadata.
 
 ### REM-CRATE-008: Unify Diagnostic And Error Types
 
