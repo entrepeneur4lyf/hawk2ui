@@ -166,18 +166,22 @@ Production status: Not production ready.
 
 Evidence:
 
-- `crates/hawk2ui-render-skia/src/lib.rs:277` creates a CPU raster Skia surface.
-- `crates/hawk2ui-render-skia/src/lib.rs:481` strokes paths with a hard-coded white paint.
-- `crates/hawk2ui-render-skia/src/lib.rs:515` draws text with `Font::default()` and origin coordinates.
-- `crates/hawk2ui-render-skia/src/lib.rs:536` records image draw commands without decoding or drawing image data.
-- `crates/hawk2ui-render-skia/src/lib.rs:572` records layer effects instead of applying them.
-- `crates/hawk2ui-render-skia/src/lib.rs:578` records cache handles instead of implementing a real cache.
+- Initial review found image drawing, layer effects, text placement, and cache behavior recorded or
+  hard-coded rather than executed through the Skia backend.
 
 Impact:
 
-The renderer can exercise parts of the command path, but it is not a complete production renderer for premium native UI. Images, effects, cache behavior, real text placement, styling, and GPU strategy remain incomplete.
+An incomplete renderer would make the runtime scene path unsuitable for production UI surfaces.
 
-Production status: Not production ready.
+Remediation:
+
+- `hawk2ui-render-skia` now registers compiled image/vector assets, renders image/vector
+  destination rectangles, executes structured shadow/glow layer effects, tracks cache generation and
+  invalidation, renders `hawk2ui-text` layout lines, and replays runtime scene frames through Skia.
+- Pixel tests cover fills, strokes, paths, text layout, images, vectors, affine transforms, clips,
+  opacity groups, effects, cached layers, custom surfaces, and runtime-scene replay.
+
+Production status: Remediated for the accepted Skia render command surface.
 
 ### 8. Text Stack Uses Heuristic Measurement Instead Of Production Shaping/Layout
 
