@@ -30,7 +30,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
-use std::{collections::BTreeMap, ffi::c_void, path::PathBuf};
+use std::{collections::BTreeMap, ffi::c_void, fmt::Write as _, path::PathBuf};
 #[cfg(target_os = "linux")]
 use x11rb::{
     connection::Connection,
@@ -1069,6 +1069,153 @@ pub enum BaseviewClapRuntimeEditorHostResponse {
     },
 }
 
+/// Text ABI bridge matching the generated `hawk2ui_editor_dispatch` command vocabulary.
+///
+/// This lets a host-side CLAP integration drive the same command/response protocol used by the
+/// generated C ABI trampoline while routing commands into the live `Baseview` editor host.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BaseviewClapRuntimeEditorHostAbiBridge;
+
+impl BaseviewClapRuntimeEditorHostAbiBridge {
+    /// Creates the host ABI bridge.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+
+    /// Returns the stable text ABI contract.
+    #[must_use]
+    pub const fn abi_contract(&self) -> &'static str {
+        "hawk2ui_host_bridge_abi=1\ncommand=create\ncommand=set_parent\ncommand=show\ncommand=hide\ncommand=destroy\ncommand=apply_parameter\ncommand=save_state\ncommand=load_state\ncommand=drain_realtime_visuals\nresponse=created\nresponse=parent_attached\nresponse=frame_presented\nresponse=hidden\nresponse=destroyed\nresponse=parameter_applied\nresponse=state_saved\nresponse=state_loaded\nresponse=realtime_visuals_drained\nfunction=hawk2ui_editor_dispatch\n"
+    }
+
+    /// Dispatches one generated text ABI command into a live `Baseview` CLAP runtime editor host.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the command is malformed or the live host rejects the
+    /// lifecycle operation.
+    pub fn dispatch_text(
+        &self,
+        host: &mut BaseviewClapRuntimeEditorHost,
+        command: &str,
+    ) -> Result<String, BaseviewHostError> {
+        Self::dispatch_text_inner(host, command, None)
+    }
+
+    /// Dispatches one generated text ABI command with live realtime visual transport access.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the command is malformed, the realtime frame gate rejects
+    /// the drain, or the live host rejects the lifecycle operation.
+    pub fn dispatch_text_with_realtime(
+        &self,
+        host: &mut BaseviewClapRuntimeEditorHost,
+        command: &str,
+        reader: &mut RealtimeVisualUiReader,
+        frame_gate: &mut RealtimeVisualFrameGate,
+    ) -> Result<String, BaseviewHostError> {
+        Self::dispatch_text_inner(host, command, Some((reader, frame_gate)))
+    }
+
+    fn dispatch_text_inner(
+        host: &mut BaseviewClapRuntimeEditorHost,
+        command: &str,
+        realtime: Option<(&mut RealtimeVisualUiReader, &mut RealtimeVisualFrameGate)>,
+    ) -> Result<String, BaseviewHostError> {
+        let fields = parse_host_abi_fields(command)?;
+        let command_name = require_host_abi_field(&fields, "command")?;
+        match command_name {
+            "create" => {
+                let api = parse_host_abi_api(require_host_abi_field(&fields, "api")?)?;
+                let is_floating = parse_host_abi_bool(
+                    fields.get("floating").map_or("false", String::as_str),
+                    "floating",
+                )?;
+                let response = host
+                    .dispatch(BaseviewClapRuntimeEditorHostCommand::Create { api, is_floating })?;
+                Ok(response_to_host_abi_text(response))
+            }
+            "set_parent" => {
+                let api = parse_host_abi_api(require_host_abi_field(&fields, "api")?)?;
+                let raw_handle =
+                    parse_host_abi_u64(require_host_abi_field(&fields, "parent")?, "parent")?;
+                let parent = ClapGuiParentHandle::from_raw_parts(api, raw_handle)
+                    .map_err(|error| BaseviewHostError::new(error.rule(), error.message()))?;
+                let response = host.dispatch(BaseviewClapRuntimeEditorHostCommand::SetParent {
+                    parent,
+                    parent_fixture_id: parent_fixture_id_for_api(api),
+                })?;
+                Ok(response_to_host_abi_text(response))
+            }
+            "show" => Ok(response_to_host_abi_text(
+                host.dispatch(BaseviewClapRuntimeEditorHostCommand::Show)?,
+            )),
+            "hide" => Ok(response_to_host_abi_text(
+                host.dispatch(BaseviewClapRuntimeEditorHostCommand::Hide)?,
+            )),
+            "destroy" => Ok(response_to_host_abi_text(
+                host.dispatch(BaseviewClapRuntimeEditorHostCommand::Destroy)?,
+            )),
+            "apply_parameter" => {
+                let parameter_id = require_host_abi_field(&fields, "parameter_id")?.to_string();
+                let value = parse_host_abi_f64(require_host_abi_field(&fields, "value")?, "value")?;
+                let response =
+                    host.dispatch(BaseviewClapRuntimeEditorHostCommand::ApplyParameter {
+                        parameter_id,
+                        value: ParameterValue::Float(value),
+                    })?;
+                Ok(response_to_host_abi_text(response))
+            }
+            "save_state" => Ok(response_to_host_abi_text(
+                host.dispatch(BaseviewClapRuntimeEditorHostCommand::SaveState)?,
+            )),
+            "load_state" => {
+                let mut state = PluginStateEnvelope::new(1);
+                for (key, value) in &fields {
+                    let Some(parameter_id) = key
+                        .strip_prefix("param.")
+                        .and_then(|rest| rest.strip_suffix(".bits"))
+                    else {
+                        continue;
+                    };
+                    let bits = parse_host_abi_u64(value, key)?;
+                    state = state.parameter(
+                        parameter_id.to_string(),
+                        StateValue::Float(f64::from_bits(bits)),
+                    );
+                }
+                Ok(response_to_host_abi_text(host.dispatch(
+                    BaseviewClapRuntimeEditorHostCommand::LoadState(state),
+                )?))
+            }
+            "drain_realtime_visuals" => {
+                let Some((reader, frame_gate)) = realtime else {
+                    return Err(BaseviewHostError::new(
+                        "baseview.clap-host-abi.missing-realtime-channel",
+                        "CLAP host ABI realtime drains require a live UI reader and frame gate",
+                    ));
+                };
+                let timestamp_ms = fields
+                    .get("timestamp_ms")
+                    .map(|value| parse_host_abi_u64(value, "timestamp_ms"))
+                    .transpose()?
+                    .unwrap_or(0);
+                Ok(response_to_host_abi_text(host.dispatch_realtime_visuals(
+                    reader,
+                    timestamp_ms,
+                    frame_gate,
+                )?))
+            }
+            other => Err(BaseviewHostError::new(
+                "baseview.clap-host-abi.unknown-command",
+                format!("unsupported CLAP host ABI command `{other}`"),
+            )),
+        }
+    }
+}
+
 impl BaseviewClapRuntimeEditorHost {
     /// Creates a host lifecycle bridge for the CLAP plugin path received by the plugin host.
     #[must_use]
@@ -1392,6 +1539,137 @@ impl BaseviewClapRuntimeEditorHost {
             Ok(())
         } else {
             Err(not_created_error())
+        }
+    }
+}
+
+fn parse_host_abi_fields(command: &str) -> Result<BTreeMap<String, String>, BaseviewHostError> {
+    let mut fields = BTreeMap::new();
+    for line in command.lines().filter(|line| !line.trim().is_empty()) {
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(BaseviewHostError::new(
+                "baseview.clap-host-abi.malformed-line",
+                format!("CLAP host ABI command line `{line}` is missing `=`"),
+            ));
+        };
+        if key.trim().is_empty() {
+            return Err(BaseviewHostError::new(
+                "baseview.clap-host-abi.malformed-key",
+                "CLAP host ABI command keys must not be empty",
+            ));
+        }
+        fields.insert(key.trim().to_string(), value.trim().to_string());
+    }
+    if fields.is_empty() {
+        return Err(BaseviewHostError::new(
+            "baseview.clap-host-abi.empty-command",
+            "CLAP host ABI command must contain key/value fields",
+        ));
+    }
+    Ok(fields)
+}
+
+fn require_host_abi_field<'a>(
+    fields: &'a BTreeMap<String, String>,
+    key: &str,
+) -> Result<&'a str, BaseviewHostError> {
+    fields.get(key).map(String::as_str).ok_or_else(|| {
+        BaseviewHostError::new(
+            "baseview.clap-host-abi.missing-field",
+            format!("CLAP host ABI command missing required field `{key}`"),
+        )
+    })
+}
+
+fn parse_host_abi_api(value: &str) -> Result<ClapGuiWindowApi, BaseviewHostError> {
+    match value {
+        "win32" => Ok(ClapGuiWindowApi::Win32),
+        "cocoa" => Ok(ClapGuiWindowApi::Cocoa),
+        "x11" => Ok(ClapGuiWindowApi::X11),
+        "wayland" => Ok(ClapGuiWindowApi::Wayland),
+        other => Err(BaseviewHostError::new(
+            "baseview.clap-host-abi.invalid-api",
+            format!("unsupported CLAP host ABI window API `{other}`"),
+        )),
+    }
+}
+
+fn parse_host_abi_bool(value: &str, field: &str) -> Result<bool, BaseviewHostError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(BaseviewHostError::new(
+            "baseview.clap-host-abi.invalid-bool",
+            format!("CLAP host ABI field `{field}` has invalid bool value `{other}`"),
+        )),
+    }
+}
+
+fn parse_host_abi_u64(value: &str, field: &str) -> Result<u64, BaseviewHostError> {
+    value.parse::<u64>().map_err(|error| {
+        BaseviewHostError::new(
+            "baseview.clap-host-abi.invalid-integer",
+            format!("CLAP host ABI field `{field}` has invalid integer value `{value}`: {error}"),
+        )
+    })
+}
+
+fn parse_host_abi_f64(value: &str, field: &str) -> Result<f64, BaseviewHostError> {
+    let value = value.parse::<f64>().map_err(|error| {
+        BaseviewHostError::new(
+            "baseview.clap-host-abi.invalid-float",
+            format!("CLAP host ABI field `{field}` has invalid float value `{value}`: {error}"),
+        )
+    })?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(BaseviewHostError::new(
+            "baseview.clap-host-abi.invalid-float",
+            format!("CLAP host ABI field `{field}` must be finite"),
+        ))
+    }
+}
+
+const fn parent_fixture_id_for_api(api: ClapGuiWindowApi) -> &'static str {
+    match api {
+        ClapGuiWindowApi::Win32 => "abi-win32-parent",
+        ClapGuiWindowApi::Cocoa => "abi-cocoa-parent",
+        ClapGuiWindowApi::X11 => "abi-x11-parent",
+        ClapGuiWindowApi::Wayland => "abi-wayland-parent",
+    }
+}
+
+fn response_to_host_abi_text(response: BaseviewClapRuntimeEditorHostResponse) -> String {
+    match response {
+        BaseviewClapRuntimeEditorHostResponse::Created => "response=created\n".to_string(),
+        BaseviewClapRuntimeEditorHostResponse::ParentAttached => {
+            "response=parent_attached\n".to_string()
+        }
+        BaseviewClapRuntimeEditorHostResponse::FramePresented {
+            width,
+            height,
+            presented_frame_count,
+        } => format!(
+            "response=frame_presented\nwidth={width}\nheight={height}\npresented_frame_count={presented_frame_count}\n"
+        ),
+        BaseviewClapRuntimeEditorHostResponse::Hidden => "response=hidden\n".to_string(),
+        BaseviewClapRuntimeEditorHostResponse::Destroyed => "response=destroyed\n".to_string(),
+        BaseviewClapRuntimeEditorHostResponse::ParameterApplied => {
+            "response=parameter_applied\n".to_string()
+        }
+        BaseviewClapRuntimeEditorHostResponse::StateSaved(state) => {
+            let mut response = "response=state_saved\n".to_string();
+            for (parameter_id, value) in state.parameter_state {
+                if let StateValue::Float(value) = value {
+                    let _ = writeln!(response, "param.{parameter_id}.bits={}", value.to_bits());
+                }
+            }
+            response
+        }
+        BaseviewClapRuntimeEditorHostResponse::StateLoaded => "response=state_loaded\n".to_string(),
+        BaseviewClapRuntimeEditorHostResponse::RealtimeVisualsDrained { packet_count } => {
+            format!("response=realtime_visuals_drained\npacket_count={packet_count}\n")
         }
     }
 }

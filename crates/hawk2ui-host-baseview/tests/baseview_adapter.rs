@@ -4,7 +4,8 @@ use hawk2ui_host::{
     PluginParentHandle, PointerInput, RendererResizeBridge, SurfaceMetrics,
 };
 use hawk2ui_host_baseview::{
-    BaseviewClapRuntimeEditor, BaseviewClapRuntimeEditorHost, BaseviewClapRuntimeEditorHostCommand,
+    BaseviewClapRuntimeEditor, BaseviewClapRuntimeEditorHost,
+    BaseviewClapRuntimeEditorHostAbiBridge, BaseviewClapRuntimeEditorHostCommand,
     BaseviewClapRuntimeEditorHostResponse, BaseviewEventTranslator, BaseviewNativeParent,
     BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
 };
@@ -166,8 +167,8 @@ fn baseview_adapter_exposes_native_parent_and_open_options_for_real_attachment()
         BaseviewNativeParentBackend::XWayland
     );
     assert_eq!(adapter.open_options().title, "editor");
-    assert_eq!(adapter.open_options().size.width, 320.0);
-    assert_eq!(adapter.open_options().size.height, 180.0);
+    assert!((adapter.open_options().size.width - 320.0).abs() < f64::EPSILON);
+    assert!((adapter.open_options().size.height - 180.0).abs() < f64::EPSILON);
 }
 
 #[cfg(target_os = "linux")]
@@ -363,7 +364,7 @@ fn baseview_event_translator_routes_native_window_keyboard_pointer_and_teardown_
     let unfocused = translator.translate(&Event::Window(WindowEvent::Unfocused));
     assert_eq!(unfocused.events, [PluginHostEvent::FocusRouted(false)]);
 
-    let keyboard = translator.translate(&Event::Keyboard(Default::default()));
+    let keyboard = translator.translate(&Event::Keyboard(keyboard_types::KeyboardEvent::default()));
     assert_eq!(
         keyboard.events,
         [PluginHostEvent::KeyboardRouted(KeyboardInput::new(
@@ -375,7 +376,7 @@ fn baseview_event_translator_routes_native_window_keyboard_pointer_and_teardown_
 
     let moved = translator.translate(&Event::Mouse(MouseEvent::CursorMoved {
         position: Point::new(10.0, 12.0),
-        modifiers: Default::default(),
+        modifiers: keyboard_types::Modifiers::default(),
     }));
     assert_eq!(
         moved.events,
@@ -386,7 +387,7 @@ fn baseview_event_translator_routes_native_window_keyboard_pointer_and_teardown_
 
     let pressed = translator.translate(&Event::Mouse(MouseEvent::ButtonPressed {
         button: MouseButton::Left,
-        modifiers: Default::default(),
+        modifiers: keyboard_types::Modifiers::default(),
     }));
     assert_eq!(
         pressed.events,
@@ -399,7 +400,7 @@ fn baseview_event_translator_routes_native_window_keyboard_pointer_and_teardown_
 
     let wheel = translator.translate(&Event::Mouse(MouseEvent::WheelScrolled {
         delta: ScrollDelta::Lines { x: 1.0, y: -2.0 },
-        modifiers: Default::default(),
+        modifiers: keyboard_types::Modifiers::default(),
     }));
     assert_eq!(
         wheel.events,
@@ -441,14 +442,14 @@ fn baseview_adapter_renders_runtime_scene_into_presented_skia_snapshot() {
         .expect("runtime frame renders into plugin surface");
 
     assert_eq!((snapshot.width(), snapshot.height()), (320, 180));
-    assert!(snapshot.pixels().iter().any(|pixel| *pixel == 0x0c2238));
+    assert!(snapshot.pixels().contains(&0x000c_2238));
     assert_eq!(adapter.presented_frame_count(), 1);
     assert_eq!(
         adapter
             .last_presented_frame()
             .expect("presented snapshot is retained")
             .pixel_at(10, 10),
-        Some(0x0c2238)
+        Some(0x000c_2238)
     );
 
     adapter
@@ -463,12 +464,7 @@ fn baseview_adapter_renders_runtime_scene_into_presented_skia_snapshot() {
         (resized_snapshot.width(), resized_snapshot.height()),
         (1280, 720)
     );
-    assert!(
-        resized_snapshot
-            .pixels()
-            .iter()
-            .any(|pixel| *pixel == 0x5a781e)
-    );
+    assert!(resized_snapshot.pixels().contains(&0x005a_781e));
     assert_eq!(adapter.presented_frame_count(), 2);
 }
 
@@ -550,8 +546,8 @@ fn baseview_adapter_renders_verified_clap_runtime_editor_session_frame() {
         .expect("sealed runtime frame renders through Baseview adapter");
 
     assert_eq!((snapshot.width(), snapshot.height()), (320, 180));
-    assert_eq!(snapshot.pixel_at(10, 10), Some(0x1a6f4a));
-    assert!(snapshot.pixels().iter().any(|pixel| *pixel == 0x1a6f4a));
+    assert_eq!(snapshot.pixel_at(10, 10), Some(0x001a_6f4a));
+    assert!(snapshot.pixels().contains(&0x001a_6f4a));
     assert_eq!(adapter.presented_frame_count(), 1);
 }
 
@@ -607,7 +603,7 @@ fn baseview_clap_runtime_editor_attaches_presents_and_tears_down_live_session() 
         .present_runtime_frame()
         .expect("live CLAP runtime editor presents sealed scene");
     assert_eq!((snapshot.width(), snapshot.height()), (320, 180));
-    assert_eq!(snapshot.pixel_at(10, 10), Some(0x1a6f4a));
+    assert_eq!(snapshot.pixel_at(10, 10), Some(0x001a_6f4a));
     assert_eq!(editor.presented_frame_count(), 1);
 
     editor
@@ -686,7 +682,7 @@ fn baseview_clap_runtime_editor_host_drives_callback_lifecycle_from_plugin_path(
 
     let snapshot = host.show().expect("host show presents runtime frame");
     assert_eq!((snapshot.width(), snapshot.height()), (320, 180));
-    assert_eq!(snapshot.pixel_at(10, 10), Some(0x1a6f4a));
+    assert_eq!(snapshot.pixel_at(10, 10), Some(0x001a_6f4a));
     assert_eq!(host.presented_frame_count(), 1);
     assert!(host.visible());
 
@@ -901,6 +897,7 @@ fn baseview_clap_runtime_editor_host_drains_realtime_visuals_with_frame_gate() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn baseview_clap_runtime_editor_host_dispatches_typed_abi_commands() {
     let sealed_artifact = SealedArtifact::from_manifest(
         ArtifactSchemaVersion::new(1, 0),
@@ -1004,6 +1001,138 @@ fn baseview_clap_runtime_editor_host_dispatches_typed_abi_commands() {
         host.dispatch(BaseviewClapRuntimeEditorHostCommand::Destroy)
             .expect("destroy dispatch succeeds"),
         BaseviewClapRuntimeEditorHostResponse::Destroyed
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn baseview_clap_runtime_editor_host_binds_generated_text_abi_to_live_editor() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": []
+        }
+    }));
+    let runtime_artifact =
+        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let output_root = temp_package_root("hawk2ui-baseview-clap-host-text-abi");
+    let request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.host-text-abi", "Host Text ABI", "Hawk2UI"),
+        BundleOutput::new(output_root.to_string_lossy(), "HostTextAbi"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds")
+        .materialize()
+        .expect("materialization succeeds");
+    let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostTextAbi.clap");
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+    let bridge = BaseviewClapRuntimeEditorHostAbiBridge::new();
+
+    assert!(
+        bridge
+            .abi_contract()
+            .contains("function=hawk2ui_editor_dispatch")
+    );
+    assert!(
+        bridge
+            .abi_contract()
+            .contains("command=drain_realtime_visuals")
+    );
+    assert_eq!(
+        bridge
+            .dispatch_text(&mut host, "command=create\napi=x11\nfloating=false\n")
+            .expect("ABI create dispatch succeeds"),
+        "response=created\n"
+    );
+    assert_eq!(
+        bridge
+            .dispatch_text(&mut host, "command=set_parent\napi=x11\nparent=42\n")
+            .expect("ABI set-parent dispatch succeeds"),
+        "response=parent_attached\n"
+    );
+    assert_eq!(
+        bridge
+            .dispatch_text(
+                &mut host,
+                "command=apply_parameter\nparameter_id=gain\nvalue=0.25\n",
+            )
+            .expect("ABI parameter dispatch succeeds"),
+        "response=parameter_applied\n"
+    );
+    let show = bridge
+        .dispatch_text(&mut host, "command=show\n")
+        .expect("ABI show dispatch succeeds");
+    assert!(show.contains("response=frame_presented"));
+    assert!(show.contains("width=320"));
+    assert!(show.contains("height=180"));
+    assert_eq!(host.presented_frame_count(), 1);
+
+    let saved = bridge
+        .dispatch_text(&mut host, "command=save_state\n")
+        .expect("ABI save-state dispatch succeeds");
+    assert!(saved.contains("response=state_saved"));
+    assert!(saved.contains("param.gain.bits="));
+    let load = format!(
+        "command=load_state\nparam.gain.bits={}\n",
+        0.75f64.to_bits()
+    );
+    assert_eq!(
+        bridge
+            .dispatch_text(&mut host, &load)
+            .expect("ABI load-state dispatch succeeds"),
+        "response=state_loaded\n"
+    );
+    assert_eq!(
+        host.parameter_value("gain"),
+        Some(&ParameterValue::Float(0.75))
+    );
+    let (mut writer, mut reader) =
+        RealtimeVisualTransport::split_preallocated(4, FrameDropPolicy::DropNewest);
+    let mut gate = RealtimeVisualFrameGate::new(60).expect("valid realtime frame gate");
+    let _ = writer.audio_thread_push(RealtimeVisualPacket::meter("meter", 0.8));
+    let realtime = bridge
+        .dispatch_text_with_realtime(
+            &mut host,
+            "command=drain_realtime_visuals\ntimestamp_ms=0\n",
+            &mut reader,
+            &mut gate,
+        )
+        .expect("ABI realtime dispatch succeeds");
+    assert_eq!(
+        realtime,
+        "response=realtime_visuals_drained\npacket_count=1\n"
+    );
+    assert_eq!(
+        host.latest_realtime_visual_packets(),
+        &[RealtimeVisualPacket::meter("meter", 0.8)]
+    );
+    assert_eq!(
+        bridge
+            .dispatch_text(&mut host, "command=hide\n")
+            .expect("ABI hide dispatch succeeds"),
+        "response=hidden\n"
+    );
+    assert_eq!(
+        bridge
+            .dispatch_text(&mut host, "command=destroy\n")
+            .expect("ABI destroy dispatch succeeds"),
+        "response=destroyed\n"
     );
 }
 

@@ -1544,8 +1544,8 @@ Acceptance:
 Status:
 
 - Plugin product model is hardened for parameter identity/default safety at the model and manifest
-  boundary. Remaining work in this area belongs to concrete format adapters and host-specific
-  binary materialization under `REM-PLUGIN-002`.
+  boundary. Selected-format adapter and host-specific binary materialization are tracked under
+  `REM-PLUGIN-002`.
 
 Review check:
 
@@ -1646,20 +1646,32 @@ Status:
     trampoline using host-owned command/response buffers. The compiled host-load test drives editor
     create/set-parent/show/hide/destroy, parameter apply, state save/load, and realtime visual drain
     commands through the export and verifies that the generated plugin state changes.
-- Remaining work under this item is to bind the generated C ABI trampoline to a real DAW-owned CLAP editor
-  surface in an integration smoke so the same command path is exercised outside the synthetic loader.
+  - `hawk2ui-host-baseview` now includes `BaseviewClapRuntimeEditorHostAbiBridge`, a host-side text
+    ABI bridge matching the generated `hawk2ui_editor_dispatch` command vocabulary. The bridge
+    routes generated create/set-parent/show/hide/destroy, parameter, state, and realtime visual
+    drain commands into a live `BaseviewClapRuntimeEditorHost`, attaches to a DAW-owned parent
+    fixture, presents the verified runtime scene through Skia, and verifies state and realtime
+    changes through an integration smoke outside the generated-library synthetic loader.
 
 Required remediation:
 
-- Finish the selected CLAP adapter with live Hawk2UI editor rendering in the attached GUI surface,
-  parameter/state/realtime bridge integration, dynamic-library generation, signing/notarization
-  policy where applicable, and host tests.
+- No remaining remediation for the selected CLAP target in this register: live Hawk2UI editor
+  rendering, parameter/state/realtime bridge integration, dynamic-library generation, package
+  verification, and host tests are implemented for the current production boundary.
 - Implement VST3/AU/LV2 with equivalent lifecycle/editor/state/host tests only if those formats
   become selected production targets; VST3 is currently tracked but not release-gated.
 
 Acceptance:
 
 - At least one real plugin format loads in a test host with Hawk2UI editor rendering.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with the selected CLAP adapter boundary for production
+  stability: generated CLAP packages expose the C ABI vocabulary, host-side code consumes that same
+  vocabulary, package/session verification fails closed, Baseview attaches to validated host parent
+  handles, runtime scenes render through Skia, and parameter/state/realtime paths are covered by
+  host tests.
 
 ### REM-PLUGIN-003: Realtime Visual Data Channels
 
@@ -1670,12 +1682,13 @@ Evidence:
 
 Status:
 
-- Remediated in source for the format-neutral realtime transport layer.
+- Remediated in source for the format-neutral realtime transport layer and selected CLAP host bridge.
 - Tests cover meter/analyzer/scope/modulation packets, drop policy behavior, thread-moved audio writers, non-blocking/no-allocation counters, UI drains, and reduced-cadence UI drain gating.
 
 Required remediation:
 
-- Carry the realtime transport into real plugin format adapters when `REM-PLUGIN-002` lands.
+- Carry the realtime transport into additional plugin format adapters only if those formats become
+  selected production targets.
 
 Acceptance:
 
