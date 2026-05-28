@@ -2,7 +2,11 @@
 
 use std::collections::BTreeMap;
 
-use crate::{ArtifactHash, BuildDiagnostic, BuildDiagnosticSeverity, HawkManifest};
+use crate::{
+    ArtifactHash, BuildDiagnostic, BuildDiagnosticSeverity, HawkManifest,
+    manifest::AssetDeclaration,
+};
+use hawk2ui_assets::{AssetBackend, AssetHash as BackendAssetHash, AssetLimits};
 
 /// Supported asset kinds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -179,51 +183,127 @@ impl AssetCompilationPlan {
         manifest: &HawkManifest,
         sources: &AssetSourceIndex,
     ) -> Result<Vec<AssetCompilationRecord>, AssetCompilationError> {
+        let mut backend = AssetBackend::new(AssetLimits::default());
         manifest
             .assets
             .iter()
-            .map(|asset| {
-                let kind = AssetKind::parse(&asset.kind)?;
-                let source = sources.get(&asset.path).ok_or_else(|| {
-                    AssetCompilationError::MissingAsset {
-                        id: asset.id.clone(),
-                        path: asset.path.clone(),
-                        diagnostic: Box::new(BuildDiagnostic::new(
-                            BuildDiagnosticSeverity::Error,
-                            "asset.missing",
-                            "declared asset source is missing",
-                        )),
-                    }
-                })?;
-                if !source.safe {
-                    return Err(AssetCompilationError::UnsafeAsset {
-                        id: asset.id.clone(),
-                        path: asset.path.clone(),
-                        diagnostic: Box::new(BuildDiagnostic::new(
-                            BuildDiagnosticSeverity::Error,
-                            "asset.unsafe",
-                            "declared asset failed safety validation",
-                        )),
-                    });
-                }
-                let source_hash = ArtifactHash::from_bytes(&source.bytes);
-                let cache_key = format!("{}:{}:{}", kind.as_str(), asset.id, source_hash.0);
-                Ok(AssetCompilationRecord {
-                    id: asset.id.clone(),
-                    kind,
-                    source_path: asset.path.clone(),
-                    source_hash,
-                    dimensions: source.dimensions,
-                    sanitization: AssetSanitizationStatus::Clean,
-                    package: AssetPackageMetadata {
-                        package_path: package_path_for(&asset.path),
-                        cache_key,
-                        cache_generation: 1,
-                    },
-                })
-            })
+            .map(|asset| compile_asset(asset, sources, &mut backend))
             .collect()
     }
+}
+
+fn compile_asset(
+    asset: &AssetDeclaration,
+    sources: &AssetSourceIndex,
+    backend: &mut AssetBackend,
+) -> Result<AssetCompilationRecord, AssetCompilationError> {
+    let kind = AssetKind::parse(&asset.kind)?;
+    let source = asset_source(asset, sources)?;
+    let source_hash = ArtifactHash::from_bytes(&source.bytes);
+    let backend_record = compile_with_backend(asset, source, kind, backend)?;
+    let dimensions =
+        backend_record
+            .as_ref()
+            .and_then(|record| match (record.width(), record.height()) {
+                (Some(width), Some(height)) => Some(AssetDimensions::new(width, height)),
+                _ => source.dimensions,
+            });
+    let sanitization = backend_record
+        .as_ref()
+        .map_or(AssetSanitizationStatus::Clean, |record| {
+            if record.sanitized() {
+                AssetSanitizationStatus::Sanitized
+            } else {
+                AssetSanitizationStatus::Clean
+            }
+        });
+    let cache_generation = backend_record.as_ref().map_or(1, |record| {
+        u32::try_from(record.cache_generation()).unwrap_or(u32::MAX)
+    });
+    let cache_key = format!("{}:{}:{}", kind.as_str(), asset.id, source_hash.0);
+    Ok(AssetCompilationRecord {
+        id: asset.id.clone(),
+        kind,
+        source_path: asset.path.clone(),
+        source_hash,
+        dimensions,
+        sanitization,
+        package: AssetPackageMetadata {
+            package_path: package_path_for(&asset.path),
+            cache_key,
+            cache_generation,
+        },
+    })
+}
+
+fn asset_source<'source>(
+    asset: &AssetDeclaration,
+    sources: &'source AssetSourceIndex,
+) -> Result<&'source AssetSource, AssetCompilationError> {
+    let source = sources
+        .get(&asset.path)
+        .ok_or_else(|| AssetCompilationError::MissingAsset {
+            id: asset.id.clone(),
+            path: asset.path.clone(),
+            diagnostic: Box::new(BuildDiagnostic::new(
+                BuildDiagnosticSeverity::Error,
+                "asset.missing",
+                "declared asset source is missing",
+            )),
+        })?;
+    if source.safe {
+        Ok(source)
+    } else {
+        Err(AssetCompilationError::UnsafeAsset {
+            id: asset.id.clone(),
+            path: asset.path.clone(),
+            diagnostic: Box::new(BuildDiagnostic::new(
+                BuildDiagnosticSeverity::Error,
+                "asset.unsafe",
+                "declared asset failed safety validation",
+            )),
+        })
+    }
+}
+
+fn compile_with_backend(
+    asset: &AssetDeclaration,
+    source: &AssetSource,
+    kind: AssetKind,
+    backend: &mut AssetBackend,
+) -> Result<Option<hawk2ui_assets::AssetRecord>, AssetCompilationError> {
+    let backend_hash = BackendAssetHash::sha256_bytes(&source.bytes);
+    match kind {
+        AssetKind::Image => {
+            Some(backend.compile_image(&asset.id, &asset.path, &source.bytes, &backend_hash))
+        }
+        AssetKind::Vector => {
+            Some(backend.compile_vector(&asset.id, &asset.path, &source.bytes, &backend_hash))
+        }
+        AssetKind::Font => {
+            Some(backend.load_font(&asset.id, &asset.path, &source.bytes, &backend_hash))
+        }
+        AssetKind::DesignToken => {
+            validate_design_token(&source.bytes).map_err(|diagnostic| {
+                AssetCompilationError::UnsafeAsset {
+                    id: asset.id.clone(),
+                    path: asset.path.clone(),
+                    diagnostic: Box::new(diagnostic),
+                }
+            })?;
+            None
+        }
+    }
+    .transpose()
+    .map_err(|error| AssetCompilationError::UnsafeAsset {
+        id: asset.id.clone(),
+        path: asset.path.clone(),
+        diagnostic: Box::new(BuildDiagnostic::new(
+            BuildDiagnosticSeverity::Error,
+            error.diagnostic().rule(),
+            error.diagnostic().message(),
+        )),
+    })
 }
 
 /// Asset compilation error.
@@ -260,5 +340,26 @@ fn package_path_for(path: &str) -> String {
     match path.rsplit_once('.') {
         Some((stem, _extension)) => format!("{stem}.pack"),
         None => format!("{path}.pack"),
+    }
+}
+
+fn validate_design_token(bytes: &[u8]) -> Result<(), BuildDiagnostic> {
+    let source = std::str::from_utf8(bytes).map_err(|_| {
+        BuildDiagnostic::new(
+            BuildDiagnosticSeverity::Error,
+            "asset.design-token.invalid-utf8",
+            "design token assets must be UTF-8 JSON or TOML",
+        )
+    })?;
+    if serde_json::from_str::<serde_json::Value>(source).is_ok()
+        || toml::from_str::<toml::Value>(source).is_ok()
+    {
+        Ok(())
+    } else {
+        Err(BuildDiagnostic::new(
+            BuildDiagnosticSeverity::Error,
+            "asset.design-token.parse-failed",
+            "design token assets must parse as JSON or TOML",
+        ))
     }
 }

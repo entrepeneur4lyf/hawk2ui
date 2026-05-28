@@ -928,6 +928,11 @@ fn build_workspace_error_diagnostic(error: BuildWorkspaceError, root: &Path) -> 
             format!("declared build file could not be read: {path}"),
         )
         .file(root.join(path).display().to_string()),
+        BuildWorkspaceError::FileTooLarge(path) => CliDiagnostic::error(
+            "build.file-too-large",
+            format!("declared build file exceeds the maximum supported size: {path}"),
+        )
+        .file(root.join(path).display().to_string()),
         BuildWorkspaceError::UnsafePath(path) => CliDiagnostic::error(
             "build.path.unsafe",
             format!("declared build path escapes the workspace: {path}"),

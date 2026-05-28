@@ -1607,8 +1607,10 @@ version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
  "hawk2ui-api",
+ "hawk2ui-assets",
  "hawk2ui-script",
  "hawk2ui-style",
+ "image",
  "jsonschema",
  "schemars",
  "serde",

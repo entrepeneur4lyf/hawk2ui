@@ -629,6 +629,7 @@ impl SealedArtifact {
             .artifact
             .ensure_compatible_with(expected_schema_version)?;
         container.artifact.ensure_signature_policy(policy)?;
+        container.artifact.ensure_manifest_snapshot_integrity()?;
         let actual_hash = container.artifact.content_hash();
         if container.content_hash != actual_hash || container.artifact.hashes.content != actual_hash
         {
@@ -721,6 +722,19 @@ impl SealedArtifact {
         }
     }
 
+    fn ensure_manifest_snapshot_integrity(&self) -> Result<(), SealedArtifactError> {
+        let actual_manifest_hash = ArtifactHash::from_bytes(self.manifest_snapshot.as_bytes());
+        if self.manifest_snapshot_hash != actual_manifest_hash
+            || self.hashes.manifest != actual_manifest_hash
+        {
+            return Err(container_verification_error(
+                "artifact.container.manifest-hash-mismatch",
+                "sealed artifact manifest snapshot hash does not match payload",
+            ));
+        }
+        Ok(())
+    }
+
     /// Ensures the artifact schema is compatible with an expected schema.
     ///
     /// # Errors
@@ -802,10 +816,11 @@ impl SealedArtifact {
 
     fn stable_payload_with_signature(&self, include_signature: bool) -> String {
         let mut payload = format!(
-            "schema={}.{};manifest={};generator={};profile={};",
+            "schema={}.{};manifest={};manifest-snapshot={};generator={};profile={};",
             self.schema_version.major,
             self.schema_version.minor,
             self.manifest_snapshot_hash.0,
+            ArtifactHash::from_bytes(self.manifest_snapshot.as_bytes()).0,
             self.build_metadata.generator,
             self.build_metadata.profile
         );

@@ -7,12 +7,15 @@ use std::{
 
 use crate::{
     ArtifactHash, ArtifactSchemaVersion, AssetCompilationError, AssetCompilationPlan,
-    AssetManifestEntry, AssetSource, AssetSourceIndex, BuildPipeline, BuildPipelineError,
-    CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError,
-    PackageTargetRecord, SealedArtifact, VerificationReport,
+    AssetManifestEntry, AssetSource, AssetSourceIndex, BuildDiagnostic, BuildDiagnosticSeverity,
+    BuildPhase, BuildPipeline, BuildPipelineError, CompiledAssetRecord, CompiledScriptRecord,
+    CompiledStyleRecord, HawkManifest, ManifestError, PackageTargetRecord, SealedArtifact,
+    VerificationReport,
 };
 use hawk2ui_script::{ScriptBackend, ScriptBackendError, ScriptExecutionLimits, ScriptModule};
 use hawk2ui_style::{StyleCompileError, compile_style_source};
+
+const MAX_DECLARED_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A Hawk project directory loaded from the filesystem.
 #[derive(Clone, Debug, PartialEq)]
@@ -48,8 +51,9 @@ impl BuildWorkspace {
                 "manifest.hawk.toml".into(),
             ));
         }
-        let manifest_source = fs::read_to_string(&manifest_path)
-            .map_err(|_| BuildWorkspaceError::UnreadableFile("manifest.hawk.toml".into()))?;
+        let manifest_source =
+            String::from_utf8(read_bounded_file(&manifest_path, "manifest.hawk.toml")?)
+                .map_err(|_| BuildWorkspaceError::UnreadableFile("manifest.hawk.toml".into()))?;
         let manifest =
             HawkManifest::parse(&manifest_source).map_err(BuildWorkspaceError::ManifestInvalid)?;
         let root = requested_root
@@ -68,10 +72,7 @@ impl BuildWorkspace {
         self,
         schema_version: ArtifactSchemaVersion,
     ) -> Result<BuildWorkspaceOutput, BuildWorkspaceError> {
-        let pipeline = BuildPipeline::production();
-        pipeline
-            .ensure_release_ready()
-            .map_err(BuildWorkspaceError::PipelineBlocked)?;
+        let mut pipeline = BuildPipeline::production();
 
         let mut artifact = SealedArtifact::from_manifest(schema_version, &self.manifest);
         artifact = artifact
@@ -112,6 +113,13 @@ impl BuildWorkspace {
                 report.with_package_target(PackageTargetRecord::new(target.kind, &target.name))
             },
         );
+        let verification = self.verify_artifact(verification, &artifact);
+        for diagnostic in &verification.diagnostics {
+            pipeline = pipeline.with_diagnostic(BuildPhase::Verification, diagnostic.clone());
+        }
+        pipeline
+            .ensure_release_ready()
+            .map_err(BuildWorkspaceError::PipelineBlocked)?;
 
         Ok(BuildWorkspaceOutput {
             manifest: self.manifest,
@@ -189,8 +197,63 @@ impl BuildWorkspace {
         if !resolved.starts_with(&self.root) {
             return Err(BuildWorkspaceError::UnsafePath(path.into()));
         }
-        fs::read(&absolute).map_err(|_| BuildWorkspaceError::UnreadableFile(path.into()))
+        read_bounded_file(&resolved, path)
     }
+
+    fn verify_artifact(
+        &self,
+        mut report: VerificationReport,
+        artifact: &SealedArtifact,
+    ) -> VerificationReport {
+        if artifact.compiled_scripts.is_empty() {
+            report = report.with_diagnostic(BuildDiagnostic::new(
+                BuildDiagnosticSeverity::Error,
+                "verification.script.missing",
+                "artifact must contain at least one compiled script",
+            ));
+        }
+        if self.manifest.source.style.is_some() && artifact.compiled_styles.is_empty() {
+            report = report.with_diagnostic(BuildDiagnostic::new(
+                BuildDiagnosticSeverity::Error,
+                "verification.style.missing",
+                "artifact must contain the declared compiled style",
+            ));
+        }
+        for asset in &self.manifest.assets {
+            if !artifact
+                .asset_manifest
+                .iter()
+                .any(|entry| entry.id == asset.id)
+            {
+                report = report.with_diagnostic(BuildDiagnostic::new(
+                    BuildDiagnosticSeverity::Error,
+                    "verification.asset-manifest.missing",
+                    format!("artifact manifest is missing asset `{}`", asset.id),
+                ));
+            }
+            if !artifact
+                .compiled_assets
+                .iter()
+                .any(|compiled| compiled.id == asset.id)
+            {
+                report = report.with_diagnostic(BuildDiagnostic::new(
+                    BuildDiagnosticSeverity::Error,
+                    "verification.compiled-asset.missing",
+                    format!("artifact is missing compiled asset `{}`", asset.id),
+                ));
+            }
+        }
+        report
+    }
+}
+
+fn read_bounded_file(path: &Path, display_path: &str) -> Result<Vec<u8>, BuildWorkspaceError> {
+    let metadata = fs::metadata(path)
+        .map_err(|_| BuildWorkspaceError::UnreadableFile(display_path.to_string()))?;
+    if metadata.len() > MAX_DECLARED_FILE_BYTES {
+        return Err(BuildWorkspaceError::FileTooLarge(display_path.to_string()));
+    }
+    fs::read(path).map_err(|_| BuildWorkspaceError::UnreadableFile(display_path.to_string()))
 }
 
 fn validate_workspace_relative_path(path: &str) -> Result<(), BuildWorkspaceError> {
@@ -239,6 +302,8 @@ pub enum BuildWorkspaceError {
     MissingFile(String),
     /// A required workspace file exists but could not be read.
     UnreadableFile(String),
+    /// A declared workspace file exceeds the build read limit.
+    FileTooLarge(String),
     /// A manifest path attempts to escape the workspace root.
     UnsafePath(String),
     /// Manifest parsing or validation failed.

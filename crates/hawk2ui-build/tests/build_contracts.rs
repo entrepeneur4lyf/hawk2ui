@@ -10,6 +10,7 @@ use hawk2ui_build::{
     CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget, PackageTargetRecord,
     SealedArtifact, SealedArtifactError, SourceSpan, VerificationReport,
 };
+use image::{ColorType, ImageEncoder};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -43,6 +44,31 @@ fn encode_hex(bytes: &[u8]) -> String {
         encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+fn tiny_png() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut bytes)
+        .write_image(&[255, 255, 255, 255], 1, 1, ColorType::Rgba8.into())
+        .expect("test PNG encodes");
+    bytes
+}
+
+fn simple_svg(fill: &str) -> Vec<u8> {
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><path fill="{fill}" d="M0 0H16V16H0Z"/></svg>"#
+    )
+    .into_bytes()
+}
+
+fn fixture_font_bytes() -> Option<Vec<u8>> {
+    [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ]
+    .iter()
+    .find_map(|path| fs::read(path).ok())
 }
 
 #[test]
@@ -558,6 +584,31 @@ fn sealed_artifact_rejects_untrusted_or_invalid_release_signature() {
 }
 
 #[test]
+fn sealed_artifact_rejects_manifest_snapshot_malleability() {
+    let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
+    let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest);
+    let (signed, _verifier) = sign_artifact(artifact, "release-key");
+    let mut tampered = signed;
+    tampered.manifest_snapshot = "attacker-controlled-snapshot".to_string();
+    tampered.hashes.content = tampered.content_hash();
+
+    let bytes = tampered
+        .to_container_bytes(ArtifactSignaturePolicy::RequireVerifiedSignature)
+        .expect("structural signature policy still serializes");
+    let error = SealedArtifact::from_container_bytes(
+        &bytes,
+        ArtifactSchemaVersion::new(1, 0),
+        ArtifactSignaturePolicy::RequireVerifiedSignature,
+    )
+    .expect_err("manifest snapshot tampering must be rejected");
+
+    assert!(matches!(
+        error,
+        SealedArtifactError::ContainerVerification { .. }
+    ));
+}
+
+#[test]
 fn sealed_artifact_reports_incompatible_schema_diagnostic() {
     let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
     let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(2, 0), &manifest);
@@ -680,40 +731,46 @@ id = "logo"
 kind = "vector"
 path = "assets/logo.svg"
 
-[[assets]]
-id = "display"
-kind = "font"
-path = "assets/display.otf"
-
-[[assets]]
-id = "theme"
-kind = "design-token"
-path = "tokens/theme.json"
-"#;
-    let manifest = HawkManifest::parse(input).expect("asset manifest parses");
-    let index = AssetSourceIndex::new([
-        AssetSource::new("assets/hero.png", b"hero")
-            .with_dimensions(AssetDimensions::new(1920, 1080)),
-        AssetSource::new("assets/logo.svg", b"logo"),
-        AssetSource::new("assets/display.otf", b"font"),
-        AssetSource::new("tokens/theme.json", b"theme"),
-    ]);
+    [[assets]]
+    id = "theme"
+    kind = "design-token"
+    path = "tokens/theme.json"
+    "#;
+    let font = fixture_font_bytes();
+    let has_font = font.is_some();
+    let input = if has_font {
+        format!(
+            "{input}\n[[assets]]\nid = \"display\"\nkind = \"font\"\npath = \"assets/display.ttf\"\n"
+        )
+    } else {
+        input.to_string()
+    };
+    let manifest = HawkManifest::parse(&input).expect("asset manifest parses");
+    let mut sources = vec![
+        AssetSource::new("assets/hero.png", tiny_png()),
+        AssetSource::new("assets/logo.svg", simple_svg("#ffffff")),
+        AssetSource::new("tokens/theme.json", br##"{"color":{"surface":"#080a0e"}}"##),
+    ];
+    if let Some(font) = font {
+        sources.push(AssetSource::new("assets/display.ttf", font));
+    }
+    let index = AssetSourceIndex::new(sources);
 
     let records = AssetCompilationPlan::compile_manifest(&manifest, &index)
         .expect("all declared assets compile");
 
-    assert_eq!(records.len(), 4);
+    assert_eq!(records.len(), if has_font { 4 } else { 3 });
     assert_eq!(records[0].kind, AssetKind::Image);
-    assert_eq!(
-        records[0].dimensions,
-        Some(AssetDimensions::new(1920, 1080))
-    );
-    assert_eq!(records[0].sanitization, AssetSanitizationStatus::Clean);
+    assert_eq!(records[0].dimensions, Some(AssetDimensions::new(1, 1)));
+    assert_eq!(records[0].sanitization, AssetSanitizationStatus::Sanitized);
     assert_eq!(records[0].package.package_path, "assets/hero.pack");
     assert!(records[0].package.cache_key.starts_with("image:hero:"));
     assert_eq!(records[1].kind, AssetKind::Vector);
-    assert_eq!(records[2].kind, AssetKind::Font);
-    assert_eq!(records[3].kind, AssetKind::DesignToken);
+    assert_eq!(records[1].sanitization, AssetSanitizationStatus::Sanitized);
+    assert_eq!(records[2].kind, AssetKind::DesignToken);
+    if records.len() == 4 {
+        assert_eq!(records[3].kind, AssetKind::Font);
+    }
 }
 
 #[test]
@@ -801,12 +858,13 @@ entry = "src/main.ts"
 
 [[assets]]
 id = "hero"
-kind = "image"
-path = "assets/hero.png"
-"#;
+    kind = "vector"
+    path = "assets/hero.svg"
+    "#;
     let manifest = HawkManifest::parse(input).expect("asset manifest parses");
-    let first = AssetSourceIndex::new([AssetSource::new("assets/hero.png", b"first")]);
-    let second = AssetSourceIndex::new([AssetSource::new("assets/hero.png", b"second")]);
+    let first = AssetSourceIndex::new([AssetSource::new("assets/hero.svg", simple_svg("#ffffff"))]);
+    let second =
+        AssetSourceIndex::new([AssetSource::new("assets/hero.svg", simple_svg("#000000"))]);
 
     let first_records =
         AssetCompilationPlan::compile_manifest(&manifest, &first).expect("first asset compiles");
@@ -917,7 +975,10 @@ path = "assets/logo.svg"
         &root.join("styles/main.hawk.css"),
         ".root { display: flex; font-size: 18px; background-color: token(color.surface); }",
     );
-    write_file(&root.join("assets/logo.svg"), "<svg />");
+    write_file(
+        &root.join("assets/logo.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><path fill="#ffffff" d="M0 0H16V16H0Z"/></svg>"##,
+    );
 
     let output = BuildWorkspace::load(&root)
         .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
