@@ -1513,8 +1513,12 @@ Status:
   - The live CLAP editor host bridge now exposes typed command/response dispatch records for create,
     set-parent, show, hide, destroy, parameter apply, state save/load, and realtime visual drain
     operations, giving generated plugin exports or host ABI shims a single stable invocation surface.
-- Remaining work under this item is to expose the typed host bridge dispatch surface through generated
-  CLAP binary exports where a host requires a C ABI rather than direct Rust integration.
+  - Generated CLAP dynamic-library scaffolds now export `hawk2ui_editor_host_abi`, a UTF-8 ABI contract
+    listing the supported host bridge commands and responses; the external host-load test resolves and
+    validates the export from the compiled library.
+- Remaining work under this item is to wire a concrete C ABI command invocation trampoline from generated
+  CLAP binaries to an embedding host implementation where a host requires C ABI calls rather than direct
+  Rust integration.
 
 Required remediation:
 

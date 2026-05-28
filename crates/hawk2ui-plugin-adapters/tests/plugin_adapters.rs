@@ -628,6 +628,7 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     assert!(source.contains("Gain"));
     assert!(source.contains("hawk2ui_editor_descriptor"));
     assert!(source.contains("hawk2ui_editor_state"));
+    assert!(source.contains("hawk2ui_editor_host_abi"));
     assert!(source.contains("Contents/Resources/hawk2ui-runtime-artifact.json"));
     assert!(source.contains("host_adapter=baseview"));
 
@@ -845,6 +846,43 @@ fn main() {
             assert!(descriptor.contains("runtime_artifact=Contents/Resources/hawk2ui-runtime-artifact.json"));
             assert!(descriptor.contains("host_adapter=baseview"));
             assert!(descriptor.contains("renderer=skia"));
+            let editor_host_abi: libloading::Symbol<unsafe extern "C" fn(*mut usize) -> *const u8> =
+                library.get(b"hawk2ui_editor_host_abi\0").expect("editor host ABI export resolves");
+            let mut host_abi_len = 0usize;
+            let host_abi_ptr = editor_host_abi(&mut host_abi_len);
+            assert!(!host_abi_ptr.is_null());
+            assert!(host_abi_len > 0);
+            let host_abi = std::str::from_utf8(std::slice::from_raw_parts(
+                host_abi_ptr,
+                host_abi_len,
+            ))
+            .expect("editor host ABI is utf8");
+            for required_entry in [
+                "hawk2ui_host_bridge_abi=1",
+                "command=create",
+                "command=set_parent",
+                "command=show",
+                "command=hide",
+                "command=destroy",
+                "command=apply_parameter",
+                "command=save_state",
+                "command=load_state",
+                "command=drain_realtime_visuals",
+                "response=created",
+                "response=parent_attached",
+                "response=frame_presented",
+                "response=hidden",
+                "response=destroyed",
+                "response=parameter_applied",
+                "response=state_saved",
+                "response=state_loaded",
+                "response=realtime_visuals_drained",
+            ] {
+                assert!(
+                    host_abi.contains(required_entry),
+                    "host ABI missing {required_entry}"
+                );
+            }
             let editor_state: libloading::Symbol<unsafe extern "C" fn() -> Hawk2uiEditorState> =
                 library.get(b"hawk2ui_editor_state\0").expect("editor state export resolves");
             assert_editor_state(editor_state(), false, false, false, 1024, 640);
