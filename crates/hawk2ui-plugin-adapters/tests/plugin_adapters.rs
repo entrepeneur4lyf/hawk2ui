@@ -4,8 +4,9 @@ use hawk2ui_plugin::{
 };
 use hawk2ui_plugin_adapters::{
     ClapCdylibScaffold, ClapGuiParentHandle, ClapGuiWindowApi, ClapPluginEntryPlan,
-    ClapRuntimeEditorDescriptor, MaterializedPackageOutput, PackageAdapterSet, PackageFormat,
-    PackagePlan, PackageRequest, VerificationReport, VerificationStatus,
+    ClapRuntimeEditorDescriptor, ClapRuntimeEditorSession, MaterializedPackageOutput,
+    PackageAdapterSet, PackageFormat, PackagePlan, PackageRequest, VerificationReport,
+    VerificationStatus,
 };
 use std::{
     path::Path,
@@ -307,6 +308,21 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
     assert!(generated_clap_source.contains("hawk2ui_editor_descriptor"));
     assert!(generated_clap_source.contains("Contents/Resources/hawk2ui-runtime-artifact.json"));
     assert!(generated_clap_source.contains("host_adapter=baseview"));
+    let editor_session =
+        ClapRuntimeEditorSession::load_from_package(root).expect("editor session loads");
+    assert_eq!(editor_session.descriptor().host_adapter(), "baseview");
+    assert_eq!(editor_session.descriptor().renderer(), "skia");
+    assert_eq!(
+        editor_session.descriptor().runtime_artifact(),
+        "Contents/Resources/hawk2ui-runtime-artifact.json"
+    );
+    assert_eq!(editor_session.descriptor().format(), PackageFormat::Clap);
+    assert_eq!(
+        editor_session.descriptor().plugin_id(),
+        "com.hawk2ui.runtime"
+    );
+    assert_eq!(editor_session.descriptor().parameter_count(), 0);
+    assert_eq!(editor_session.runtime_artifact(), &runtime_artifact);
 
     let hashes =
         std::fs::read_to_string(&outputs[0].hash_manifest_path).expect("hash manifest reads");
@@ -322,6 +338,12 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
     assert_eq!(
         plan.verify_materialized(&outputs).status(),
         VerificationStatus::Failed
+    );
+    let load_error =
+        ClapRuntimeEditorSession::load_from_package(root).expect_err("missing artifact is denied");
+    assert_eq!(
+        load_error.diagnostic().rule(),
+        "package.clap-runtime-editor.hash-invalid"
     );
 }
 

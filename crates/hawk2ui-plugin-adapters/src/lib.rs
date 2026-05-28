@@ -64,6 +64,18 @@ impl PackageFormat {
             Self::SealedArtifact => "sealed-artifact",
         }
     }
+
+    fn from_manifest_key(value: &str) -> Option<Self> {
+        match value {
+            "clap" => Some(Self::Clap),
+            "vst3" => Some(Self::Vst3),
+            "au" => Some(Self::Au),
+            "standalone" => Some(Self::Standalone),
+            "desktop-bundle" => Some(Self::DesktopBundle),
+            "sealed-artifact" => Some(Self::SealedArtifact),
+            _ => None,
+        }
+    }
 }
 
 /// CLAP GUI parent window API.
@@ -240,6 +252,204 @@ impl ClapRuntimeEditorDescriptor {
             "runtime_artifact={}\nhost_adapter={}\nrenderer={}\n",
             self.runtime_artifact, self.host_adapter, self.renderer
         )
+    }
+}
+
+/// Runtime editor descriptor loaded from a materialized CLAP package.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClapRuntimeEditorPackageDescriptor {
+    host_adapter: String,
+    renderer: String,
+    runtime_artifact: String,
+    format: PackageFormat,
+    plugin_id: String,
+    parameter_count: usize,
+}
+
+impl ClapRuntimeEditorPackageDescriptor {
+    /// Returns the native host adapter ID.
+    #[must_use]
+    pub fn host_adapter(&self) -> &str {
+        &self.host_adapter
+    }
+
+    /// Returns the renderer ID.
+    #[must_use]
+    pub fn renderer(&self) -> &str {
+        &self.renderer
+    }
+
+    /// Returns the package-relative runtime artifact path.
+    #[must_use]
+    pub fn runtime_artifact(&self) -> &str {
+        &self.runtime_artifact
+    }
+
+    /// Returns the plugin package format.
+    #[must_use]
+    pub const fn format(&self) -> PackageFormat {
+        self.format
+    }
+
+    /// Returns the plugin ID.
+    #[must_use]
+    pub fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+
+    /// Returns the expected generated parameter count.
+    #[must_use]
+    pub const fn parameter_count(&self) -> usize {
+        self.parameter_count
+    }
+
+    fn parse(source: &str) -> Result<Self, PackageMaterializationError> {
+        let table = source.parse::<toml::Table>().map_err(|error| {
+            materialization_error(
+                "package.clap-runtime-editor.descriptor-parse-failed",
+                format!("failed to parse CLAP runtime editor descriptor: {error}"),
+            )
+        })?;
+        let host_adapter = required_toml_string(&table, "host_adapter")?;
+        let renderer = required_toml_string(&table, "renderer")?;
+        let runtime_artifact = required_toml_string(&table, "runtime_artifact")?;
+        let format = required_toml_string(&table, "format")?;
+        let plugin_id = required_toml_string(&table, "plugin_id")?;
+        let parameter_count = required_toml_usize(&table, "parameter_count")?;
+        let format = PackageFormat::from_manifest_key(&format).ok_or_else(|| {
+            materialization_error(
+                "package.clap-runtime-editor.invalid-format",
+                "CLAP runtime editor descriptor declares an unsupported package format",
+            )
+        })?;
+        if host_adapter != "baseview" {
+            return Err(materialization_error(
+                "package.clap-runtime-editor.invalid-host-adapter",
+                "CLAP runtime editor descriptor must use the baseview host adapter",
+            ));
+        }
+        if renderer != "skia" {
+            return Err(materialization_error(
+                "package.clap-runtime-editor.invalid-renderer",
+                "CLAP runtime editor descriptor must use the skia renderer",
+            ));
+        }
+        if format != PackageFormat::Clap {
+            return Err(materialization_error(
+                "package.clap-runtime-editor.invalid-format",
+                "CLAP runtime editor descriptor must describe a CLAP package",
+            ));
+        }
+        if !is_reverse_dns_id(&plugin_id) {
+            return Err(materialization_error(
+                "package.clap-runtime-editor.invalid-plugin-id",
+                "CLAP runtime editor descriptor must declare a valid plugin ID",
+            ));
+        }
+        if !is_safe_relative_path(Path::new(&runtime_artifact)) {
+            return Err(materialization_error(
+                "package.clap-runtime-editor.invalid-runtime-artifact",
+                "CLAP runtime editor descriptor requires a safe relative runtime artifact path",
+            ));
+        }
+        Ok(Self {
+            host_adapter,
+            renderer,
+            runtime_artifact,
+            format,
+            plugin_id,
+            parameter_count,
+        })
+    }
+}
+
+/// Runtime-backed editor session loaded from a verified CLAP package.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClapRuntimeEditorSession {
+    package_root: String,
+    runtime_artifact_path: String,
+    descriptor: ClapRuntimeEditorPackageDescriptor,
+    runtime_artifact: serde_json::Value,
+}
+
+impl ClapRuntimeEditorSession {
+    /// Loads a runtime-backed editor session from a materialized CLAP package directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageMaterializationError`] when package hashes fail, the editor descriptor is
+    /// invalid, or the referenced runtime artifact cannot be read and parsed as JSON.
+    pub fn load_from_package(
+        package_root: impl AsRef<Path>,
+    ) -> Result<Self, PackageMaterializationError> {
+        let package_root = package_root.as_ref();
+        let resources_path = package_root.join("Contents").join("Resources");
+        let hash_manifest_path = resources_path.join("hawk2ui-hashes.toml");
+        if !hash_manifest_matches(package_root, &hash_manifest_path) {
+            return Err(materialization_error(
+                "package.clap-runtime-editor.hash-invalid",
+                "CLAP runtime editor package hash manifest does not match package contents",
+            ));
+        }
+        let descriptor_path = resources_path.join("hawk2ui-editor.toml");
+        let descriptor_source = fs::read_to_string(&descriptor_path).map_err(|error| {
+            materialization_error(
+                "package.clap-runtime-editor.descriptor-read-failed",
+                format!(
+                    "failed to read CLAP runtime editor descriptor {}: {error}",
+                    descriptor_path.display()
+                ),
+            )
+        })?;
+        let descriptor = ClapRuntimeEditorPackageDescriptor::parse(&descriptor_source)?;
+        let runtime_artifact_path = package_root.join(descriptor.runtime_artifact());
+        let runtime_artifact_source =
+            fs::read_to_string(&runtime_artifact_path).map_err(|error| {
+                materialization_error(
+                    "package.clap-runtime-editor.runtime-artifact-read-failed",
+                    format!(
+                        "failed to read CLAP runtime artifact {}: {error}",
+                        runtime_artifact_path.display()
+                    ),
+                )
+            })?;
+        let runtime_artifact = serde_json::from_str(&runtime_artifact_source).map_err(|error| {
+            materialization_error(
+                "package.clap-runtime-editor.runtime-artifact-parse-failed",
+                format!("failed to parse CLAP runtime artifact JSON: {error}"),
+            )
+        })?;
+        Ok(Self {
+            package_root: package_root.to_string_lossy().into_owned(),
+            runtime_artifact_path: runtime_artifact_path.to_string_lossy().into_owned(),
+            descriptor,
+            runtime_artifact,
+        })
+    }
+
+    /// Returns the materialized package root.
+    #[must_use]
+    pub fn package_root(&self) -> &str {
+        &self.package_root
+    }
+
+    /// Returns the resolved runtime artifact path.
+    #[must_use]
+    pub fn runtime_artifact_path(&self) -> &str {
+        &self.runtime_artifact_path
+    }
+
+    /// Returns the parsed editor descriptor.
+    #[must_use]
+    pub const fn descriptor(&self) -> &ClapRuntimeEditorPackageDescriptor {
+        &self.descriptor
+    }
+
+    /// Returns the parsed sealed runtime artifact payload.
+    #[must_use]
+    pub const fn runtime_artifact(&self) -> &serde_json::Value {
+        &self.runtime_artifact
     }
 }
 
@@ -2421,6 +2631,43 @@ fn validate_package_json<T: JsonSchema>(
         PackageDiagnostic::new(
             invalid_rule,
             format!("{label} failed schema validation: {error}"),
+        )
+    })
+}
+
+fn required_toml_string(
+    table: &toml::Table,
+    key: &'static str,
+) -> Result<String, PackageMaterializationError> {
+    table
+        .get(key)
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            materialization_error(
+                "package.clap-runtime-editor.descriptor-invalid",
+                format!("CLAP runtime editor descriptor requires string field `{key}`"),
+            )
+        })
+}
+
+fn required_toml_usize(
+    table: &toml::Table,
+    key: &'static str,
+) -> Result<usize, PackageMaterializationError> {
+    let value = table
+        .get(key)
+        .and_then(toml::Value::as_integer)
+        .ok_or_else(|| {
+            materialization_error(
+                "package.clap-runtime-editor.descriptor-invalid",
+                format!("CLAP runtime editor descriptor requires integer field `{key}`"),
+            )
+        })?;
+    usize::try_from(value).map_err(|_| {
+        materialization_error(
+            "package.clap-runtime-editor.descriptor-invalid",
+            format!("CLAP runtime editor descriptor field `{key}` must be non-negative"),
         )
     })
 }
