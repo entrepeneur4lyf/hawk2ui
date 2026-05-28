@@ -226,6 +226,7 @@ fn plugin_adapters_materialize_package_metadata_outputs() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources() {
     let metadata =
         FormatMetadata::new("com.hawk2ui.runtime", "Runtime", "Hawk2UI").feature("audio-effect");
@@ -354,9 +355,9 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
     );
     assert_eq!(editor_session.descriptor().parameter_count(), 0);
     assert_eq!(editor_session.descriptor().editor_id(), "main-editor");
-    assert_eq!(editor_session.descriptor().logical_width(), 1024.0);
-    assert_eq!(editor_session.descriptor().logical_height(), 640.0);
-    assert_eq!(editor_session.descriptor().scale_factor(), 1.25);
+    assert!((editor_session.descriptor().logical_width() - 1024.0).abs() < f64::EPSILON);
+    assert!((editor_session.descriptor().logical_height() - 640.0).abs() < f64::EPSILON);
+    assert!((editor_session.descriptor().scale_factor() - 1.25).abs() < f64::EPSILON);
     assert_eq!(editor_session.runtime_artifact(), &runtime_artifact);
     assert_eq!(editor_session.sealed_artifact(), &sealed_artifact);
     let host_config = editor_session
@@ -371,19 +372,17 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
         hawk2ui_host::HostPlatformHandle::linux_x11(7, 42)
     );
     assert_eq!(host_config.editor_config().editor_id, "main-editor");
-    assert_eq!(host_config.editor_config().metrics.logical_width, 1024.0);
-    assert_eq!(host_config.editor_config().metrics.logical_height, 640.0);
-    assert_eq!(host_config.editor_config().metrics.scale_factor, 1.25);
+    assert!((host_config.editor_config().metrics.logical_width - 1024.0).abs() < f64::EPSILON);
+    assert!((host_config.editor_config().metrics.logical_height - 640.0).abs() < f64::EPSILON);
+    assert!((host_config.editor_config().metrics.scale_factor - 1.25).abs() < f64::EPSILON);
     let frame = editor_session
         .runtime_scene_frame()
         .expect("runtime scene frame builds from sealed artifact payload");
-    assert_eq!(
-        frame
-            .geometry_for(&RuntimeViewId::new("runtime-root"))
-            .expect("root geometry exists")
-            .width,
-        1024.0
-    );
+    let root_width = frame
+        .geometry_for(&RuntimeViewId::new("runtime-root"))
+        .expect("root geometry exists")
+        .width;
+    assert!((root_width - 1024.0).abs() < f32::EPSILON);
     assert!(frame.draw_commands().iter().any(|command| {
         matches!(
             command,
@@ -574,6 +573,7 @@ fn plugin_adapters_validate_clap_runtime_editor_descriptor() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     let metadata = FormatMetadata::new("com.hawk2ui.loadable", "Loadable", "Hawk2UI")
         .version("1.0.0")
@@ -629,6 +629,8 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     assert!(source.contains("hawk2ui_editor_descriptor"));
     assert!(source.contains("hawk2ui_editor_state"));
     assert!(source.contains("hawk2ui_editor_host_abi"));
+    assert!(source.contains("hawk2ui_realtime_safety_policy"));
+    assert!(source.contains("Hawk2uiRealtimeOperation::PreallocatedWrite"));
     assert!(source.contains("Contents/Resources/hawk2ui-runtime-artifact.json"));
     assert!(source.contains("host_adapter=baseview"));
 
@@ -719,6 +721,7 @@ libloading = "0.8.9"
 "#
 }
 
+#[allow(clippy::too_many_lines)]
 fn generated_clap_host_check_source() -> &'static str {
     r#"use std::{env, ffi::{c_void, CStr}, ptr};
 
@@ -882,6 +885,31 @@ fn main() {
                 assert!(
                     host_abi.contains(required_entry),
                     "host ABI missing {required_entry}"
+                );
+            }
+            let realtime_policy: libloading::Symbol<unsafe extern "C" fn(*mut usize) -> *const u8> =
+                library.get(b"hawk2ui_realtime_safety_policy\0").expect("realtime safety policy export resolves");
+            let mut realtime_policy_len = 0usize;
+            let realtime_policy_ptr = realtime_policy(&mut realtime_policy_len);
+            assert!(!realtime_policy_ptr.is_null());
+            assert!(realtime_policy_len > 0);
+            let realtime_policy = std::str::from_utf8(std::slice::from_raw_parts(
+                realtime_policy_ptr,
+                realtime_policy_len,
+            ))
+            .expect("realtime policy is utf8");
+            for required_entry in [
+                "hawk2ui_realtime_safety_policy=1",
+                "context=audio_thread",
+                "process_callback=guarded_preallocated_copy",
+                "allowed=preallocated_write",
+                "forbidden=allocation",
+                "forbidden=blocking_wait",
+                "lock_policy=no_blocking_locks",
+            ] {
+                assert!(
+                    realtime_policy.contains(required_entry),
+                    "realtime policy missing {required_entry}"
                 );
             }
             let editor_dispatch: libloading::Symbol<

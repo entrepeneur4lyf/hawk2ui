@@ -1701,15 +1701,21 @@ Evidence:
 - Product direction requires no audio-thread blocking.
 - `hawk2ui-perf::RealtimeGuard` defines forbidden realtime operations, lock policy, and audit telemetry.
 - `release/release-criteria.toml` includes `plugin-realtime-safety` as a release-blocking criterion.
+- Generated CLAP dynamic-library scaffolds now expose `hawk2ui_realtime_safety_policy`, advertise
+  audio-thread `preallocated_write` as the only allowed process operation class, and guard the CLAP
+  `process` callback before copying audio buffers.
 
 Status:
 
-- Remediated at release-gated policy/report layer.
-- Tests cover denied allocation/blocking operations, allowed preallocated writes, explicit no-blocking-lock policy, telemetry counters, and release criterion coverage.
+- Remediated at release-gated policy/report layer and selected CLAP adapter callback boundary.
+- Tests cover denied allocation/blocking operations, allowed preallocated writes, explicit
+  no-blocking-lock policy, telemetry counters, release criterion coverage, generated CLAP policy
+  export resolution, and process-callback policy enforcement before audio buffer copying.
 
 Required remediation:
 
-- Carry the realtime guard into real plugin format adapter callbacks when `REM-PLUGIN-002` lands.
+- Carry the realtime safety policy into additional plugin format adapter callbacks only if those
+  formats become selected production targets.
 
 Acceptance:
 

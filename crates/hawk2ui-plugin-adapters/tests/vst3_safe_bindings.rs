@@ -13,7 +13,7 @@ fn vst3_safe_records_validate_ids_metadata_values_and_parent_handles() {
     assert!(Vst3ClassId::from_hex("not-a-class-id").is_err());
 
     let normalized = Vst3NormalizedValue::new(0.75).expect("value is in VST3 normalized range");
-    assert_eq!(normalized.get(), 0.75);
+    assert!((normalized.get() - 0.75).abs() < f64::EPSILON);
     assert!(Vst3NormalizedValue::new(-0.01).is_err());
     assert!(Vst3NormalizedValue::new(1.01).is_err());
 
