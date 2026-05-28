@@ -29,6 +29,10 @@ pub enum VisualFixtureKind {
     GraphSurface,
     /// DPI scaling fixture.
     DpiScaling,
+    /// Premium desktop application template fixture.
+    PremiumDesktopTemplate,
+    /// Premium plugin editor template fixture.
+    PremiumPluginTemplate,
 }
 
 /// Deterministic visual fixture metadata.
@@ -104,7 +108,8 @@ impl VisualFixtureSet {
     #[must_use]
     pub fn production_baseline() -> Self {
         use VisualFixtureKind::{
-            CustomControl, DpiScaling, Gradient, GraphSurface, ImageLayer, Shape, Text, VectorAsset,
+            CustomControl, DpiScaling, Gradient, GraphSurface, ImageLayer, PremiumDesktopTemplate,
+            PremiumPluginTemplate, Shape, Text, VectorAsset,
         };
 
         Self::new([
@@ -116,6 +121,20 @@ impl VisualFixtureSet {
             VisualFixture::new(CustomControl, "visual::custom-knob", 360, 360, 1.0),
             VisualFixture::new(GraphSurface, "visual::graph-surface", 960, 480, 1.0),
             VisualFixture::new(DpiScaling, "visual::dpi-scaling", 640, 360, 2.0),
+            VisualFixture::new(
+                PremiumDesktopTemplate,
+                "visual::premium-desktop-template",
+                1280,
+                720,
+                1.0,
+            ),
+            VisualFixture::new(
+                PremiumPluginTemplate,
+                "visual::premium-plugin-template",
+                960,
+                540,
+                1.0,
+            ),
         ])
     }
 

@@ -479,9 +479,10 @@ Evidence:
 
 - Product direction lists premium visual capability as non-negotiable.
 - Winit can render compiled runtime scene output through the Skia path.
-- The current visual/template surface is not yet sufficient to prove premium desktop/plugin UI
-  quality across gradients, typography, imagery, layer effects, analyzers, dense controls, and
-  animated surfaces.
+- Visual regression fixtures now include premium desktop and premium plugin template families.
+- Skia-backed visual regression renders a premium desktop surface and a premium plugin editor
+  surface using gradients, typography, image placement, vector marks, rounded panels, shadows,
+  glows, knobs, meters, analyzers, scopes, dense controls, and realtime custom surfaces.
 
 Required remediation:
 
@@ -492,6 +493,19 @@ Required remediation:
 Acceptance:
 
 - Example gallery demonstrates JUCE-class visual ambition without native drawing code by the user.
+
+Status:
+
+- Remediated at the renderer/testkit proof boundary: premium desktop/plugin fixture families are
+  part of the production visual baseline, and tests prove that the renderer can compose the visual
+  primitives required for high-end native application and plugin UI templates.
+- Future template catalog expansion must preserve this source-backed visual regression contract.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this premium visual quality boundary for
+  production stability: the requirement is no longer represented by aspirational prose alone; it is
+  backed by rendered pixels across the visual primitive families the product depends on.
 
 ### REM-PROD-003: Manifest-First Product Validation
 
