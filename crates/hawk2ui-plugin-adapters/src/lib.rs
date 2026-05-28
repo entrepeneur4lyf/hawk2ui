@@ -9,6 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use hawk2ui_host::HostPlatformHandle;
 use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRecord, ParameterValue, PluginEditor,
 };
@@ -62,6 +63,121 @@ impl PackageFormat {
             Self::DesktopBundle => "desktop-bundle",
             Self::SealedArtifact => "sealed-artifact",
         }
+    }
+}
+
+/// CLAP GUI parent window API.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub enum ClapGuiWindowApi {
+    /// Windows `HWND` parent.
+    Win32,
+    /// macOS Cocoa `NSView` parent.
+    Cocoa,
+    /// Linux X11 parent window.
+    X11,
+    /// Linux Wayland parent surface.
+    Wayland,
+}
+
+impl ClapGuiWindowApi {
+    /// Returns the CLAP ABI API name.
+    #[must_use]
+    pub const fn clap_name(self) -> &'static str {
+        match self {
+            Self::Win32 => "win32",
+            Self::Cocoa => "cocoa",
+            Self::X11 => "x11",
+            Self::Wayland => "wayland",
+        }
+    }
+}
+
+/// Safe record of a CLAP GUI parent handle after API-specific validation.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClapGuiParentHandle {
+    api: ClapGuiWindowApi,
+    raw_handle: u64,
+}
+
+impl ClapGuiParentHandle {
+    /// Creates a CLAP GUI parent handle record from a raw host-provided handle value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageDiagnostic`] when the raw handle value is zero.
+    pub fn from_raw_parts(
+        api: ClapGuiWindowApi,
+        raw_handle: u64,
+    ) -> Result<Self, PackageDiagnostic> {
+        if raw_handle == 0 {
+            Err(PackageDiagnostic::new(
+                "package.clap-gui-parent.invalid-handle",
+                "CLAP GUI parent handle must be nonzero",
+            ))
+        } else {
+            Ok(Self { api, raw_handle })
+        }
+    }
+
+    /// Returns the CLAP window API.
+    #[must_use]
+    pub const fn api(&self) -> ClapGuiWindowApi {
+        self.api
+    }
+
+    /// Returns the raw platform handle value.
+    #[must_use]
+    pub const fn raw_handle(&self) -> u64 {
+        self.raw_handle
+    }
+
+    /// Converts this CLAP GUI parent into `Hawk2UI`'s host platform handle record.
+    ///
+    /// X11 and Wayland CLAP handles do not carry the display/connection pointer, so the caller must
+    /// pass the display handle from the native host context when mapping Linux parents.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageDiagnostic`] when a Linux display handle is required but missing or zero.
+    pub fn to_host_platform_handle(
+        &self,
+        linux_display_handle: Option<u64>,
+    ) -> Result<HostPlatformHandle, PackageDiagnostic> {
+        match self.api {
+            ClapGuiWindowApi::Win32 => Ok(HostPlatformHandle::windows_hwnd(self.raw_handle)),
+            ClapGuiWindowApi::Cocoa => Ok(HostPlatformHandle::macos_ns_view(self.raw_handle)),
+            ClapGuiWindowApi::X11 => Ok(HostPlatformHandle::linux_x11(
+                require_linux_display(linux_display_handle)?,
+                self.raw_handle,
+            )),
+            ClapGuiWindowApi::Wayland => Ok(HostPlatformHandle::linux_wayland(
+                require_linux_display(linux_display_handle)?,
+                self.raw_handle,
+            )),
+        }
+    }
+
+    /// Converts this CLAP GUI parent into a Baseview-compatible host handle when supported.
+    ///
+    /// Baseview's current Linux backend attaches through X11/XCB/XWayland-compatible parent
+    /// handles, not native Wayland parent surfaces.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageDiagnostic`] when the CLAP API is unsupported by the current Baseview bridge
+    /// or required Linux display metadata is missing.
+    pub fn to_baseview_host_handle(
+        &self,
+        linux_display_handle: Option<u64>,
+    ) -> Result<HostPlatformHandle, PackageDiagnostic> {
+        if self.api == ClapGuiWindowApi::Wayland {
+            return Err(PackageDiagnostic::new(
+                "package.clap-gui-parent.unsupported-api",
+                "Baseview plugin attachment does not support native Wayland CLAP GUI parents",
+            ));
+        }
+        self.to_host_platform_handle(linux_display_handle)
     }
 }
 
@@ -1690,6 +1806,16 @@ fn validate_request(request: &PackageRequest) -> Result<(), PackagePlanningError
         Ok(())
     } else {
         Err(PackagePlanningError { diagnostics })
+    }
+}
+
+fn require_linux_display(linux_display_handle: Option<u64>) -> Result<u64, PackageDiagnostic> {
+    match linux_display_handle {
+        Some(display) if display != 0 => Ok(display),
+        Some(_) | None => Err(PackageDiagnostic::new(
+            "package.clap-gui-parent.missing-display",
+            "CLAP Linux GUI parent mapping requires a nonzero display handle from the host context",
+        )),
     }
 }
 

@@ -1774,6 +1774,7 @@ name = "hawk2ui-plugin-adapters"
 version = "0.1.0"
 dependencies = [
  "clap-sys",
+ "hawk2ui-host",
  "hawk2ui-plugin",
  "jsonschema",
  "schemars",

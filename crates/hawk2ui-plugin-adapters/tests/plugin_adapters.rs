@@ -3,8 +3,9 @@ use hawk2ui_plugin::{
     PluginEditor, PluginEditorSize,
 };
 use hawk2ui_plugin_adapters::{
-    ClapCdylibScaffold, ClapPluginEntryPlan, MaterializedPackageOutput, PackageAdapterSet,
-    PackageFormat, PackagePlan, PackageRequest, VerificationReport, VerificationStatus,
+    ClapCdylibScaffold, ClapGuiParentHandle, ClapGuiWindowApi, ClapPluginEntryPlan,
+    MaterializedPackageOutput, PackageAdapterSet, PackageFormat, PackagePlan, PackageRequest,
+    VerificationReport, VerificationStatus,
 };
 use std::{
     path::Path,
@@ -318,6 +319,59 @@ fn plugin_adapters_build_clap_entry_plan_from_clap_sys_contract() {
     assert_eq!(entry.clap_version(), "1.2.2");
     assert_eq!(entry.plugin_id(), "com.hawk2ui.clap");
     assert_eq!(entry.features(), &["audio-effect", "utility"]);
+}
+
+#[test]
+fn plugin_adapters_map_clap_gui_parent_handles_to_baseview_hosts() {
+    let x11_parent = ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::X11, 42)
+        .expect("nonzero X11 handle maps");
+    assert_eq!(x11_parent.api(), ClapGuiWindowApi::X11);
+    assert_eq!(
+        x11_parent
+            .to_baseview_host_handle(Some(7))
+            .expect("X11 parent with display maps to host handle"),
+        hawk2ui_host::HostPlatformHandle::linux_x11(7, 42)
+    );
+
+    let windows_parent = ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::Win32, 99)
+        .expect("nonzero HWND maps");
+    assert_eq!(
+        windows_parent
+            .to_baseview_host_handle(None)
+            .expect("Windows parent maps directly"),
+        hawk2ui_host::HostPlatformHandle::windows_hwnd(99)
+    );
+
+    let macos_parent = ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::Cocoa, 123)
+        .expect("nonzero NSView maps");
+    assert_eq!(
+        macos_parent
+            .to_baseview_host_handle(None)
+            .expect("macOS parent maps directly"),
+        hawk2ui_host::HostPlatformHandle::macos_ns_view(123)
+    );
+}
+
+#[test]
+fn plugin_adapters_reject_invalid_clap_gui_parent_handles() {
+    let zero = ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::X11, 0)
+        .expect_err("zero native parent handles must be rejected");
+    assert_eq!(zero.rule(), "package.clap-gui-parent.invalid-handle");
+
+    let missing_display = ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::X11, 42)
+        .expect("X11 handle maps")
+        .to_baseview_host_handle(None)
+        .expect_err("X11 Baseview attachment requires an explicit display handle");
+    assert_eq!(
+        missing_display.rule(),
+        "package.clap-gui-parent.missing-display"
+    );
+
+    let wayland = ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::Wayland, 42)
+        .expect("CLAP Wayland handle is structurally valid")
+        .to_baseview_host_handle(Some(7))
+        .expect_err("Baseview cannot attach native Wayland parents");
+    assert_eq!(wayland.rule(), "package.clap-gui-parent.unsupported-api");
 }
 
 #[test]

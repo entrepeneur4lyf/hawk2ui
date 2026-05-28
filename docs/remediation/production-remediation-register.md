@@ -1445,6 +1445,9 @@ Status:
 - Package materialization now emits `Contents/Resources/hawk2ui-editor.toml` for runtime-backed
   packages, declaring the `baseview` host adapter, `skia` renderer, runtime artifact path, format,
   plugin ID, and parameter count, and includes that descriptor in package hash verification.
+- CLAP GUI parent handles now have a safe typed bridge from CLAP window APIs into `Hawk2UI`
+  platform handle records, including validation for nonzero raw handles, Linux display metadata,
+  and Baseview's current native-Wayland attachment limitation.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:
