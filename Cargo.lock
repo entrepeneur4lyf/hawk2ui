@@ -1661,6 +1661,7 @@ dependencies = [
  "hawk2ui-render-skia",
  "hawk2ui-runtime",
  "raw-window-handle 0.5.2",
+ "x11rb",
 ]
 
 [[package]]

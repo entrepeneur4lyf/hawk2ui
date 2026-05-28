@@ -1345,17 +1345,20 @@ Evidence:
 - The plugin meter/analyzer smoke fixture now drives the actual preallocated realtime visual
   transport, frame gate, drop accounting, and UI drain path instead of returning constants from the
   trace file alone.
+- `hawk2ui-host-baseview` has an opt-in native integration smoke
+  (`HAWK2UI_NATIVE_BASEVIEW_SMOKE=1`) that creates a real `X11`/`XWayland` parent window, opens a
+  parented Baseview child through `BaseviewPluginAdapter::open_parented_window`, receives a frame,
+  and closes cleanly.
 
 Status:
 
 - Partially open: fixture/contract coverage, runtime-scene Skia presentation, raw native parent
-  validation, a real Baseview `open_parented` source path, and plugin smoke coverage for the
-  Baseview render path exist. The retained Skia snapshot still needs live binding into an actual
-  DAW-owned native child surface.
+  validation, a real Baseview `open_parented` source path, plugin smoke coverage for the Baseview
+  render path, and opt-in native parented-window smoke coverage exist. The retained Skia snapshot
+  still needs live binding into an actual DAW-owned native child surface.
 
 Required remediation:
 
-- Add host-integration smoke coverage around real Baseview parented editor attachment.
 - Connect the attached surface to the Hawk2UI runtime-scene-to-Skia rendering path.
 - Route host resize, DPI, focus, pointer, keyboard, repaint, show/hide, and teardown.
 - Ensure plugin editor teardown never exits process.
