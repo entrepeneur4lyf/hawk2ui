@@ -8,7 +8,7 @@ use hawk2ui_api::Diagnostic;
 use hawk2ui_host::{
     ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
     HostPlatformHandle, KeyboardInput, LinuxWindowSystem, PointerInput, RepaintRequest,
-    SurfaceMetrics, SurfaceOwnership, WindowMode,
+    SurfaceClipboardRequest, SurfaceMetrics, SurfaceOwnership, WindowMode,
 };
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
@@ -189,6 +189,153 @@ impl WinitTranslatedEvent {
 pub struct WinitEventTranslator {
     metrics: SurfaceMetrics,
     last_pointer_position: (f64, f64),
+}
+
+/// Response from a native clipboard request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WinitClipboardResponse {
+    /// Text read from the native clipboard.
+    Text(String),
+    /// Text was written to the native clipboard.
+    Written,
+    /// Native clipboard text was cleared.
+    Cleared,
+}
+
+/// Backend boundary for native desktop clipboard access.
+pub trait WinitClipboardBackend {
+    /// Reads clipboard text.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the platform clipboard cannot be read.
+    fn read_text(&mut self) -> Result<String, WinitHostError>;
+
+    /// Writes clipboard text.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the platform clipboard cannot be written.
+    fn write_text(&mut self, text: String) -> Result<(), WinitHostError>;
+
+    /// Clears clipboard text when supported.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the platform clipboard cannot be cleared.
+    fn clear_text(&mut self) -> Result<(), WinitHostError>;
+}
+
+/// Production native clipboard backend backed by the operating-system clipboard.
+pub struct ArboardClipboardBackend {
+    clipboard: arboard::Clipboard,
+}
+
+impl ArboardClipboardBackend {
+    /// Opens the native clipboard.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the platform clipboard cannot be opened.
+    pub fn new() -> Result<Self, WinitHostError> {
+        let clipboard = arboard::Clipboard::new().map_err(|error| {
+            WinitHostError::new(
+                "desktop.clipboard.open-failed",
+                format!("failed to open native clipboard: {error}"),
+            )
+        })?;
+        Ok(Self { clipboard })
+    }
+}
+
+impl WinitClipboardBackend for ArboardClipboardBackend {
+    fn read_text(&mut self) -> Result<String, WinitHostError> {
+        self.clipboard.get_text().map_err(|error| {
+            WinitHostError::new(
+                "desktop.clipboard.read-failed",
+                format!("failed to read native clipboard text: {error}"),
+            )
+        })
+    }
+
+    fn write_text(&mut self, text: String) -> Result<(), WinitHostError> {
+        self.clipboard.set_text(text).map_err(|error| {
+            WinitHostError::new(
+                "desktop.clipboard.write-failed",
+                format!("failed to write native clipboard text: {error}"),
+            )
+        })
+    }
+
+    fn clear_text(&mut self) -> Result<(), WinitHostError> {
+        self.write_text(String::new())
+    }
+}
+
+/// Capability-checked native clipboard bridge for Winit desktop hosts.
+#[derive(Clone, Debug)]
+pub struct WinitClipboardBridge<B> {
+    capability: ClipboardCapability,
+    backend: B,
+}
+
+impl<B: WinitClipboardBackend> WinitClipboardBridge<B> {
+    /// Creates a clipboard bridge from a host capability and backend.
+    #[must_use]
+    pub const fn new(capability: ClipboardCapability, backend: B) -> Self {
+        Self {
+            capability,
+            backend,
+        }
+    }
+
+    /// Executes a clipboard request against the native backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when capability policy denies the operation or the native
+    /// clipboard backend fails.
+    pub fn handle_request(
+        &mut self,
+        request: SurfaceClipboardRequest,
+    ) -> Result<WinitClipboardResponse, WinitHostError> {
+        match request {
+            SurfaceClipboardRequest::Read => {
+                self.ensure_can_read()?;
+                self.backend.read_text().map(WinitClipboardResponse::Text)
+            }
+            SurfaceClipboardRequest::Write(text) => {
+                self.ensure_can_write()?;
+                self.backend.write_text(text)?;
+                Ok(WinitClipboardResponse::Written)
+            }
+            SurfaceClipboardRequest::Clear => {
+                self.ensure_can_write()?;
+                self.backend.clear_text()?;
+                Ok(WinitClipboardResponse::Cleared)
+            }
+        }
+    }
+
+    fn ensure_can_read(&self) -> Result<(), WinitHostError> {
+        match self.capability {
+            ClipboardCapability::Read | ClipboardCapability::ReadWrite => Ok(()),
+            ClipboardCapability::None | ClipboardCapability::Write => Err(WinitHostError::new(
+                "desktop.clipboard.read-denied",
+                "desktop clipboard read requires read capability",
+            )),
+        }
+    }
+
+    fn ensure_can_write(&self) -> Result<(), WinitHostError> {
+        match self.capability {
+            ClipboardCapability::Write | ClipboardCapability::ReadWrite => Ok(()),
+            ClipboardCapability::None | ClipboardCapability::Read => Err(WinitHostError::new(
+                "desktop.clipboard.write-denied",
+                "desktop clipboard write requires write capability",
+            )),
+        }
+    }
 }
 
 impl WinitEventTranslator {
@@ -563,6 +710,24 @@ impl WinitDesktopAdapter {
     /// Drains host events.
     pub fn drain_events(&mut self) -> Vec<DesktopHostEvent> {
         std::mem::take(&mut self.events)
+    }
+
+    /// Executes a clipboard request through a native clipboard bridge.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the window is closed, the bridge denies the request, or the
+    /// native clipboard backend fails.
+    pub fn try_request_clipboard<B: WinitClipboardBackend>(
+        &mut self,
+        request: SurfaceClipboardRequest,
+        bridge: &mut WinitClipboardBridge<B>,
+    ) -> Result<WinitClipboardResponse, WinitHostError> {
+        self.ensure_accepts_host_event()?;
+        let response = bridge.handle_request(request.clone())?;
+        self.events
+            .push(DesktopHostEvent::ClipboardRequested(request));
+        Ok(response)
     }
 
     fn set_mode(&mut self, mode: WindowMode) {

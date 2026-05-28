@@ -1322,13 +1322,17 @@ Status:
 - Winit native event translation now maps resize, DPI, focus, keyboard, pointer, IME, file
   drag/drop, occlusion, redraw, close, and destroyed events into `DesktopHostEvent` records and the
   runtime event loop uses that translator for lifecycle accounting and redraw decisions.
+- Winit desktop clipboard requests now execute through a capability-checked native clipboard bridge
+  with an `arboard` OS backend and deterministic fake-backend tests for read, write, clear, denial,
+  and adapter event recording.
 
 Review check:
 
 - This remains partially open for production stability: close, resize, maximize, DPI, input, IME,
-  drag/drop, occlusion, and runtime scene presentation are covered by automated translation/runtime
-  paths and manual smoke paths, but menus, tray, dialogs, and complete OS clipboard behavior still
-  need platform-backed implementation before `REM-HOST-002` can be closed.
+  drag/drop, occlusion, OS clipboard bridging, and runtime scene presentation are covered by
+  automated translation/runtime paths and manual smoke paths, but menus, tray, dialogs, and
+  platform-specific clipboard smoke coverage still need platform-backed implementation before
+  `REM-HOST-002` can be closed.
 
 ### REM-HOST-003: Complete Baseview Plugin Backend
 

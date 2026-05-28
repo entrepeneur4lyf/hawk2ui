@@ -17,6 +17,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+arboard = "3.6.1"
 hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
 hawk2ui-assets = { version = "0.1.0", path = "../hawk2ui-assets" }
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }

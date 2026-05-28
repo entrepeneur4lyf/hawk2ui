@@ -1,9 +1,12 @@
 use hawk2ui_host::{
     ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
     HostPlatformHandle, KeyboardInput, LinuxWindowSystem, PointerInput, RendererResizeBridge,
-    SurfaceMetrics, WindowMode,
+    SurfaceClipboardRequest, SurfaceMetrics, WindowMode,
 };
-use hawk2ui_host_winit::{WinitDesktopAdapter, WinitEventTranslator, WinitPlatformFixture};
+use hawk2ui_host_winit::{
+    WinitClipboardBackend, WinitClipboardBridge, WinitClipboardResponse, WinitDesktopAdapter,
+    WinitEventTranslator, WinitPlatformFixture,
+};
 
 #[test]
 fn winit_adapter_owns_desktop_window_and_maps_window_controls() {
@@ -179,6 +182,120 @@ fn winit_adapter_routes_focus_keyboard_pointer_clipboard_and_repaint() {
     assert_eq!(adapter.repaint_requests()[0].reason, "animation tick");
     assert_eq!(adapter.config().clipboard, ClipboardCapability::ReadWrite);
     assert_eq!(adapter.drain_events().len(), 5);
+}
+
+#[test]
+fn winit_clipboard_bridge_executes_read_write_and_clear_with_capability_checks() {
+    let backend = FakeClipboardBackend {
+        text: Some("old value".into()),
+    };
+    let mut bridge = WinitClipboardBridge::new(ClipboardCapability::ReadWrite, backend);
+
+    assert_eq!(
+        bridge
+            .handle_request(SurfaceClipboardRequest::Read)
+            .expect("clipboard read succeeds"),
+        WinitClipboardResponse::Text("old value".into())
+    );
+    assert_eq!(
+        bridge
+            .handle_request(SurfaceClipboardRequest::Write("new value".into()))
+            .expect("clipboard write succeeds"),
+        WinitClipboardResponse::Written
+    );
+    assert_eq!(
+        bridge
+            .handle_request(SurfaceClipboardRequest::Read)
+            .expect("clipboard read after write succeeds"),
+        WinitClipboardResponse::Text("new value".into())
+    );
+    assert_eq!(
+        bridge
+            .handle_request(SurfaceClipboardRequest::Clear)
+            .expect("clipboard clear succeeds"),
+        WinitClipboardResponse::Cleared
+    );
+    assert_eq!(
+        bridge
+            .handle_request(SurfaceClipboardRequest::Read)
+            .expect("clipboard read after clear succeeds"),
+        WinitClipboardResponse::Text(String::new())
+    );
+
+    let error = WinitClipboardBridge::new(
+        ClipboardCapability::Read,
+        FakeClipboardBackend {
+            text: Some("locked".into()),
+        },
+    )
+    .handle_request(SurfaceClipboardRequest::Write("denied".into()))
+    .expect_err("write must require write capability");
+    assert_eq!(error.rule(), "desktop.clipboard.write-denied");
+}
+
+#[test]
+fn winit_adapter_executes_clipboard_requests_through_native_bridge() {
+    let mut adapter = WinitDesktopAdapter::create_window(
+        DesktopWindowConfig::new("app", SurfaceMetrics::new(400.0, 300.0, 1.0))
+            .with_clipboard(ClipboardCapability::ReadWrite),
+        WinitPlatformFixture::linux(LinuxWindowSystem::Wayland),
+    )
+    .expect("window fixture creates");
+    adapter.drain_events();
+    let mut bridge = WinitClipboardBridge::new(
+        adapter.config().clipboard,
+        FakeClipboardBackend {
+            text: Some("initial".into()),
+        },
+    );
+
+    assert_eq!(
+        adapter
+            .try_request_clipboard(
+                SurfaceClipboardRequest::Write("from adapter".into()),
+                &mut bridge
+            )
+            .expect("adapter clipboard write succeeds"),
+        WinitClipboardResponse::Written
+    );
+    assert_eq!(
+        adapter
+            .try_request_clipboard(SurfaceClipboardRequest::Read, &mut bridge)
+            .expect("adapter clipboard read succeeds"),
+        WinitClipboardResponse::Text("from adapter".into())
+    );
+
+    let events = adapter.drain_events();
+    assert_eq!(
+        events,
+        vec![
+            DesktopHostEvent::ClipboardRequested(SurfaceClipboardRequest::Write(
+                "from adapter".into()
+            )),
+            DesktopHostEvent::ClipboardRequested(SurfaceClipboardRequest::Read),
+        ]
+    );
+}
+
+#[derive(Clone, Debug)]
+struct FakeClipboardBackend {
+    text: Option<String>,
+}
+
+impl WinitClipboardBackend for FakeClipboardBackend {
+    fn read_text(&mut self) -> Result<String, hawk2ui_host_winit::WinitHostError> {
+        Ok(self.text.clone().unwrap_or_default())
+    }
+
+    fn write_text(&mut self, text: String) -> Result<(), hawk2ui_host_winit::WinitHostError> {
+        self.text = Some(text);
+        Ok(())
+    }
+
+    fn clear_text(&mut self) -> Result<(), hawk2ui_host_winit::WinitHostError> {
+        self.text = Some(String::new());
+        Ok(())
+    }
 }
 
 #[test]
