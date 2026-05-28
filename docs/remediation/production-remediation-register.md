@@ -1463,6 +1463,10 @@ Status:
   under `Contents/Resources/generated-clap`, embeds the same runtime editor descriptor payload used
   by host-load tests, preserves generated parameter metadata in the scaffold source, and includes
   both scaffold files in package hash verification.
+- Generated CLAP `cdylib` scaffolds now keep parameter values in lock-free atomic storage, save
+  parameter state into the CLAP state stream, restore validated finite parameter values from host
+  state payloads, clamp restored values to generated parameter ranges, and prove the round trip in
+  the external host-load test.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:

@@ -727,19 +727,38 @@ fn main() {
         assert!(!state.is_null());
         let state = &*(state as *const clap_sys::ext::state::clap_plugin_state);
         let mut saved = Vec::new();
-        let ostream = clap_sys::stream::clap_ostream {
-            ctx: (&mut saved as *mut Vec<u8>).cast(),
-            write: Some(write_stream),
-        };
-        assert!((state.save.expect("state save"))(plugin, &ostream));
-        assert_eq!(std::str::from_utf8(&saved).expect("state is utf8"), "hawk2ui-state-v1\n");
-        let istream = clap_sys::stream::clap_istream {
-            ctx: ptr::null_mut(),
-            read: Some(empty_read),
-        };
-        assert!((state.load.expect("state load"))(plugin, &istream));
-    }
-}
+          let ostream = clap_sys::stream::clap_ostream {
+              ctx: (&mut saved as *mut Vec<u8>).cast(),
+              write: Some(write_stream),
+          };
+          assert!((state.save.expect("state save"))(plugin, &ostream));
+          let saved_state = std::str::from_utf8(&saved).expect("state is utf8");
+          assert!(saved_state.starts_with("hawk2ui-state-v1\n"));
+          assert!(saved_state.contains("param 1 "));
+          let loaded_payload = format!("hawk2ui-state-v1\nparam 1 {}\n", 3.5f64.to_bits());
+          let mut read_cursor = ReadCursor {
+              bytes: loaded_payload.into_bytes(),
+              offset: 0,
+          };
+          let istream = clap_sys::stream::clap_istream {
+              ctx: (&mut read_cursor as *mut ReadCursor).cast(),
+              read: Some(read_stream),
+          };
+          assert!((state.load.expect("state load"))(plugin, &istream));
+          let mut loaded_value = f64::NAN;
+          assert!((params.get_value.expect("loaded param value"))(
+              plugin,
+              1,
+              &mut loaded_value,
+          ));
+          assert_eq!(loaded_value, 3.5);
+      }
+  }
+
+  struct ReadCursor {
+      bytes: Vec<u8>,
+      offset: usize,
+  }
 
 unsafe extern "C" fn write_stream(
     stream: *const clap_sys::stream::clap_ostream,
@@ -752,14 +771,28 @@ unsafe extern "C" fn write_stream(
     size as i64
 }
 
-unsafe extern "C" fn empty_read(
-    _stream: *const clap_sys::stream::clap_istream,
-    _buffer: *mut c_void,
-    _size: u64,
-) -> i64 {
-    0
-}
-"#
+  unsafe extern "C" fn read_stream(
+      stream: *const clap_sys::stream::clap_istream,
+      buffer: *mut c_void,
+      size: u64,
+  ) -> i64 {
+      let cursor = unsafe { &mut *((*stream).ctx as *mut ReadCursor) };
+      let remaining = cursor.bytes.len().saturating_sub(cursor.offset);
+      let read_len = remaining.min(size as usize);
+      if read_len == 0 {
+          return 0;
+      }
+      unsafe {
+          std::ptr::copy_nonoverlapping(
+              cursor.bytes.as_ptr().add(cursor.offset),
+              buffer.cast::<u8>(),
+              read_len,
+          );
+      }
+      cursor.offset += read_len;
+      read_len as i64
+  }
+  "#
 }
 
 #[test]

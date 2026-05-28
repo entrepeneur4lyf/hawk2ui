@@ -351,6 +351,8 @@ pub struct ClapCdylibScaffold {
     package_name: String,
     library_file_stem: String,
     parameter_source: String,
+    parameter_value_source: String,
+    parameter_count: usize,
     editor_width: u32,
     editor_height: u32,
     runtime_editor_descriptor: Option<ClapRuntimeEditorDescriptor>,
@@ -365,6 +367,8 @@ impl ClapCdylibScaffold {
             package_name: "hawk2ui-generated-clap".into(),
             library_file_stem: "hawk2ui_generated_clap".into(),
             parameter_source: "&[]".into(),
+            parameter_value_source: "[]".into(),
+            parameter_count: 0,
             editor_width: 800,
             editor_height: 600,
             runtime_editor_descriptor: None,
@@ -384,11 +388,20 @@ impl ClapCdylibScaffold {
     #[must_use]
     pub fn with_parameters(mut self, parameters: &ParameterModel) -> Self {
         self.parameter_source = clap_parameter_source(parameters);
+        self.parameter_value_source = clap_parameter_value_source(parameters);
+        self.parameter_count = parameters.parameters.len();
         self
     }
 
-    fn with_parameter_source(mut self, parameter_source: impl Into<String>) -> Self {
+    fn with_parameter_sources(
+        mut self,
+        parameter_source: impl Into<String>,
+        parameter_value_source: impl Into<String>,
+        parameter_count: usize,
+    ) -> Self {
         self.parameter_source = parameter_source.into();
+        self.parameter_value_source = parameter_value_source.into();
+        self.parameter_count = parameter_count;
         self
     }
 
@@ -455,6 +468,8 @@ impl ClapCdylibScaffold {
                 &rust_nul_terminated_byte_string(&self.entry.version),
             )
             .replace("__PARAMETERS__", &self.parameter_source)
+            .replace("__PARAMETER_VALUES__", &self.parameter_value_source)
+            .replace("__PARAMETER_COUNT__", &self.parameter_count.to_string())
             .replace("__EDITOR_WIDTH__", &self.editor_width.to_string())
             .replace("__EDITOR_HEIGHT__", &self.editor_height.to_string())
             .replace(
@@ -491,8 +506,9 @@ use clap_sys::process::{
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::string_sizes::{CLAP_NAME_SIZE, CLAP_PATH_SIZE};
 use clap_sys::version::CLAP_VERSION;
-use std::ffi::{c_char, c_void, CStr};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::ffi::{c_char, c_void, CStr};
+    use std::fmt::Write as _;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 static PLUGIN_ID_BYTES: &[u8] = __PLUGIN_ID_BYTES__;
 static PLUGIN_NAME_BYTES: &[u8] = __PLUGIN_NAME_BYTES__;
@@ -516,9 +532,10 @@ struct GeneratedParameter {
     max_value: f64,
     default_value: f64,
     flags: u32,
-}
+    }
 
-static PARAMETERS: &[GeneratedParameter] = __PARAMETERS__;
+    static PARAMETERS: &[GeneratedParameter] = __PARAMETERS__;
+    static PARAMETER_VALUES: [AtomicU64; __PARAMETER_COUNT__] = __PARAMETER_VALUES__;
 
 static DESCRIPTOR: clap_plugin_descriptor = clap_plugin_descriptor {
     clap_version: CLAP_VERSION,
@@ -840,23 +857,23 @@ unsafe extern "C" fn params_get_info(
     true
 }
 
-unsafe extern "C" fn params_get_value(
-    _plugin: *const clap_plugin,
-    param_id: u32,
-    out_value: *mut f64,
-) -> bool {
-    let Some(parameter) = find_parameter(param_id) else {
-        return false;
-    };
-    if out_value.is_null() {
-        return false;
-    }
+    unsafe extern "C" fn params_get_value(
+        _plugin: *const clap_plugin,
+        param_id: u32,
+        out_value: *mut f64,
+    ) -> bool {
+        let Some(index) = find_parameter_index(param_id) else {
+            return false;
+        };
+        if out_value.is_null() {
+            return false;
+        }
 
-    unsafe {
-        *out_value = parameter.default_value;
+        unsafe {
+            *out_value = f64::from_bits(PARAMETER_VALUES[index].load(Ordering::Acquire));
+        }
+        true
     }
-    true
-}
 
 unsafe extern "C" fn params_value_to_text(
     _plugin: *const clap_plugin,
@@ -907,9 +924,15 @@ unsafe extern "C" fn params_flush(
 ) {
 }
 
-fn find_parameter(param_id: u32) -> Option<&'static GeneratedParameter> {
-    PARAMETERS.iter().find(|parameter| parameter.id == param_id)
-}
+    fn find_parameter(param_id: u32) -> Option<&'static GeneratedParameter> {
+        find_parameter_index(param_id).map(|index| &PARAMETERS[index])
+    }
+
+    fn find_parameter_index(param_id: u32) -> Option<usize> {
+        PARAMETERS
+            .iter()
+            .position(|parameter| parameter.id == param_id)
+    }
 
 fn write_c_buffer(out_buffer: *mut c_char, out_buffer_capacity: u32, source: &[u8]) {
     let write_len = source
@@ -925,17 +948,18 @@ fn write_c_buffer(out_buffer: *mut c_char, out_buffer_capacity: u32, source: &[u
     }
 }
 
-unsafe extern "C" fn state_save(_plugin: *const clap_plugin, stream: *const clap_ostream) -> bool {
-    if stream.is_null() {
-        return false;
+    unsafe extern "C" fn state_save(_plugin: *const clap_plugin, stream: *const clap_ostream) -> bool {
+        if stream.is_null() {
+            return false;
+        }
+        let stream = unsafe { &*stream };
+        let Some(write) = stream.write else {
+            return false;
+        };
+        let state = state_payload();
+        let written = unsafe { write(stream, state.as_ptr().cast(), state.len() as u64) };
+        written == state.len() as i64
     }
-    let stream = unsafe { &*stream };
-    let Some(write) = stream.write else {
-        return false;
-    };
-    let written = unsafe { write(stream, STATE_BYTES.as_ptr().cast(), STATE_BYTES.len() as u64) };
-    written == STATE_BYTES.len() as i64
-}
 
 unsafe extern "C" fn state_load(_plugin: *const clap_plugin, stream: *const clap_istream) -> bool {
     if stream.is_null() {
@@ -945,10 +969,78 @@ unsafe extern "C" fn state_load(_plugin: *const clap_plugin, stream: *const clap
     let Some(read) = stream.read else {
         return false;
     };
-    let mut buffer = [0_u8; 64];
-    let read = unsafe { read(stream, buffer.as_mut_ptr().cast(), buffer.len() as u64) };
-    read >= 0
-}
+        let Some(payload) = read_state_payload(stream, read) else {
+            return false;
+        };
+        restore_state_payload(&payload)
+    }
+
+    fn state_payload() -> Vec<u8> {
+        let mut state = String::from(std::str::from_utf8(STATE_BYTES).unwrap_or("hawk2ui-state-v1\n"));
+        for (index, parameter) in PARAMETERS.iter().enumerate() {
+            let bits = PARAMETER_VALUES[index].load(Ordering::Acquire);
+            let _ = writeln!(state, "param {} {}", parameter.id, bits);
+        }
+        state.into_bytes()
+    }
+
+    fn read_state_payload(
+        stream: &clap_istream,
+        read: unsafe extern "C" fn(*const clap_istream, *mut c_void, u64) -> i64,
+    ) -> Option<Vec<u8>> {
+        const MAX_STATE_BYTES: usize = 64 * 1024;
+        let mut payload = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read_len = unsafe { read(stream, buffer.as_mut_ptr().cast(), buffer.len() as u64) };
+            if read_len < 0 {
+                return None;
+            }
+            if read_len == 0 {
+                break;
+            }
+            let read_len = read_len as usize;
+            if payload.len().saturating_add(read_len) > MAX_STATE_BYTES {
+                return None;
+            }
+            payload.extend_from_slice(&buffer[..read_len]);
+        }
+        Some(payload)
+    }
+
+    fn restore_state_payload(payload: &[u8]) -> bool {
+        let Ok(state) = std::str::from_utf8(payload) else {
+            return false;
+        };
+        if !state.starts_with("hawk2ui-state-v1\n") {
+            return false;
+        }
+        for line in state.lines().skip(1) {
+            let mut parts = line.split_ascii_whitespace();
+            if parts.next() != Some("param") {
+                continue;
+            }
+            let Some(param_id) = parts.next().and_then(|value| value.parse::<u32>().ok()) else {
+                return false;
+            };
+            let Some(bits) = parts.next().and_then(|value| value.parse::<u64>().ok()) else {
+                return false;
+            };
+            let Some(index) = find_parameter_index(param_id) else {
+                continue;
+            };
+            let parameter = &PARAMETERS[index];
+            let value = f64::from_bits(bits);
+            if !value.is_finite() {
+                return false;
+            }
+            PARAMETER_VALUES[index].store(
+                value.clamp(parameter.min_value, parameter.max_value).to_bits(),
+                Ordering::Release,
+            );
+        }
+        true
+    }
 
 unsafe extern "C" fn gui_is_api_supported(
     _plugin: *const clap_plugin,
@@ -1237,6 +1329,9 @@ pub struct PackageTargetPlan {
     #[serde(skip)]
     #[schemars(skip)]
     clap_parameter_source: String,
+    #[serde(skip)]
+    #[schemars(skip)]
+    clap_parameter_value_source: String,
 }
 
 impl PackageTargetPlan {
@@ -1588,7 +1683,11 @@ impl PackageTargetPlan {
         resources_path: &Path,
     ) -> Result<ClapCdylibScaffoldOutput, PackageMaterializationError> {
         let mut scaffold = ClapCdylibScaffold::from_metadata(&self.metadata)
-            .with_parameter_source(self.clap_parameter_source.clone());
+            .with_parameter_sources(
+                self.clap_parameter_source.clone(),
+                self.clap_parameter_value_source.clone(),
+                self.parameter_count,
+            );
         if self.runtime_artifact.is_some() {
             let descriptor = ClapRuntimeEditorDescriptor::new(
                 "Contents/Resources/hawk2ui-runtime-artifact.json",
@@ -1776,6 +1875,7 @@ impl PackageAdapterSet {
                 parameter_count: request.parameters.parameters.len(),
                 runtime_artifact: request.runtime_artifact.clone(),
                 clap_parameter_source: clap_parameter_source(&request.parameters),
+                clap_parameter_value_source: clap_parameter_value_source(&request.parameters),
             })
             .collect();
         Ok(PackagePlan { targets })
@@ -2087,6 +2187,23 @@ fn clap_parameter_source(parameters: &ParameterModel) -> String {
             rust_f64_literal(parameter_max_value(parameter)),
             rust_f64_literal(parameter_default_value(parameter)),
             clap_parameter_flags(parameter),
+        );
+    }
+    source.push(']');
+    source
+}
+
+fn clap_parameter_value_source(parameters: &ParameterModel) -> String {
+    if parameters.parameters.is_empty() {
+        return "[]".into();
+    }
+
+    let mut source = String::from("[\n");
+    for parameter in &parameters.parameters {
+        let _ = writeln!(
+            source,
+            "    AtomicU64::new({}),",
+            parameter_default_value(parameter).to_bits()
         );
     }
     source.push(']');
