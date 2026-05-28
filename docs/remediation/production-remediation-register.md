@@ -1350,14 +1350,17 @@ Evidence:
   parented Baseview child through `BaseviewPluginAdapter::open_parented_window`, renders a
   `RuntimeSceneFrame` through Skia, presents the pixels into the native child window, receives a
   frame, and closes cleanly.
+- Native Baseview event translation now maps window resize/DPI/focus/close, keyboard events,
+  pointer movement/buttons/wheel/drag events, frame presentation, and host-driven show/hide into
+  `PluginHostEvent` records.
 
 Status:
 
-- Partially open: fixture/contract coverage, runtime-scene Skia presentation, raw native parent
-  validation, a real Baseview `open_parented` source path, plugin smoke coverage for the Baseview
-  render path, and opt-in native parented-window smoke coverage with X11/XWayland pixel
-  presentation exist. Remaining work is host event parity for real plugin-host show/hide, focus,
-  keyboard, and pointer traffic against native parented children.
+- Remediated for the current Baseview backend boundary: fixture/contract coverage, runtime-scene
+  Skia presentation, raw native parent validation, a real Baseview `open_parented` source path,
+  plugin smoke coverage for the Baseview render path, opt-in native parented-window smoke coverage
+  with X11/XWayland pixel presentation, and native event translation for resize, DPI, focus,
+  keyboard, pointer, frame presentation, show/hide, and teardown now exist.
 
 Required remediation:
 
@@ -1367,6 +1370,8 @@ Required remediation:
 Acceptance:
 
 - Baseview smoke app opens a real embedded/plugin-like surface and renders Hawk2UI scene output.
+- Baseview native event translation is covered by deterministic tests, and the opt-in native smoke
+  records frame presentation through the same handler event sink used by real parented windows.
 
 ### REM-HOST-004: Complete Native Platform Backends
 

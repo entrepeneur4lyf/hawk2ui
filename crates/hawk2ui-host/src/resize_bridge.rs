@@ -181,6 +181,8 @@ impl RendererResizeBridge {
             )),
             PluginHostEvent::ParentAttached(_)
             | PluginHostEvent::EditorCreated(_)
+            | PluginHostEvent::EditorShown(_)
+            | PluginHostEvent::EditorHidden(_)
             | PluginHostEvent::RepaintScheduled(_)
             | PluginHostEvent::FocusRouted(_)
             | PluginHostEvent::KeyboardRouted(_)

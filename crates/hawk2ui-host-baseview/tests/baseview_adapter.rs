@@ -3,7 +3,8 @@ use hawk2ui_host::{
     PluginParentHandle, PointerInput, RendererResizeBridge, SurfaceMetrics,
 };
 use hawk2ui_host_baseview::{
-    BaseviewNativeParent, BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
+    BaseviewEventTranslator, BaseviewNativeParent, BaseviewNativeParentBackend,
+    BaseviewParentFixture, BaseviewPluginAdapter,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_render::Color;
@@ -289,6 +290,124 @@ fn baseview_adapter_routes_resize_dpi_repaint_focus_keyboard_and_pointer() {
             .filter_map(|event| bridge.plugin_event_to_target_request(event, adapter.metrics()))
             .any(|request| request.force_redraw)
     );
+}
+
+#[test]
+fn baseview_adapter_records_host_driven_show_hide_without_process_quit() {
+    let mut adapter = BaseviewPluginAdapter::attach(
+        PluginEditorConfig::new(
+            "editor",
+            PluginParentHandle::opaque("parent"),
+            SurfaceMetrics::new(320.0, 180.0, 1.0),
+        ),
+        BaseviewParentFixture::linux_xwayland(),
+    )
+    .expect("baseview editor attaches");
+    adapter.drain_events();
+
+    assert!(adapter.visible());
+    adapter.hide_editor("host hid editor");
+    adapter.hide_editor("duplicate hide ignored");
+    adapter.show_editor("host showed editor");
+    adapter.show_editor("duplicate show ignored");
+
+    assert!(adapter.visible());
+    assert!(!adapter.requested_process_quit());
+    assert_eq!(
+        adapter.drain_events(),
+        vec![
+            PluginHostEvent::EditorHidden("host hid editor".into()),
+            PluginHostEvent::FocusRouted(false),
+            PluginHostEvent::EditorShown("host showed editor".into()),
+        ]
+    );
+}
+
+#[test]
+fn baseview_event_translator_routes_native_window_keyboard_pointer_and_teardown_events() {
+    use baseview::{
+        Event, EventStatus, MouseButton, MouseEvent, Point, ScrollDelta, Size, WindowEvent,
+        WindowInfo,
+    };
+
+    let mut translator = BaseviewEventTranslator::new(SurfaceMetrics::new(320.0, 180.0, 1.0));
+
+    let resized = translator.translate(&Event::Window(WindowEvent::Resized(
+        WindowInfo::from_logical_size(Size::new(640.0, 360.0), 2.0),
+    )));
+    assert_eq!(resized.status, EventStatus::Captured);
+    assert!(
+        resized
+            .events
+            .contains(&PluginHostEvent::HostResize(SurfaceMetrics::new(
+                640.0, 360.0, 2.0
+            )))
+    );
+    assert!(resized.events.contains(&PluginHostEvent::DpiChanged(2.0)));
+    assert_eq!(translator.metrics(), SurfaceMetrics::new(640.0, 360.0, 2.0));
+
+    let focused = translator.translate(&Event::Window(WindowEvent::Focused));
+    assert_eq!(focused.events, [PluginHostEvent::FocusRouted(true)]);
+    let unfocused = translator.translate(&Event::Window(WindowEvent::Unfocused));
+    assert_eq!(unfocused.events, [PluginHostEvent::FocusRouted(false)]);
+
+    let keyboard = translator.translate(&Event::Keyboard(Default::default()));
+    assert_eq!(
+        keyboard.events,
+        [PluginHostEvent::KeyboardRouted(KeyboardInput::new(
+            "Unidentified",
+            true
+        ))]
+    );
+    assert_eq!(keyboard.status, EventStatus::Captured);
+
+    let moved = translator.translate(&Event::Mouse(MouseEvent::CursorMoved {
+        position: Point::new(10.0, 12.0),
+        modifiers: Default::default(),
+    }));
+    assert_eq!(
+        moved.events,
+        [PluginHostEvent::PointerRouted(PointerInput::new(
+            10.0, 12.0, "move"
+        ))]
+    );
+
+    let pressed = translator.translate(&Event::Mouse(MouseEvent::ButtonPressed {
+        button: MouseButton::Left,
+        modifiers: Default::default(),
+    }));
+    assert_eq!(
+        pressed.events,
+        [PluginHostEvent::PointerRouted(PointerInput::new(
+            10.0,
+            12.0,
+            "left-down"
+        ))]
+    );
+
+    let wheel = translator.translate(&Event::Mouse(MouseEvent::WheelScrolled {
+        delta: ScrollDelta::Lines { x: 1.0, y: -2.0 },
+        modifiers: Default::default(),
+    }));
+    assert_eq!(
+        wheel.events,
+        [PluginHostEvent::PointerRouted(PointerInput::new(
+            10.0,
+            12.0,
+            "wheel-lines:1:-2"
+        ))]
+    );
+
+    let closing = translator.translate(&Event::Window(WindowEvent::WillClose));
+    assert_eq!(
+        closing.events,
+        [
+            PluginHostEvent::EditorDestroyed("baseview child window closed".into()),
+            PluginHostEvent::SafeTeardownComplete,
+        ]
+    );
+    let duplicate_close = translator.translate(&Event::Window(WindowEvent::WillClose));
+    assert!(duplicate_close.events.is_empty());
 }
 
 #[test]

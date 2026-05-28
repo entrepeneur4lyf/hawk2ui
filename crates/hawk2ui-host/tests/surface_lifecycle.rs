@@ -243,6 +243,32 @@ fn plugin_lifecycle_records_attachment_resize_dpi_repaint_and_input_routing() {
 }
 
 #[test]
+fn plugin_lifecycle_records_host_driven_show_hide() {
+    let mut adapter = RecordingPluginAdapter::attach(PluginEditorConfig::new(
+        "editor",
+        PluginParentHandle::opaque("clap-parent"),
+        SurfaceMetrics::new(320.0, 240.0, 1.0),
+    ));
+    adapter.drain_events();
+
+    assert!(adapter.visible());
+    adapter.hide_editor("host hid editor");
+    adapter.hide_editor("duplicate hide ignored");
+    adapter.show_editor("host showed editor");
+    adapter.show_editor("duplicate show ignored");
+
+    assert!(adapter.visible());
+    assert_eq!(
+        adapter.drain_events(),
+        vec![
+            PluginHostEvent::EditorHidden("host hid editor".into()),
+            PluginHostEvent::FocusRouted(false),
+            PluginHostEvent::EditorShown("host showed editor".into()),
+        ]
+    );
+}
+
+#[test]
 fn plugin_lifecycle_teardown_never_requests_process_quit() {
     let mut adapter = RecordingPluginAdapter::attach(PluginEditorConfig::new(
         "editor",

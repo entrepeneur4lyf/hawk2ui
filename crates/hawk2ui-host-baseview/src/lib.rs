@@ -11,6 +11,7 @@ use hawk2ui_host::{
 use hawk2ui_render::{Color, RendererBackend};
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend, SkiaSurfaceConfig};
 use hawk2ui_runtime::RuntimeSceneFrame;
+use keyboard_types::{Key, KeyState, KeyboardEvent};
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasRawDisplayHandle, HasRawWindowHandle,
     RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle, XcbDisplayHandle,
@@ -351,12 +352,195 @@ unsafe impl HasRawDisplayHandle for BaseviewNativeParent {
     }
 }
 
+/// Host events produced from one native Baseview event.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BaseviewTranslatedEvent {
+    /// Whether the native event was handled by `Hawk2UI` or should continue to the parent host.
+    pub status: EventStatus,
+    /// Plugin host events emitted by the translation.
+    pub events: Vec<PluginHostEvent>,
+}
+
+impl BaseviewTranslatedEvent {
+    fn captured(events: Vec<PluginHostEvent>) -> Self {
+        Self {
+            status: EventStatus::Captured,
+            events,
+        }
+    }
+}
+
+/// Stateful translator from native Baseview events into `Hawk2UI` plugin host events.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BaseviewEventTranslator {
+    metrics: SurfaceMetrics,
+    last_pointer_position: (f64, f64),
+    destroyed: bool,
+}
+
+impl BaseviewEventTranslator {
+    /// Creates a native event translator with the current editor metrics.
+    #[must_use]
+    pub const fn new(metrics: SurfaceMetrics) -> Self {
+        Self {
+            metrics,
+            last_pointer_position: (0.0, 0.0),
+            destroyed: false,
+        }
+    }
+
+    /// Returns the latest metrics observed from native resize/DPI events.
+    #[must_use]
+    pub const fn metrics(&self) -> SurfaceMetrics {
+        self.metrics
+    }
+
+    /// Translates a Baseview event into plugin host events.
+    #[must_use]
+    pub fn translate(&mut self, event: &baseview::Event) -> BaseviewTranslatedEvent {
+        match event {
+            baseview::Event::Window(event) => self.translate_window_event(event),
+            baseview::Event::Keyboard(event) => {
+                BaseviewTranslatedEvent::captured(vec![PluginHostEvent::KeyboardRouted(
+                    KeyboardInput::new(keyboard_key_label(event), event.state == KeyState::Down),
+                )])
+            }
+            baseview::Event::Mouse(event) => self.translate_mouse_event(event),
+        }
+    }
+
+    fn translate_window_event(&mut self, event: &baseview::WindowEvent) -> BaseviewTranslatedEvent {
+        match event {
+            baseview::WindowEvent::Resized(info) => {
+                let logical_size = info.logical_size();
+                let metrics =
+                    SurfaceMetrics::new(logical_size.width, logical_size.height, info.scale());
+                if validate_baseview_metrics(metrics).is_err() {
+                    return BaseviewTranslatedEvent::captured(Vec::new());
+                }
+                let scale_changed =
+                    (self.metrics.scale_factor - metrics.scale_factor).abs() > f64::EPSILON;
+                self.metrics = metrics;
+                let mut events = vec![PluginHostEvent::HostResize(metrics)];
+                if scale_changed {
+                    events.push(PluginHostEvent::DpiChanged(metrics.scale_factor));
+                }
+                BaseviewTranslatedEvent::captured(events)
+            }
+            baseview::WindowEvent::Focused => {
+                BaseviewTranslatedEvent::captured(vec![PluginHostEvent::FocusRouted(true)])
+            }
+            baseview::WindowEvent::Unfocused => {
+                BaseviewTranslatedEvent::captured(vec![PluginHostEvent::FocusRouted(false)])
+            }
+            baseview::WindowEvent::WillClose => {
+                if self.destroyed {
+                    BaseviewTranslatedEvent::captured(Vec::new())
+                } else {
+                    self.destroyed = true;
+                    BaseviewTranslatedEvent::captured(vec![
+                        PluginHostEvent::EditorDestroyed("baseview child window closed".into()),
+                        PluginHostEvent::SafeTeardownComplete,
+                    ])
+                }
+            }
+        }
+    }
+
+    fn translate_mouse_event(&mut self, event: &baseview::MouseEvent) -> BaseviewTranslatedEvent {
+        let pointer = match event {
+            baseview::MouseEvent::CursorMoved { position, .. } => {
+                self.last_pointer_position = (position.x, position.y);
+                PointerInput::new(position.x, position.y, "move")
+            }
+            baseview::MouseEvent::ButtonPressed { button, .. } => {
+                let (x, y) = self.last_pointer_position;
+                PointerInput::new(x, y, format!("{}-down", mouse_button_label(*button)))
+            }
+            baseview::MouseEvent::ButtonReleased { button, .. } => {
+                let (x, y) = self.last_pointer_position;
+                PointerInput::new(x, y, format!("{}-up", mouse_button_label(*button)))
+            }
+            baseview::MouseEvent::WheelScrolled { delta, .. } => {
+                let (x, y) = self.last_pointer_position;
+                PointerInput::new(x, y, scroll_delta_label(*delta))
+            }
+            baseview::MouseEvent::CursorEntered => {
+                let (x, y) = self.last_pointer_position;
+                PointerInput::new(x, y, "enter")
+            }
+            baseview::MouseEvent::CursorLeft => {
+                let (x, y) = self.last_pointer_position;
+                PointerInput::new(x, y, "leave")
+            }
+            baseview::MouseEvent::DragEntered { position, .. } => {
+                self.last_pointer_position = (position.x, position.y);
+                PointerInput::new(position.x, position.y, "drag-entered")
+            }
+            baseview::MouseEvent::DragMoved { position, .. } => {
+                self.last_pointer_position = (position.x, position.y);
+                PointerInput::new(position.x, position.y, "drag-moved")
+            }
+            baseview::MouseEvent::DragLeft => {
+                let (x, y) = self.last_pointer_position;
+                PointerInput::new(x, y, "drag-left")
+            }
+            baseview::MouseEvent::DragDropped { position, .. } => {
+                self.last_pointer_position = (position.x, position.y);
+                PointerInput::new(position.x, position.y, "drag-dropped")
+            }
+        };
+        BaseviewTranslatedEvent::captured(vec![PluginHostEvent::PointerRouted(pointer)])
+    }
+}
+
+fn keyboard_key_label(event: &KeyboardEvent) -> String {
+    match &event.key {
+        Key::Character(value) => value.clone(),
+        key => format!("{key:?}"),
+    }
+}
+
+fn mouse_button_label(button: baseview::MouseButton) -> &'static str {
+    match button {
+        baseview::MouseButton::Left => "left",
+        baseview::MouseButton::Middle => "middle",
+        baseview::MouseButton::Right => "right",
+        baseview::MouseButton::Back => "back",
+        baseview::MouseButton::Forward => "forward",
+        baseview::MouseButton::Other(_) => "other",
+    }
+}
+
+fn scroll_delta_label(delta: baseview::ScrollDelta) -> String {
+    match delta {
+        baseview::ScrollDelta::Lines { x, y } => {
+            format!("wheel-lines:{}:{}", compact_f32(x), compact_f32(y))
+        }
+        baseview::ScrollDelta::Pixels { x, y } => {
+            format!("wheel-pixels:{}:{}", compact_f32(x), compact_f32(y))
+        }
+    }
+}
+
+fn compact_f32(value: f32) -> String {
+    if value.fract() == 0.0 {
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            (value as i32).to_string()
+        }
+    } else {
+        value.to_string()
+    }
+}
+
 /// Linux `X11`/`XWayland` Baseview handler that renders a runtime scene with Skia and presents it
 /// into the native child window during frame callbacks.
 #[cfg(target_os = "linux")]
 pub struct BaseviewX11SkiaFrameHandler {
     scene: RuntimeSceneFrame,
-    metrics: SurfaceMetrics,
+    event_translator: BaseviewEventTranslator,
+    event_sink: Arc<Mutex<Vec<PluginHostEvent>>>,
     presented_frames: Arc<AtomicU64>,
     last_error: Arc<Mutex<Option<BaseviewHostError>>>,
     close_after_first_frame: bool,
@@ -374,7 +558,8 @@ impl BaseviewX11SkiaFrameHandler {
     ) -> Self {
         Self {
             scene,
-            metrics,
+            event_translator: BaseviewEventTranslator::new(metrics),
+            event_sink: Arc::new(Mutex::new(Vec::new())),
             presented_frames,
             last_error,
             close_after_first_frame: false,
@@ -388,9 +573,25 @@ impl BaseviewX11SkiaFrameHandler {
         self
     }
 
+    /// Records translated native events into a caller-owned sink.
+    #[must_use]
+    pub fn with_event_sink(mut self, event_sink: Arc<Mutex<Vec<PluginHostEvent>>>) -> Self {
+        self.event_sink = event_sink;
+        self
+    }
+
     fn record_error(&self, error: BaseviewHostError) {
         if let Ok(mut last_error) = self.last_error.lock() {
             *last_error = Some(error);
+        }
+    }
+
+    fn record_events(&self, events: Vec<PluginHostEvent>) {
+        if events.is_empty() {
+            return;
+        }
+        if let Ok(mut event_sink) = self.event_sink.lock() {
+            event_sink.extend(events);
         }
     }
 }
@@ -399,11 +600,16 @@ impl BaseviewX11SkiaFrameHandler {
 impl WindowHandler for BaseviewX11SkiaFrameHandler {
     fn on_frame(&mut self, window: &mut Window) {
         let frame_index = self.presented_frames.load(Ordering::SeqCst);
-        match render_scene_to_skia_snapshot(&self.scene, self.metrics, frame_index)
+        let metrics = self.event_translator.metrics();
+        match render_scene_to_skia_snapshot(&self.scene, metrics, frame_index)
             .and_then(|snapshot| present_snapshot_to_x11_window(window, &snapshot))
         {
             Ok(()) => {
                 self.presented_frames.fetch_add(1, Ordering::SeqCst);
+                self.record_events(vec![PluginHostEvent::FramePresented {
+                    frame_id: frame_index,
+                    metrics,
+                }]);
                 if self.close_after_first_frame {
                     window.close();
                 }
@@ -415,8 +621,10 @@ impl WindowHandler for BaseviewX11SkiaFrameHandler {
         }
     }
 
-    fn on_event(&mut self, _window: &mut Window, _event: baseview::Event) -> EventStatus {
-        EventStatus::Ignored
+    fn on_event(&mut self, _window: &mut Window, event: baseview::Event) -> EventStatus {
+        let translated = self.event_translator.translate(&event);
+        self.record_events(translated.events);
+        translated.status
     }
 }
 
@@ -428,6 +636,7 @@ pub struct BaseviewPluginAdapter {
     capabilities: BaseviewCapabilities,
     open_options: WindowOpenOptions,
     destroyed: bool,
+    visible: bool,
     requested_process_quit: bool,
     events: Vec<PluginHostEvent>,
     repaint_reasons: Vec<String>,
@@ -466,6 +675,7 @@ impl BaseviewPluginAdapter {
             capabilities: BaseviewCapabilities::plugin_editor(),
             open_options,
             destroyed: false,
+            visible: true,
             requested_process_quit: false,
             repaint_reasons: Vec::new(),
             presented_frame_count: 0,
@@ -489,6 +699,12 @@ impl BaseviewPluginAdapter {
     #[must_use]
     pub const fn destroyed(&self) -> bool {
         self.destroyed
+    }
+
+    /// Returns whether the editor is currently visible.
+    #[must_use]
+    pub const fn visible(&self) -> bool {
+        self.visible
     }
 
     /// Returns whether process quit was requested.
@@ -555,6 +771,25 @@ impl BaseviewPluginAdapter {
     /// Drains host events.
     pub fn drain_events(&mut self) -> Vec<PluginHostEvent> {
         std::mem::take(&mut self.events)
+    }
+
+    /// Records a host-driven editor show request.
+    pub fn show_editor(&mut self, reason: impl Into<String>) {
+        if self.accepts_host_event() && !self.visible {
+            self.visible = true;
+            self.events
+                .push(PluginHostEvent::EditorShown(reason.into()));
+        }
+    }
+
+    /// Records a host-driven editor hide request.
+    pub fn hide_editor(&mut self, reason: impl Into<String>) {
+        if self.accepts_host_event() && self.visible {
+            self.visible = false;
+            self.events
+                .push(PluginHostEvent::EditorHidden(reason.into()));
+            self.events.push(PluginHostEvent::FocusRouted(false));
+        }
     }
 
     /// Handles host resize events and reports invalid metrics.
@@ -907,6 +1142,7 @@ impl PluginHostAdapter for BaseviewPluginAdapter {
     fn destroy_editor(&mut self, reason: impl Into<String>) {
         if !self.destroyed {
             self.destroyed = true;
+            self.visible = false;
             self.events
                 .push(PluginHostEvent::EditorDestroyed(reason.into()));
             self.events.push(PluginHostEvent::SafeTeardownComplete);

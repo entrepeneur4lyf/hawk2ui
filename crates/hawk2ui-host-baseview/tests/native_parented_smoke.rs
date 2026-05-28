@@ -10,7 +10,8 @@ use std::{
 };
 
 use hawk2ui_host::{
-    HostPlatformHandle, PluginEditorConfig, PluginHostAdapter, PluginParentHandle, SurfaceMetrics,
+    HostPlatformHandle, PluginEditorConfig, PluginHostAdapter, PluginHostEvent, PluginParentHandle,
+    SurfaceMetrics,
 };
 use hawk2ui_host_baseview::{
     BaseviewParentFixture, BaseviewPluginAdapter, BaseviewX11SkiaFrameHandler,
@@ -54,13 +55,16 @@ fn baseview_opens_real_parented_x11_surface_when_native_smoke_enabled() {
 
     let handler_presented_frames = Arc::new(AtomicU64::new(0));
     let handler_error = Arc::new(Mutex::new(None));
+    let handler_events = Arc::new(Mutex::new(Vec::new()));
     let scene = runtime_scene();
     let metrics = adapter.metrics();
     let presented_frames = Arc::clone(&handler_presented_frames);
     let presented_error = Arc::clone(&handler_error);
+    let presented_events = Arc::clone(&handler_events);
     let mut handle = adapter
         .open_parented_window(move |_| {
             BaseviewX11SkiaFrameHandler::new(scene, metrics, presented_frames, presented_error)
+                .with_event_sink(presented_events)
                 .close_after_first_frame(true)
         })
         .expect("baseview opens a real parented child window and handler");
@@ -76,6 +80,19 @@ fn baseview_opens_real_parented_x11_surface_when_native_smoke_enabled() {
 
     assert_eq!(handler_presented_frames.load(Ordering::SeqCst), 1);
     assert_eq!(*handler_error.lock().expect("handler error lock"), None);
+    assert!(
+        handler_events
+            .lock()
+            .expect("handler event lock")
+            .iter()
+            .any(|event| matches!(
+                event,
+                PluginHostEvent::FramePresented {
+                    frame_id: 0,
+                    metrics
+                } if *metrics == SurfaceMetrics::new(320.0, 180.0, 1.0)
+            ))
+    );
     assert!(!handle.is_open());
 }
 

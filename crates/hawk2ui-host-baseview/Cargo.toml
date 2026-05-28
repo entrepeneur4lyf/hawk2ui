@@ -27,6 +27,7 @@ hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
 hawk2ui-render-skia = { version = "0.1.0", path = "../hawk2ui-render-skia" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
+keyboard-types = "0.6.2"
 raw-window-handle = "0.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]

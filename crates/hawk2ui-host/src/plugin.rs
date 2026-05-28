@@ -56,6 +56,10 @@ pub enum PluginHostEvent {
     ParentAttached(PluginParentHandle),
     /// Editor was created.
     EditorCreated(String),
+    /// Editor was shown by the host.
+    EditorShown(String),
+    /// Editor was hidden by the host.
+    EditorHidden(String),
     /// Host resized the editor.
     HostResize(SurfaceMetrics),
     /// DPI scale changed.
@@ -117,10 +121,29 @@ pub trait PluginHostAdapter {
 pub struct RecordingPluginAdapter {
     config: PluginEditorConfig,
     capabilities: HostCapabilities,
-    focused: bool,
+    focus: PluginEditorFocus,
+    visibility: PluginEditorVisibility,
     requested_process_quit: bool,
-    destroyed: bool,
+    lifetime: PluginEditorLifetime,
     events: Vec<PluginHostEvent>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+enum PluginEditorFocus {
+    Focused,
+    Unfocused,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+enum PluginEditorVisibility {
+    Visible,
+    Hidden,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+enum PluginEditorLifetime {
+    Live,
+    Destroyed,
 }
 
 impl RecordingPluginAdapter {
@@ -134,9 +157,10 @@ impl RecordingPluginAdapter {
             ],
             config,
             capabilities: HostCapabilities::plugin(),
-            focused: false,
+            focus: PluginEditorFocus::Unfocused,
+            visibility: PluginEditorVisibility::Visible,
             requested_process_quit: false,
-            destroyed: false,
+            lifetime: PluginEditorLifetime::Live,
         }
     }
 
@@ -157,8 +181,34 @@ impl RecordingPluginAdapter {
         self.config.metrics
     }
 
+    /// Returns whether the editor is currently visible.
+    #[must_use]
+    pub const fn visible(&self) -> bool {
+        matches!(self.visibility, PluginEditorVisibility::Visible)
+    }
+
+    /// Records a host-driven editor show request.
+    pub fn show_editor(&mut self, reason: impl Into<String>) {
+        if self.accepts_host_event() && !self.visible() {
+            self.visibility = PluginEditorVisibility::Visible;
+            self.events
+                .push(PluginHostEvent::EditorShown(reason.into()));
+        }
+    }
+
+    /// Records a host-driven editor hide request.
+    pub fn hide_editor(&mut self, reason: impl Into<String>) {
+        if self.accepts_host_event() && self.visible() {
+            self.visibility = PluginEditorVisibility::Hidden;
+            self.focus = PluginEditorFocus::Unfocused;
+            self.events
+                .push(PluginHostEvent::EditorHidden(reason.into()));
+            self.events.push(PluginHostEvent::FocusRouted(false));
+        }
+    }
+
     fn accepts_host_event(&self) -> bool {
-        !self.destroyed
+        matches!(self.lifetime, PluginEditorLifetime::Live)
     }
 }
 
@@ -172,7 +222,7 @@ impl HostSurface for RecordingPluginAdapter {
     }
 
     fn has_focus(&self) -> bool {
-        self.focused
+        matches!(self.focus, PluginEditorFocus::Focused)
     }
 
     fn set_focus(&mut self, focused: bool) {
@@ -251,7 +301,11 @@ impl PluginHostAdapter for RecordingPluginAdapter {
         if !self.accepts_host_event() {
             return;
         }
-        self.focused = focused;
+        self.focus = if focused {
+            PluginEditorFocus::Focused
+        } else {
+            PluginEditorFocus::Unfocused
+        };
         self.events.push(PluginHostEvent::FocusRouted(focused));
     }
 
@@ -270,8 +324,10 @@ impl PluginHostAdapter for RecordingPluginAdapter {
     }
 
     fn destroy_editor(&mut self, reason: impl Into<String>) {
-        if !self.destroyed {
-            self.destroyed = true;
+        if self.accepts_host_event() {
+            self.lifetime = PluginEditorLifetime::Destroyed;
+            self.visibility = PluginEditorVisibility::Hidden;
+            self.focus = PluginEditorFocus::Unfocused;
             self.events
                 .push(PluginHostEvent::EditorDestroyed(reason.into()));
             self.events.push(PluginHostEvent::SafeTeardownComplete);
