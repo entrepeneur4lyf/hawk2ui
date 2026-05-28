@@ -1986,6 +1986,9 @@ Evidence:
 
 - Examples exist.
 - `hawk2ui new` creates a manifest-backed TypeScript starter project.
+- `hawk2ui new` now creates a buildable desktop and plugin scaffold with entry script,
+  bootstrap script, style source, SVG asset, README, plugin metadata, editor metadata,
+  parameters, preset, desktop target, and CLAP plugin target.
 - Repository examples cover desktop basic, desktop dashboard, style gallery, security denials,
   plugin basic, plugin synth editor, and plugin meter/analyzer fixtures.
 - Framework examples are covered by smoke/conformance tests.
@@ -2000,10 +2003,17 @@ Acceptance:
 
 Status:
 
-- Partially remediated: starter project creation and example coverage exist, and examples are
-  included in smoke/manual source-truth checks.
-- Remaining work is richer production template generation, generated parameter UI variants, and
-  premium visual starter templates.
+- Remediated for the current production scaffold boundary: starter project creation, example
+  coverage, and smoke/manual source-truth checks exist, and the generated scaffold validates,
+  builds release artifacts, and packages a verified plugin artifact in CLI tests.
+- Future template expansion must be additive and tested against the same validate/build/package
+  contract rather than weakening this baseline.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with the scaffolding implementation at this boundary:
+  it produces real source, styles, assets, manifest metadata, desktop/plugin targets, and a verified
+  package path instead of a placeholder project.
 
 ### REM-DX-003: Complete User Manual
 

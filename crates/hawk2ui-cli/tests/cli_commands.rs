@@ -118,6 +118,45 @@ path = "assets/logo.svg"
 }
 
 #[test]
+fn workspace_new_project_creates_buildable_desktop_and_plugin_scaffold() {
+    let root = temp_cli_workspace("new-project");
+
+    let created = WorkspaceCommandRunner::new(&root).execute(CliCommand::NewProject);
+
+    assert_eq!(created.exit_code, CliExitCode::Success);
+    for path in [
+        "manifest.hawk.toml",
+        "src/main.ts",
+        "src/bootstrap.ts",
+        "styles/main.hawk.css",
+        "assets/logo.svg",
+        "README.md",
+    ] {
+        assert!(root.join(path).is_file(), "scaffold missing {path}");
+    }
+
+    let manifest = fs::read_to_string(root.join("manifest.hawk.toml"))
+        .expect("generated manifest should be readable");
+    assert!(manifest.contains("kind = \"desktop\""));
+    assert!(manifest.contains("kind = \"plugin\""));
+    assert!(manifest.contains("[[parameters]]"));
+    assert!(manifest.contains("[[assets]]"));
+
+    let validate = WorkspaceCommandRunner::new(&root).execute(CliCommand::Validate);
+    assert_eq!(validate.exit_code, CliExitCode::Success);
+
+    let build = WorkspaceCommandRunner::new(&root).execute(CliCommand::BuildRelease);
+    assert_eq!(build.exit_code, CliExitCode::Success);
+    assert!(build.stdout.contains("compiled-scripts: 2"));
+    assert!(build.stdout.contains("compiled-styles: 1"));
+    assert!(build.stdout.contains("compiled-assets: 1"));
+
+    let package = WorkspaceCommandRunner::new(&root).execute(CliCommand::PackagePlugin);
+    assert_eq!(package.exit_code, CliExitCode::Success);
+    assert!(package.stdout.contains("verification-status: passed"));
+}
+
+#[test]
 fn workspace_explain_reports_targets_capabilities_and_next_commands() {
     let root = temp_cli_workspace("explain");
     write_desktop_project(&root, "com.hawk2ui.cli-explain", "CLI Explain");

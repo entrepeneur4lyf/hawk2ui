@@ -292,16 +292,11 @@ impl WorkspaceCommandRunner {
             );
         }
 
-        let source_dir = self.root.join("src");
-        if let Err(error) = fs::create_dir_all(&source_dir) {
-            return io_failure("project.create-dir-failed", &source_dir, &error);
-        }
-        let source_path = source_dir.join("main.ts");
-        if let Err(error) = fs::write(&source_path, "export const app = \"hawk2ui\";\n") {
-            return io_failure("project.write-source-failed", &source_path, &error);
-        }
-        if let Err(error) = fs::write(&manifest_path, default_manifest()) {
-            return io_failure("project.write-manifest-failed", &manifest_path, &error);
+        for (relative_path, contents) in default_project_files() {
+            let path = self.root.join(relative_path);
+            if let Err(error) = write_project_file(&path, contents) {
+                return io_failure("project.write-file-failed", &path, &error);
+            }
         }
         CommandExecution::success(format!(
             "created Hawk2UI project at {}\n",
@@ -1016,6 +1011,13 @@ fn io_failure(rule: &str, path: &Path, error: &std::io::Error) -> CommandExecuti
     )
 }
 
+fn write_project_file(path: &Path, contents: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, contents)
+}
+
 fn render_diagnostics(diagnostics: &[CliDiagnostic]) -> String {
     diagnostics
         .iter()
@@ -1540,22 +1542,197 @@ fn runtime_scene_diagnostic(error: &RuntimeSceneError) -> Box<CliDiagnostic> {
     ))
 }
 
+fn default_project_files() -> [(&'static str, &'static str); 6] {
+    [
+        ("manifest.hawk.toml", default_manifest()),
+        ("src/main.ts", default_entry_source()),
+        ("src/bootstrap.ts", default_bootstrap_source()),
+        ("styles/main.hawk.css", default_style_source()),
+        ("assets/logo.svg", default_logo_svg()),
+        ("README.md", default_project_readme()),
+    ]
+}
+
 fn default_manifest() -> &'static str {
     r#"[identity]
 id = "com.example.hawk2ui-app"
 name = "Hawk2UI App"
 version = "0.1.0"
 
+[package]
+name = "hawk2ui-app"
+bundle_id = "com.example.hawk2ui-app"
+
 [source]
 entry = "src/main.ts"
+style = "styles/main.hawk.css"
+script = "src/bootstrap.ts"
 
 [capabilities]
-keys = ["native-windowing"]
+keys = ["native-windowing", "sealed-artifacts"]
+
+[plugin]
+id = "com.example.hawk2ui-app"
+name = "Hawk2UI App"
+
+[editor]
+width = 960
+height = 540
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+default = 0.5
+
+[[parameters]]
+id = "mix"
+name = "Mix"
+default = 0.75
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+
+[[presets]]
+id = "init"
+name = "Init"
 
 [[targets]]
 kind = "desktop"
-name = "local-desktop"
+name = "linux-wayland"
+
+[[targets]]
+kind = "plugin"
+name = "clap"
 "#
+}
+
+fn default_entry_source() -> &'static str {
+    r##"export function mount(host) {
+    host.on("ready", () => {});
+    return {
+        id: "root",
+        type: "view",
+        props: {
+            backgroundColor: "#080b10",
+            width: 960,
+            height: 540,
+            padding: 32,
+            gap: 18
+        },
+        children: [
+            {
+                id: "title",
+                type: "text",
+                text: "Hawk2UI Native Surface",
+                props: {
+                    textColor: "#f8fafc",
+                    fontSize: 28,
+                    width: 720,
+                    height: 44
+                }
+            },
+            {
+                id: "subtitle",
+                type: "text",
+                text: "Desktop and plugin-ready scaffold with typed source, styles, assets, and parameters.",
+                props: {
+                    textColor: "#a9b4c7",
+                    fontSize: 18,
+                    width: 820,
+                    height: 34
+                }
+            },
+            {
+                id: "panel",
+                type: "view",
+                props: {
+                    backgroundColor: "#131a24",
+                    width: 720,
+                    height: 160,
+                    padding: 22,
+                    gap: 12
+                },
+                children: [
+                    {
+                        id: "panel-heading",
+                        type: "text",
+                        text: "Production scaffold",
+                        props: {
+                            textColor: "#ffffff",
+                            fontSize: 22,
+                            width: 420,
+                            height: 34
+                        }
+                    },
+                    {
+                        id: "panel-copy",
+                        type: "text",
+                        text: "Run validate, build-release, run-desktop, or package-plugin from this project directory.",
+                        props: {
+                            textColor: "#d6deea",
+                            fontSize: 16,
+                            width: 640,
+                            height: 32
+                        }
+                    }
+                ]
+            }
+        ]
+    };
+}
+"##
+}
+
+fn default_bootstrap_source() -> &'static str {
+    r#"export const hawk2uiTemplate = {
+    surface: "native-window",
+    renderer: "skia",
+    pluginFormats: ["clap"],
+};
+"#
+}
+
+fn default_style_source() -> &'static str {
+    r".root {
+    display: flex;
+    font-size: 18px;
+    background-color: token(color.surface);
+    color: #f8fafc;
+}
+
+.panel {
+    display: flex;
+    background-color: token(color.surface);
+    color: #d6deea;
+}
+"
+}
+
+fn default_logo_svg() -> &'static str {
+    r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+    <path d="M12 70L28 18L44 70L56 34L68 70L84 18" fill="none" stroke="#7dd3fc" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M20 78H76" fill="none" stroke="#f8fafc" stroke-width="6" stroke-linecap="round"/>
+</svg>
+"##
+}
+
+fn default_project_readme() -> &'static str {
+    r"# Hawk2UI App
+
+Generated project scaffold.
+
+Commands:
+
+- `hawk2ui validate`
+- `hawk2ui build-release`
+- `hawk2ui run-desktop`
+- `hawk2ui package-plugin`
+
+The starter manifest includes a desktop target, a CLAP plugin target, TypeScript entrypoints,
+CSS, an SVG asset, plugin parameters, and an initial preset.
+"
 }
 
 #[cfg(test)]
