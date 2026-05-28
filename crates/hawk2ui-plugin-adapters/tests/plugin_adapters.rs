@@ -9,6 +9,7 @@ use hawk2ui_plugin_adapters::{
     PackageAdapterSet, PackageFormat, PackagePlan, PackageRequest, VerificationReport,
     VerificationStatus,
 };
+use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeViewId};
 use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
@@ -231,7 +232,30 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
     let sealed_artifact = SealedArtifact::from_manifest(
         ArtifactSchemaVersion::new(1, 0),
         &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
-    );
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 1024.0, "height": 640.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 1024.0,
+            "height": 640.0,
+            "visual": { "fill": [8, 10, 14, 255] },
+            "children": [
+                {
+                    "id": "runtime-title",
+                    "width": 320.0,
+                    "height": 48.0,
+                    "visual": {
+                        "text": {
+                            "value": "Runtime Editor",
+                            "font_size": 24.0,
+                            "color": [240, 245, 255, 255]
+                        }
+                    }
+                }
+            ]
+        }
+    }));
     let runtime_artifact =
         serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
     let output_root = std::env::temp_dir().join(format!(
@@ -341,6 +365,23 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
     assert_eq!(host_config.editor_config().metrics.logical_width, 1024.0);
     assert_eq!(host_config.editor_config().metrics.logical_height, 640.0);
     assert_eq!(host_config.editor_config().metrics.scale_factor, 1.25);
+    let frame = editor_session
+        .runtime_scene_frame()
+        .expect("runtime scene frame builds from sealed artifact payload");
+    assert_eq!(
+        frame
+            .geometry_for(&RuntimeViewId::new("runtime-root"))
+            .expect("root geometry exists")
+            .width,
+        1024.0
+    );
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Text { id, text, .. }
+                if id.as_str() == "runtime-title" && text == "Runtime Editor"
+        )
+    }));
 
     let invalid_output_root = std::env::temp_dir().join(format!(
         "hawk2ui-plugin-invalid-runtime-artifact-{}",

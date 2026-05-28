@@ -1482,6 +1482,9 @@ Status:
   - Verified CLAP runtime editor sessions can now build a Baseview handoff record from a CLAP GUI
     parent handle, producing the validated native parent handle plus the format-neutral
     `PluginEditorConfig` consumed by the Baseview adapter.
+  - Sealed artifacts now carry an optional compiled runtime scene payload, and verified CLAP runtime
+    editor sessions can decode that payload into a real `RuntimeSceneFrame`; missing or malformed
+    runtime scene payloads fail explicitly instead of rendering a synthetic placeholder.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:

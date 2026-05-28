@@ -329,6 +329,8 @@ pub struct SealedArtifact {
     pub build_metadata: BuildMetadata,
     /// Target metadata.
     pub target_metadata: Vec<TargetArtifactMetadata>,
+    /// Optional compiled runtime scene payload for native host/plugin rendering.
+    pub runtime_scene: Option<serde_json::Value>,
 }
 
 impl SealedArtifact {
@@ -360,6 +362,7 @@ impl SealedArtifact {
                     name: target.name.clone(),
                 })
                 .collect(),
+            runtime_scene: None,
         };
         artifact.hashes.content = artifact.content_hash();
         artifact
@@ -401,6 +404,14 @@ impl SealedArtifact {
     #[must_use]
     pub fn with_signature(mut self, signature: ArtifactSignature) -> Self {
         self.signature = signature;
+        self.hashes.content = self.content_hash();
+        self
+    }
+
+    /// Adds a compiled runtime scene payload and refreshes the content hash.
+    #[must_use]
+    pub fn with_runtime_scene_payload(mut self, runtime_scene: serde_json::Value) -> Self {
+        self.runtime_scene = Some(runtime_scene);
         self.hashes.content = self.content_hash();
         self
     }
@@ -658,6 +669,11 @@ impl SealedArtifact {
             payload.push_str(&asset.artifact_path);
             payload.push(':');
             payload.push_str(&asset.source_hash.0);
+            payload.push(';');
+        }
+        if let Some(runtime_scene) = &self.runtime_scene {
+            payload.push_str("runtime-scene=");
+            payload.push_str(&ArtifactHash::from_bytes(runtime_scene.to_string().as_bytes()).0);
             payload.push(';');
         }
         payload.push_str("signature=");

@@ -15,6 +15,7 @@ use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRecord, ParameterValue, PluginEditor,
     PluginEditorSize,
 };
+use hawk2ui_runtime::{RuntimeSceneFrame, RuntimeScenePayload};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -575,6 +576,29 @@ impl ClapRuntimeEditorSession {
             editor_config,
             host_parent,
         })
+    }
+
+    /// Builds the runtime scene frame carried by the verified sealed artifact payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageMaterializationError`] when the sealed artifact does not carry a runtime
+    /// scene payload or when the payload cannot be converted into a renderable runtime scene.
+    pub fn runtime_scene_frame(&self) -> Result<RuntimeSceneFrame, PackageMaterializationError> {
+        let runtime_scene = self.sealed_artifact.runtime_scene.as_ref().ok_or_else(|| {
+            materialization_error(
+                "package.clap-runtime-editor.runtime-scene-missing",
+                "CLAP runtime editor sealed artifact does not contain a runtime scene payload",
+            )
+        })?;
+        RuntimeScenePayload::from_json(runtime_scene)
+            .and_then(|payload| payload.build_frame())
+            .map_err(|error| {
+                materialization_error(
+                    format!("package.clap-runtime-editor.{}", error.rule()),
+                    error.message(),
+                )
+            })
     }
 }
 

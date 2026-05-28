@@ -6,6 +6,7 @@ pub mod events;
 pub mod lifecycle;
 pub mod persistence;
 pub mod safety;
+pub mod scene_payload;
 pub mod scheduler;
 pub mod script;
 pub mod view;
@@ -25,6 +26,10 @@ pub use persistence::{
 };
 pub use safety::{
     RuntimeExecutionContext, RuntimeGuardDenial, RuntimeGuardOperation, RuntimeSafetyGuard,
+};
+pub use scene_payload::{
+    RuntimeScenePayload, RuntimeScenePayloadError, RuntimeScenePayloadNode,
+    RuntimeScenePayloadText, RuntimeScenePayloadVisual, RuntimeSceneViewport,
 };
 pub use scheduler::{
     AnimationCadencePolicy, AnimationFrameScheduler, AnimationFrameTick, RuntimeScheduleBatch,

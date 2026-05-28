@@ -1777,6 +1777,7 @@ dependencies = [
  "hawk2ui-build",
  "hawk2ui-host",
  "hawk2ui-plugin",
+ "hawk2ui-runtime",
  "jsonschema",
  "schemars",
  "serde",
@@ -1814,6 +1815,7 @@ dependencies = [
  "hawk2ui-render",
  "hawk2ui-render-skia",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
