@@ -21,7 +21,9 @@ pub use runtime::{
     WinitDesktopRuntime, WinitDesktopRuntimeConfig, WinitDesktopRuntimeSummary,
     WinitDesktopRuntimeSurfaceState,
 };
-pub use software_frame::{SoftwareFrame, SoftwareFrameRenderer, physical_frame_size};
+pub use software_frame::{
+    DesktopErrorOverlay, SoftwareFrame, SoftwareFrameRenderer, physical_frame_size,
+};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-host-winit";

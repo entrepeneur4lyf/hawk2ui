@@ -1334,6 +1334,8 @@ Evidence:
   typed `WinitDesktopReload` records.
 - Winit dev runtime applies patchable reloads, preserves compatible state, tracks native reload
   counts, and keeps build/runtime diagnostics visible instead of silently restarting the process.
+- Winit software frame rendering now supports a dev error overlay over default and runtime scene
+  frames, and the CLI dev loop emits a host-ready overlay record before failed validation reloads.
 
 Required remediation:
 
@@ -1346,16 +1348,16 @@ Acceptance:
 Status:
 
 - Remediated for the native desktop dev-loop boundary: file watching, incremental rebuild
-  classification, source diagnostics, state-preserving Winit reloads, and clean close summary are
-  implemented and covered by CLI/Winit tests.
-- Remaining work is an in-window visual error overlay and equivalent plugin-host dev reload once the
-  real DAW-owned editor integration smoke lands.
+  classification, source diagnostics, state-preserving Winit reloads, in-window error overlays, and
+  clean close summary are implemented and covered by CLI/Winit tests.
+- Plugin-host dev reload belongs to the CLAP editor host integration path under `REM-PLUGIN-002`;
+  it is no longer blocking this desktop dev-loop item.
 
 Review check:
 
 - As the delivering engineer, I am satisfied with this desktop hot-reload boundary for production
-  stability: the implementation uses real filesystem watching and real native surface reloads, and
-  the remaining work is explicitly scoped to overlay UX and plugin-host integration.
+  stability: the implementation uses real filesystem watching, real native surface reloads, and a
+  rendered in-window diagnostic overlay instead of hiding rebuild failures in terminal output only.
 
 ## Host And Windowing Remediation
 

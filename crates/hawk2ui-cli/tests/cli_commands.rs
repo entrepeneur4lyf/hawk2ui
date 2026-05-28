@@ -561,6 +561,7 @@ fn dev_loop_watches_rebuilds_validates_reloads_and_preserves_state() {
         ]
     );
     assert!(report.visible_errors.is_empty());
+    assert!(report.error_overlay.is_none());
 }
 
 #[test]
@@ -582,6 +583,12 @@ fn dev_loop_reports_visible_errors_before_runtime_reload() {
         ]
     );
     assert_eq!(report.visible_errors[0].rule, "manifest.invalid");
+    let overlay = report
+        .error_overlay
+        .expect("validation failure should produce an in-window overlay record");
+    assert_eq!(overlay.rule(), "manifest.invalid");
+    assert_eq!(overlay.message(), "validation failed");
+    assert_eq!(overlay.to_desktop_overlay().rule(), "manifest.invalid");
 }
 
 #[test]

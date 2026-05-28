@@ -2,8 +2,9 @@ use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits};
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
-    DesktopRuntimeEvent, SoftwareFrameRenderer, WinitDesktopReload, WinitDesktopReloadKind,
-    WinitDesktopRuntimeConfig, WinitDesktopRuntimeSurfaceState, WinitHostError,
+    DesktopErrorOverlay, DesktopRuntimeEvent, SoftwareFrameRenderer, WinitDesktopReload,
+    WinitDesktopReloadKind, WinitDesktopRuntimeConfig, WinitDesktopRuntimeSurfaceState,
+    WinitHostError,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_render::{Color, CustomSurfaceCategory, CustomSurfaceDataSnapshot};
@@ -29,6 +30,50 @@ fn software_frame_renders_visible_pixels() {
             .pixels()
             .iter()
             .any(|pixel| *pixel != pixels.pixels()[0])
+    );
+}
+
+#[test]
+fn software_frame_renders_development_error_overlay_over_default_scene() {
+    let overlay =
+        DesktopErrorOverlay::new("manifest.invalid", "manifest.hawk.toml failed validation")
+            .with_source_path("manifest.hawk.toml");
+    let renderer = SoftwareFrameRenderer::new().with_error_overlay(overlay.clone());
+
+    let pixels = renderer
+        .render_frame("Hawk2UI", 320, 220, 1.0)
+        .expect("software frame with error overlay should render");
+
+    assert_eq!(renderer.error_overlay(), Some(&overlay));
+    assert!(
+        has_error_overlay_pixel(pixels.pixels()),
+        "error overlay must draw visible warning pixels inside the default frame"
+    );
+}
+
+#[test]
+fn software_frame_renders_development_error_overlay_over_runtime_scene() {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(320.0, 220.0)),
+        RuntimeVisual::Fill(Color::rgba(8, 10, 14, 255)),
+    ));
+    let frame = RuntimeSceneBridge::new(Viewport::new(320.0, 220.0))
+        .build(&tree)
+        .expect("runtime scene frame should build");
+
+    let pixels = SoftwareFrameRenderer::new()
+        .with_error_overlay(
+            DesktopErrorOverlay::new("style.property.unknown", "unsupported style property")
+                .with_source_path("styles/main.hawk.css"),
+        )
+        .render_scene_frame(&frame, 320, 220, 1.0)
+        .expect("runtime scene with error overlay should render");
+
+    assert!(
+        has_error_overlay_pixel(pixels.pixels()),
+        "error overlay must draw visible warning pixels over runtime scene frames"
     );
 }
 
@@ -261,6 +306,15 @@ fn png_1x1() -> Vec<u8> {
         .write_image(&[255, 0, 0, 255], 1, 1, ColorType::Rgba8.into())
         .expect("test PNG encodes");
     bytes
+}
+
+fn has_error_overlay_pixel(pixels: &[u32]) -> bool {
+    pixels.iter().any(|pixel| {
+        let red = (pixel >> 16) & 0xff;
+        let green = (pixel >> 8) & 0xff;
+        let blue = pixel & 0xff;
+        red >= 220 && green <= 120 && blue <= 120
+    })
 }
 
 #[test]

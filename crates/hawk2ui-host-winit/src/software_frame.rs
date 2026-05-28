@@ -2,7 +2,7 @@
 
 use hawk2ui_assets::{AssetKind, AssetRecord};
 use hawk2ui_host::SurfaceMetrics;
-use hawk2ui_render::{BackendError, Color, RendererBackend, Transform};
+use hawk2ui_render::{BackendError, Color, Geometry, RendererBackend, Transform};
 use hawk2ui_render_skia::{
     RuntimeSceneAssetFallback, RuntimeSceneReplayOptions, SkiaRendererBackend, SkiaSurfaceConfig,
 };
@@ -73,13 +73,62 @@ impl SoftwareFrame {
 #[derive(Clone, Debug, Default)]
 pub struct SoftwareFrameRenderer {
     assets: Vec<AssetRecord>,
+    error_overlay: Option<DesktopErrorOverlay>,
+}
+
+/// Visual diagnostic overlay rendered inside a development desktop surface.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesktopErrorOverlay {
+    rule: String,
+    message: String,
+    source_path: Option<String>,
+}
+
+impl DesktopErrorOverlay {
+    /// Creates an error overlay from a stable diagnostic rule and user-facing message.
+    #[must_use]
+    pub fn new(rule: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            rule: rule.into(),
+            message: message.into(),
+            source_path: None,
+        }
+    }
+
+    /// Adds a source path to display in the overlay.
+    #[must_use]
+    pub fn with_source_path(mut self, source_path: impl Into<String>) -> Self {
+        self.source_path = Some(source_path.into());
+        self
+    }
+
+    /// Returns the diagnostic rule.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        &self.rule
+    }
+
+    /// Returns the diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns the optional source path.
+    #[must_use]
+    pub fn source_path(&self) -> Option<&str> {
+        self.source_path.as_deref()
+    }
 }
 
 impl SoftwareFrameRenderer {
     /// Creates a software frame renderer without pre-registered runtime assets.
     #[must_use]
     pub const fn new() -> Self {
-        Self { assets: Vec::new() }
+        Self {
+            assets: Vec::new(),
+            error_overlay: None,
+        }
     }
 
     /// Adds compiled runtime assets that scene image/vector commands may draw.
@@ -89,10 +138,23 @@ impl SoftwareFrameRenderer {
         self
     }
 
+    /// Adds a development error overlay to composite over rendered frames.
+    #[must_use]
+    pub fn with_error_overlay(mut self, overlay: DesktopErrorOverlay) -> Self {
+        self.error_overlay = Some(overlay);
+        self
+    }
+
     /// Returns the compiled runtime assets registered with this renderer.
     #[must_use]
     pub fn assets(&self) -> &[AssetRecord] {
         &self.assets
+    }
+
+    /// Returns the configured development error overlay.
+    #[must_use]
+    pub fn error_overlay(&self) -> Option<&DesktopErrorOverlay> {
+        self.error_overlay.as_ref()
     }
 
     /// Renders a full-surface frame through Skia.
@@ -130,6 +192,9 @@ impl SoftwareFrameRenderer {
             })?;
 
         draw_default_scene(surface.canvas(), title, width, height, scale_factor);
+        if let Some(overlay) = &self.error_overlay {
+            draw_error_overlay_canvas(surface.canvas(), width, height, scale_factor, overlay);
+        }
 
         surface_to_frame(surface, width, height, skia_width, skia_height)
     }
@@ -174,6 +239,10 @@ impl SoftwareFrameRenderer {
                     .with_missing_asset_fallback(RuntimeSceneAssetFallback::Placeholder),
             )
             .map_err(|error| map_backend_error(&error))?;
+        if let Some(overlay) = &self.error_overlay {
+            draw_error_overlay_backend(&mut backend, width, height, scale, overlay)
+                .map_err(|error| map_backend_error(&error))?;
+        }
 
         backend
             .end_frame(SOFTWARE_FRAME_SURFACE_ID)
@@ -260,6 +329,140 @@ fn draw_default_scene(
         &secondary_font,
         &secondary,
     );
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn draw_error_overlay_canvas(
+    canvas: &skia_safe::Canvas,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+    overlay: &DesktopErrorOverlay,
+) {
+    let scale = scale_factor.max(1.0) as f32;
+    let margin = 18.0 * scale;
+    let overlay_width = ((width as f32) - margin * 2.0).min(560.0 * scale).max(1.0);
+    let overlay_height = 128.0 * scale;
+    let x = margin;
+    let y = ((height as f32) - overlay_height - margin).max(margin);
+
+    let mut shadow = Paint::default();
+    shadow.set_style(PaintStyle::Fill);
+    shadow.set_anti_alias(true);
+    shadow.set_color(SkiaColor::from_argb(170, 0, 0, 0));
+    canvas.draw_rect(
+        Rect::from_xywh(
+            x + 6.0 * scale,
+            y + 8.0 * scale,
+            overlay_width,
+            overlay_height,
+        ),
+        &shadow,
+    );
+
+    let mut panel = Paint::default();
+    panel.set_style(PaintStyle::Fill);
+    panel.set_anti_alias(true);
+    panel.set_color(SkiaColor::from_argb(245, 24, 18, 26));
+    canvas.draw_rect(Rect::from_xywh(x, y, overlay_width, overlay_height), &panel);
+
+    let mut accent = Paint::default();
+    accent.set_style(PaintStyle::Fill);
+    accent.set_anti_alias(true);
+    accent.set_color(SkiaColor::from_argb(255, 248, 81, 73));
+    canvas.draw_rect(Rect::from_xywh(x, y, 6.0 * scale, overlay_height), &accent);
+
+    let mut heading = Paint::default();
+    heading.set_style(PaintStyle::Fill);
+    heading.set_anti_alias(true);
+    heading.set_color(SkiaColor::from_argb(255, 255, 245, 245));
+    let mut heading_font = Font::default();
+    heading_font.set_size(18.0 * scale);
+    canvas.draw_str(
+        format!("Build error: {}", overlay.rule()),
+        (x + 22.0 * scale, y + 34.0 * scale),
+        &heading_font,
+        &heading,
+    );
+
+    let mut body = Paint::default();
+    body.set_style(PaintStyle::Fill);
+    body.set_anti_alias(true);
+    body.set_color(SkiaColor::from_argb(255, 253, 186, 186));
+    let mut body_font = Font::default();
+    body_font.set_size(14.0 * scale);
+    canvas.draw_str(
+        overlay.message(),
+        (x + 22.0 * scale, y + 66.0 * scale),
+        &body_font,
+        &body,
+    );
+    if let Some(source_path) = overlay.source_path() {
+        canvas.draw_str(
+            source_path,
+            (x + 22.0 * scale, y + 96.0 * scale),
+            &body_font,
+            &body,
+        );
+    }
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn draw_error_overlay_backend(
+    backend: &mut SkiaRendererBackend,
+    width: u32,
+    height: u32,
+    scale: f32,
+    overlay: &DesktopErrorOverlay,
+) -> Result<(), BackendError> {
+    let logical_width = width as f32 / scale;
+    let logical_height = height as f32 / scale;
+    let overlay_width = (logical_width - 36.0).clamp(1.0, 560.0);
+    let overlay_height = 128.0;
+    let x = 18.0;
+    let y = (logical_height - overlay_height - 18.0).max(18.0);
+
+    backend.draw_shadow_rect(
+        Geometry::new(x, y, overlay_width, overlay_height),
+        8.0,
+        10.0,
+        12.0,
+        Color::rgba(0, 0, 0, 170),
+    )?;
+    backend.draw_rounded_rect(
+        Geometry::new(x, y, overlay_width, overlay_height),
+        16.0,
+        Color::rgba(24, 18, 26, 245),
+    )?;
+    backend.draw_rounded_rect(
+        Geometry::new(x, y, 8.0, overlay_height),
+        4.0,
+        Color::rgba(248, 81, 73, 255),
+    )?;
+    backend.draw_text_at(
+        &format!("Build error: {}", overlay.rule()),
+        18.0,
+        x + 24.0,
+        y + 36.0,
+        Color::rgba(255, 245, 245, 255),
+    )?;
+    backend.draw_text_at(
+        overlay.message(),
+        14.0,
+        x + 24.0,
+        y + 68.0,
+        Color::rgba(253, 186, 186, 255),
+    )?;
+    if let Some(source_path) = overlay.source_path() {
+        backend.draw_text_at(
+            source_path,
+            14.0,
+            x + 24.0,
+            y + 98.0,
+            Color::rgba(253, 186, 186, 255),
+        )?;
+    }
+    Ok(())
 }
 
 fn surface_to_frame(

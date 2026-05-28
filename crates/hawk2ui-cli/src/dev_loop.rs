@@ -12,6 +12,7 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 
 use crate::CliDiagnostic;
+use hawk2ui_host_winit::DesktopErrorOverlay;
 
 /// Development loop event.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -402,6 +403,55 @@ pub struct RecordingReloadTarget {
     reload_count: usize,
 }
 
+/// Host-ready development error overlay generated before a failed reload reaches the surface.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DevErrorOverlay {
+    rule: String,
+    message: String,
+    source_path: Option<String>,
+}
+
+impl DevErrorOverlay {
+    /// Creates an error overlay from a CLI diagnostic.
+    #[must_use]
+    pub fn from_diagnostic(diagnostic: &CliDiagnostic) -> Self {
+        Self {
+            rule: diagnostic.rule.clone(),
+            message: diagnostic.message.clone(),
+            source_path: diagnostic.file_path.clone(),
+        }
+    }
+
+    /// Returns the stable diagnostic rule.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        &self.rule
+    }
+
+    /// Returns the visible diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns the optional source path.
+    #[must_use]
+    pub fn source_path(&self) -> Option<&str> {
+        self.source_path.as_deref()
+    }
+
+    /// Converts the CLI overlay record into the desktop host renderer overlay.
+    #[must_use]
+    pub fn to_desktop_overlay(&self) -> DesktopErrorOverlay {
+        let overlay = DesktopErrorOverlay::new(self.rule.clone(), self.message.clone());
+        if let Some(source_path) = &self.source_path {
+            overlay.with_source_path(source_path.clone())
+        } else {
+            overlay
+        }
+    }
+}
+
 fn hash_bytes(bytes: &[u8]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
@@ -485,6 +535,8 @@ pub struct DevLoopReport {
     pub events: Vec<DevLoopEvent>,
     /// Visible validation errors.
     pub visible_errors: Vec<CliDiagnostic>,
+    /// Host-ready in-window error overlay shown when validation fails before reload.
+    pub error_overlay: Option<DevErrorOverlay>,
 }
 
 /// Recording development loop.
@@ -542,9 +594,11 @@ impl DevLoop {
 
         if let Some(rule) = &self.validation_failure_rule {
             events.push(DevLoopEvent::ValidationFailed);
+            let diagnostic = CliDiagnostic::error(rule.clone(), "validation failed");
             return Ok(DevLoopReport {
                 events,
-                visible_errors: vec![CliDiagnostic::error(rule.clone(), "validation failed")],
+                error_overlay: Some(DevErrorOverlay::from_diagnostic(&diagnostic)),
+                visible_errors: vec![diagnostic],
             });
         }
 
@@ -556,6 +610,7 @@ impl DevLoop {
         Ok(DevLoopReport {
             events,
             visible_errors: Vec::new(),
+            error_overlay: None,
         })
     }
 }
