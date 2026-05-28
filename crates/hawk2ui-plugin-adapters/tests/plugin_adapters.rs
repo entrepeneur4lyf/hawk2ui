@@ -317,21 +317,30 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
         .join("Resources")
         .join("generated-clap")
         .join("Cargo.toml");
-    let generated_clap_source = root
+    let generated_clap_source_path = root
         .join("Contents")
         .join("Resources")
         .join("generated-clap")
         .join("src")
         .join("lib.rs");
     assert!(generated_clap_cargo.is_file());
-    assert!(generated_clap_source.is_file());
+    assert!(generated_clap_source_path.is_file());
     let generated_clap_source =
-        std::fs::read_to_string(&generated_clap_source).expect("generated CLAP source reads");
+        std::fs::read_to_string(&generated_clap_source_path).expect("generated CLAP source reads");
     assert!(generated_clap_source.contains("hawk2ui_editor_descriptor"));
     assert!(generated_clap_source.contains("Contents/Resources/hawk2ui-runtime-artifact.json"));
     assert!(generated_clap_source.contains("host_adapter=baseview"));
     let editor_session =
         ClapRuntimeEditorSession::load_from_package(root).expect("editor session loads");
+    let clap_plugin_path = root.join("Runtime.clap");
+    let editor_session_from_clap_path =
+        ClapRuntimeEditorSession::load_from_clap_plugin_path(&clap_plugin_path)
+            .expect("editor session loads from CLAP plugin path");
+    assert_eq!(editor_session_from_clap_path, editor_session);
+    let editor_session_from_generated_source =
+        ClapRuntimeEditorSession::load_from_clap_plugin_path(&generated_clap_source_path)
+            .expect("editor session loads from generated binary-adjacent package path");
+    assert_eq!(editor_session_from_generated_source, editor_session);
     assert_eq!(editor_session.descriptor().host_adapter(), "baseview");
     assert_eq!(editor_session.descriptor().renderer(), "skia");
     assert_eq!(
@@ -407,6 +416,13 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
     assert_eq!(
         schema_error.diagnostic().rule(),
         "package.clap-runtime-editor.runtime-artifact-schema-invalid"
+    );
+    let unresolved_error =
+        ClapRuntimeEditorSession::load_from_clap_plugin_path(std::env::temp_dir())
+            .expect_err("unrelated path cannot resolve a CLAP runtime editor package");
+    assert_eq!(
+        unresolved_error.diagnostic().rule(),
+        "package.clap-runtime-editor.package-root-unresolved"
     );
 
     let hashes =

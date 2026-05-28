@@ -517,6 +517,34 @@ impl ClapRuntimeEditorSession {
         })
     }
 
+    /// Loads a runtime-backed editor session by resolving the package root from a CLAP plugin path.
+    ///
+    /// The supplied path may be the materialized package root, the generated `.clap` entry file, or a
+    /// file nested under the package such as a generated dynamic library path. The resolver walks
+    /// ancestors until it finds the hashed `Hawk2UI` runtime editor descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageMaterializationError`] when no runtime-backed package root can be found or
+    /// when the resolved package fails normal verified session loading.
+    pub fn load_from_clap_plugin_path(
+        plugin_path: impl AsRef<Path>,
+    ) -> Result<Self, PackageMaterializationError> {
+        let plugin_path = plugin_path.as_ref();
+        for candidate in plugin_path.ancestors() {
+            if is_runtime_editor_package_root(candidate) {
+                return Self::load_from_package(candidate);
+            }
+        }
+        Err(materialization_error(
+            "package.clap-runtime-editor.package-root-unresolved",
+            format!(
+                "failed to resolve Hawk2UI CLAP runtime editor package root from {}",
+                plugin_path.display()
+            ),
+        ))
+    }
+
     /// Returns the materialized package root.
     #[must_use]
     pub fn package_root(&self) -> &str {
@@ -600,6 +628,12 @@ impl ClapRuntimeEditorSession {
                 )
             })
     }
+}
+
+fn is_runtime_editor_package_root(candidate: &Path) -> bool {
+    let resources_path = candidate.join("Contents").join("Resources");
+    resources_path.join("hawk2ui-editor.toml").is_file()
+        && resources_path.join("hawk2ui-hashes.toml").is_file()
 }
 
 fn sealed_artifact_error_message(error: &hawk2ui_build::SealedArtifactError) -> String {

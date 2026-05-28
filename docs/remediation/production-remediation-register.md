@@ -1497,6 +1497,9 @@ Status:
   - `hawk2ui-host-baseview` now provides a live `BaseviewClapRuntimeEditor` bridge that owns a verified
     `ClapRuntimeEditorSession`, attaches the session to a validated CLAP parent through Baseview,
     presents the sealed runtime scene through Skia, and delegates host resize/show/hide/destroy.
+  - Verified CLAP runtime editor sessions can now resolve the package root from a CLAP plugin path or a
+    nested generated-library-adjacent path before performing the same hash and descriptor validation,
+    giving plugin hosts a concrete entry point from the path they receive at load time.
 - Remaining work under this item is to connect the generated CLAP GUI callback state machine to the live
   host-side `BaseviewClapRuntimeEditor` bridge at the plugin-host embedding boundary.
 
