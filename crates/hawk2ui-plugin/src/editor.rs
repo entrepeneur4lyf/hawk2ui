@@ -1,9 +1,10 @@
 //! Plugin editor embedding records.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Plugin editor kind.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum EditorKind {
     /// Generated editor from plugin parameter metadata.
     Generated,
@@ -12,7 +13,7 @@ pub enum EditorKind {
 }
 
 /// Plugin editor size and scale.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 pub struct PluginEditorSize {
     /// Logical width in host points.
     pub logical_width: f64,
@@ -71,7 +72,7 @@ impl EditorParent {
 }
 
 /// Plugin editor record.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 pub struct PluginEditor {
     /// Stable editor identifier.
     pub id: String,

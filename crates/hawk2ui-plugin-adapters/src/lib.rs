@@ -13,6 +13,7 @@ use hawk2ui_build::SealedArtifact;
 use hawk2ui_host::HostPlatformHandle;
 use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRecord, ParameterValue, PluginEditor,
+    PluginEditorSize,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -257,7 +258,7 @@ impl ClapRuntimeEditorDescriptor {
 }
 
 /// Runtime editor descriptor loaded from a materialized CLAP package.
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClapRuntimeEditorPackageDescriptor {
     host_adapter: String,
@@ -266,6 +267,10 @@ pub struct ClapRuntimeEditorPackageDescriptor {
     format: PackageFormat,
     plugin_id: String,
     parameter_count: usize,
+    editor_id: String,
+    logical_width: f64,
+    logical_height: f64,
+    scale_factor: f64,
 }
 
 impl ClapRuntimeEditorPackageDescriptor {
@@ -305,6 +310,30 @@ impl ClapRuntimeEditorPackageDescriptor {
         self.parameter_count
     }
 
+    /// Returns the stable editor ID that owns the attached surface.
+    #[must_use]
+    pub fn editor_id(&self) -> &str {
+        &self.editor_id
+    }
+
+    /// Returns the logical editor width requested by the package.
+    #[must_use]
+    pub const fn logical_width(&self) -> f64 {
+        self.logical_width
+    }
+
+    /// Returns the logical editor height requested by the package.
+    #[must_use]
+    pub const fn logical_height(&self) -> f64 {
+        self.logical_height
+    }
+
+    /// Returns the initial editor device scale factor.
+    #[must_use]
+    pub const fn scale_factor(&self) -> f64 {
+        self.scale_factor
+    }
+
     fn parse(source: &str) -> Result<Self, PackageMaterializationError> {
         let table = source.parse::<toml::Table>().map_err(|error| {
             materialization_error(
@@ -318,6 +347,10 @@ impl ClapRuntimeEditorPackageDescriptor {
         let format = required_toml_string(&table, "format")?;
         let plugin_id = required_toml_string(&table, "plugin_id")?;
         let parameter_count = required_toml_usize(&table, "parameter_count")?;
+        let editor_id = required_toml_string(&table, "editor_id")?;
+        let logical_width = required_toml_f64(&table, "logical_width")?;
+        let logical_height = required_toml_f64(&table, "logical_height")?;
+        let scale_factor = required_toml_f64(&table, "scale_factor")?;
         let format = PackageFormat::from_manifest_key(&format).ok_or_else(|| {
             materialization_error(
                 "package.clap-runtime-editor.invalid-format",
@@ -354,6 +387,19 @@ impl ClapRuntimeEditorPackageDescriptor {
                 "CLAP runtime editor descriptor requires a safe relative runtime artifact path",
             ));
         }
+        if editor_id.trim().is_empty()
+            || !logical_width.is_finite()
+            || !logical_height.is_finite()
+            || !scale_factor.is_finite()
+            || logical_width <= 0.0
+            || logical_height <= 0.0
+            || scale_factor <= 0.0
+        {
+            return Err(materialization_error(
+                "package.clap-runtime-editor.invalid-editor",
+                "CLAP runtime editor descriptor requires a non-empty editor ID and positive finite metrics",
+            ));
+        }
         Ok(Self {
             host_adapter,
             renderer,
@@ -361,6 +407,10 @@ impl ClapRuntimeEditorPackageDescriptor {
             format,
             plugin_id,
             parameter_count,
+            editor_id,
+            logical_width,
+            logical_height,
+            scale_factor,
         })
     }
 }
@@ -1566,6 +1616,7 @@ pub struct PackageRequest {
     parameters: ParameterModel,
     formats: Vec<PackageFormat>,
     runtime_artifact: Option<serde_json::Value>,
+    editor: Option<PluginEditor>,
 }
 
 impl PackageRequest {
@@ -1582,7 +1633,15 @@ impl PackageRequest {
             parameters,
             formats: Vec::new(),
             runtime_artifact: None,
+            editor: None,
         }
+    }
+
+    /// Configures the plugin editor surface metadata used by runtime-backed package outputs.
+    #[must_use]
+    pub fn with_editor(mut self, editor: PluginEditor) -> Self {
+        self.editor = Some(editor);
+        self
     }
 
     /// Attaches a sealed `Hawk2UI` runtime artifact payload to every materialized package target.
@@ -1611,6 +1670,7 @@ pub struct PackageTargetPlan {
     output_path: String,
     parameter_count: usize,
     runtime_artifact: Option<serde_json::Value>,
+    editor: PluginEditor,
     #[serde(skip)]
     #[schemars(skip)]
     clap_parameter_source: String,
@@ -1782,13 +1842,17 @@ impl PackageTargetPlan {
 
     fn editor_descriptor(&self) -> String {
         format!(
-            "host_adapter = {}\nrenderer = {}\nruntime_artifact = {}\nformat = {}\nplugin_id = {}\nparameter_count = {}\n",
+            "host_adapter = {}\nrenderer = {}\nruntime_artifact = {}\nformat = {}\nplugin_id = {}\nparameter_count = {}\neditor_id = {}\nlogical_width = {}\nlogical_height = {}\nscale_factor = {}\n",
             quoted_metadata_string("baseview"),
             quoted_metadata_string("skia"),
             quoted_metadata_string("Contents/Resources/hawk2ui-runtime-artifact.json"),
             quoted_metadata_string(self.format.manifest_key()),
             quoted_metadata_string(&self.metadata.id),
-            self.parameter_count
+            self.parameter_count,
+            quoted_metadata_string(&self.editor.id),
+            self.editor.initial_size.logical_width,
+            self.editor.initial_size.logical_height,
+            self.editor.initial_size.scale_factor
         )
     }
 
@@ -1968,6 +2032,7 @@ impl PackageTargetPlan {
         resources_path: &Path,
     ) -> Result<ClapCdylibScaffoldOutput, PackageMaterializationError> {
         let mut scaffold = ClapCdylibScaffold::from_metadata(&self.metadata)
+            .with_editor(&self.editor)
             .with_parameter_sources(
                 self.clap_parameter_source.clone(),
                 self.clap_parameter_value_source.clone(),
@@ -2159,6 +2224,7 @@ impl PackageAdapterSet {
                 output_path: output_path(&request.output, *format),
                 parameter_count: request.parameters.parameters.len(),
                 runtime_artifact: request.runtime_artifact.clone(),
+                editor: request.editor.clone().unwrap_or_else(default_plugin_editor),
                 clap_parameter_source: clap_parameter_source(&request.parameters),
                 clap_parameter_value_source: clap_parameter_value_source(&request.parameters),
             })
@@ -2708,6 +2774,32 @@ fn required_toml_usize(
     })
 }
 
+fn required_toml_f64(
+    table: &toml::Table,
+    key: &'static str,
+) -> Result<f64, PackageMaterializationError> {
+    let value = table.get(key).ok_or_else(|| {
+        materialization_error(
+            "package.clap-runtime-editor.descriptor-invalid",
+            format!("CLAP runtime editor descriptor requires numeric field `{key}`"),
+        )
+    })?;
+    value
+        .as_float()
+        .or_else(|| {
+            value
+                .as_integer()
+                .and_then(|value| i32::try_from(value).ok())
+                .map(f64::from)
+        })
+        .ok_or_else(|| {
+            materialization_error(
+                "package.clap-runtime-editor.descriptor-invalid",
+                format!("CLAP runtime editor descriptor field `{key}` must be numeric"),
+            )
+        })
+}
+
 fn create_package_dir(path: &Path) -> Result<(), PackageMaterializationError> {
     fs::create_dir_all(path).map_err(|error| {
         materialization_error(
@@ -2925,6 +3017,10 @@ fn output_path(output: &BundleOutput, format: PackageFormat) -> String {
         output.bundle_name,
         format.extension()
     )
+}
+
+fn default_plugin_editor() -> PluginEditor {
+    PluginEditor::custom("main-editor", PluginEditorSize::new(800.0, 600.0, 1.0))
 }
 
 fn is_reverse_dns_id(value: &str) -> bool {

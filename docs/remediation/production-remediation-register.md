@@ -1476,6 +1476,9 @@ Status:
     descriptor contract, resolves the safe package-relative runtime artifact path, parses and schema
     validates the sealed runtime artifact JSON into a typed `SealedArtifact`, and fails closed when
     package contents no longer match hash coverage or the runtime payload is malformed.
+  - Runtime-backed CLAP package requests now carry `PluginEditor` metadata into materialized editor
+    descriptors and generated CLAP scaffolds, so the verified session has stable editor ID, logical
+    size, and DPI scale for the Baseview surface instead of relying on hard-coded defaults.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:

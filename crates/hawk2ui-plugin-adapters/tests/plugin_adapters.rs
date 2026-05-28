@@ -246,6 +246,10 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
         BundleOutput::new(output_root.to_string_lossy(), "Runtime"),
         ParameterModel::new([]),
     )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(1024.0, 640.0, 1.25),
+    ))
     .with_runtime_artifact(runtime_artifact.clone())
     .with_format(PackageFormat::Clap);
 
@@ -316,6 +320,10 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
         "com.hawk2ui.runtime"
     );
     assert_eq!(editor_session.descriptor().parameter_count(), 0);
+    assert_eq!(editor_session.descriptor().editor_id(), "main-editor");
+    assert_eq!(editor_session.descriptor().logical_width(), 1024.0);
+    assert_eq!(editor_session.descriptor().logical_height(), 640.0);
+    assert_eq!(editor_session.descriptor().scale_factor(), 1.25);
     assert_eq!(editor_session.runtime_artifact(), &runtime_artifact);
     assert_eq!(editor_session.sealed_artifact(), &sealed_artifact);
 
