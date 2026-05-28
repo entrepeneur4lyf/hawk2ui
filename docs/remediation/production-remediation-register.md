@@ -1452,6 +1452,9 @@ Status:
   it through a stable `hawk2ui_editor_descriptor` dynamic-library export; the external generated
   host checker resolves the export and verifies the runtime artifact path, host adapter, and
   renderer metadata.
+- The generated CLAP editor descriptor is now backed by a typed `ClapRuntimeEditorDescriptor`
+  record with validation for safe relative runtime artifact paths, host adapter IDs, and renderer
+  IDs before it can be embedded into the dynamic library scaffold.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:

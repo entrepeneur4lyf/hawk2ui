@@ -181,6 +181,68 @@ impl ClapGuiParentHandle {
     }
 }
 
+/// Runtime editor descriptor embedded into generated CLAP GUI libraries.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClapRuntimeEditorDescriptor {
+    runtime_artifact: String,
+    host_adapter: String,
+    renderer: String,
+}
+
+impl ClapRuntimeEditorDescriptor {
+    /// Creates a validated runtime editor descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageDiagnostic`] when the runtime artifact path, host adapter, or renderer ID is
+    /// structurally invalid.
+    pub fn new(
+        runtime_artifact: impl Into<String>,
+        host_adapter: impl Into<String>,
+        renderer: impl Into<String>,
+    ) -> Result<Self, PackageDiagnostic> {
+        let runtime_artifact = runtime_artifact.into();
+        let host_adapter = host_adapter.into();
+        let renderer = renderer.into();
+        if runtime_artifact.trim().is_empty()
+            || !is_safe_relative_path(Path::new(&runtime_artifact))
+            || runtime_artifact.contains('\0')
+        {
+            return Err(PackageDiagnostic::new(
+                "package.clap-editor-descriptor.invalid-runtime-artifact",
+                "CLAP runtime editor descriptor requires a safe relative runtime artifact path",
+            ));
+        }
+        if !is_filesystem_segment(&host_adapter) {
+            return Err(PackageDiagnostic::new(
+                "package.clap-editor-descriptor.invalid-host-adapter",
+                "CLAP runtime editor descriptor requires a non-empty host adapter ID",
+            ));
+        }
+        if !is_filesystem_segment(&renderer) {
+            return Err(PackageDiagnostic::new(
+                "package.clap-editor-descriptor.invalid-renderer",
+                "CLAP runtime editor descriptor requires a non-empty renderer ID",
+            ));
+        }
+        Ok(Self {
+            runtime_artifact,
+            host_adapter,
+            renderer,
+        })
+    }
+
+    /// Serializes the descriptor payload exported by the generated CLAP library.
+    #[must_use]
+    pub fn to_export_payload(&self) -> String {
+        format!(
+            "runtime_artifact={}\nhost_adapter={}\nrenderer={}\n",
+            self.runtime_artifact, self.host_adapter, self.renderer
+        )
+    }
+}
+
 /// CLAP plugin entry metadata derived from the `clap-sys` ABI contract.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -291,7 +353,7 @@ pub struct ClapCdylibScaffold {
     parameter_source: String,
     editor_width: u32,
     editor_height: u32,
-    runtime_editor_descriptor: String,
+    runtime_editor_descriptor: Option<ClapRuntimeEditorDescriptor>,
 }
 
 impl ClapCdylibScaffold {
@@ -305,7 +367,7 @@ impl ClapCdylibScaffold {
             parameter_source: "&[]".into(),
             editor_width: 800,
             editor_height: 600,
-            runtime_editor_descriptor: String::new(),
+            runtime_editor_descriptor: None,
         }
     }
 
@@ -329,16 +391,9 @@ impl ClapCdylibScaffold {
     #[must_use]
     pub fn with_runtime_editor_descriptor(
         mut self,
-        runtime_artifact: impl Into<String>,
-        host_adapter: impl Into<String>,
-        renderer: impl Into<String>,
+        descriptor: ClapRuntimeEditorDescriptor,
     ) -> Self {
-        self.runtime_editor_descriptor = format!(
-            "runtime_artifact={}\nhost_adapter={}\nrenderer={}\n",
-            runtime_artifact.into(),
-            host_adapter.into(),
-            renderer.into()
-        );
+        self.runtime_editor_descriptor = Some(descriptor);
         self
     }
 
@@ -399,7 +454,13 @@ impl ClapCdylibScaffold {
             .replace("__EDITOR_HEIGHT__", &self.editor_height.to_string())
             .replace(
                 "__EDITOR_DESCRIPTOR_BYTES__",
-                &rust_byte_string(&self.runtime_editor_descriptor),
+                &rust_byte_string(
+                    &self
+                        .runtime_editor_descriptor
+                        .as_ref()
+                        .map(ClapRuntimeEditorDescriptor::to_export_payload)
+                        .unwrap_or_default(),
+                ),
             )
     }
 }

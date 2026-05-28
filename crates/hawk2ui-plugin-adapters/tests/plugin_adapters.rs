@@ -4,8 +4,8 @@ use hawk2ui_plugin::{
 };
 use hawk2ui_plugin_adapters::{
     ClapCdylibScaffold, ClapGuiParentHandle, ClapGuiWindowApi, ClapPluginEntryPlan,
-    MaterializedPackageOutput, PackageAdapterSet, PackageFormat, PackagePlan, PackageRequest,
-    VerificationReport, VerificationStatus,
+    ClapRuntimeEditorDescriptor, MaterializedPackageOutput, PackageAdapterSet, PackageFormat,
+    PackagePlan, PackageRequest, VerificationReport, VerificationStatus,
 };
 use std::{
     path::Path,
@@ -375,6 +375,37 @@ fn plugin_adapters_reject_invalid_clap_gui_parent_handles() {
 }
 
 #[test]
+fn plugin_adapters_validate_clap_runtime_editor_descriptor() {
+    let descriptor = ClapRuntimeEditorDescriptor::new(
+        "Contents/Resources/hawk2ui-runtime-artifact.json",
+        "baseview",
+        "skia",
+    )
+    .expect("valid descriptor builds");
+
+    assert_eq!(
+        descriptor.to_export_payload(),
+        "runtime_artifact=Contents/Resources/hawk2ui-runtime-artifact.json\nhost_adapter=baseview\nrenderer=skia\n"
+    );
+    assert_eq!(
+        ClapRuntimeEditorDescriptor::new("", "baseview", "skia")
+            .expect_err("empty runtime artifact path is rejected")
+            .rule(),
+        "package.clap-editor-descriptor.invalid-runtime-artifact"
+    );
+    assert_eq!(
+        ClapRuntimeEditorDescriptor::new(
+            "Contents/Resources/hawk2ui-runtime-artifact.json",
+            "",
+            "skia"
+        )
+        .expect_err("empty host adapter is rejected")
+        .rule(),
+        "package.clap-editor-descriptor.invalid-host-adapter"
+    );
+}
+
+#[test]
 fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     let metadata = FormatMetadata::new("com.hawk2ui.loadable", "Loadable", "Hawk2UI")
         .version("1.0.0")
@@ -399,9 +430,12 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
         .with_editor(&editor)
         .with_parameters(&parameters)
         .with_runtime_editor_descriptor(
-            "Contents/Resources/hawk2ui-runtime-artifact.json",
-            "baseview",
-            "skia",
+            ClapRuntimeEditorDescriptor::new(
+                "Contents/Resources/hawk2ui-runtime-artifact.json",
+                "baseview",
+                "skia",
+            )
+            .expect("runtime editor descriptor builds"),
         );
     let output = scaffold
         .write_to(&output_root)
