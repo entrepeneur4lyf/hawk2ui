@@ -9,6 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use hawk2ui_build::SealedArtifact;
 use hawk2ui_host::HostPlatformHandle;
 use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRecord, ParameterValue, PluginEditor,
@@ -371,6 +372,7 @@ pub struct ClapRuntimeEditorSession {
     runtime_artifact_path: String,
     descriptor: ClapRuntimeEditorPackageDescriptor,
     runtime_artifact: serde_json::Value,
+    sealed_artifact: SealedArtifact,
 }
 
 impl ClapRuntimeEditorSession {
@@ -414,17 +416,32 @@ impl ClapRuntimeEditorSession {
                     ),
                 )
             })?;
-        let runtime_artifact = serde_json::from_str(&runtime_artifact_source).map_err(|error| {
+        let runtime_artifact: serde_json::Value = serde_json::from_str(&runtime_artifact_source)
+            .map_err(|error| {
+                materialization_error(
+                    "package.clap-runtime-editor.runtime-artifact-parse-failed",
+                    format!("failed to parse CLAP runtime artifact JSON: {error}"),
+                )
+            })?;
+        SealedArtifact::validate_json(&runtime_artifact).map_err(|error| {
             materialization_error(
-                "package.clap-runtime-editor.runtime-artifact-parse-failed",
-                format!("failed to parse CLAP runtime artifact JSON: {error}"),
+                "package.clap-runtime-editor.runtime-artifact-schema-invalid",
+                sealed_artifact_error_message(&error),
             )
         })?;
+        let sealed_artifact: SealedArtifact = serde_json::from_value(runtime_artifact.clone())
+            .map_err(|error| {
+                materialization_error(
+                    "package.clap-runtime-editor.runtime-artifact-parse-failed",
+                    format!("failed to decode CLAP sealed runtime artifact: {error}"),
+                )
+            })?;
         Ok(Self {
             package_root: package_root.to_string_lossy().into_owned(),
             runtime_artifact_path: runtime_artifact_path.to_string_lossy().into_owned(),
             descriptor,
             runtime_artifact,
+            sealed_artifact,
         })
     }
 
@@ -450,6 +467,25 @@ impl ClapRuntimeEditorSession {
     #[must_use]
     pub const fn runtime_artifact(&self) -> &serde_json::Value {
         &self.runtime_artifact
+    }
+
+    /// Returns the typed sealed runtime artifact consumed by live editor rendering.
+    #[must_use]
+    pub const fn sealed_artifact(&self) -> &SealedArtifact {
+        &self.sealed_artifact
+    }
+}
+
+fn sealed_artifact_error_message(error: &hawk2ui_build::SealedArtifactError) -> String {
+    match error {
+        hawk2ui_build::SealedArtifactError::IncompatibleSchema { diagnostic, .. }
+        | hawk2ui_build::SealedArtifactError::SchemaGeneration { diagnostic }
+        | hawk2ui_build::SealedArtifactError::SchemaValidation { diagnostic }
+        | hawk2ui_build::SealedArtifactError::ContainerSerialization { diagnostic }
+        | hawk2ui_build::SealedArtifactError::ContainerVerification { diagnostic }
+        | hawk2ui_build::SealedArtifactError::SignaturePolicy { diagnostic } => {
+            diagnostic.message.clone()
+        }
     }
 }
 

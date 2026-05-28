@@ -1471,10 +1471,11 @@ Status:
   automation events from the core event space, rejects malformed/non-finite values, clamps valid
   automation to generated parameter ranges, and updates the same lock-free parameter store used by
   state persistence and `params.get_value`.
-- Runtime-backed CLAP packages now have a typed `ClapRuntimeEditorSession` loader that verifies the
-  package hash manifest, parses `hawk2ui-editor.toml`, validates the `baseview`/`skia`/`clap`
-  descriptor contract, resolves the safe package-relative runtime artifact path, parses the sealed
-  runtime artifact JSON, and fails closed when package contents no longer match hash coverage.
+  - Runtime-backed CLAP packages now have a typed `ClapRuntimeEditorSession` loader that verifies the
+    package hash manifest, parses `hawk2ui-editor.toml`, validates the `baseview`/`skia`/`clap`
+    descriptor contract, resolves the safe package-relative runtime artifact path, parses and schema
+    validates the sealed runtime artifact JSON into a typed `SealedArtifact`, and fails closed when
+    package contents no longer match hash coverage or the runtime payload is malformed.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:

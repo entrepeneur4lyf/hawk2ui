@@ -1,3 +1,4 @@
+use hawk2ui_build::{ArtifactSchemaVersion, HawkManifest, SealedArtifact};
 use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterFlags, ParameterModel, ParameterRange, ParameterRecord,
     PluginEditor, PluginEditorSize,
@@ -227,19 +228,12 @@ fn plugin_adapters_materialize_package_metadata_outputs() {
 fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources() {
     let metadata =
         FormatMetadata::new("com.hawk2ui.runtime", "Runtime", "Hawk2UI").feature("audio-effect");
-    let runtime_artifact = serde_json::json!({
-        "schema_version": { "major": 1, "minor": 0 },
-        "manifest_snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "asset_manifest": [
-            { "id": "logo", "kind": "image", "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
-        ],
-        "compiled_assets": [
-            { "id": "logo", "kind": "image", "bytes": 128 }
-        ],
-        "compiled_styles": [],
-        "compiled_scripts": [],
-        "capabilities": ["plugin-editor"],
-    });
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    );
+    let runtime_artifact =
+        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
     let output_root = std::env::temp_dir().join(format!(
         "hawk2ui-plugin-runtime-artifact-{}",
         SystemTime::now()
@@ -323,6 +317,33 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
     );
     assert_eq!(editor_session.descriptor().parameter_count(), 0);
     assert_eq!(editor_session.runtime_artifact(), &runtime_artifact);
+    assert_eq!(editor_session.sealed_artifact(), &sealed_artifact);
+
+    let invalid_output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-plugin-invalid-runtime-artifact-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let invalid_request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.invalid-runtime", "InvalidRuntime", "Hawk2UI"),
+        BundleOutput::new(invalid_output_root.to_string_lossy(), "InvalidRuntime"),
+        ParameterModel::new([]),
+    )
+    .with_runtime_artifact(serde_json::json!({ "schema_version": { "major": 1 } }))
+    .with_format(PackageFormat::Clap);
+    let invalid_outputs = PackageAdapterSet::new()
+        .plan(&invalid_request)
+        .expect("invalid artifact package plan succeeds")
+        .materialize()
+        .expect("invalid artifact materializes with hash coverage");
+    let schema_error = ClapRuntimeEditorSession::load_from_package(&invalid_outputs[0].output_path)
+        .expect_err("schema-invalid runtime artifact is denied");
+    assert_eq!(
+        schema_error.diagnostic().rule(),
+        "package.clap-runtime-editor.runtime-artifact-schema-invalid"
+    );
 
     let hashes =
         std::fs::read_to_string(&outputs[0].hash_manifest_path).expect("hash manifest reads");
@@ -346,6 +367,31 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
         "package.clap-runtime-editor.hash-invalid"
     );
 }
+
+const VALID_PLUGIN_MANIFEST: &str = r#"
+[identity]
+id = "com.hawk2ui.runtime"
+name = "Runtime"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[capabilities]
+keys = ["plugin-editor"]
+
+[[targets]]
+kind = "plugin"
+name = "clap"
+
+[plugin]
+id = "com.hawk2ui.runtime"
+name = "Runtime"
+
+[editor]
+width = 960
+height = 540
+"#;
 
 #[test]
 fn plugin_adapters_build_clap_entry_plan_from_clap_sys_contract() {
