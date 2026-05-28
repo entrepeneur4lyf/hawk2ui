@@ -1,3 +1,4 @@
+use hawk2ui_build::{ArtifactSchemaVersion, HawkManifest, SealedArtifact};
 use hawk2ui_host::{
     HostPlatformHandle, KeyboardInput, PluginEditorConfig, PluginHostAdapter, PluginHostEvent,
     PluginParentHandle, PointerInput, RendererResizeBridge, SurfaceMetrics,
@@ -7,6 +8,13 @@ use hawk2ui_host_baseview::{
     BaseviewParentFixture, BaseviewPluginAdapter,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
+use hawk2ui_plugin::{
+    BundleOutput, FormatMetadata, ParameterModel, PluginEditor, PluginEditorSize,
+};
+use hawk2ui_plugin_adapters::{
+    ClapGuiParentHandle, ClapGuiWindowApi, ClapRuntimeEditorSession, PackageAdapterSet,
+    PackageFormat, PackageRequest,
+};
 use hawk2ui_render::Color;
 use hawk2ui_runtime::{
     RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
@@ -15,6 +23,7 @@ use hawk2ui_runtime::{
 use raw_window_handle::{
     HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn baseview_adapter_attaches_editor_to_daw_owned_parent() {
@@ -461,6 +470,89 @@ fn baseview_adapter_renders_runtime_scene_into_presented_skia_snapshot() {
 }
 
 #[test]
+fn baseview_adapter_renders_verified_clap_runtime_editor_session_frame() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": [
+                {
+                    "id": "runtime-label",
+                    "width": 160.0,
+                    "height": 32.0,
+                    "visual": {
+                        "text": {
+                            "value": "Runtime Editor",
+                            "font_size": 16.0,
+                            "color": [240, 245, 255, 255]
+                        }
+                    }
+                }
+            ]
+        }
+    }));
+    let runtime_artifact =
+        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let output_root = temp_package_root("hawk2ui-baseview-clap-runtime-editor");
+    let request = PackageRequest::new(
+        FormatMetadata::new(
+            "com.hawk2ui.baseview-runtime",
+            "Baseview Runtime",
+            "Hawk2UI",
+        ),
+        BundleOutput::new(output_root.to_string_lossy(), "BaseviewRuntime"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds")
+        .materialize()
+        .expect("materialization succeeds");
+    let session = ClapRuntimeEditorSession::load_from_package(&outputs[0].output_path)
+        .expect("verified CLAP runtime editor session loads");
+    let host_config = session
+        .baseview_host_config(
+            ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::X11, 42)
+                .expect("CLAP parent handle validates"),
+            Some(7),
+        )
+        .expect("Baseview host handoff builds");
+    let parent = BaseviewParentFixture::from_platform_handle(
+        "clap-runtime-parent",
+        host_config.host_parent(),
+    );
+    let mut adapter = BaseviewPluginAdapter::attach(host_config.editor_config().clone(), parent)
+        .expect("Baseview adapter accepts CLAP parent handoff");
+    adapter.drain_events();
+
+    let frame = session
+        .runtime_scene_frame()
+        .expect("runtime scene frame builds from sealed payload");
+    let snapshot = adapter
+        .render_scene_frame(&frame)
+        .expect("sealed runtime frame renders through Baseview adapter");
+
+    assert_eq!((snapshot.width(), snapshot.height()), (320, 180));
+    assert_eq!(snapshot.pixel_at(10, 10), Some(0x1a6f4a));
+    assert!(snapshot.pixels().iter().any(|pixel| *pixel == 0x1a6f4a));
+    assert_eq!(adapter.presented_frame_count(), 1);
+}
+
+#[test]
 fn baseview_adapter_teardown_destroys_editor_without_process_quit() {
     let mut adapter = BaseviewPluginAdapter::attach(
         PluginEditorConfig::new(
@@ -571,6 +663,41 @@ fn runtime_scene_frame(width: f32, height: f32, color: Color) -> RuntimeSceneFra
         .build(&tree)
         .expect("runtime scene frame builds")
 }
+
+fn temp_package_root(prefix: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "{prefix}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ))
+}
+
+const VALID_PLUGIN_MANIFEST: &str = r#"
+[identity]
+id = "com.hawk2ui.baseview-runtime"
+name = "Baseview Runtime"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[capabilities]
+keys = ["plugin-editor"]
+
+[[targets]]
+kind = "plugin"
+name = "clap"
+
+[plugin]
+id = "com.hawk2ui.baseview-runtime"
+name = "Baseview Runtime"
+
+[editor]
+width = 320
+height = 180
+"#;
 
 struct NoopWindowHandler;
 

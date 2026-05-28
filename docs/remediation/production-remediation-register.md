@@ -1485,7 +1485,12 @@ Status:
   - Sealed artifacts now carry an optional compiled runtime scene payload, and verified CLAP runtime
     editor sessions can decode that payload into a real `RuntimeSceneFrame`; missing or malformed
     runtime scene payloads fail explicitly instead of rendering a synthetic placeholder.
-- Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
+  - Baseview adapter integration now loads a verified CLAP runtime editor session from a materialized
+    package, builds the CLAP parent-to-Baseview handoff, attaches the Baseview adapter to the validated
+    native parent fixture, renders the sealed runtime scene through Skia, and verifies the presented
+    surface pixels.
+- Remaining work under this item is to connect the verified runtime editor session path into the
+  generated CLAP dynamic library GUI callbacks and host-test that live callback path.
 
 Required remediation:
 

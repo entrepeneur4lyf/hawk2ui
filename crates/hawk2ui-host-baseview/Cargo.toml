@@ -32,3 +32,9 @@ raw-window-handle = "0.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = "0.13.2"
+
+[dev-dependencies]
+hawk2ui-build = { version = "0.1.0", path = "../hawk2ui-build" }
+hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
+hawk2ui-plugin-adapters = { version = "0.1.0", path = "../hawk2ui-plugin-adapters" }
+serde_json = "1"
