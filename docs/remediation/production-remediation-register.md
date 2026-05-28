@@ -1494,8 +1494,11 @@ Status:
     create, parent attach, resize, show, hide, and destroy transitions through the compiled library.
   - Generated CLAP GUI callbacks now reject null native parent handles before marking the editor
     attached, matching the validated nonzero handle policy used by the Baseview bridge.
-- Remaining work under this item is to replace the generated CLAP GUI callback state machine with live
-  `Hawk2UI` runtime editor session attachment/rendering inside the plugin surface.
+  - `hawk2ui-host-baseview` now provides a live `BaseviewClapRuntimeEditor` bridge that owns a verified
+    `ClapRuntimeEditorSession`, attaches the session to a validated CLAP parent through Baseview,
+    presents the sealed runtime scene through Skia, and delegates host resize/show/hide/destroy.
+- Remaining work under this item is to connect the generated CLAP GUI callback state machine to the live
+  host-side `BaseviewClapRuntimeEditor` bridge at the plugin-host embedding boundary.
 
 Required remediation:
 

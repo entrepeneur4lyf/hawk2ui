@@ -8,6 +8,9 @@ use hawk2ui_host::{
     HostPlatformHandle, KeyboardInput, PluginEditorConfig, PluginHostAdapter, PluginHostEvent,
     PointerInput, SurfaceMetrics, SurfaceOwnership,
 };
+use hawk2ui_plugin_adapters::{
+    ClapGuiParentHandle, ClapRuntimeEditorSession, PackageDiagnostic, PackageMaterializationError,
+};
 use hawk2ui_render::{Color, RendererBackend};
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend, SkiaSurfaceConfig};
 use hawk2ui_runtime::RuntimeSceneFrame;
@@ -866,6 +869,129 @@ impl BaseviewPluginAdapter {
             ))
         }
     }
+}
+
+/// Live CLAP runtime editor attached through `Baseview` and rendered with Skia.
+#[derive(Debug)]
+pub struct BaseviewClapRuntimeEditor {
+    session: ClapRuntimeEditorSession,
+    adapter: BaseviewPluginAdapter,
+}
+
+impl BaseviewClapRuntimeEditor {
+    /// Attaches a verified CLAP runtime editor session to a DAW-owned parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the CLAP parent cannot be represented for Baseview or the
+    /// Baseview adapter rejects the resulting editor configuration.
+    pub fn attach(
+        session: ClapRuntimeEditorSession,
+        parent: ClapGuiParentHandle,
+        linux_display_handle: Option<u64>,
+        parent_fixture_id: &'static str,
+    ) -> Result<Self, BaseviewHostError> {
+        let host_config = session
+            .baseview_host_config(parent, linux_display_handle)
+            .map_err(|diagnostic| baseview_error_from_package_diagnostic(&diagnostic))?;
+        let parent_fixture = BaseviewParentFixture::from_platform_handle(
+            parent_fixture_id,
+            host_config.host_parent(),
+        );
+        let adapter =
+            BaseviewPluginAdapter::attach(host_config.editor_config().clone(), parent_fixture)?;
+        Ok(Self { session, adapter })
+    }
+
+    /// Returns the verified CLAP runtime editor session.
+    #[must_use]
+    pub const fn session(&self) -> &ClapRuntimeEditorSession {
+        &self.session
+    }
+
+    /// Returns the attached Baseview adapter.
+    #[must_use]
+    pub const fn adapter(&self) -> &BaseviewPluginAdapter {
+        &self.adapter
+    }
+
+    /// Returns the current editor metrics.
+    #[must_use]
+    pub fn metrics(&self) -> SurfaceMetrics {
+        self.adapter.metrics()
+    }
+
+    /// Returns whether the editor is currently visible.
+    #[must_use]
+    pub const fn visible(&self) -> bool {
+        self.adapter.visible()
+    }
+
+    /// Returns whether the editor is destroyed.
+    #[must_use]
+    pub const fn destroyed(&self) -> bool {
+        self.adapter.destroyed()
+    }
+
+    /// Returns the number of runtime scene frames presented by the live editor.
+    #[must_use]
+    pub const fn presented_frame_count(&self) -> u64 {
+        self.adapter.presented_frame_count()
+    }
+
+    /// Presents the verified sealed runtime scene into the attached Baseview surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the sealed runtime scene cannot be built or the Baseview
+    /// surface cannot render the frame.
+    pub fn present_runtime_frame(&mut self) -> Result<&SkiaFrameSnapshot, BaseviewHostError> {
+        let frame = self
+            .session
+            .runtime_scene_frame()
+            .map_err(|error| baseview_error_from_materialization_error(&error))?;
+        self.adapter.render_scene_frame(&frame)
+    }
+
+    /// Handles a host-driven resize for the attached live editor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the editor is destroyed or metrics are invalid.
+    pub fn try_host_resize(&mut self, metrics: SurfaceMetrics) -> Result<(), BaseviewHostError> {
+        self.adapter.try_host_resize(metrics)
+    }
+
+    /// Records a host-driven show request.
+    pub fn show_editor(&mut self, reason: impl Into<String>) {
+        self.adapter.show_editor(reason);
+    }
+
+    /// Records a host-driven hide request.
+    pub fn hide_editor(&mut self, reason: impl Into<String>) {
+        self.adapter.hide_editor(reason);
+    }
+
+    /// Destroys the live editor safely.
+    pub fn destroy_editor(&mut self, reason: impl Into<String>) {
+        self.adapter.destroy_editor(reason);
+    }
+
+    /// Drains host events emitted by the attached editor.
+    pub fn drain_events(&mut self) -> Vec<PluginHostEvent> {
+        self.adapter.drain_events()
+    }
+}
+
+fn baseview_error_from_package_diagnostic(diagnostic: &PackageDiagnostic) -> BaseviewHostError {
+    BaseviewHostError::new(diagnostic.rule(), diagnostic.message())
+}
+
+fn baseview_error_from_materialization_error(
+    error: &PackageMaterializationError,
+) -> BaseviewHostError {
+    let diagnostic = error.diagnostic();
+    BaseviewHostError::new(diagnostic.rule(), diagnostic.message())
 }
 
 fn validate_baseview_parent(handle: HostPlatformHandle) -> Result<(), BaseviewHostError> {

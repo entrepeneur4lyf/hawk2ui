@@ -4,8 +4,8 @@ use hawk2ui_host::{
     PluginParentHandle, PointerInput, RendererResizeBridge, SurfaceMetrics,
 };
 use hawk2ui_host_baseview::{
-    BaseviewEventTranslator, BaseviewNativeParent, BaseviewNativeParentBackend,
-    BaseviewParentFixture, BaseviewPluginAdapter,
+    BaseviewClapRuntimeEditor, BaseviewEventTranslator, BaseviewNativeParent,
+    BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_plugin::{
@@ -550,6 +550,82 @@ fn baseview_adapter_renders_verified_clap_runtime_editor_session_frame() {
     assert_eq!(snapshot.pixel_at(10, 10), Some(0x1a6f4a));
     assert!(snapshot.pixels().iter().any(|pixel| *pixel == 0x1a6f4a));
     assert_eq!(adapter.presented_frame_count(), 1);
+}
+
+#[test]
+fn baseview_clap_runtime_editor_attaches_presents_and_tears_down_live_session() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": []
+        }
+    }));
+    let runtime_artifact =
+        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let output_root = temp_package_root("hawk2ui-baseview-clap-live-runtime-editor");
+    let request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.live-runtime", "Live Runtime", "Hawk2UI"),
+        BundleOutput::new(output_root.to_string_lossy(), "LiveRuntime"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds")
+        .materialize()
+        .expect("materialization succeeds");
+    let session = ClapRuntimeEditorSession::load_from_package(&outputs[0].output_path)
+        .expect("verified CLAP runtime editor session loads");
+
+    let mut editor = BaseviewClapRuntimeEditor::attach(
+        session,
+        ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::X11, 42)
+            .expect("CLAP parent handle validates"),
+        Some(7),
+        "clap-live-runtime-parent",
+    )
+    .expect("live CLAP runtime editor attaches");
+    editor.drain_events();
+
+    let snapshot = editor
+        .present_runtime_frame()
+        .expect("live CLAP runtime editor presents sealed scene");
+    assert_eq!((snapshot.width(), snapshot.height()), (320, 180));
+    assert_eq!(snapshot.pixel_at(10, 10), Some(0x1a6f4a));
+    assert_eq!(editor.presented_frame_count(), 1);
+
+    editor
+        .try_host_resize(SurfaceMetrics::new(640.0, 360.0, 2.0))
+        .expect("live editor accepts resize");
+    let resized_snapshot = editor
+        .present_runtime_frame()
+        .expect("live CLAP runtime editor presents after resize");
+    assert_eq!(
+        (resized_snapshot.width(), resized_snapshot.height()),
+        (1280, 720)
+    );
+    assert_eq!(editor.presented_frame_count(), 2);
+
+    editor.hide_editor("host hid editor");
+    editor.show_editor("host showed editor");
+    editor.destroy_editor("host closed editor");
+    let error = editor
+        .present_runtime_frame()
+        .expect_err("destroyed live editor must not render");
+    assert_eq!(error.rule(), "baseview.editor.destroyed");
 }
 
 #[test]
