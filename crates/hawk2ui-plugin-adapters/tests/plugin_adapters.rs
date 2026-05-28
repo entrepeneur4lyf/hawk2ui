@@ -836,6 +836,17 @@ fn main() {
             assert_editor_state(editor_state(), true, false, false, 1024, 640);
             assert!(!(gui.show.expect("gui show before parent"))(plugin));
             assert_editor_state(editor_state(), true, false, false, 1024, 640);
+            let null_parent = clap_sys::ext::gui::clap_window {
+                api: preferred_api,
+                specific: clap_sys::ext::gui::clap_window_handle {
+                    ptr: ptr::null_mut(),
+                },
+            };
+            assert!(!(gui.set_parent.expect("gui rejects null parent handle"))(
+                plugin,
+                &null_parent
+            ));
+            assert_editor_state(editor_state(), true, false, false, 1024, 640);
             let parent = clap_sys::ext::gui::clap_window {
                 api: preferred_api,
                 specific: clap_sys::ext::gui::clap_window_handle {

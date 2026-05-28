@@ -1492,6 +1492,8 @@ Status:
   - Generated CLAP dynamic-library scaffolds now expose a stable `hawk2ui_editor_state` export backed by
     the same atomics updated by the CLAP GUI callbacks, and the external host-load test verifies
     create, parent attach, resize, show, hide, and destroy transitions through the compiled library.
+  - Generated CLAP GUI callbacks now reject null native parent handles before marking the editor
+    attached, matching the validated nonzero handle policy used by the Baseview bridge.
 - Remaining work under this item is to replace the generated CLAP GUI callback state machine with live
   `Hawk2UI` runtime editor session attachment/rendering inside the plugin surface.
 

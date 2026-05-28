@@ -1575,14 +1575,18 @@ unsafe extern "C" fn gui_set_parent(
     _plugin: *const clap_plugin,
     window: *const clap_window,
 ) -> bool {
-    if window.is_null() {
-        return false;
-    }
-    let window = unsafe { &*window };
-    if !EDITOR_CREATED.load(Ordering::Acquire) || !is_supported_window_api(window.api) {
-        return false;
-    }
-    EDITOR_ATTACHED.store(true, Ordering::Release);
+      if window.is_null() {
+          return false;
+      }
+      let window = unsafe { &*window };
+      let has_parent_handle = unsafe { !window.specific.ptr.is_null() };
+      if !EDITOR_CREATED.load(Ordering::Acquire)
+          || !is_supported_window_api(window.api)
+          || !has_parent_handle
+      {
+          return false;
+      }
+      EDITOR_ATTACHED.store(true, Ordering::Release);
     true
 }
 
