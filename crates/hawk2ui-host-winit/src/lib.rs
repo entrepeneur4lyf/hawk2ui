@@ -11,6 +11,7 @@ use hawk2ui_host::{
     SurfaceMetrics, SurfaceOwnership, WindowMode,
 };
 use winit::dpi::LogicalSize;
+use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 
 pub use runtime::{
     DesktopRuntimeEvent, WinitDesktopRuntime, WinitDesktopRuntimeConfig, WinitDesktopRuntimeSummary,
@@ -149,6 +150,236 @@ impl WinitCapability {
             Self::Resize => WINIT_CAP_RESIZE,
             Self::Repaint => WINIT_CAP_REPAINT,
         }
+    }
+}
+
+/// Host events produced from a single native `winit` window event.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WinitTranslatedEvent {
+    /// Desktop host events emitted by the translation.
+    pub events: Vec<DesktopHostEvent>,
+    /// Whether this event requires a redraw request.
+    pub requires_redraw: bool,
+    /// Whether this event requests native event-loop exit.
+    pub requests_close: bool,
+}
+
+impl WinitTranslatedEvent {
+    fn new(events: Vec<DesktopHostEvent>) -> Self {
+        Self {
+            events,
+            requires_redraw: false,
+            requests_close: false,
+        }
+    }
+
+    fn redraw(mut self) -> Self {
+        self.requires_redraw = true;
+        self
+    }
+
+    fn close(mut self) -> Self {
+        self.requests_close = true;
+        self
+    }
+}
+
+/// Stateful translator from native `winit` events into `Hawk2UI` desktop host events.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WinitEventTranslator {
+    metrics: SurfaceMetrics,
+    last_pointer_position: (f64, f64),
+}
+
+impl WinitEventTranslator {
+    /// Creates a translator with the current surface metrics.
+    #[must_use]
+    pub const fn new(metrics: SurfaceMetrics) -> Self {
+        Self {
+            metrics,
+            last_pointer_position: (0.0, 0.0),
+        }
+    }
+
+    /// Returns the latest metrics observed from native resize/DPI events.
+    #[must_use]
+    pub const fn metrics(&self) -> SurfaceMetrics {
+        self.metrics
+    }
+
+    /// Translates a native `winit` window event into host events.
+    #[must_use]
+    pub fn translate(&mut self, event: &WindowEvent) -> WinitTranslatedEvent {
+        match event {
+            WindowEvent::Resized(size) => self.translate_resize(size.width, size.height),
+            WindowEvent::CloseRequested | WindowEvent::Destroyed => {
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::CloseRequested(
+                    "native close requested".into(),
+                )])
+                .close()
+            }
+            WindowEvent::DroppedFile(path) => {
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::FileDragDrop(format!(
+                    "dropped:{}",
+                    path.to_string_lossy()
+                ))])
+            }
+            WindowEvent::HoveredFile(path) => {
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::FileDragDrop(format!(
+                    "hovered:{}",
+                    path.to_string_lossy()
+                ))])
+            }
+            WindowEvent::HoveredFileCancelled => {
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::FileDragDrop(
+                    "hover-cancelled".into(),
+                )])
+            }
+            WindowEvent::Focused(focused) => {
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::FocusChanged(*focused)])
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::KeyboardInput(
+                    KeyboardInput::new(
+                        format!("{:?}", event.logical_key),
+                        event.state == ElementState::Pressed,
+                    ),
+                )])
+            }
+            WindowEvent::Ime(event) => {
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::ImeInput(ime_event_label(event))])
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let x = position.x / self.metrics.scale_factor;
+                let y = position.y / self.metrics.scale_factor;
+                self.last_pointer_position = (x, y);
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::PointerInput(PointerInput::new(
+                    x, y, "move",
+                ))])
+            }
+            WindowEvent::CursorEntered { .. } => {
+                let (x, y) = self.last_pointer_position;
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::PointerInput(PointerInput::new(
+                    x, y, "enter",
+                ))])
+            }
+            WindowEvent::CursorLeft { .. } => {
+                let (x, y) = self.last_pointer_position;
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::PointerInput(PointerInput::new(
+                    x, y, "leave",
+                ))])
+            }
+            WindowEvent::MouseWheel { delta, phase, .. } => {
+                let (x, y) = self.last_pointer_position;
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::PointerInput(PointerInput::new(
+                    x,
+                    y,
+                    mouse_wheel_label(*delta, *phase),
+                ))])
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let (x, y) = self.last_pointer_position;
+                let suffix = if *state == ElementState::Pressed {
+                    "down"
+                } else {
+                    "up"
+                };
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::PointerInput(PointerInput::new(
+                    x,
+                    y,
+                    format!("{}-{suffix}", mouse_button_label(*button)),
+                ))])
+            }
+            WindowEvent::Occluded(occluded) => {
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::WindowOcclusionChanged(*occluded)])
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.metrics.scale_factor = *scale_factor;
+                WinitTranslatedEvent::new(vec![
+                    DesktopHostEvent::DpiChanged(*scale_factor),
+                    DesktopHostEvent::RendererTargetRecreateRequested,
+                ])
+                .redraw()
+            }
+            WindowEvent::RedrawRequested => WinitTranslatedEvent::new(Vec::new()).redraw(),
+            _ => WinitTranslatedEvent::new(Vec::new()),
+        }
+    }
+
+    fn translate_resize(
+        &mut self,
+        physical_width: u32,
+        physical_height: u32,
+    ) -> WinitTranslatedEvent {
+        let scale = self.metrics.scale_factor;
+        self.metrics = SurfaceMetrics::new(
+            f64::from(physical_width) / scale,
+            f64::from(physical_height) / scale,
+            scale,
+        );
+        WinitTranslatedEvent::new(vec![
+            DesktopHostEvent::Resized(self.metrics),
+            DesktopHostEvent::RendererTargetRecreateRequested,
+        ])
+        .redraw()
+    }
+}
+
+fn ime_event_label(event: &Ime) -> String {
+    match event {
+        Ime::Enabled => "enabled".into(),
+        Ime::Preedit(value, Some((start, end))) => format!("preedit:{value}:{start}..{end}"),
+        Ime::Preedit(value, None) => format!("preedit:{value}:hidden"),
+        Ime::Commit(value) => format!("commit:{value}"),
+        Ime::Disabled => "disabled".into(),
+    }
+}
+
+fn mouse_button_label(button: MouseButton) -> &'static str {
+    match button {
+        MouseButton::Left => "left",
+        MouseButton::Right => "right",
+        MouseButton::Middle => "middle",
+        MouseButton::Back => "back",
+        MouseButton::Forward => "forward",
+        MouseButton::Other(_) => "other",
+    }
+}
+
+fn mouse_wheel_label(delta: MouseScrollDelta, _phase: TouchPhase) -> String {
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => {
+            format!("wheel-lines:{}:{}", compact_f32(x), compact_f32(y))
+        }
+        MouseScrollDelta::PixelDelta(position) => {
+            format!(
+                "wheel-pixels:{}:{}",
+                compact_f64(position.x),
+                compact_f64(position.y)
+            )
+        }
+    }
+}
+
+fn compact_f32(value: f32) -> String {
+    if value.fract() == 0.0 {
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            (value as i32).to_string()
+        }
+    } else {
+        value.to_string()
+    }
+}
+
+fn compact_f64(value: f64) -> String {
+    if value.fract() == 0.0 {
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            (value as i64).to_string()
+        }
+    } else {
+        value.to_string()
     }
 }
 

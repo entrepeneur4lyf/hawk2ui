@@ -121,6 +121,12 @@ pub enum DesktopHostEvent {
     KeyboardInput(KeyboardInput),
     /// Pointer input.
     PointerInput(PointerInput),
+    /// Input method editor event.
+    ImeInput(String),
+    /// Native file drag/drop event.
+    FileDragDrop(String),
+    /// Native window occlusion changed.
+    WindowOcclusionChanged(bool),
     /// Clipboard capability changed.
     ClipboardCapabilityChanged(ClipboardCapability),
     /// DPI scale changed.

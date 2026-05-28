@@ -3,7 +3,7 @@ use hawk2ui_host::{
     HostPlatformHandle, KeyboardInput, LinuxWindowSystem, PointerInput, RendererResizeBridge,
     SurfaceMetrics, WindowMode,
 };
-use hawk2ui_host_winit::{WinitDesktopAdapter, WinitPlatformFixture};
+use hawk2ui_host_winit::{WinitDesktopAdapter, WinitEventTranslator, WinitPlatformFixture};
 
 #[test]
 fn winit_adapter_owns_desktop_window_and_maps_window_controls() {
@@ -179,6 +179,103 @@ fn winit_adapter_routes_focus_keyboard_pointer_clipboard_and_repaint() {
     assert_eq!(adapter.repaint_requests()[0].reason, "animation tick");
     assert_eq!(adapter.config().clipboard, ClipboardCapability::ReadWrite);
     assert_eq!(adapter.drain_events().len(), 5);
+}
+
+#[test]
+fn winit_event_translator_routes_native_window_ime_drag_pointer_and_close_events() {
+    use std::path::PathBuf;
+    use winit::{
+        dpi::{PhysicalPosition, PhysicalSize},
+        event::{DeviceId, ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent},
+    };
+
+    let mut translator = WinitEventTranslator::new(SurfaceMetrics::new(800.0, 600.0, 2.0));
+
+    let resized = translator.translate(&WindowEvent::Resized(PhysicalSize::new(1600, 900)));
+    assert!(resized.requires_redraw);
+    assert!(
+        resized
+            .events
+            .contains(&DesktopHostEvent::Resized(SurfaceMetrics::new(
+                800.0, 450.0, 2.0
+            )))
+    );
+    assert!(
+        resized
+            .events
+            .contains(&DesktopHostEvent::RendererTargetRecreateRequested)
+    );
+
+    let focused = translator.translate(&WindowEvent::Focused(true));
+    assert_eq!(focused.events, [DesktopHostEvent::FocusChanged(true)]);
+
+    let ime = translator.translate(&WindowEvent::Ime(Ime::Preedit("é".into(), Some((0, 2)))));
+    assert_eq!(
+        ime.events,
+        [DesktopHostEvent::ImeInput("preedit:é:0..2".into())]
+    );
+
+    let cursor = translator.translate(&WindowEvent::CursorMoved {
+        device_id: DeviceId::dummy(),
+        position: PhysicalPosition::new(24.0, 48.0),
+    });
+    assert_eq!(
+        cursor.events,
+        [DesktopHostEvent::PointerInput(PointerInput::new(
+            12.0, 24.0, "move"
+        ))]
+    );
+
+    let mouse = translator.translate(&WindowEvent::MouseInput {
+        device_id: DeviceId::dummy(),
+        state: ElementState::Pressed,
+        button: MouseButton::Left,
+    });
+    assert_eq!(
+        mouse.events,
+        [DesktopHostEvent::PointerInput(PointerInput::new(
+            12.0,
+            24.0,
+            "left-down"
+        ))]
+    );
+
+    let wheel = translator.translate(&WindowEvent::MouseWheel {
+        device_id: DeviceId::dummy(),
+        delta: MouseScrollDelta::LineDelta(1.0, -2.0),
+        phase: winit::event::TouchPhase::Moved,
+    });
+    assert_eq!(
+        wheel.events,
+        [DesktopHostEvent::PointerInput(PointerInput::new(
+            12.0,
+            24.0,
+            "wheel-lines:1:-2"
+        ))]
+    );
+
+    let dropped = translator.translate(&WindowEvent::DroppedFile(PathBuf::from("/tmp/preset.h2p")));
+    assert_eq!(
+        dropped.events,
+        [DesktopHostEvent::FileDragDrop(
+            "dropped:/tmp/preset.h2p".into()
+        )]
+    );
+
+    let occluded = translator.translate(&WindowEvent::Occluded(true));
+    assert_eq!(
+        occluded.events,
+        [DesktopHostEvent::WindowOcclusionChanged(true)]
+    );
+
+    let close = translator.translate(&WindowEvent::CloseRequested);
+    assert!(close.requests_close);
+    assert_eq!(
+        close.events,
+        [DesktopHostEvent::CloseRequested(
+            "native close requested".into()
+        )]
+    );
 }
 
 #[test]

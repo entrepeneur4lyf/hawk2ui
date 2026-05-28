@@ -3,7 +3,7 @@
 use std::{num::NonZeroU32, sync::Arc, time::Instant};
 
 use hawk2ui_assets::AssetRecord;
-use hawk2ui_host::DesktopWindowConfig;
+use hawk2ui_host::{DesktopHostEvent, DesktopWindowConfig};
 use hawk2ui_layout::Viewport;
 use hawk2ui_runtime::{
     AnimationCadencePolicy, AnimationFrameScheduler, RuntimeSceneBridge, RuntimeViewTree,
@@ -17,7 +17,10 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::{SoftwareFrameRenderer, WinitHostError, physical_frame_size};
+use crate::{
+    SoftwareFrameRenderer, WinitEventTranslator, WinitHostError, WinitTranslatedEvent,
+    physical_frame_size,
+};
 
 /// Production desktop runtime configuration.
 #[derive(Clone, Debug, PartialEq)]
@@ -231,6 +234,7 @@ struct RuntimeApplication {
     context: Option<Context<Arc<Window>>>,
     surface: Option<Surface<Arc<Window>, Arc<Window>>>,
     lifecycle: RuntimeLifecycle,
+    event_translator: WinitEventTranslator,
     animation: AnimationFrameScheduler,
     started_at: Instant,
     last_error: Option<WinitHostError>,
@@ -240,6 +244,7 @@ impl RuntimeApplication {
     fn new(config: WinitDesktopRuntimeConfig, renderer: SoftwareFrameRenderer) -> Self {
         let animation = AnimationFrameScheduler::new(config.animation_policy());
         let renderer = renderer.with_assets(config.runtime_assets().iter().cloned());
+        let metrics = config.window.metrics;
         Self {
             config,
             renderer,
@@ -247,6 +252,7 @@ impl RuntimeApplication {
             context: None,
             surface: None,
             lifecycle: RuntimeLifecycle::default(),
+            event_translator: WinitEventTranslator::new(metrics),
             animation,
             started_at: Instant::now(),
             last_error: None,
@@ -311,7 +317,6 @@ impl RuntimeApplication {
                 format!("failed to resize native presentation surface: {error}"),
             )
         })?;
-        self.lifecycle.record_resize();
         self.request_redraw();
         Ok(())
     }
@@ -487,6 +492,29 @@ impl RuntimeLifecycle {
         }
     }
 
+    fn record_translated_event(&mut self, translated: &WinitTranslatedEvent) {
+        for event in &translated.events {
+            match event {
+                DesktopHostEvent::Resized(_) => self.record_resize(),
+                DesktopHostEvent::DpiChanged(_) => self.record_dpi_change(),
+                DesktopHostEvent::FocusChanged(_)
+                | DesktopHostEvent::KeyboardInput(_)
+                | DesktopHostEvent::PointerInput(_)
+                | DesktopHostEvent::ImeInput(_)
+                | DesktopHostEvent::FileDragDrop(_)
+                | DesktopHostEvent::WindowOcclusionChanged(_) => self.record_input_event(),
+                DesktopHostEvent::WindowCreated(_)
+                | DesktopHostEvent::CloseRequested(_)
+                | DesktopHostEvent::ModeChanged(_)
+                | DesktopHostEvent::RendererTargetRecreateRequested
+                | DesktopHostEvent::ClipboardCapabilityChanged(_)
+                | DesktopHostEvent::RepaintRequested(_)
+                | DesktopHostEvent::ClipboardRequested(_)
+                | DesktopHostEvent::FramePresented { .. } => {}
+            }
+        }
+    }
+
     fn request_close(&mut self) -> bool {
         if self.summary.close_requested {
             false
@@ -565,28 +593,36 @@ impl ApplicationHandler for RuntimeApplication {
         if !self.lifecycle.accepts_host_event() && !matches!(&event, &WindowEvent::CloseRequested) {
             return;
         }
+        let translated = self.event_translator.translate(&event);
+        self.lifecycle.record_translated_event(&translated);
         let result = match event {
-            WindowEvent::CloseRequested => {
+            WindowEvent::CloseRequested | WindowEvent::Destroyed => {
                 self.lifecycle.request_close();
                 event_loop.exit();
                 Ok(())
             }
             WindowEvent::Resized(size) => self.resize_surface(size),
             WindowEvent::ScaleFactorChanged { .. } => {
-                self.lifecycle.record_dpi_change();
                 self.request_redraw();
                 Ok(())
             }
             WindowEvent::RedrawRequested => self.present_frame(event_loop),
             WindowEvent::Focused(_)
             | WindowEvent::KeyboardInput { .. }
+            | WindowEvent::Ime(_)
             | WindowEvent::CursorMoved { .. }
             | WindowEvent::CursorEntered { .. }
             | WindowEvent::CursorLeft { .. }
             | WindowEvent::MouseInput { .. }
             | WindowEvent::MouseWheel { .. }
+            | WindowEvent::DroppedFile(_)
+            | WindowEvent::HoveredFile(_)
+            | WindowEvent::HoveredFileCancelled
+            | WindowEvent::Occluded(_)
             | WindowEvent::ModifiersChanged(_) => {
-                self.lifecycle.record_input_event();
+                if translated.requires_redraw {
+                    self.request_redraw();
+                }
                 Ok(())
             }
             _ => Ok(()),

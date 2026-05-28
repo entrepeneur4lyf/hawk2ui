@@ -1319,13 +1319,16 @@ Status:
 - Winit software frame rendering now accepts runtime scene image/vector asset commands and paints visible missing-asset placeholders instead of aborting frame presentation.
 - `REM-RENDER-001` connected Winit runtime scene frames to renderer-owned Skia replay, so desktop
   frames now render the runtime tree through the production renderer path.
+- Winit native event translation now maps resize, DPI, focus, keyboard, pointer, IME, file
+  drag/drop, occlusion, redraw, close, and destroyed events into `DesktopHostEvent` records and the
+  runtime event loop uses that translator for lifecycle accounting and redraw decisions.
 
 Review check:
 
-- This remains partially open for production stability: close, resize, maximize, DPI, input, and
-  runtime scene presentation are covered by automated and manual smoke paths, but menus, tray,
-  dialogs, drag/drop, IME, and complete OS clipboard behavior still need platform-backed
-  implementation before `REM-HOST-002` can be closed.
+- This remains partially open for production stability: close, resize, maximize, DPI, input, IME,
+  drag/drop, occlusion, and runtime scene presentation are covered by automated translation/runtime
+  paths and manual smoke paths, but menus, tray, dialogs, and complete OS clipboard behavior still
+  need platform-backed implementation before `REM-HOST-002` can be closed.
 
 ### REM-HOST-003: Complete Baseview Plugin Backend
 
