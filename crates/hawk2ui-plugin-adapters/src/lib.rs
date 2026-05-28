@@ -487,7 +487,10 @@ impl ClapCdylibScaffold {
 
 const CLAP_CDYLIB_SOURCE_TEMPLATE: &str = r#"//! Generated Hawk2UI CLAP entry library scaffold.
 
-use clap_sys::entry::clap_plugin_entry;
+    use clap_sys::entry::clap_plugin_entry;
+    use clap_sys::events::{
+        clap_event_param_value, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE,
+    };
 use clap_sys::ext::audio_ports::{
     clap_audio_port_info, clap_plugin_audio_ports, CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS,
     CLAP_PORT_STEREO,
@@ -917,12 +920,41 @@ unsafe extern "C" fn params_text_to_value(
     true
 }
 
-unsafe extern "C" fn params_flush(
-    _plugin: *const clap_plugin,
-    _in: *const clap_sys::events::clap_input_events,
-    _out: *const clap_sys::events::clap_output_events,
-) {
-}
+    unsafe extern "C" fn params_flush(
+        _plugin: *const clap_plugin,
+        in_: *const clap_sys::events::clap_input_events,
+        _out: *const clap_sys::events::clap_output_events,
+    ) {
+        if in_.is_null() {
+            return;
+        }
+        let input = unsafe { &*in_ };
+        let Some(size) = input.size else {
+            return;
+        };
+        let Some(get) = input.get else {
+            return;
+        };
+        let event_count = unsafe { size(input) };
+        for index in 0..event_count {
+            let header = unsafe { get(input, index) };
+            if header.is_null() {
+                continue;
+            }
+            let header = unsafe { &*header };
+            if header.space_id != CLAP_CORE_EVENT_SPACE_ID
+                || header.type_ != CLAP_EVENT_PARAM_VALUE
+                || header.size < std::mem::size_of::<clap_event_param_value>() as u32
+            {
+                continue;
+            }
+            let event = unsafe {
+                &*(header as *const clap_sys::events::clap_event_header)
+                    .cast::<clap_event_param_value>()
+            };
+            let _ = store_parameter_value(event.param_id, event.value);
+        }
+    }
 
     fn find_parameter(param_id: u32) -> Option<&'static GeneratedParameter> {
         find_parameter_index(param_id).map(|index| &PARAMETERS[index])
@@ -932,6 +964,21 @@ unsafe extern "C" fn params_flush(
         PARAMETERS
             .iter()
             .position(|parameter| parameter.id == param_id)
+    }
+
+    fn store_parameter_value(param_id: u32, value: f64) -> bool {
+        if !value.is_finite() {
+            return false;
+        }
+        let Some(index) = find_parameter_index(param_id) else {
+            return false;
+        };
+        let parameter = &PARAMETERS[index];
+        PARAMETER_VALUES[index].store(
+            value.clamp(parameter.min_value, parameter.max_value).to_bits(),
+            Ordering::Release,
+        );
+        true
     }
 
 fn write_c_buffer(out_buffer: *mut c_char, out_buffer_capacity: u32, source: &[u8]) {
@@ -1026,18 +1073,10 @@ unsafe extern "C" fn state_load(_plugin: *const clap_plugin, stream: *const clap
             let Some(bits) = parts.next().and_then(|value| value.parse::<u64>().ok()) else {
                 return false;
             };
-            let Some(index) = find_parameter_index(param_id) else {
-                continue;
-            };
-            let parameter = &PARAMETERS[index];
             let value = f64::from_bits(bits);
-            if !value.is_finite() {
+            if !store_parameter_value(param_id, value) {
                 return false;
             }
-            PARAMETER_VALUES[index].store(
-                value.clamp(parameter.min_value, parameter.max_value).to_bits(),
-                Ordering::Release,
-            );
         }
         true
     }

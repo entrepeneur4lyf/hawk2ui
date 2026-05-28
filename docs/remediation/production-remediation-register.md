@@ -1467,6 +1467,10 @@ Status:
   parameter state into the CLAP state stream, restore validated finite parameter values from host
   state payloads, clamp restored values to generated parameter ranges, and prove the round trip in
   the external host-load test.
+- Generated CLAP `params.flush` now parses host input events, accepts `CLAP_EVENT_PARAM_VALUE`
+  automation events from the core event space, rejects malformed/non-finite values, clamps valid
+  automation to generated parameter ranges, and updates the same lock-free parameter store used by
+  state persistence and `params.get_value`.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:

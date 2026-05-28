@@ -716,12 +716,44 @@ fn main() {
         assert_eq!(info.min_value, -60.0);
         assert_eq!(info.max_value, 6.0);
         assert_eq!(info.default_value, 0.0);
-        let mut value = f64::NAN;
-        assert!((params.get_value.expect("param value"))(plugin, 1, &mut value));
-        assert_eq!(value, 0.0);
+          let mut value = f64::NAN;
+          assert!((params.get_value.expect("param value"))(plugin, 1, &mut value));
+          assert_eq!(value, 0.0);
+          let automation_event = clap_sys::events::clap_event_param_value {
+              header: clap_sys::events::clap_event_header {
+                  size: std::mem::size_of::<clap_sys::events::clap_event_param_value>() as u32,
+                  time: 0,
+                  space_id: clap_sys::events::CLAP_CORE_EVENT_SPACE_ID,
+                  type_: clap_sys::events::CLAP_EVENT_PARAM_VALUE,
+                  flags: 0,
+              },
+              param_id: 1,
+              cookie: ptr::null_mut(),
+              note_id: -1,
+              port_index: -1,
+              channel: -1,
+              key: -1,
+              value: 2.25,
+          };
+          let input_event = SingleInputEvent {
+              event: automation_event,
+          };
+          let input_events = clap_sys::events::clap_input_events {
+              ctx: (&input_event as *const SingleInputEvent).cast_mut().cast(),
+              size: Some(single_input_event_size),
+              get: Some(single_input_event_get),
+          };
+          (params.flush.expect("param flush"))(plugin, &input_events, ptr::null());
+          let mut automated_value = f64::NAN;
+          assert!((params.get_value.expect("automated param value"))(
+              plugin,
+              1,
+              &mut automated_value,
+          ));
+          assert_eq!(automated_value, 2.25);
 
-        let state = ((*plugin).get_extension.expect("state extension"))(
-            plugin,
+          let state = ((*plugin).get_extension.expect("state extension"))(
+              plugin,
             b"clap.state\0".as_ptr().cast(),
         );
         assert!(!state.is_null());
@@ -760,6 +792,10 @@ fn main() {
       offset: usize,
   }
 
+  struct SingleInputEvent {
+      event: clap_sys::events::clap_event_param_value,
+  }
+
 unsafe extern "C" fn write_stream(
     stream: *const clap_sys::stream::clap_ostream,
     buffer: *const c_void,
@@ -791,6 +827,23 @@ unsafe extern "C" fn write_stream(
       }
       cursor.offset += read_len;
       read_len as i64
+  }
+
+  unsafe extern "C" fn single_input_event_size(
+      _list: *const clap_sys::events::clap_input_events,
+  ) -> u32 {
+      1
+  }
+
+  unsafe extern "C" fn single_input_event_get(
+      list: *const clap_sys::events::clap_input_events,
+      index: u32,
+  ) -> *const clap_sys::events::clap_event_header {
+      if index != 0 {
+          return ptr::null();
+      }
+      let input = unsafe { &*((*list).ctx as *const SingleInputEvent) };
+      &input.event.header
   }
   "#
 }
