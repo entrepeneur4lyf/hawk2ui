@@ -316,8 +316,9 @@ Status:
 - Realtime visual data now uses `rtrb`-backed preallocated transport records.
 - `RealtimeVisualTransport::split_preallocated` returns separate audio-writer and UI-reader endpoints, and tests move the audio writer across a thread boundary.
 - CLAP generated `cdylib` scaffolding and host-load tests exist.
-- VST3/AU/LV2 remain package-layout or compatibility-matrix targets unless separately
-  implemented or removed from the supported production matrix.
+- VST3 remains a tracked package-layout/compatibility target but is not release-gated. AU/LV2 remain
+  package-layout or compatibility-matrix targets unless separately implemented or removed from the
+  supported production matrix.
 
 Required remediation:
 
@@ -326,7 +327,7 @@ Required remediation:
 - Finish the selected CLAP production vertical by connecting generated runtime artifacts to live
   Hawk2UI editor rendering inside the attached plugin GUI surface.
 - Implement VST3/AU/LV2 adapters only if they remain in the selected production compatibility
-  matrix; otherwise remove them from product claims and CLI/package output descriptions.
+  matrix; VST3 must not be restored to the release gate unless that decision changes explicitly.
 
 Acceptance:
 
@@ -1440,8 +1441,8 @@ Evidence:
 
 - `hawk2ui-plugin-adapters` materializes package file layouts and now uses `clap-sys` for the
   generated CLAP scaffold path.
-- VST3/AU/LV2 remain non-loadable package/metadata paths unless separately implemented or removed
-  from the production target matrix.
+- VST3 remains a non-gating package/metadata path. AU/LV2 remain non-loadable package/metadata paths
+  unless separately implemented or removed from the production target matrix.
 
 Status:
 
@@ -1536,7 +1537,7 @@ Required remediation:
   parameter/state/realtime bridge integration, dynamic-library generation, signing/notarization
   policy where applicable, and host tests.
 - Implement VST3/AU/LV2 with equivalent lifecycle/editor/state/host tests only if those formats
-  remain selected production targets.
+  become selected production targets; VST3 is currently tracked but not release-gated.
 
 Acceptance:
 

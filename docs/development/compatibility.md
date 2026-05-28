@@ -1,8 +1,10 @@
 # Compatibility
 
-Hawk2UI compatibility data is machine-readable and release-gated. Update the
-matrix files in the same change as the code, fixture, or package behavior they
-describe.
+Hawk2UI compatibility data is machine-readable. Release-gated rows are enforced
+by `release/package-targets.toml`; tracked non-gating rows, such as VST3 package
+metadata, must stay explicit and must not be described as release blockers.
+Update the matrix files in the same change as the code, fixture, or package
+behavior they describe.
 
 ## Operating System Matrix
 

@@ -602,6 +602,15 @@ compatibility_notes_required = true
             assert!(targets.contains(id), "missing package target {id}");
         }
 
+        let vst3 = targets
+            .targets
+            .iter()
+            .find(|target| target.id == "plugin-vst3")
+            .expect("VST3 remains a tracked non-gating target");
+        assert!(
+            !vst3.release_gate,
+            "VST3 must not be a release-gated target"
+        );
         assert!(targets.release_blockers().all(|target| target.release_gate));
     }
 
