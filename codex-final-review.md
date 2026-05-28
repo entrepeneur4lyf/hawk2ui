@@ -183,16 +183,23 @@ Production status: Not production ready.
 
 Evidence:
 
-- `crates/hawk2ui-text/src/lib.rs:276` lays out text through a custom paragraph pipeline.
-- `crates/hawk2ui-text/src/lib.rs:520` measures grapheme clusters heuristically.
-- `crates/hawk2ui-text/src/lib.rs:542` assigns widths using fixed factors for whitespace, emoji, CJK, RTL, and other text.
-- Parley is invoked only as a processor sanity path; the implementation does not consume real shaped glyph runs and metrics as the layout output.
+- Initial review found `hawk2ui-text` splitting lines and calculating widths through heuristic
+  grapheme factors while only invoking Parley as a finite-metrics sanity check.
 
 Impact:
 
 Complex scripts, font fallback, ligatures, shaping, bidirectional text, and precise measurement will not be production correct.
 
-Production status: Not production ready.
+Remediation:
+
+- `TextBackend::layout` now uses Parley line ranges, advances, baselines, layout width, and layout
+  height as the source of truth for `TextLayout` output.
+- The old heuristic line splitter was removed from production layout output; the remaining cluster
+  estimate is limited to pre-layout end-ellipsis truncation selection.
+- Tests cover wrapped line records, high-DPI metrics, bidi/emoji flags, and Parley processing with
+  strict clippy validation.
+
+Production status: Remediated at shaped layout metrics boundary.
 
 ### 9. Asset Processing Claims Are Stronger Than The Implementation
 

@@ -608,6 +608,8 @@ Evidence:
 - `LayoutTree::try_compute_layout_with_text_measurer` feeds text measurement into Taffy leaf sizing.
 - `RuntimeSceneBridge::build_with_text_measurer` attaches runtime text visuals to layout text measurement inputs before scene export.
 - `hawk2ui-text::TextLayout` now carries positioned `TextLayoutLine` records with measured line text, width, and baseline offsets.
+- `hawk2ui-text::TextBackend::layout` now derives line ranges, advances, baselines, layout width,
+  and layout height from Parley layout output instead of the removed heuristic line splitter.
 - `hawk2ui-render-skia::SkiaRendererBackend::draw_text_layout` consumes `TextLayout` directly, resolves the requested family through Skia with default fallback, and draws each measured line at its layout baseline.
 
 Required remediation:
@@ -621,6 +623,8 @@ Acceptance:
 Remediation delivered:
 
 - Text layout output now exposes renderer-owned line records instead of only aggregate metrics.
+- Text layout metrics now come from Parley's shaped layout result; heuristic cluster width remains
+  only as a conservative pre-layout truncation selector.
 - Skia text layout rendering now uses the production text backend's resolved family, display text, line count, bidi/parley/truncation flags, high-DPI baseline, and positioned line records.
 - Regression coverage verifies wrapped line records, truncation display text propagation, high-DPI baseline changes, and visible Skia pixels from shaped text layout drawing.
 

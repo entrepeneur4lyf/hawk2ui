@@ -65,9 +65,9 @@ fn text_backend_wraps_truncates_and_scales_high_dpi_metrics() {
         wrapped_layout.lines().len(),
         usize::try_from(wrapped_layout.line_count()).unwrap()
     );
-    assert_eq!(
+    assert_close(
         wrapped_layout.lines()[0].baseline_px(),
-        wrapped_layout.baseline_px()
+        wrapped_layout.baseline_px(),
     );
     assert!(wrapped_layout.lines()[1].baseline_px() > wrapped_layout.lines()[0].baseline_px());
     assert!(
@@ -83,6 +83,13 @@ fn text_backend_wraps_truncates_and_scales_high_dpi_metrics() {
     assert_eq!(
         truncated_layout.lines()[0].text(),
         truncated_layout.display_text()
+    );
+}
+
+fn assert_close(actual: f32, expected: f32) {
+    assert!(
+        (actual - expected).abs() < f32::EPSILON,
+        "expected {actual} to equal {expected}"
     );
 }
 

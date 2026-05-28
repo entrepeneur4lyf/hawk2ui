@@ -245,6 +245,13 @@ pub struct TextLayoutLine {
     baseline_px: f32,
 }
 
+struct ParleyLayoutMetrics {
+    lines: Vec<TextLayoutLine>,
+    width_px: f32,
+    height_px: f32,
+    baseline_px: f32,
+}
+
 impl TextLayoutLine {
     /// Returns the text slice to draw for this line.
     #[must_use]
@@ -482,15 +489,12 @@ impl TextBackend {
         let cluster_count = clusters.len();
         let contains_emoji = clusters.iter().any(|cluster| cluster.chars().any(is_emoji));
         let bidi_resolved = input.bidi && display_text.chars().any(is_rtl);
-        let line_height = input.size_px * input.dpi_scale * 1.2;
-        let baseline_px = input.size_px * input.dpi_scale * 0.8;
-        let lines = layout_lines(&display_text, input, line_height, baseline_px);
+        let parley_metrics = self.layout_with_parley(input, &display_text)?;
+        let lines = parley_metrics.lines;
         let line_count = u32::try_from(lines.len()).unwrap_or(u32::MAX);
-        let width_px = lines
-            .iter()
-            .fold(0.0_f32, |width, line| width.max(line.width_px()));
-        let height_px = (0..line_count).fold(0.0_f32, |height, _| height + line_height);
-        let parley_processed = self.process_with_parley(input, &display_text)?;
+        let width_px = parley_metrics.width_px;
+        let height_px = parley_metrics.height_px;
+        let baseline_px = parley_metrics.baseline_px;
         let _bidi_info = BidiInfo::new(&display_text, None);
 
         let mut flags = 0_u8;
@@ -500,9 +504,7 @@ impl TextBackend {
         if bidi_resolved {
             flags |= TEXT_LAYOUT_BIDI_RESOLVED;
         }
-        if parley_processed {
-            flags |= TEXT_LAYOUT_PARLEY_PROCESSED;
-        }
+        flags |= TEXT_LAYOUT_PARLEY_PROCESSED;
         if !matches!(input.truncation, TruncationMode::None) {
             flags |= TEXT_LAYOUT_TRUNCATED;
         }
@@ -543,11 +545,11 @@ impl TextBackend {
         })
     }
 
-    fn process_with_parley(
+    fn layout_with_parley(
         &self,
         input: &TextLayoutInput,
         display_text: &str,
-    ) -> Result<bool, TextBackendError> {
+    ) -> Result<ParleyLayoutMetrics, TextBackendError> {
         let mut font_context = self.parley_font_context.lock().map_err(|_| {
             TextBackendError::new(
                 "text.parley.font-context-poisoned",
@@ -565,7 +567,56 @@ impl TextBackend {
         builder.push_default(StyleProperty::FontSize(input.size_px));
         let mut layout = builder.build(display_text);
         layout.break_all_lines(parley_max_advance(input));
-        Ok(layout.width().is_finite() && layout.height().is_finite())
+
+        if !layout.width().is_finite() || !layout.height().is_finite() {
+            return Err(TextBackendError::new(
+                "text.parley.invalid-metrics",
+                "Parley produced non-finite text layout metrics",
+            ));
+        }
+
+        let mut lines = Vec::new();
+        let mut baseline_px = None;
+        for line in layout.lines() {
+            let metrics = line.metrics();
+            if !metrics.advance.is_finite() || !metrics.baseline.is_finite() {
+                return Err(TextBackendError::new(
+                    "text.parley.invalid-line-metrics",
+                    "Parley produced non-finite line metrics",
+                ));
+            }
+            let range = line.text_range();
+            let text = display_text
+                .get(range)
+                .ok_or_else(|| {
+                    TextBackendError::new(
+                        "text.parley.invalid-line-range",
+                        "Parley produced a line range outside the source text",
+                    )
+                })?
+                .to_string();
+            let baseline = round_tenth(metrics.baseline);
+            baseline_px.get_or_insert(baseline);
+            lines.push(TextLayoutLine {
+                text,
+                width_px: round_tenth(metrics.advance - metrics.trailing_whitespace),
+                baseline_px: baseline,
+            });
+        }
+
+        if lines.is_empty() {
+            return Err(TextBackendError::new(
+                "text.parley.empty-layout",
+                "Parley produced no text layout lines",
+            ));
+        }
+
+        Ok(ParleyLayoutMetrics {
+            lines,
+            width_px: round_tenth(layout.width()),
+            height_px: round_tenth(layout.height()),
+            baseline_px: baseline_px.unwrap_or(0.0),
+        })
     }
 }
 
@@ -641,63 +692,6 @@ fn measure_clusters(clusters: &[&str], size_px: f32, dpi_scale: f32) -> f32 {
     clusters.iter().fold(0.0_f32, |width, cluster| {
         width + cluster_width_factor(cluster) * size_px * dpi_scale
     })
-}
-
-fn layout_lines(
-    display_text: &str,
-    input: &TextLayoutInput,
-    line_height: f32,
-    baseline_px: f32,
-) -> Vec<TextLayoutLine> {
-    let LineBreakMode::Wrap { max_width_px } = input.line_break else {
-        return vec![text_layout_line(display_text, input, baseline_px)];
-    };
-    let max_width_px = max_width_px * input.dpi_scale;
-    let mut lines = Vec::new();
-    let mut line = String::new();
-    let mut line_width_px = 0.0_f32;
-    let mut next_baseline_px = baseline_px;
-
-    for cluster in display_text.graphemes(true) {
-        let cluster_width = measure_clusters(&[cluster], input.size_px, input.dpi_scale);
-        if !line.is_empty() && line_width_px + cluster_width > max_width_px {
-            lines.push(TextLayoutLine {
-                text: line,
-                width_px: round_tenth(line_width_px),
-                baseline_px: round_tenth(next_baseline_px),
-            });
-            line = String::new();
-            line_width_px = 0.0;
-            next_baseline_px += line_height;
-        }
-        line.push_str(cluster);
-        line_width_px += cluster_width;
-    }
-
-    if line.is_empty() {
-        lines.push(text_layout_line(display_text, input, baseline_px));
-    } else {
-        lines.push(TextLayoutLine {
-            text: line,
-            width_px: round_tenth(line_width_px),
-            baseline_px: round_tenth(next_baseline_px),
-        });
-    }
-
-    lines
-}
-
-fn text_layout_line(
-    display_text: &str,
-    input: &TextLayoutInput,
-    baseline_px: f32,
-) -> TextLayoutLine {
-    let clusters: Vec<&str> = display_text.graphemes(true).collect();
-    TextLayoutLine {
-        text: display_text.to_string(),
-        width_px: round_tenth(measure_clusters(&clusters, input.size_px, input.dpi_scale)),
-        baseline_px: round_tenth(baseline_px),
-    }
 }
 
 fn cluster_width_factor(cluster: &str) -> f32 {
