@@ -2,6 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Maximum accessibility tree depth traversed by host-facing operations.
+///
+/// Accessibility trees may be hydrated from package data, so traversal is
+/// deliberately bounded to avoid stack exhaustion from adversarial input.
+pub const A11Y_MAX_TREE_DEPTH: usize = 256;
+
 /// Accessibility role.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum A11yRole {
@@ -66,6 +72,53 @@ pub struct A11yBounds {
     pub height: f64,
 }
 
+/// Numeric accessibility value metadata.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct A11yNumericValue {
+    /// Current numeric value.
+    pub value: f64,
+    /// Optional minimum value.
+    pub min: Option<f64>,
+    /// Optional maximum value.
+    pub max: Option<f64>,
+    /// Optional increment/decrement step.
+    pub step: Option<f64>,
+}
+
+impl A11yNumericValue {
+    /// Creates numeric value metadata.
+    #[must_use]
+    pub const fn new(value: f64) -> Self {
+        Self {
+            value,
+            min: None,
+            max: None,
+            step: None,
+        }
+    }
+
+    /// Sets the minimum value.
+    #[must_use]
+    pub const fn min(mut self, min: f64) -> Self {
+        self.min = Some(min);
+        self
+    }
+
+    /// Sets the maximum value.
+    #[must_use]
+    pub const fn max(mut self, max: f64) -> Self {
+        self.max = Some(max);
+        self
+    }
+
+    /// Sets the increment/decrement step.
+    #[must_use]
+    pub const fn step(mut self, step: f64) -> Self {
+        self.step = Some(step);
+        self
+    }
+}
+
 impl A11yBounds {
     /// Creates bounds.
     #[must_use]
@@ -92,6 +145,8 @@ pub struct A11yNode {
     pub description: Option<String>,
     /// Accessible value text.
     pub value: Option<String>,
+    /// Numeric value metadata for range-like controls.
+    pub numeric_value: Option<A11yNumericValue>,
     /// Checked state.
     pub checked: Option<CheckedState>,
     /// Disabled state.
@@ -102,6 +157,10 @@ pub struct A11yNode {
     pub bounds: Option<A11yBounds>,
     /// Supported actions.
     pub actions: Vec<A11yAction>,
+    /// Total item count for collection children.
+    pub size_of_set: Option<usize>,
+    /// One-based position in a collection.
+    pub position_in_set: Option<usize>,
     /// Child nodes.
     pub children: Vec<A11yNode>,
 }
@@ -116,11 +175,14 @@ impl A11yNode {
             name: None,
             description: None,
             value: None,
+            numeric_value: None,
             checked: None,
             disabled: false,
             focused: false,
             bounds: None,
             actions: Vec::new(),
+            size_of_set: None,
+            position_in_set: None,
             children: Vec::new(),
         }
     }
@@ -143,6 +205,13 @@ impl A11yNode {
     #[must_use]
     pub fn value(mut self, value: impl Into<String>) -> Self {
         self.value = Some(value.into());
+        self
+    }
+
+    /// Sets numeric value metadata.
+    #[must_use]
+    pub const fn numeric_value(mut self, value: A11yNumericValue) -> Self {
+        self.numeric_value = Some(value);
         self
     }
 
@@ -181,6 +250,20 @@ impl A11yNode {
         self
     }
 
+    /// Sets collection size metadata.
+    #[must_use]
+    pub const fn size_of_set(mut self, size: usize) -> Self {
+        self.size_of_set = Some(size);
+        self
+    }
+
+    /// Sets one-based collection position metadata.
+    #[must_use]
+    pub const fn position_in_set(mut self, position: usize) -> Self {
+        self.position_in_set = Some(position);
+        self
+    }
+
     /// Adds a child node.
     #[must_use]
     pub fn child(mut self, child: A11yNode) -> Self {
@@ -189,19 +272,49 @@ impl A11yNode {
     }
 
     fn find(&self, id: &str) -> Option<&A11yNode> {
+        self.find_at_depth(id, 0)
+    }
+
+    fn find_at_depth(&self, id: &str, depth: usize) -> Option<&A11yNode> {
+        if depth > A11Y_MAX_TREE_DEPTH {
+            return None;
+        }
         if self.id == id {
             return Some(self);
         }
-        self.children.iter().find_map(|child| child.find(id))
+        self.children
+            .iter()
+            .find_map(|child| child.find_at_depth(id, depth + 1))
     }
 
     pub(crate) fn find_mut(&mut self, id: &str) -> Option<&mut A11yNode> {
+        self.find_mut_at_depth(id, 0)
+    }
+
+    fn find_mut_at_depth(&mut self, id: &str, depth: usize) -> Option<&mut A11yNode> {
+        if depth > A11Y_MAX_TREE_DEPTH {
+            return None;
+        }
         if self.id == id {
             return Some(self);
         }
         self.children
             .iter_mut()
-            .find_map(|child| child.find_mut(id))
+            .find_map(|child| child.find_mut_at_depth(id, depth + 1))
+    }
+
+    pub(crate) fn clear_focus(&mut self) {
+        self.clear_focus_at_depth(0);
+    }
+
+    fn clear_focus_at_depth(&mut self, depth: usize) {
+        if depth > A11Y_MAX_TREE_DEPTH {
+            return;
+        }
+        self.focused = false;
+        for child in &mut self.children {
+            child.clear_focus_at_depth(depth + 1);
+        }
     }
 }
 
@@ -227,5 +340,9 @@ impl A11yTree {
 
     pub(crate) fn find_mut(&mut self, id: &str) -> Option<&mut A11yNode> {
         self.root.find_mut(id)
+    }
+
+    pub(crate) fn clear_focus(&mut self) {
+        self.root.clear_focus();
     }
 }

@@ -3,7 +3,10 @@
 use hawk2ui_api::Diagnostic;
 use serde::{Deserialize, Serialize};
 
-use crate::{A11yAction, A11yTree};
+use crate::{A11yAction, A11yRole, A11yTree, CheckedState};
+
+/// Maximum retained action events per dispatcher.
+pub const A11Y_ACTION_EVENT_HISTORY_LIMIT: usize = 1024;
 
 /// Accessibility action event.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -108,21 +111,59 @@ impl A11yActionDispatcher {
     ///
     /// Returns [`A11yActionDispatchError`] when the target node is missing.
     pub fn dispatch(&mut self, event: A11yActionEvent) -> Result<(), A11yActionDispatchError> {
-        let Some(node) = self.tree.find_mut(&event.node_id) else {
-            return Err(A11yActionDispatchError {
-                code: "a11y.action-target-missing".into(),
-                message: format!("accessibility action target is missing: {}", event.node_id),
-            });
+        let Some(node) = self.tree.find(&event.node_id) else {
+            return Err(missing_target_error(&event.node_id));
         };
-        match &event.action {
-            A11yAction::Focus => node.focused = true,
-            A11yAction::SetValue(value) => node.value = Some(value.clone()),
-            A11yAction::Press
-            | A11yAction::Increment
-            | A11yAction::Decrement
-            | A11yAction::Custom(_) => {}
+        if node.disabled {
+            return Err(A11yActionDispatchError {
+                code: "a11y.action-target-disabled".into(),
+                message: format!("accessibility action target is disabled: {}", event.node_id),
+            });
         }
-        self.events.push(event);
+        if !action_supported(&node.actions, &event.action) {
+            return Err(A11yActionDispatchError {
+                code: "a11y.action-unsupported".into(),
+                message: format!(
+                    "accessibility action is not supported by target {}",
+                    event.node_id
+                ),
+            });
+        }
+        match &event.action {
+            A11yAction::Focus => {
+                self.tree.clear_focus();
+                let Some(node) = self.tree.find_mut(&event.node_id) else {
+                    return Err(missing_target_error(&event.node_id));
+                };
+                node.focused = true;
+            }
+            A11yAction::Press => {
+                let Some(node) = self.tree.find_mut(&event.node_id) else {
+                    return Err(missing_target_error(&event.node_id));
+                };
+                if node.role == A11yRole::Checkbox {
+                    node.checked = Some(match node.checked.unwrap_or(CheckedState::Unchecked) {
+                        CheckedState::Checked | CheckedState::Mixed => CheckedState::Unchecked,
+                        CheckedState::Unchecked => CheckedState::Checked,
+                    });
+                }
+            }
+            A11yAction::Increment => self.adjust_numeric_value(&event.node_id, 1.0)?,
+            A11yAction::Decrement => self.adjust_numeric_value(&event.node_id, -1.0)?,
+            A11yAction::SetValue(value) => {
+                let Some(node) = self.tree.find_mut(&event.node_id) else {
+                    return Err(missing_target_error(&event.node_id));
+                };
+                node.value = Some(value.clone());
+                if let (Some(numeric), Ok(parsed)) =
+                    (node.numeric_value.as_mut(), value.parse::<f64>())
+                {
+                    numeric.value = clamp_numeric(parsed, numeric.min, numeric.max);
+                }
+            }
+            A11yAction::Custom(_) => {}
+        }
+        self.push_event(event);
         Ok(())
     }
 
@@ -137,4 +178,108 @@ impl A11yActionDispatcher {
     pub fn events(&self) -> &[A11yActionEvent] {
         &self.events
     }
+
+    fn adjust_numeric_value(
+        &mut self,
+        node_id: &str,
+        direction: f64,
+    ) -> Result<(), A11yActionDispatchError> {
+        let node = self
+            .tree
+            .find_mut(node_id)
+            .ok_or_else(|| missing_target_error(node_id))?;
+        let step = node
+            .numeric_value
+            .as_ref()
+            .and_then(|numeric| numeric.step)
+            .filter(|step| step.is_finite() && *step > 0.0)
+            .unwrap_or(1.0);
+        let (current, suffix) = numeric_value_and_suffix(node.value.as_deref(), node.numeric_value)
+            .ok_or_else(|| A11yActionDispatchError {
+                code: "a11y.action-invalid-value".into(),
+                message: format!("accessibility numeric value is invalid: {node_id}"),
+            })?;
+        let adjusted = if let Some(numeric) = node.numeric_value.as_mut() {
+            let value = clamp_numeric(current + (direction * step), numeric.min, numeric.max);
+            numeric.value = value;
+            value
+        } else {
+            current + (direction * step)
+        };
+        node.value = Some(format_numeric_value(adjusted, suffix.as_deref()));
+        Ok(())
+    }
+
+    fn push_event(&mut self, event: A11yActionEvent) {
+        if self.events.len() == A11Y_ACTION_EVENT_HISTORY_LIMIT {
+            self.events.remove(0);
+        }
+        self.events.push(event);
+    }
+}
+
+fn missing_target_error(node_id: &str) -> A11yActionDispatchError {
+    A11yActionDispatchError {
+        code: "a11y.action-target-missing".into(),
+        message: format!("accessibility action target is missing: {node_id}"),
+    }
+}
+
+fn action_supported(supported: &[A11yAction], requested: &A11yAction) -> bool {
+    supported.iter().any(|action| match (action, requested) {
+        (A11yAction::SetValue(_), A11yAction::SetValue(_)) => true,
+        (A11yAction::Custom(left), A11yAction::Custom(right)) => left == right,
+        _ => action == requested,
+    })
+}
+
+fn numeric_value_and_suffix(
+    value: Option<&str>,
+    numeric: Option<crate::A11yNumericValue>,
+) -> Option<(f64, Option<String>)> {
+    if let Some(text) = value {
+        return parse_numeric_text(text);
+    }
+    numeric.map(|numeric| (numeric.value, None))
+}
+
+fn parse_numeric_text(text: &str) -> Option<(f64, Option<String>)> {
+    let trimmed = text.trim_start();
+    let leading_whitespace = text.len().saturating_sub(trimmed.len());
+    let mut end = 0;
+    for (index, character) in trimmed.char_indices() {
+        if character.is_ascii_digit() || matches!(character, '+' | '-' | '.' | 'e' | 'E') {
+            end = index + character.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if end == 0 {
+        return None;
+    }
+    let number = trimmed[..end].parse::<f64>().ok()?;
+    if !number.is_finite() {
+        return None;
+    }
+    let suffix_start = leading_whitespace + end;
+    let suffix = text[suffix_start..].trim_start();
+    let suffix = (!suffix.is_empty()).then(|| suffix.to_owned());
+    Some((number, suffix))
+}
+
+fn clamp_numeric(value: f64, min: Option<f64>, max: Option<f64>) -> f64 {
+    let value = min.map_or(value, |min| value.max(min));
+    max.map_or(value, |max| value.min(max))
+}
+
+fn format_numeric_value(value: f64, suffix: Option<&str>) -> String {
+    let mut text = value.to_string();
+    if text.ends_with(".0") {
+        text.truncate(text.len() - 2);
+    }
+    if let Some(suffix) = suffix {
+        text.push(' ');
+        text.push_str(suffix);
+    }
+    text
 }

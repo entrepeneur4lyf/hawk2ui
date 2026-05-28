@@ -2,11 +2,16 @@
 
 use std::collections::BTreeMap;
 
-use accesskit::{Action, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate};
+use accesskit::{
+    Action, CustomAction, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
+};
 use hawk2ui_api::Diagnostic;
 use serde::{Deserialize, Serialize};
 
-use crate::{A11yAction, A11yBounds, A11yNode, A11yRole, A11yTree, CheckedState};
+use crate::{
+    A11Y_MAX_TREE_DEPTH, A11yAction, A11yBounds, A11yNode, A11yNumericValue, A11yRole, A11yTree,
+    CheckedState,
+};
 
 /// Accessibility host surface kind.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -18,10 +23,10 @@ pub enum A11yHostSurfaceKind {
 }
 
 /// Layout geometry update for an accessibility node.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct LayoutGeometryUpdate {
     /// Target node identifier.
-    pub node_id: &'static str,
+    pub node_id: String,
     /// Updated bounds.
     pub bounds: A11yBounds,
 }
@@ -29,8 +34,11 @@ pub struct LayoutGeometryUpdate {
 impl LayoutGeometryUpdate {
     /// Creates a layout geometry update.
     #[must_use]
-    pub const fn new(node_id: &'static str, bounds: A11yBounds) -> Self {
-        Self { node_id, bounds }
+    pub fn new(node_id: impl Into<String>, bounds: A11yBounds) -> Self {
+        Self {
+            node_id: node_id.into(),
+            bounds,
+        }
     }
 }
 
@@ -124,9 +132,9 @@ impl A11yHostExporter {
     /// Returns [`AccessKitExportError`] when the target node does not exist.
     pub fn apply_geometry(
         &mut self,
-        update: LayoutGeometryUpdate,
+        update: &LayoutGeometryUpdate,
     ) -> Result<(), AccessKitExportError> {
-        let Some(node) = self.tree.find_mut(update.node_id) else {
+        let Some(node) = self.tree.find_mut(update.node_id.as_str()) else {
             return Err(AccessKitExportError::new(
                 "a11y.geometry-node-missing",
                 format!("accessibility node is missing: {}", update.node_id),
@@ -162,7 +170,7 @@ impl A11yHostExporter {
         let mut node_ids = BTreeMap::new();
         assign_accesskit_ids(&self.tree.root, &mut node_ids)?;
         let mut focused = Vec::new();
-        collect_focused_node_ids(&self.tree.root, &mut focused);
+        collect_focused_node_ids(&self.tree.root, &mut focused)?;
         if focused.len() > 1 {
             return Err(AccessKitExportError::new(
                 "a11y.accesskit.multiple-focused-nodes",
@@ -188,43 +196,72 @@ impl A11yHostExporter {
 }
 
 fn assign_accesskit_ids(
-    node: &A11yNode,
+    root: &A11yNode,
     node_ids: &mut BTreeMap<String, NodeId>,
 ) -> Result<(), AccessKitExportError> {
-    if node.id.trim().is_empty() {
-        return Err(AccessKitExportError::new(
-            "a11y.accesskit.invalid-id",
-            "accessibility node identifier must not be empty",
-        ));
-    }
-    if node_ids.contains_key(&node.id) {
-        return Err(AccessKitExportError::new(
-            "a11y.accesskit.duplicate-id",
-            format!("duplicate accessibility node identifier: {}", node.id),
-        ));
-    }
-    let next = u64::try_from(node_ids.len())
-        .ok()
-        .and_then(|len| len.checked_add(1))
-        .ok_or_else(|| {
-            AccessKitExportError::new(
-                "a11y.accesskit.id-overflow",
-                "accessibility tree contains more nodes than AccessKit can address",
-            )
-        })?;
-    node_ids.insert(node.id.clone(), NodeId(next));
-    for child in &node.children {
-        assign_accesskit_ids(child, node_ids)?;
+    let mut stack = vec![(root, 0usize)];
+    while let Some((node, depth)) = stack.pop() {
+        reject_excessive_depth(depth)?;
+        if node.id.trim().is_empty() {
+            return Err(AccessKitExportError::new(
+                "a11y.accesskit.invalid-id",
+                "accessibility node identifier must not be empty",
+            ));
+        }
+        if node_ids.contains_key(&node.id) {
+            return Err(AccessKitExportError::new(
+                "a11y.accesskit.duplicate-id",
+                format!("duplicate accessibility node identifier: {}", node.id),
+            ));
+        }
+        let next = u64::try_from(node_ids.len())
+            .ok()
+            .and_then(|len| len.checked_add(1))
+            .ok_or_else(|| {
+                AccessKitExportError::new(
+                    "a11y.accesskit.id-overflow",
+                    "accessibility tree contains more nodes than AccessKit can address",
+                )
+            })?;
+        node_ids.insert(node.id.clone(), NodeId(next));
+        for child in node.children.iter().rev() {
+            stack.push((child, depth + 1));
+        }
     }
     Ok(())
 }
 
 fn collect_accesskit_nodes(
-    node: &A11yNode,
+    root: &A11yNode,
     node_ids: &BTreeMap<String, NodeId>,
     nodes: &mut Vec<(NodeId, Node)>,
 ) -> Result<(), AccessKitExportError> {
-    let Some(id) = node_ids.get(&node.id).copied() else {
+    let mut stack = vec![(root, 0usize)];
+    while let Some((node, depth)) = stack.pop() {
+        reject_excessive_depth(depth)?;
+        let accesskit_node = build_accesskit_node(node, node_ids)?;
+        let id = node_ids.get(&node.id).copied().ok_or_else(|| {
+            AccessKitExportError::new(
+                "a11y.accesskit.missing-id",
+                format!(
+                    "accessibility node was not assigned an AccessKit ID: {}",
+                    node.id
+                ),
+            )
+        })?;
+        nodes.push((id, accesskit_node));
+        for child in node.children.iter().rev() {
+            stack.push((child, depth + 1));
+        }
+    }
+    Ok(())
+}
+
+fn build_accesskit_node(
+    node: &A11yNode,
+    node_ids: &BTreeMap<String, NodeId>,
+) -> Result<Node, AccessKitExportError> {
+    if !node_ids.contains_key(&node.id) {
         return Err(AccessKitExportError::new(
             "a11y.accesskit.missing-id",
             format!(
@@ -232,7 +269,7 @@ fn collect_accesskit_nodes(
                 node.id
             ),
         ));
-    };
+    }
     let mut accesskit_node = Node::new(role_to_accesskit(node.role));
     if let Some(name) = &node.name {
         accesskit_node.set_label(name.as_str());
@@ -243,6 +280,9 @@ fn collect_accesskit_nodes(
     if let Some(value) = &node.value {
         accesskit_node.set_value(value.as_str());
     }
+    if let Some(numeric) = node.numeric_value {
+        apply_numeric_value(&mut accesskit_node, numeric)?;
+    }
     if node.disabled {
         accesskit_node.set_disabled();
     }
@@ -252,8 +292,30 @@ fn collect_accesskit_nodes(
     if let Some(bounds) = node.bounds {
         accesskit_node.set_bounds(bounds_to_accesskit(bounds)?);
     }
+    if let Some(size_of_set) = node.size_of_set {
+        accesskit_node.set_size_of_set(size_of_set);
+    }
+    if let Some(position_in_set) = node.position_in_set {
+        accesskit_node.set_position_in_set(position_in_set);
+    }
     for action in &node.actions {
-        accesskit_node.add_action(action_to_accesskit(action));
+        match action {
+            A11yAction::Custom(name) => {
+                accesskit_node.add_action(Action::CustomAction);
+                let custom_action_id = i32::try_from(accesskit_node.custom_actions().len())
+                    .map_err(|_| {
+                        AccessKitExportError::new(
+                            "a11y.accesskit.custom-action-overflow",
+                            "accessibility node has too many custom actions",
+                        )
+                    })?;
+                accesskit_node.push_custom_action(CustomAction {
+                    id: custom_action_id,
+                    description: name.clone().into_boxed_str(),
+                });
+            }
+            _ => accesskit_node.add_action(action_to_accesskit(action)),
+        }
     }
     let children = node
         .children
@@ -261,26 +323,31 @@ fn collect_accesskit_nodes(
         .filter_map(|child| node_ids.get(&child.id).copied())
         .collect::<Vec<_>>();
     accesskit_node.set_children(children);
-    nodes.push((id, accesskit_node));
-    for child in &node.children {
-        collect_accesskit_nodes(child, node_ids, nodes)?;
-    }
-    Ok(())
+    Ok(accesskit_node)
 }
 
-fn collect_focused_node_ids<'a>(node: &'a A11yNode, focused: &mut Vec<&'a str>) {
-    if node.focused {
-        focused.push(&node.id);
+fn collect_focused_node_ids<'a>(
+    root: &'a A11yNode,
+    focused: &mut Vec<&'a str>,
+) -> Result<(), AccessKitExportError> {
+    let mut stack = vec![(root, 0usize)];
+    while let Some((node, depth)) = stack.pop() {
+        reject_excessive_depth(depth)?;
+        if node.focused {
+            focused.push(&node.id);
+        }
+        for child in node.children.iter().rev() {
+            stack.push((child, depth + 1));
+        }
     }
-    for child in &node.children {
-        collect_focused_node_ids(child, focused);
-    }
+    Ok(())
 }
 
 fn role_to_accesskit(role: A11yRole) -> Role {
     match role {
         A11yRole::Window => Role::Window,
-        A11yRole::Panel | A11yRole::Custom => Role::Pane,
+        A11yRole::Panel => Role::Pane,
+        A11yRole::Custom => Role::Group,
         A11yRole::Button => Role::Button,
         A11yRole::Slider => Role::Slider,
         A11yRole::TextInput => Role::TextInput,
@@ -307,6 +374,62 @@ fn action_to_accesskit(action: &A11yAction) -> Action {
         A11yAction::SetValue(_) => Action::SetValue,
         A11yAction::Custom(_) => Action::CustomAction,
     }
+}
+
+fn apply_numeric_value(
+    node: &mut Node,
+    numeric: A11yNumericValue,
+) -> Result<(), AccessKitExportError> {
+    for value in [
+        numeric.value,
+        numeric.min.unwrap_or(0.0),
+        numeric.max.unwrap_or(0.0),
+        numeric.step.unwrap_or(0.0),
+    ] {
+        if !value.is_finite() {
+            return Err(AccessKitExportError::new(
+                "a11y.accesskit.invalid-numeric-value",
+                "accessibility numeric values must be finite",
+            ));
+        }
+    }
+    if let (Some(min), Some(max)) = (numeric.min, numeric.max)
+        && min > max
+    {
+        return Err(AccessKitExportError::new(
+            "a11y.accesskit.invalid-numeric-value",
+            "accessibility numeric minimum must not exceed maximum",
+        ));
+    }
+    if let Some(step) = numeric.step
+        && step <= 0.0
+    {
+        return Err(AccessKitExportError::new(
+            "a11y.accesskit.invalid-numeric-value",
+            "accessibility numeric step must be positive",
+        ));
+    }
+    node.set_numeric_value(numeric.value);
+    if let Some(min) = numeric.min {
+        node.set_min_numeric_value(min);
+    }
+    if let Some(max) = numeric.max {
+        node.set_max_numeric_value(max);
+    }
+    if let Some(step) = numeric.step {
+        node.set_numeric_value_step(step);
+    }
+    Ok(())
+}
+
+fn reject_excessive_depth(depth: usize) -> Result<(), AccessKitExportError> {
+    if depth > A11Y_MAX_TREE_DEPTH {
+        return Err(AccessKitExportError::new(
+            "a11y.accesskit.max-depth",
+            format!("accessibility tree exceeds maximum depth of {A11Y_MAX_TREE_DEPTH}"),
+        ));
+    }
+    Ok(())
 }
 
 fn bounds_to_accesskit(bounds: A11yBounds) -> Result<Rect, AccessKitExportError> {

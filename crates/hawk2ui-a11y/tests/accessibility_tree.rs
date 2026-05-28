@@ -1,11 +1,8 @@
 use hawk2ui_a11y::{
-    A11yAction, A11yActionDispatcher, A11yActionEvent, A11yBounds, A11yNode, A11yRole, A11yTree,
-    CheckedState,
+    A11Y_ACTION_EVENT_HISTORY_LIMIT, A11Y_MAX_TREE_DEPTH, A11yAction, A11yActionDispatcher,
+    A11yActionEvent, A11yBounds, A11yNode, A11yNumericValue, A11yRole, A11yTree, CheckedState,
 };
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
-use serde::{Serialize, de::DeserializeOwned};
-
-fn assert_serde<T: Serialize + DeserializeOwned>() {}
 
 #[test]
 fn tree_records_preserve_shape_identity_bounds_and_hierarchy() {
@@ -42,11 +39,22 @@ fn tree_records_preserve_shape_identity_bounds_and_hierarchy() {
 
 #[test]
 fn tree_records_are_serializable_contracts() {
-    assert_serde::<A11yTree>();
-    assert_serde::<A11yNode>();
-    assert_serde::<A11yBounds>();
-    assert_serde::<A11yAction>();
-    assert_serde::<A11yRole>();
+    let tree = A11yTree::new(
+        A11yNode::new("root", A11yRole::Window).child(
+            A11yNode::new("gain", A11yRole::Slider)
+                .name("Gain")
+                .value("0.5")
+                .numeric_value(A11yNumericValue::new(0.5).min(0.0).max(1.0).step(0.1))
+                .size_of_set(4)
+                .position_in_set(1)
+                .action(A11yAction::SetValue(String::new())),
+        ),
+    );
+
+    let encoded = serde_json::to_string(&tree).expect("a11y tree serializes");
+    let decoded: A11yTree = serde_json::from_str(&encoded).expect("a11y tree deserializes");
+
+    assert_eq!(decoded, tree);
 }
 
 use hawk2ui_a11y::{ComponentKind, ComponentSemantics, VisualStyleSemantics};
@@ -76,20 +84,28 @@ fn component_semantics_exist_independently_of_visual_styles() {
 #[test]
 fn actions_values_dispatch_focus_press_increment_decrement_set_value_and_custom() {
     let tree = A11yTree::new(
-        A11yNode::new("gain", A11yRole::Slider)
-            .name("Gain")
-            .value("0.5")
-            .action(A11yAction::Focus)
-            .action(A11yAction::Press)
-            .action(A11yAction::Increment)
-            .action(A11yAction::Decrement)
-            .action(A11yAction::SetValue("0.75".into()))
-            .action(A11yAction::Custom("reset".into())),
+        A11yNode::new("root", A11yRole::Window)
+            .child(A11yNode::new("other", A11yRole::Button).focused(true))
+            .child(
+                A11yNode::new("gain", A11yRole::Slider)
+                    .name("Gain")
+                    .value("0.5")
+                    .numeric_value(A11yNumericValue::new(0.5).min(0.0).max(1.0).step(0.25))
+                    .action(A11yAction::Focus)
+                    .action(A11yAction::Increment)
+                    .action(A11yAction::Decrement)
+                    .action(A11yAction::SetValue(String::new()))
+                    .action(A11yAction::Custom("reset".into())),
+            )
+            .child(
+                A11yNode::new("enabled", A11yRole::Checkbox)
+                    .checked(CheckedState::Unchecked)
+                    .action(A11yAction::Press),
+            ),
     );
     let mut dispatcher = A11yActionDispatcher::new(tree);
 
     dispatcher.dispatch(A11yActionEvent::focus("gain")).unwrap();
-    dispatcher.dispatch(A11yActionEvent::press("gain")).unwrap();
     dispatcher
         .dispatch(A11yActionEvent::increment("gain"))
         .unwrap();
@@ -102,13 +118,80 @@ fn actions_values_dispatch_focus_press_increment_decrement_set_value_and_custom(
     dispatcher
         .dispatch(A11yActionEvent::custom("gain", "reset"))
         .unwrap();
+    dispatcher
+        .dispatch(A11yActionEvent::press("enabled"))
+        .unwrap();
 
     assert!(dispatcher.tree().find("gain").unwrap().focused);
+    assert!(!dispatcher.tree().find("other").unwrap().focused);
     assert_eq!(
         dispatcher.tree().find("gain").unwrap().value.as_deref(),
         Some("0.75")
     );
+    assert!(
+        (dispatcher
+            .tree()
+            .find("gain")
+            .unwrap()
+            .numeric_value
+            .unwrap()
+            .value
+            - 0.75)
+            .abs()
+            < f64::EPSILON
+    );
+    assert_eq!(
+        dispatcher.tree().find("enabled").unwrap().checked,
+        Some(CheckedState::Checked)
+    );
     assert_eq!(dispatcher.events().len(), 6);
+}
+
+#[test]
+fn action_dispatch_rejects_unsupported_disabled_and_invalid_numeric_actions() {
+    let tree = A11yTree::new(
+        A11yNode::new("root", A11yRole::Window)
+            .child(A11yNode::new("button", A11yRole::Button).action(A11yAction::Press))
+            .child(
+                A11yNode::new("disabled", A11yRole::Button)
+                    .disabled(true)
+                    .action(A11yAction::Press),
+            )
+            .child(
+                A11yNode::new("bad-slider", A11yRole::Slider)
+                    .value("loud")
+                    .action(A11yAction::Increment),
+            ),
+    );
+    let mut dispatcher = A11yActionDispatcher::new(tree);
+
+    let unsupported = dispatcher
+        .dispatch(A11yActionEvent::focus("button"))
+        .expect_err("unsupported focus action must be rejected");
+    let disabled = dispatcher
+        .dispatch(A11yActionEvent::press("disabled"))
+        .expect_err("disabled action target must be rejected");
+    let invalid_value = dispatcher
+        .dispatch(A11yActionEvent::increment("bad-slider"))
+        .expect_err("invalid numeric value must be rejected");
+
+    assert_eq!(unsupported.code, "a11y.action-unsupported");
+    assert_eq!(disabled.code, "a11y.action-target-disabled");
+    assert_eq!(invalid_value.code, "a11y.action-invalid-value");
+}
+
+#[test]
+fn action_dispatch_bounds_event_history() {
+    let tree = A11yTree::new(A11yNode::new("button", A11yRole::Button).action(A11yAction::Press));
+    let mut dispatcher = A11yActionDispatcher::new(tree);
+
+    for _ in 0..(A11Y_ACTION_EVENT_HISTORY_LIMIT + 4) {
+        dispatcher
+            .dispatch(A11yActionEvent::press("button"))
+            .unwrap();
+    }
+
+    assert_eq!(dispatcher.events().len(), A11Y_ACTION_EVENT_HISTORY_LIMIT);
 }
 
 #[test]
@@ -133,7 +216,7 @@ fn host_export_updates_bounds_from_layout_geometry() {
     let mut exporter = A11yHostExporter::desktop(tree);
 
     exporter
-        .apply_geometry(LayoutGeometryUpdate::new(
+        .apply_geometry(&LayoutGeometryUpdate::new(
             "button",
             A11yBounds::new(10.0, 12.0, 80.0, 24.0),
         ))
@@ -157,7 +240,7 @@ fn host_export_errors_convert_to_shared_diagnostics() {
     let mut exporter = A11yHostExporter::desktop(tree);
 
     let missing_geometry = exporter
-        .apply_geometry(LayoutGeometryUpdate::new(
+        .apply_geometry(&LayoutGeometryUpdate::new(
             "missing",
             A11yBounds::new(10.0, 12.0, 80.0, 24.0),
         ))
@@ -200,10 +283,22 @@ fn host_export_builds_accesskit_tree_update() {
                 A11yNode::new("gain", A11yRole::Slider)
                     .name("Gain")
                     .value("-6 dB")
+                    .numeric_value(A11yNumericValue::new(-6.0).min(-60.0).max(12.0).step(0.5))
                     .focused(true)
                     .bounds(A11yBounds::new(20.0, 20.0, 120.0, 32.0))
                     .action(A11yAction::Increment)
                     .action(A11yAction::Decrement),
+            )
+            .child(
+                A11yNode::new("presets", A11yRole::List)
+                    .name("Presets")
+                    .size_of_set(2)
+                    .child(
+                        A11yNode::new("preset-a", A11yRole::ListItem)
+                            .name("A")
+                            .position_in_set(1)
+                            .size_of_set(2),
+                    ),
             ),
     );
     let export = A11yHostExporter::desktop(tree)
@@ -225,19 +320,68 @@ fn host_export_builds_accesskit_tree_update() {
         .find(|(id, _)| *id == gain_id)
         .map(|(_, node)| node)
         .expect("gain node exported");
+    let presets = export
+        .update
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == export.node_id("presets").unwrap())
+        .map(|(_, node)| node)
+        .expect("presets node exported");
+    let preset_a = export
+        .update
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == export.node_id("preset-a").unwrap())
+        .map(|(_, node)| node)
+        .expect("preset node exported");
 
     assert_eq!(export.update.focus, gain_id);
     assert_eq!(root.role(), accesskit::Role::Window);
-    assert_eq!(root.children(), &[gain_id]);
+    assert_eq!(
+        root.children(),
+        &[gain_id, export.node_id("presets").unwrap()]
+    );
     assert_eq!(gain.role(), accesskit::Role::Slider);
     assert_eq!(gain.label(), Some("Gain"));
     assert_eq!(gain.value(), Some("-6 dB"));
+    assert_eq!(gain.numeric_value(), Some(-6.0));
+    assert_eq!(gain.min_numeric_value(), Some(-60.0));
+    assert_eq!(gain.max_numeric_value(), Some(12.0));
+    assert_eq!(gain.numeric_value_step(), Some(0.5));
     assert!(gain.supports_action(accesskit::Action::Increment));
     assert!(gain.supports_action(accesskit::Action::Decrement));
+    assert_eq!(presets.size_of_set(), Some(2));
+    assert_eq!(preset_a.position_in_set(), Some(1));
+    assert_eq!(preset_a.size_of_set(), Some(2));
     assert_eq!(
         gain.bounds().expect("bounds exported"),
         accesskit::Rect::new(20.0, 20.0, 140.0, 52.0)
     );
+}
+
+#[test]
+fn host_export_rejects_invalid_accesskit_ids_and_excessive_depth() {
+    let empty_id = A11yHostExporter::desktop(A11yTree::new(A11yNode::new("", A11yRole::Window)))
+        .export_accesskit_update()
+        .expect_err("empty accessibility identifiers must fail");
+    let duplicate_id = A11yHostExporter::desktop(A11yTree::new(
+        A11yNode::new("root", A11yRole::Window)
+            .child(A11yNode::new("duplicate", A11yRole::Button))
+            .child(A11yNode::new("duplicate", A11yRole::Button)),
+    ))
+    .export_accesskit_update()
+    .expect_err("duplicate accessibility identifiers must fail");
+    let mut root = A11yNode::new("node-0", A11yRole::Window);
+    for depth in (1..=(A11Y_MAX_TREE_DEPTH + 1)).rev() {
+        root = A11yNode::new(format!("node-{depth}"), A11yRole::Panel).child(root);
+    }
+    let too_deep = A11yHostExporter::desktop(A11yTree::new(root))
+        .export_accesskit_update()
+        .expect_err("excessively deep accessibility trees must fail");
+
+    assert_eq!(empty_id.rule, "a11y.accesskit.invalid-id");
+    assert_eq!(duplicate_id.rule, "a11y.accesskit.duplicate-id");
+    assert_eq!(too_deep.rule, "a11y.accesskit.max-depth");
 }
 
 #[test]

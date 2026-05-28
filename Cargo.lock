@@ -1566,6 +1566,7 @@ dependencies = [
  "accesskit",
  "hawk2ui-api",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

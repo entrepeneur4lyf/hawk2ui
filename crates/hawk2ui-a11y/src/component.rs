@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{A11yNode, A11yRole, CheckedState};
+use crate::{A11yAction, A11yNode, A11yNumericValue, A11yRole, CheckedState};
 
 /// Headless component kind.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -62,7 +62,10 @@ impl ComponentSemantics {
     pub fn button(id: impl Into<String>, name: impl Into<String>) -> Self {
         Self::new(
             ComponentKind::Button,
-            A11yNode::new(id, A11yRole::Button).name(name),
+            A11yNode::new(id, A11yRole::Button)
+                .name(name)
+                .action(A11yAction::Focus)
+                .action(A11yAction::Press),
         )
     }
 
@@ -73,10 +76,18 @@ impl ComponentSemantics {
         name: impl Into<String>,
         value: impl Into<String>,
     ) -> Self {
-        Self::new(
-            ComponentKind::Slider,
-            A11yNode::new(id, A11yRole::Slider).name(name).value(value),
-        )
+        let value = value.into();
+        let mut node = A11yNode::new(id, A11yRole::Slider)
+            .name(name)
+            .value(value.clone())
+            .action(A11yAction::Focus)
+            .action(A11yAction::Increment)
+            .action(A11yAction::Decrement)
+            .action(A11yAction::SetValue(String::new()));
+        if let Ok(numeric) = value.parse::<f64>() {
+            node = node.numeric_value(A11yNumericValue::new(numeric));
+        }
+        Self::new(ComponentKind::Slider, node)
     }
 
     /// Creates text input semantics.
@@ -90,7 +101,9 @@ impl ComponentSemantics {
             ComponentKind::TextInput,
             A11yNode::new(id, A11yRole::TextInput)
                 .name(name)
-                .value(value),
+                .value(value)
+                .action(A11yAction::Focus)
+                .action(A11yAction::SetValue(String::new())),
         )
     }
 
@@ -106,7 +119,9 @@ impl ComponentSemantics {
             ComponentKind::Checkbox,
             A11yNode::new(id, A11yRole::Checkbox)
                 .name(name)
-                .checked(checked),
+                .checked(checked)
+                .action(A11yAction::Focus)
+                .action(A11yAction::Press),
         )
     }
 
@@ -115,7 +130,9 @@ impl ComponentSemantics {
     pub fn list(id: impl Into<String>, name: impl Into<String>, item_count: usize) -> Self {
         let mut semantics = Self::new(
             ComponentKind::List,
-            A11yNode::new(id, A11yRole::List).name(name),
+            A11yNode::new(id, A11yRole::List)
+                .name(name)
+                .size_of_set(item_count),
         );
         semantics.item_count = Some(item_count);
         semantics

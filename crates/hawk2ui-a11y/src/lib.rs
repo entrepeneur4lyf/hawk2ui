@@ -7,14 +7,19 @@ pub mod host;
 pub mod plugin;
 pub mod tree;
 
-pub use actions::{A11yActionDispatchError, A11yActionDispatcher, A11yActionEvent};
+pub use actions::{
+    A11Y_ACTION_EVENT_HISTORY_LIMIT, A11yActionDispatchError, A11yActionDispatcher, A11yActionEvent,
+};
 pub use component::{ComponentKind, ComponentSemantics, VisualStyleSemantics};
 pub use host::{
     A11yHostExportSnapshot, A11yHostExporter, A11yHostSurfaceKind, AccessKitExport,
     AccessKitExportError, LayoutGeometryUpdate,
 };
 pub use plugin::{A11yPluginDenial, A11yPluginGuard, A11yPluginOperation, A11yThreadContext};
-pub use tree::{A11yAction, A11yBounds, A11yNode, A11yRole, A11yTree, CheckedState};
+pub use tree::{
+    A11Y_MAX_TREE_DEPTH, A11yAction, A11yBounds, A11yNode, A11yNumericValue, A11yRole, A11yTree,
+    CheckedState,
+};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-a11y";
