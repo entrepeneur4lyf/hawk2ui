@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Core public facade for Hawk2UI product records and runtime entry points."
+description = "Curated public facade for Hawk2UI product schema records and stable API contracts."
 
 [lib]
 name = "hawk2ui_core"
