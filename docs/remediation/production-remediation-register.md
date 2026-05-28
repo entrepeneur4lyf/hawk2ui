@@ -1329,14 +1329,20 @@ Status:
 - Winit desktop dialog requests now execute through a typed native dialog bridge with `rfd` as the
   production backend, deterministic fake-backend tests for message/open/save/cancel behavior, and
   adapter event recording after successful backend completion.
+- Winit native clipboard smoke coverage is available as an ignored environment-gated test:
+  `HAWK2UI_NATIVE_CLIPBOARD_SMOKE=1 cargo test -p hawk2ui-host-winit winit_native_clipboard_backend_smoke_when_enabled --test winit_adapter -- --ignored`.
+- Native menu/tray implementation remains blocked on a deliberate dependency decision: the current
+  production crates (`muda`/`tray-icon`) require GTK/libxdo/AppIndicator development packages on
+  Linux when enabled, so they must be isolated behind explicit platform features or documented OS
+  package prerequisites before entering the default workspace build.
 
 Review check:
 
 - This remains partially open for production stability: close, resize, maximize, DPI, input, IME,
   drag/drop, occlusion, OS clipboard bridging, and runtime scene presentation are covered by
-  automated translation/runtime paths and manual smoke paths, and native dialogs now have a
-  platform-backed bridge. Menus, tray, and platform-specific clipboard/dialog smoke coverage still
-  need platform-backed implementation before
+  automated translation/runtime paths and manual smoke paths, native dialogs now have a
+  platform-backed bridge, and clipboard has an opt-in native smoke. Menus, tray, and interactive
+  platform-specific dialog smoke coverage still need platform-backed implementation before
   `REM-HOST-002` can be closed.
 
 ### REM-HOST-003: Complete Baseview Plugin Backend

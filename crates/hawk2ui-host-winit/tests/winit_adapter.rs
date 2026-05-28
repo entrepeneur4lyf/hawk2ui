@@ -5,8 +5,9 @@ use hawk2ui_host::{
     SurfaceClipboardRequest, SurfaceMetrics, WindowMode,
 };
 use hawk2ui_host_winit::{
-    WinitClipboardBackend, WinitClipboardBridge, WinitClipboardResponse, WinitDesktopAdapter,
-    WinitDialogBackend, WinitDialogBridge, WinitEventTranslator, WinitPlatformFixture,
+    ArboardClipboardBackend, WinitClipboardBackend, WinitClipboardBridge, WinitClipboardResponse,
+    WinitDesktopAdapter, WinitDialogBackend, WinitDialogBridge, WinitEventTranslator,
+    WinitPlatformFixture,
 };
 
 #[test]
@@ -276,6 +277,45 @@ fn winit_adapter_executes_clipboard_requests_through_native_bridge() {
             DesktopHostEvent::ClipboardRequested(SurfaceClipboardRequest::Read),
         ]
     );
+}
+
+#[test]
+#[ignore = "requires a native desktop clipboard service"]
+fn winit_native_clipboard_backend_smoke_when_enabled() {
+    if std::env::var("HAWK2UI_NATIVE_CLIPBOARD_SMOKE").as_deref() != Ok("1") {
+        return;
+    }
+
+    let mut bridge = WinitClipboardBridge::new(
+        ClipboardCapability::ReadWrite,
+        ArboardClipboardBackend::new()
+            .expect("native clipboard must open when smoke test is enabled"),
+    );
+    let original = bridge.handle_request(SurfaceClipboardRequest::Read).ok();
+    let token = format!("hawk2ui-native-clipboard-smoke-{}", std::process::id());
+
+    bridge
+        .handle_request(SurfaceClipboardRequest::Write(token.clone()))
+        .expect("native clipboard write succeeds");
+    assert_eq!(
+        bridge
+            .handle_request(SurfaceClipboardRequest::Read)
+            .expect("native clipboard read succeeds"),
+        WinitClipboardResponse::Text(token)
+    );
+
+    match original {
+        Some(WinitClipboardResponse::Text(text)) => {
+            bridge
+                .handle_request(SurfaceClipboardRequest::Write(text))
+                .expect("native clipboard original text restores");
+        }
+        _ => {
+            bridge
+                .handle_request(SurfaceClipboardRequest::Clear)
+                .expect("native clipboard clears after smoke");
+        }
+    }
 }
 
 #[test]
