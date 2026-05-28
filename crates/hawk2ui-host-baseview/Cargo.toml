@@ -29,5 +29,5 @@ hawk2ui-render-skia = { version = "0.1.0", path = "../hawk2ui-render-skia" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
 raw-window-handle = "0.5"
 
-[dev-dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 x11rb = "0.13.2"

@@ -2,16 +2,24 @@
 
 use std::{
     sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
 };
 
-use baseview::{Event, EventStatus, Window, WindowHandler};
-use hawk2ui_host::{HostPlatformHandle, PluginEditorConfig, PluginParentHandle, SurfaceMetrics};
-use hawk2ui_host_baseview::{BaseviewParentFixture, BaseviewPluginAdapter};
+use hawk2ui_host::{
+    HostPlatformHandle, PluginEditorConfig, PluginHostAdapter, PluginParentHandle, SurfaceMetrics,
+};
+use hawk2ui_host_baseview::{
+    BaseviewParentFixture, BaseviewPluginAdapter, BaseviewX11SkiaFrameHandler,
+};
+use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
+use hawk2ui_render::Color;
+use hawk2ui_runtime::{
+    RuntimeSceneBridge, RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
+};
 use x11rb::{
     COPY_DEPTH_FROM_PARENT,
     connection::Connection,
@@ -44,13 +52,18 @@ fn baseview_opens_real_parented_x11_surface_when_native_smoke_enabled() {
     )
     .expect("baseview adapter attaches to x11 parent record");
 
-    let frames = Arc::new(AtomicUsize::new(0));
-    let handler_frames = Arc::clone(&frames);
+    let handler_presented_frames = Arc::new(AtomicU64::new(0));
+    let handler_error = Arc::new(Mutex::new(None));
+    let scene = runtime_scene();
+    let metrics = adapter.metrics();
+    let presented_frames = Arc::clone(&handler_presented_frames);
+    let presented_error = Arc::clone(&handler_error);
     let mut handle = adapter
-        .open_parented_window(move |_| CloseAfterFirstFrame {
-            frames: handler_frames,
+        .open_parented_window(move |_| {
+            BaseviewX11SkiaFrameHandler::new(scene, metrics, presented_frames, presented_error)
+                .close_after_first_frame(true)
         })
-        .expect("baseview opens a real parented child window");
+        .expect("baseview opens a real parented child window and handler");
 
     let deadline = Instant::now() + Duration::from_secs(3);
     while handle.is_open() && Instant::now() < deadline {
@@ -61,7 +74,8 @@ fn baseview_opens_real_parented_x11_surface_when_native_smoke_enabled() {
         handle.close();
     }
 
-    assert!(frames.load(Ordering::SeqCst) >= 1);
+    assert_eq!(handler_presented_frames.load(Ordering::SeqCst), 1);
+    assert_eq!(*handler_error.lock().expect("handler error lock"), None);
     assert!(!handle.is_open());
 }
 
@@ -112,17 +126,14 @@ impl Drop for X11ParentWindow {
     }
 }
 
-struct CloseAfterFirstFrame {
-    frames: Arc<AtomicUsize>,
-}
-
-impl WindowHandler for CloseAfterFirstFrame {
-    fn on_frame(&mut self, window: &mut Window) {
-        self.frames.fetch_add(1, Ordering::SeqCst);
-        window.close();
-    }
-
-    fn on_event(&mut self, _window: &mut Window, _event: Event) -> EventStatus {
-        EventStatus::Ignored
-    }
+fn runtime_scene() -> hawk2ui_runtime::RuntimeSceneFrame {
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("native-smoke-root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(320.0, 180.0)),
+        RuntimeVisual::Fill(Color::rgba(32, 96, 180, 255)),
+    ));
+    RuntimeSceneBridge::new(Viewport::new(320.0, 180.0))
+        .build(&tree)
+        .expect("native smoke runtime scene builds")
 }

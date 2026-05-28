@@ -1347,19 +1347,20 @@ Evidence:
   trace file alone.
 - `hawk2ui-host-baseview` has an opt-in native integration smoke
   (`HAWK2UI_NATIVE_BASEVIEW_SMOKE=1`) that creates a real `X11`/`XWayland` parent window, opens a
-  parented Baseview child through `BaseviewPluginAdapter::open_parented_window`, receives a frame,
-  and closes cleanly.
+  parented Baseview child through `BaseviewPluginAdapter::open_parented_window`, renders a
+  `RuntimeSceneFrame` through Skia, presents the pixels into the native child window, receives a
+  frame, and closes cleanly.
 
 Status:
 
 - Partially open: fixture/contract coverage, runtime-scene Skia presentation, raw native parent
   validation, a real Baseview `open_parented` source path, plugin smoke coverage for the Baseview
-  render path, and opt-in native parented-window smoke coverage exist. The retained Skia snapshot
-  still needs live binding into an actual DAW-owned native child surface.
+  render path, and opt-in native parented-window smoke coverage with X11/XWayland pixel
+  presentation exist. Remaining work is host event parity for real plugin-host show/hide, focus,
+  keyboard, and pointer traffic against native parented children.
 
 Required remediation:
 
-- Connect the attached surface to the Hawk2UI runtime-scene-to-Skia rendering path.
 - Route host resize, DPI, focus, pointer, keyboard, repaint, show/hide, and teardown.
 - Ensure plugin editor teardown never exits process.
 

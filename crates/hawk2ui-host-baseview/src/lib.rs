@@ -1,7 +1,9 @@
 #![deny(unsafe_code)]
 //! `Baseview`-backed embedded plugin host adapter for `Hawk2UI`.
 
-use baseview::{Size, Window, WindowHandle, WindowHandler, WindowOpenOptions, WindowScalePolicy};
+use baseview::{
+    EventStatus, Size, Window, WindowHandle, WindowHandler, WindowOpenOptions, WindowScalePolicy,
+};
 use hawk2ui_host::{
     HostPlatformHandle, KeyboardInput, PluginEditorConfig, PluginHostAdapter, PluginHostEvent,
     PointerInput, SurfaceMetrics, SurfaceOwnership,
@@ -15,6 +17,17 @@ use raw_window_handle::{
     XcbWindowHandle, XlibDisplayHandle, XlibWindowHandle,
 };
 use std::ffi::c_void;
+#[cfg(target_os = "linux")]
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
+#[cfg(target_os = "linux")]
+use x11rb::{
+    connection::Connection,
+    protocol::xproto::{ConnectionExt, CreateGCAux, ImageFormat},
+    rust_connection::RustConnection,
+};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-host-baseview";
@@ -338,6 +351,75 @@ unsafe impl HasRawDisplayHandle for BaseviewNativeParent {
     }
 }
 
+/// Linux `X11`/`XWayland` Baseview handler that renders a runtime scene with Skia and presents it
+/// into the native child window during frame callbacks.
+#[cfg(target_os = "linux")]
+pub struct BaseviewX11SkiaFrameHandler {
+    scene: RuntimeSceneFrame,
+    metrics: SurfaceMetrics,
+    presented_frames: Arc<AtomicU64>,
+    last_error: Arc<Mutex<Option<BaseviewHostError>>>,
+    close_after_first_frame: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl BaseviewX11SkiaFrameHandler {
+    /// Creates a frame handler for an attached Baseview `X11`/`XWayland` child window.
+    #[must_use]
+    pub fn new(
+        scene: RuntimeSceneFrame,
+        metrics: SurfaceMetrics,
+        presented_frames: Arc<AtomicU64>,
+        last_error: Arc<Mutex<Option<BaseviewHostError>>>,
+    ) -> Self {
+        Self {
+            scene,
+            metrics,
+            presented_frames,
+            last_error,
+            close_after_first_frame: false,
+        }
+    }
+
+    /// Configures whether the handler closes the native child after the first presented frame.
+    #[must_use]
+    pub const fn close_after_first_frame(mut self, close_after_first_frame: bool) -> Self {
+        self.close_after_first_frame = close_after_first_frame;
+        self
+    }
+
+    fn record_error(&self, error: BaseviewHostError) {
+        if let Ok(mut last_error) = self.last_error.lock() {
+            *last_error = Some(error);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl WindowHandler for BaseviewX11SkiaFrameHandler {
+    fn on_frame(&mut self, window: &mut Window) {
+        let frame_index = self.presented_frames.load(Ordering::SeqCst);
+        match render_scene_to_skia_snapshot(&self.scene, self.metrics, frame_index)
+            .and_then(|snapshot| present_snapshot_to_x11_window(window, &snapshot))
+        {
+            Ok(()) => {
+                self.presented_frames.fetch_add(1, Ordering::SeqCst);
+                if self.close_after_first_frame {
+                    window.close();
+                }
+            }
+            Err(error) => {
+                self.record_error(error);
+                window.close();
+            }
+        }
+    }
+
+    fn on_event(&mut self, _window: &mut Window, _event: baseview::Event) -> EventStatus {
+        EventStatus::Ignored
+    }
+}
+
 /// Headless-safe Baseview plugin adapter.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaseviewPluginAdapter {
@@ -520,33 +602,8 @@ impl BaseviewPluginAdapter {
     ) -> Result<&SkiaFrameSnapshot, BaseviewHostError> {
         self.ensure_accepts_host_event()?;
         validate_baseview_metrics(self.config.metrics)?;
-        let (width, height) = self.config.metrics.physical_size();
-        let dpi_scale = scale_factor_to_f32(self.config.metrics.scale_factor)?;
         let frame_index = self.presented_frame_count;
-        let mut backend = SkiaRendererBackend::new();
-        backend
-            .create_surface_with_config(SkiaSurfaceConfig::cpu_raster(
-                "baseview-editor",
-                width,
-                height,
-            ))
-            .map_err(|error| map_backend_error(&error))?;
-        backend
-            .begin_frame("baseview-editor")
-            .map_err(|error| map_backend_error(&error))?;
-        backend
-            .clear(Color::rgba(0, 0, 0, 0))
-            .map_err(|error| map_backend_error(&error))?;
-        backend
-            .draw_runtime_scene_frame(scene, frame_index, dpi_scale)
-            .map_err(|error| map_backend_error(&error))?;
-        backend
-            .end_frame("baseview-editor")
-            .map_err(|error| map_backend_error(&error))?;
-        let snapshot = backend
-            .frame_snapshot("baseview-editor")
-            .map_err(|error| map_backend_error(&error))?
-            .clone();
+        let snapshot = render_scene_to_skia_snapshot(scene, self.config.metrics, frame_index)?;
         self.presented_frame_count = self.presented_frame_count.saturating_add(1);
         self.last_presented_frame = Some(snapshot);
         self.events.push(PluginHostEvent::RepaintScheduled(
@@ -633,6 +690,147 @@ fn map_backend_error(error: &hawk2ui_render::BackendError) -> BaseviewHostError 
         format!("baseview.render.{}", error.diagnostic().rule()),
         error.diagnostic().message(),
     )
+}
+
+fn render_scene_to_skia_snapshot(
+    scene: &RuntimeSceneFrame,
+    metrics: SurfaceMetrics,
+    frame_index: u64,
+) -> Result<SkiaFrameSnapshot, BaseviewHostError> {
+    let (width, height) = metrics.physical_size();
+    let dpi_scale = scale_factor_to_f32(metrics.scale_factor)?;
+    let mut backend = SkiaRendererBackend::new();
+    backend
+        .create_surface_with_config(SkiaSurfaceConfig::cpu_raster(
+            "baseview-editor",
+            width,
+            height,
+        ))
+        .map_err(|error| map_backend_error(&error))?;
+    backend
+        .begin_frame("baseview-editor")
+        .map_err(|error| map_backend_error(&error))?;
+    backend
+        .clear(Color::rgba(0, 0, 0, 0))
+        .map_err(|error| map_backend_error(&error))?;
+    backend
+        .draw_runtime_scene_frame(scene, frame_index, dpi_scale)
+        .map_err(|error| map_backend_error(&error))?;
+    backend
+        .end_frame("baseview-editor")
+        .map_err(|error| map_backend_error(&error))?;
+    backend
+        .frame_snapshot("baseview-editor")
+        .map_err(|error| map_backend_error(&error))
+        .cloned()
+}
+
+#[cfg(target_os = "linux")]
+fn present_snapshot_to_x11_window(
+    window: &Window,
+    snapshot: &SkiaFrameSnapshot,
+) -> Result<(), BaseviewHostError> {
+    let drawable = x11_drawable_from_window(window)?;
+    let width = u16::try_from(snapshot.width()).map_err(|_| {
+        BaseviewHostError::new(
+            "baseview.x11-present.invalid-size",
+            "baseview X11 presentation width must fit u16",
+        )
+    })?;
+    let height = u16::try_from(snapshot.height()).map_err(|_| {
+        BaseviewHostError::new(
+            "baseview.x11-present.invalid-size",
+            "baseview X11 presentation height must fit u16",
+        )
+    })?;
+    let (connection, screen_number) = x11rb::connect(None).map_err(|error| {
+        BaseviewHostError::new(
+            "baseview.x11-present.connect-failed",
+            format!("failed to connect to X11 display for Baseview presentation: {error}"),
+        )
+    })?;
+    let depth = connection.setup().roots[screen_number].root_depth;
+    let gc = create_x11_gc(&connection, drawable)?;
+    let data = snapshot_to_x11_bgrx(snapshot);
+    connection
+        .put_image(
+            ImageFormat::Z_PIXMAP,
+            drawable,
+            gc,
+            width,
+            height,
+            0,
+            0,
+            0,
+            depth,
+            &data,
+        )
+        .map_err(|error| {
+            BaseviewHostError::new(
+                "baseview.x11-present.put-image-failed",
+                format!("failed to put Baseview frame pixels into X11 child window: {error}"),
+            )
+        })?;
+    connection.free_gc(gc).map_err(|error| {
+        BaseviewHostError::new(
+            "baseview.x11-present.free-gc-failed",
+            format!("failed to release Baseview X11 presentation graphics context: {error}"),
+        )
+    })?;
+    connection.flush().map_err(|error| {
+        BaseviewHostError::new(
+            "baseview.x11-present.flush-failed",
+            format!("failed to flush Baseview X11 presentation commands: {error}"),
+        )
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn x11_drawable_from_window(window: &Window) -> Result<u32, BaseviewHostError> {
+    match window.raw_window_handle() {
+        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).map_err(|_| {
+            BaseviewHostError::new(
+                "baseview.x11-present.invalid-window",
+                "baseview Xlib child window handle must fit X11 window id",
+            )
+        }),
+        RawWindowHandle::Xcb(handle) => Ok(handle.window),
+        _ => Err(BaseviewHostError::new(
+            "baseview.x11-present.unsupported-window",
+            "baseview X11 software presentation requires an Xlib or XCB child window",
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn create_x11_gc(connection: &RustConnection, drawable: u32) -> Result<u32, BaseviewHostError> {
+    let gc = connection.generate_id().map_err(|error| {
+        BaseviewHostError::new(
+            "baseview.x11-present.gc-id-failed",
+            format!("failed to allocate Baseview X11 graphics context id: {error}"),
+        )
+    })?;
+    connection
+        .create_gc(gc, drawable, &CreateGCAux::new())
+        .map_err(|error| {
+            BaseviewHostError::new(
+                "baseview.x11-present.create-gc-failed",
+                format!("failed to create Baseview X11 graphics context: {error}"),
+            )
+        })?;
+    Ok(gc)
+}
+
+#[cfg(target_os = "linux")]
+fn snapshot_to_x11_bgrx(snapshot: &SkiaFrameSnapshot) -> Vec<u8> {
+    let mut data = Vec::with_capacity(snapshot.pixels().len().saturating_mul(4));
+    for pixel in snapshot.pixels() {
+        data.push((pixel & 0x0000_00ff) as u8);
+        data.push(((pixel & 0x0000_ff00) >> 8) as u8);
+        data.push(((pixel & 0x00ff_0000) >> 16) as u8);
+        data.push(0);
+    }
+    data
 }
 
 fn require_nonzero_handle(handle: u64) -> Result<(), BaseviewHostError> {
