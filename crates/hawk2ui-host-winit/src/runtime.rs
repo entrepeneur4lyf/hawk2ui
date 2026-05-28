@@ -1,6 +1,10 @@
 //! Production `winit` desktop event-loop runtime.
 
-use std::{num::NonZeroU32, sync::Arc, time::Instant};
+use std::{
+    num::NonZeroU32,
+    sync::{Arc, mpsc::Receiver},
+    time::Instant,
+};
 
 use hawk2ui_assets::AssetRecord;
 use hawk2ui_host::{DesktopHostEvent, DesktopWindowConfig};
@@ -132,6 +136,180 @@ impl WinitDesktopRuntimeConfig {
     }
 }
 
+/// Development reload category for a running `winit` desktop surface.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WinitDesktopReloadKind {
+    /// Style-only patch; the existing native window can be reused.
+    StylePatch,
+    /// Asset patch; the renderer asset registry is refreshed and the window can be reused.
+    AssetPatch,
+    /// Runtime tree patch; the retained scene source is replaced and the window can be reused.
+    RuntimeTreePatch,
+    /// Script rebuild; the rebuilt runtime tree is applied without recreating the window.
+    ScriptRebuild,
+    /// Manifest or unknown source changed; the current event loop must exit and be restarted.
+    FullRebuildRequired,
+}
+
+impl WinitDesktopReloadKind {
+    /// Returns whether this reload requires terminating and recreating the native event loop.
+    #[must_use]
+    pub const fn requires_event_loop_restart(self) -> bool {
+        matches!(self, Self::FullRebuildRequired)
+    }
+}
+
+/// Reload request sent to a running desktop surface during `hawk2ui dev`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WinitDesktopReload {
+    kind: WinitDesktopReloadKind,
+    config: WinitDesktopRuntimeConfig,
+    preserve_state: bool,
+}
+
+impl WinitDesktopReload {
+    /// Creates a reload request from a classified change and rebuilt runtime configuration.
+    #[must_use]
+    pub const fn new(kind: WinitDesktopReloadKind, config: WinitDesktopRuntimeConfig) -> Self {
+        Self {
+            kind,
+            config,
+            preserve_state: true,
+        }
+    }
+
+    /// Sets whether runtime state should be preserved while applying the reload.
+    #[must_use]
+    pub const fn with_preserve_state(mut self, preserve_state: bool) -> Self {
+        self.preserve_state = preserve_state;
+        self
+    }
+
+    /// Returns the reload category.
+    #[must_use]
+    pub const fn kind(&self) -> WinitDesktopReloadKind {
+        self.kind
+    }
+
+    /// Returns the rebuilt runtime configuration.
+    #[must_use]
+    pub const fn config(&self) -> &WinitDesktopRuntimeConfig {
+        &self.config
+    }
+
+    /// Returns whether runtime state should be preserved.
+    #[must_use]
+    pub const fn preserve_state(&self) -> bool {
+        self.preserve_state
+    }
+}
+
+/// Result of applying a desktop reload request to a live surface.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WinitDesktopReloadReport {
+    kind: WinitDesktopReloadKind,
+    reload_generation: u64,
+    preserve_state: bool,
+    redraw_requested: bool,
+    requires_event_loop_restart: bool,
+}
+
+impl WinitDesktopReloadReport {
+    /// Returns the reload category that produced this report.
+    #[must_use]
+    pub const fn kind(&self) -> WinitDesktopReloadKind {
+        self.kind
+    }
+
+    /// Returns the monotonic reload generation after applying the patch.
+    #[must_use]
+    pub const fn reload_generation(&self) -> u64 {
+        self.reload_generation
+    }
+
+    /// Returns whether runtime state was preserved.
+    #[must_use]
+    pub const fn preserve_state(&self) -> bool {
+        self.preserve_state
+    }
+
+    /// Returns whether the native window should request a redraw.
+    #[must_use]
+    pub const fn redraw_requested(&self) -> bool {
+        self.redraw_requested
+    }
+
+    /// Returns whether the current event loop must exit and be restarted.
+    #[must_use]
+    pub const fn requires_event_loop_restart(&self) -> bool {
+        self.requires_event_loop_restart
+    }
+}
+
+/// Mutable runtime state for a native desktop surface.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WinitDesktopRuntimeSurfaceState {
+    config: WinitDesktopRuntimeConfig,
+    reload_generation: u64,
+}
+
+impl WinitDesktopRuntimeSurfaceState {
+    /// Creates validated state for a native desktop surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the initial runtime configuration is invalid.
+    pub fn new(config: WinitDesktopRuntimeConfig) -> Result<Self, WinitHostError> {
+        config.validate()?;
+        Ok(Self {
+            config,
+            reload_generation: 0,
+        })
+    }
+
+    /// Returns the current runtime configuration.
+    #[must_use]
+    pub const fn config(&self) -> &WinitDesktopRuntimeConfig {
+        &self.config
+    }
+
+    /// Returns the number of reloads applied without recreating the event loop.
+    #[must_use]
+    pub const fn reload_generation(&self) -> u64 {
+        self.reload_generation
+    }
+
+    /// Applies a reload to the retained desktop surface state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the rebuilt runtime configuration is invalid.
+    pub fn apply_reload(
+        &mut self,
+        reload: WinitDesktopReload,
+    ) -> Result<WinitDesktopReloadReport, WinitHostError> {
+        reload.config.validate()?;
+        if reload.kind.requires_event_loop_restart() {
+            return Ok(WinitDesktopReloadReport {
+                kind: reload.kind,
+                reload_generation: self.reload_generation,
+                preserve_state: false,
+                redraw_requested: false,
+                requires_event_loop_restart: true,
+            });
+        }
+        self.config = reload.config;
+        self.reload_generation = self.reload_generation.saturating_add(1);
+        Ok(WinitDesktopReloadReport {
+            kind: reload.kind,
+            reload_generation: self.reload_generation,
+            preserve_state: reload.preserve_state,
+            redraw_requested: true,
+            requires_event_loop_restart: false,
+        })
+    }
+}
+
 /// Summary returned after the desktop runtime exits.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WinitDesktopRuntimeSummary {
@@ -147,6 +325,8 @@ pub struct WinitDesktopRuntimeSummary {
     pub input_events: u64,
     /// Number of animation ticks accepted before presentation.
     pub animation_ticks: u64,
+    /// Number of dev reloads applied without recreating the native event loop.
+    pub native_reloads: u64,
     /// Whether a close request was received.
     pub close_requested: bool,
 }
@@ -225,6 +405,57 @@ impl WinitDesktopRuntime {
         })?;
         app.finish()
     }
+
+    /// Runs the native desktop event loop with a development reload channel.
+    ///
+    /// The event loop owns the native window. Rebuilt runtime configurations are delivered through
+    /// `reloads` and applied on the event-loop thread by requesting a redraw instead of tearing down
+    /// the surface for patchable reload kinds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when event-loop creation, window creation, rendering, reload
+    /// validation, resize, or presentation fails.
+    pub fn run_dev_blocking(
+        &self,
+        config: WinitDesktopRuntimeConfig,
+        reloads: Receiver<WinitDesktopReload>,
+    ) -> Result<WinitDesktopRuntimeSummary, WinitHostError> {
+        config.validate()?;
+        let event_loop = EventLoop::<WinitDesktopRuntimeUserEvent>::with_user_event()
+            .build()
+            .map_err(|error| {
+                WinitHostError::new(
+                    "desktop.event-loop.create-failed",
+                    format!("failed to create winit dev event loop: {error}"),
+                )
+            })?;
+        let proxy = event_loop.create_proxy();
+        std::thread::spawn(move || {
+            for reload in reloads {
+                if proxy
+                    .send_event(WinitDesktopRuntimeUserEvent::Reload(reload))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        let mut app = RuntimeApplication::new(config, self.renderer.clone());
+        event_loop.run_app(&mut app).map_err(|error| {
+            WinitHostError::new(
+                "desktop.event-loop.run-failed",
+                format!("winit dev event loop failed: {error}"),
+            )
+        })?;
+        app.finish()
+    }
+}
+
+#[derive(Clone, Debug)]
+enum WinitDesktopRuntimeUserEvent {
+    Reload(WinitDesktopReload),
 }
 
 struct RuntimeApplication {
@@ -265,6 +496,28 @@ impl RuntimeApplication {
         } else {
             Ok(self.lifecycle.into_summary())
         }
+    }
+
+    fn apply_reload(
+        &mut self,
+        reload: WinitDesktopReload,
+    ) -> Result<WinitDesktopReloadReport, WinitHostError> {
+        let mut state = WinitDesktopRuntimeSurfaceState {
+            config: self.config.clone(),
+            reload_generation: self.lifecycle.summary.native_reloads,
+        };
+        let report = state.apply_reload(reload)?;
+        if report.requires_event_loop_restart() {
+            return Ok(report);
+        }
+        self.config = state.config;
+        self.renderer =
+            SoftwareFrameRenderer::new().with_assets(self.config.runtime_assets().iter().cloned());
+        self.event_translator = WinitEventTranslator::new(self.config.window.metrics);
+        self.animation = AnimationFrameScheduler::new(self.config.animation_policy());
+        self.lifecycle.record_native_reload();
+        self.request_redraw();
+        Ok(report)
     }
 
     fn create_window(&mut self, event_loop: &ActiveEventLoop) -> Result<(), WinitHostError> {
@@ -414,6 +667,71 @@ impl RuntimeApplication {
         self.last_error = Some(error);
         event_loop.exit();
     }
+
+    fn handle_resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_none()
+            && let Err(error) = self.create_window(event_loop)
+        {
+            self.fail(event_loop, error);
+        }
+    }
+
+    fn handle_window_event(&mut self, event_loop: &ActiveEventLoop, event: &WindowEvent) {
+        if !self.lifecycle.accepts_host_event() && !matches!(event, WindowEvent::CloseRequested) {
+            return;
+        }
+        let translated = self.event_translator.translate(event);
+        self.lifecycle.record_translated_event(&translated);
+        let result = match event {
+            WindowEvent::CloseRequested | WindowEvent::Destroyed => {
+                self.lifecycle.request_close();
+                event_loop.exit();
+                Ok(())
+            }
+            WindowEvent::Resized(size) => self.resize_surface(*size),
+            WindowEvent::ScaleFactorChanged { .. } => {
+                self.request_redraw();
+                Ok(())
+            }
+            WindowEvent::RedrawRequested => self.present_frame(event_loop),
+            WindowEvent::Focused(_)
+            | WindowEvent::KeyboardInput { .. }
+            | WindowEvent::Ime(_)
+            | WindowEvent::CursorMoved { .. }
+            | WindowEvent::CursorEntered { .. }
+            | WindowEvent::CursorLeft { .. }
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::DroppedFile(_)
+            | WindowEvent::HoveredFile(_)
+            | WindowEvent::HoveredFileCancelled
+            | WindowEvent::Occluded(_)
+            | WindowEvent::ModifiersChanged(_) => {
+                if translated.requires_redraw {
+                    self.request_redraw();
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        };
+        if let Err(error) = result {
+            self.fail(event_loop, error);
+        }
+    }
+
+    fn handle_about_to_wait(&mut self) {
+        if self.animation.should_request_frame(self.elapsed_ms())
+            && self.lifecycle.accepts_frame_presentation()
+        {
+            self.request_redraw();
+        }
+    }
+
+    fn handle_exiting(&mut self) {
+        self.surface = None;
+        self.context = None;
+        self.window = None;
+    }
 }
 
 fn logical_size_to_f32(value: f64) -> Result<f32, WinitHostError> {
@@ -492,6 +810,12 @@ impl RuntimeLifecycle {
         }
     }
 
+    fn record_native_reload(&mut self) {
+        if self.accepts_frame_presentation() {
+            self.summary.native_reloads += 1;
+        }
+    }
+
     fn record_translated_event(&mut self, translated: &WinitTranslatedEvent) {
         for event in &translated.events {
             match event {
@@ -523,6 +847,62 @@ impl RuntimeLifecycle {
             self.summary.close_requested = true;
             true
         }
+    }
+}
+
+impl ApplicationHandler for RuntimeApplication {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.handle_resumed(event_loop);
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        self.handle_window_event(event_loop, &event);
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        self.handle_about_to_wait();
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.handle_exiting();
+    }
+}
+
+impl ApplicationHandler<WinitDesktopRuntimeUserEvent> for RuntimeApplication {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.handle_resumed(event_loop);
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WinitDesktopRuntimeUserEvent) {
+        match event {
+            WinitDesktopRuntimeUserEvent::Reload(reload) => match self.apply_reload(reload) {
+                Ok(report) if report.requires_event_loop_restart() => event_loop.exit(),
+                Ok(_) => {}
+                Err(error) => self.fail(event_loop, error),
+            },
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        self.handle_window_event(event_loop, &event);
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        self.handle_about_to_wait();
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.handle_exiting();
     }
 }
 
@@ -569,81 +949,10 @@ mod tests {
 
     #[test]
     fn logical_size_to_f32_rejects_invalid_viewport_values() {
-        assert_eq!(logical_size_to_f32(1280.0).expect("valid size"), 1280.0);
+        let value = logical_size_to_f32(1280.0).expect("valid size");
+        assert!((value - 1280.0).abs() < f32::EPSILON);
         assert!(logical_size_to_f32(0.0).is_err());
         assert!(logical_size_to_f32(f64::INFINITY).is_err());
         assert!(logical_size_to_f32(f64::MAX).is_err());
-    }
-}
-
-impl ApplicationHandler for RuntimeApplication {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_none()
-            && let Err(error) = self.create_window(event_loop)
-        {
-            self.fail(event_loop, error);
-        }
-    }
-
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event: WindowEvent,
-    ) {
-        if !self.lifecycle.accepts_host_event() && !matches!(&event, &WindowEvent::CloseRequested) {
-            return;
-        }
-        let translated = self.event_translator.translate(&event);
-        self.lifecycle.record_translated_event(&translated);
-        let result = match event {
-            WindowEvent::CloseRequested | WindowEvent::Destroyed => {
-                self.lifecycle.request_close();
-                event_loop.exit();
-                Ok(())
-            }
-            WindowEvent::Resized(size) => self.resize_surface(size),
-            WindowEvent::ScaleFactorChanged { .. } => {
-                self.request_redraw();
-                Ok(())
-            }
-            WindowEvent::RedrawRequested => self.present_frame(event_loop),
-            WindowEvent::Focused(_)
-            | WindowEvent::KeyboardInput { .. }
-            | WindowEvent::Ime(_)
-            | WindowEvent::CursorMoved { .. }
-            | WindowEvent::CursorEntered { .. }
-            | WindowEvent::CursorLeft { .. }
-            | WindowEvent::MouseInput { .. }
-            | WindowEvent::MouseWheel { .. }
-            | WindowEvent::DroppedFile(_)
-            | WindowEvent::HoveredFile(_)
-            | WindowEvent::HoveredFileCancelled
-            | WindowEvent::Occluded(_)
-            | WindowEvent::ModifiersChanged(_) => {
-                if translated.requires_redraw {
-                    self.request_redraw();
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        };
-        if let Err(error) = result {
-            self.fail(event_loop, error);
-        }
-    }
-
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if self.animation.should_request_frame(self.elapsed_ms())
-            && self.lifecycle.accepts_frame_presentation()
-        {
-            self.request_redraw();
-        }
-    }
-
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        self.surface = None;
-        self.context = None;
-        self.window = None;
     }
 }

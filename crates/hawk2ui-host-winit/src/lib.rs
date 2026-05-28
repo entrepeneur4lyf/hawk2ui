@@ -17,7 +17,9 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 
 pub use runtime::{
-    DesktopRuntimeEvent, WinitDesktopRuntime, WinitDesktopRuntimeConfig, WinitDesktopRuntimeSummary,
+    DesktopRuntimeEvent, WinitDesktopReload, WinitDesktopReloadKind, WinitDesktopReloadReport,
+    WinitDesktopRuntime, WinitDesktopRuntimeConfig, WinitDesktopRuntimeSummary,
+    WinitDesktopRuntimeSurfaceState,
 };
 pub use software_frame::{SoftwareFrame, SoftwareFrameRenderer, physical_frame_size};
 

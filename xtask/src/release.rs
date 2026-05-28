@@ -476,6 +476,7 @@ evidence = "target/release-evidence/manuals.txt"
             "dependency-health",
             "compatibility-matrix",
             "performance-budgets",
+            "visual-regression",
             "plugin-realtime-safety",
             "security-gates",
             "smoke-apps",
@@ -626,6 +627,7 @@ compatibility_notes_required = true
             "lightningcss",
             "taffy",
             "skia-safe",
+            "notify",
         ] {
             assert!(
                 policy.contains(dependency),

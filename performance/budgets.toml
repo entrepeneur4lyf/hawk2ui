@@ -35,6 +35,15 @@ release_gate = true
 fixture = "examples/desktop-dashboard"
 
 [[budgets]]
+name = "style-compile"
+category = "style"
+unit = "milliseconds"
+target = 8
+maximum = 16
+release_gate = true
+fixture = "examples/style-gallery"
+
+[[budgets]]
 name = "scene-export"
 category = "rendering"
 unit = "milliseconds"
@@ -71,6 +80,24 @@ release_gate = true
 fixture = "examples/desktop-basic"
 
 [[budgets]]
+name = "js-evaluate"
+category = "script"
+unit = "milliseconds"
+target = 12
+maximum = 24
+release_gate = true
+fixture = "examples/framework-svelte"
+
+[[budgets]]
+name = "asset-decode"
+category = "assets"
+unit = "milliseconds"
+target = 12
+maximum = 24
+release_gate = true
+fixture = "examples/style-gallery"
+
+[[budgets]]
 name = "memory-working-set"
 category = "memory"
 unit = "bytes"
@@ -87,6 +114,24 @@ target = 52428800
 maximum = 104857600
 release_gate = true
 fixture = "examples/release-package"
+
+[[budgets]]
+name = "package-verify"
+category = "package"
+unit = "milliseconds"
+target = 150
+maximum = 300
+release_gate = true
+fixture = "examples/release-package"
+
+[[budgets]]
+name = "desktop-host-frame"
+category = "host"
+unit = "milliseconds"
+target = 16
+maximum = 33
+release_gate = true
+fixture = "examples/desktop-basic"
 
 [[budgets]]
 name = "plugin-audio-allocation"

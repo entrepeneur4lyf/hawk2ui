@@ -1,0 +1,22 @@
+[package]
+name = "hawk2ui-vst3"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Safe VST3 metadata, identifier, parameter, and editor binding records for Hawk2UI."
+
+[lib]
+name = "hawk2ui_vst3"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+schemars = "1.2.1"
+serde.workspace = true
+vst3 = "0.3.0"

@@ -42,9 +42,17 @@ evidence = "target/release-evidence/compatibility-matrix.txt"
 id = "performance-budgets"
 title = "Performance budgets"
 owner = "performance"
-command = "rtk cargo test -p hawk2ui-perf"
+command = "rtk bash scripts/check-performance.sh"
 blocking = "release"
 evidence = "target/release-evidence/performance-budgets.txt"
+
+[[criteria]]
+id = "visual-regression"
+title = "Visual regression artifacts"
+owner = "quality"
+command = "rtk cargo test -p hawk2ui-testkit visual_regression"
+blocking = "release"
+evidence = "target/release-evidence/visual-regression.txt"
 
 [[criteria]]
 id = "plugin-realtime-safety"

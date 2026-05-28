@@ -26,14 +26,22 @@ pub enum PerformanceCategory {
     Startup,
     /// Layout calculation budgets.
     Layout,
+    /// Style parsing and style resolution budgets.
+    Style,
     /// Rendering budgets.
     Rendering,
     /// Runtime scheduling and event budgets.
     Runtime,
+    /// Script parsing, evaluation, and bridge budgets.
+    Script,
+    /// Asset decoding and cache budgets.
+    Assets,
     /// Memory usage budgets.
     Memory,
     /// Package size budgets.
     Package,
+    /// Desktop host and window event-loop budgets.
+    Host,
     /// Realtime audio safety budgets.
     Realtime,
 }

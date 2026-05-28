@@ -98,6 +98,15 @@ release_blocker = false
 upgrade_gate = "cargo test -p hawk2ui-render-skia && cargo test -p hawk2ui-host-winit"
 
 [[dependencies]]
+name = "notify"
+source = "crates-io"
+version = "8.2.0"
+owner = "developer-experience"
+risk = "Native filesystem event backend for hawk2ui dev; upgrades must preserve debounced project-file change detection and fallback-safe dev reload classification."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-cli dev_loop::tests && cargo test -p hawk2ui-cli workspace_dev_watches_manifest_declared_sources_and_assets"
+
+[[dependencies]]
 name = "clap-sys"
 source = "crates-io"
 version = "0.5.0"

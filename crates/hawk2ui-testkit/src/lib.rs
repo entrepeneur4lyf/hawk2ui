@@ -15,8 +15,9 @@ pub use security::{
 };
 pub use templates::{DomainTemplateKind, DomainTemplateSuite, DomainTestTemplate};
 pub use visual::{
-    ImageComparisonMetadata, VisualFixture, VisualFixtureKind, VisualFixtureSet,
-    VisualRegressionCase, VisualRegressionSuite,
+    ImageComparisonMetadata, ImageComparisonReport, VisualArtifactSet, VisualFixture,
+    VisualFixtureKind, VisualFixtureSet, VisualImageRegressionCase, VisualImageSnapshot,
+    VisualRegressionCase, VisualRegressionError, VisualRegressionReport, VisualRegressionSuite,
 };
 
 /// Fixture type used by deterministic `Hawk2UI` tests.

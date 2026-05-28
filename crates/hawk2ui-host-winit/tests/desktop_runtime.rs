@@ -2,7 +2,8 @@ use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits};
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
-    DesktopRuntimeEvent, SoftwareFrameRenderer, WinitDesktopRuntimeConfig, WinitHostError,
+    DesktopRuntimeEvent, SoftwareFrameRenderer, WinitDesktopReload, WinitDesktopReloadKind,
+    WinitDesktopRuntimeConfig, WinitDesktopRuntimeSurfaceState, WinitHostError,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_render::{Color, CustomSurfaceCategory, CustomSurfaceDataSnapshot};
@@ -59,8 +60,8 @@ fn software_frame_renders_runtime_scene_commands() {
 
     assert_eq!(pixels.width(), 32);
     assert_eq!(pixels.height(), 24);
-    assert_eq!(pixels.pixels()[0], 0x00ff0000);
-    assert!(pixels.pixels().iter().all(|pixel| *pixel == 0x00ff0000));
+    assert_eq!(pixels.pixels()[0], 0x00ff_0000);
+    assert!(pixels.pixels().iter().all(|pixel| *pixel == 0x00ff_0000));
 }
 
 #[test]
@@ -93,7 +94,7 @@ fn software_frame_renders_runtime_custom_surface_commands() {
         .expect("runtime custom surface should render to software frame");
 
     assert!(
-        pixels.pixels().iter().any(|pixel| *pixel != 0x00000000),
+        pixels.pixels().iter().any(|pixel| *pixel != 0x0000_0000),
         "custom surface should draw visible non-transparent pixels"
     );
 }
@@ -174,7 +175,7 @@ fn software_frame_degrades_missing_runtime_assets_to_visible_placeholders() {
         .render_scene_frame(&frame, 128, 96, 1.0)
         .expect("missing assets should degrade without failing the frame");
 
-    assert!(pixels.pixels().iter().any(|pixel| *pixel != 0x00000000));
+    assert!(pixels.pixels().iter().any(|pixel| *pixel != 0x0000_0000));
 }
 
 #[test]
@@ -232,11 +233,11 @@ fn software_frame_renders_registered_runtime_assets() {
         .expect("registered runtime assets should render to software frame");
 
     assert!(
-        pixels.pixels().iter().any(|pixel| *pixel == 0x00ff0000),
+        pixels.pixels().contains(&0x00ff_0000),
         "registered image asset should render decoded pixels, not a placeholder"
     );
     assert!(
-        pixels.pixels().iter().any(|pixel| *pixel == 0x00ffffff),
+        pixels.pixels().contains(&0x00ff_ffff),
         "registered vector asset should render lowered vector pixels, not a placeholder"
     );
 }
@@ -300,6 +301,75 @@ fn runtime_config_accepts_animation_cadence_policy() {
 }
 
 #[test]
+fn runtime_surface_state_applies_patchable_reload_without_restarting_window() {
+    let initial = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+        "app",
+        SurfaceMetrics::new(640.0, 480.0, 1.0),
+    ))
+    .with_runtime_tree(runtime_tree("root", Color::rgba(8, 10, 14, 255)))
+    .with_exit_after_first_frame(false);
+    let updated = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+        "app",
+        SurfaceMetrics::new(640.0, 480.0, 1.0),
+    ))
+    .with_runtime_tree(runtime_tree("root-reloaded", Color::rgba(32, 48, 96, 255)))
+    .with_exit_after_first_frame(false);
+    let mut state =
+        WinitDesktopRuntimeSurfaceState::new(initial).expect("initial state should validate");
+
+    let report = state
+        .apply_reload(WinitDesktopReload::new(
+            WinitDesktopReloadKind::RuntimeTreePatch,
+            updated,
+        ))
+        .expect("runtime tree patch should apply");
+
+    assert_eq!(report.kind(), WinitDesktopReloadKind::RuntimeTreePatch);
+    assert_eq!(report.reload_generation(), 1);
+    assert!(report.redraw_requested());
+    assert!(!report.requires_event_loop_restart());
+    assert_eq!(state.reload_generation(), 1);
+    assert_eq!(
+        state
+            .config()
+            .runtime_tree()
+            .expect("runtime tree remains present")
+            .root_id()
+            .as_str(),
+        "root-reloaded"
+    );
+}
+
+#[test]
+fn runtime_surface_state_flags_full_rebuild_as_event_loop_restart() {
+    let initial = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+        "app",
+        SurfaceMetrics::new(640.0, 480.0, 1.0),
+    ))
+    .with_runtime_tree(runtime_tree("root", Color::rgba(8, 10, 14, 255)));
+    let updated = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+        "renamed app",
+        SurfaceMetrics::new(800.0, 600.0, 1.0),
+    ))
+    .with_runtime_tree(runtime_tree("root-full", Color::rgba(96, 48, 32, 255)));
+    let mut state =
+        WinitDesktopRuntimeSurfaceState::new(initial).expect("initial state should validate");
+
+    let report = state
+        .apply_reload(WinitDesktopReload::new(
+            WinitDesktopReloadKind::FullRebuildRequired,
+            updated,
+        ))
+        .expect("full rebuild config should validate");
+
+    assert_eq!(report.kind(), WinitDesktopReloadKind::FullRebuildRequired);
+    assert!(report.requires_event_loop_restart());
+    assert!(!report.redraw_requested());
+    assert_eq!(state.reload_generation(), 0);
+    assert_eq!(state.config().window().title, "app");
+}
+
+#[test]
 fn runtime_events_request_repaint_after_resize() {
     assert!(
         DesktopRuntimeEvent::Resized {
@@ -311,4 +381,13 @@ fn runtime_events_request_repaint_after_resize() {
     );
     assert!(DesktopRuntimeEvent::DpiChanged { scale_factor: 2.0 }.requires_full_repaint());
     assert!(!DesktopRuntimeEvent::KeyboardInput.requires_full_repaint());
+}
+
+fn runtime_tree(id: &str, color: Color) -> RuntimeViewTree {
+    RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new(id),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(640.0, 480.0)),
+        RuntimeVisual::Fill(color),
+    ))
 }

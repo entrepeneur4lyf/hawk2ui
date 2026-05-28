@@ -7,11 +7,13 @@ use std::{
 
 #[test]
 fn cli_commands_help_lists_required_workflows() {
-    let catalog = CommandCatalog::default();
+    let catalog = CommandCatalog;
     let help = catalog.render_help();
 
     for command in [
         "new",
+        "run",
+        "dev",
         "validate",
         "build-dev",
         "build-release",
@@ -20,6 +22,7 @@ fn cli_commands_help_lists_required_workflows() {
         "package-plugin",
         "export-schemas",
         "diagnostics",
+        "explain",
     ] {
         assert!(help.contains(command), "help missing command: {command}");
     }
@@ -27,12 +30,14 @@ fn cli_commands_help_lists_required_workflows() {
 
 #[test]
 fn cli_commands_parse_known_commands_and_reject_invalid_command() {
-    let catalog = CommandCatalog::default();
+    let catalog = CommandCatalog;
 
     assert_eq!(
         catalog.parse(["hawk2ui", "new"]).unwrap(),
         CliCommand::NewProject
     );
+    assert_eq!(catalog.parse(["hawk2ui", "run"]).unwrap(), CliCommand::Run);
+    assert_eq!(catalog.parse(["hawk2ui", "dev"]).unwrap(), CliCommand::Dev);
     assert_eq!(
         catalog.parse(["hawk2ui", "build-release"]).unwrap(),
         CliCommand::BuildRelease
@@ -41,12 +46,94 @@ fn cli_commands_parse_known_commands_and_reject_invalid_command() {
         catalog.parse(["hawk2ui", "export-schemas"]).unwrap(),
         CliCommand::ExportSchemas
     );
+    assert_eq!(
+        catalog.parse(["hawk2ui", "explain"]).unwrap(),
+        CliCommand::Explain
+    );
 
     let error = catalog
         .parse(["hawk2ui", "nope"])
         .expect_err("invalid command should fail");
     assert_eq!(error.exit_code, CliExitCode::Usage);
     assert!(error.message.contains("unknown command"));
+}
+
+#[test]
+fn workspace_dev_runs_validated_hot_reload_loop_without_rust_commands() {
+    let root = temp_cli_workspace("dev");
+    write_desktop_project(&root, "com.hawk2ui.cli-dev", "CLI Dev");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::Dev);
+
+    assert_eq!(execution.exit_code, CliExitCode::Success);
+    assert!(execution.stdout.contains("development loop ready"));
+    assert!(execution.stdout.contains("IncrementalRebuildTriggered"));
+    assert!(execution.stdout.contains("NativeSurfaceReloaded"));
+}
+
+#[test]
+fn workspace_dev_watches_manifest_declared_sources_and_assets() {
+    let root = temp_cli_workspace("dev-filesystem");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.cli-dev-filesystem"
+name = "CLI Dev Filesystem"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+style = "styles/main.hawk.css"
+script = "src/bootstrap.ts"
+
+[capabilities]
+keys = ["native-windowing", "sealed-artifacts"]
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'desktop';");
+    write_file(&root.join("src/bootstrap.ts"), "export const boot = true;");
+    write_file(
+        &root.join("styles/main.hawk.css"),
+        ".root { color: white; }",
+    );
+    write_file(&root.join("assets/logo.svg"), "<svg />");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::Dev);
+
+    assert_eq!(execution.exit_code, CliExitCode::Success);
+    assert!(execution.stdout.contains("src/main.ts"));
+    assert!(execution.stdout.contains("src/bootstrap.ts"));
+    assert!(execution.stdout.contains("styles/main.hawk.css"));
+    assert!(execution.stdout.contains("assets/logo.svg"));
+}
+
+#[test]
+fn workspace_explain_reports_targets_capabilities_and_next_commands() {
+    let root = temp_cli_workspace("explain");
+    write_desktop_project(&root, "com.hawk2ui.cli-explain", "CLI Explain");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::Explain);
+
+    assert_eq!(execution.exit_code, CliExitCode::Success);
+    assert!(
+        execution
+            .stdout
+            .contains("project: com.hawk2ui.cli-explain")
+    );
+    assert!(execution.stdout.contains("targets:"));
+    assert!(execution.stdout.contains("linux-wayland (desktop)"));
+    assert!(execution.stdout.contains("native-windowing"));
+    assert!(execution.stdout.contains("hawk2ui run-desktop"));
 }
 
 #[test]
@@ -94,7 +181,7 @@ use hawk2ui_cli::{BuildCommandRunner, BuildCommandScenario};
 
 #[test]
 fn build_commands_return_success_validation_failure_and_verification_failure_codes() {
-    let runner = BuildCommandRunner::default();
+    let runner = BuildCommandRunner;
 
     assert_eq!(
         runner.validate(BuildCommandScenario::Success).exit_code,
@@ -496,4 +583,34 @@ fn write_file(path: &Path, contents: &str) {
         fs::create_dir_all(parent).expect("test parent directory should be created");
     }
     fs::write(path, contents).expect("test file should be written");
+}
+
+fn write_desktop_project(root: &Path, id: &str, name: &str) {
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        &format!(
+            r#"
+[identity]
+id = "{id}"
+name = "{name}"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+style = "styles/main.hawk.css"
+
+[capabilities]
+keys = ["native-windowing", "sealed-artifacts"]
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#
+        ),
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'desktop';");
+    write_file(
+        &root.join("styles/main.hawk.css"),
+        ".root { color: white; }",
+    );
 }

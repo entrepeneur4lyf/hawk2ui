@@ -29,7 +29,19 @@ name = "layout"
 harness = false
 
 [[bench]]
+name = "style"
+harness = false
+
+[[bench]]
 name = "render"
+harness = false
+
+[[bench]]
+name = "script"
+harness = false
+
+[[bench]]
+name = "assets"
 harness = false
 
 [[bench]]
@@ -38,6 +50,14 @@ harness = false
 
 [[bench]]
 name = "runtime"
+harness = false
+
+[[bench]]
+name = "package"
+harness = false
+
+[[bench]]
+name = "desktop_host"
 harness = false
 
 [[bench]]

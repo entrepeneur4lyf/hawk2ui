@@ -10,7 +10,11 @@ pub use commands::{
     BuildCommandResult, BuildCommandRunner, BuildCommandScenario, CliCommand, CliError,
     CliExitCode, CommandCatalog,
 };
-pub use dev_loop::{DevLoop, DevLoopEvent, DevLoopReport, RecordingReloadTarget, RecordingWatcher};
+pub use dev_loop::{
+    DevChangeClassifier, DevLoop, DevLoopEvent, DevLoopReport, DevPatchKind, DevPatchPlan,
+    DevWatchKind, DevWatchedPath, DevWatcherError, FileSystemWatcher, NotifyFileSystemWatcher,
+    RecordingReloadTarget, RecordingWatcher,
+};
 pub use diagnostics::{CliDiagnostic, DiagnosticSeverity, SourceSpan};
 pub use executor::{CommandExecution, WorkspaceCommandRunner};
 

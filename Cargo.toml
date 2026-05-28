@@ -22,6 +22,7 @@ members = [
     "crates/hawk2ui-platform",
     "crates/hawk2ui-plugin",
     "crates/hawk2ui-plugin-adapters",
+    "crates/hawk2ui-vst3",
     "crates/hawk2ui-render",
     "crates/hawk2ui-render-skia",
     "crates/hawk2ui-runtime",
@@ -54,6 +55,7 @@ all = "warn"
 pedantic = "warn"
 
 [workspace.dependencies]
+notify = "8"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 toml = "0.8"

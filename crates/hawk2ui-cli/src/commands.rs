@@ -9,6 +9,10 @@ use crate::CliDiagnostic;
 pub enum CliCommand {
     /// Create a new project.
     NewProject,
+    /// Build and run the default target.
+    Run,
+    /// Run a development loop with native reload.
+    Dev,
     /// Validate project manifests and sources.
     Validate,
     /// Build a development artifact.
@@ -25,12 +29,16 @@ pub enum CliCommand {
     ExportSchemas,
     /// Render diagnostics.
     Diagnostics,
+    /// Explain the current project and available workflows.
+    Explain,
 }
 
 impl CliCommand {
     fn from_name(name: &str) -> Option<Self> {
         match name {
             "new" => Some(Self::NewProject),
+            "run" => Some(Self::Run),
+            "dev" => Some(Self::Dev),
             "validate" => Some(Self::Validate),
             "build-dev" => Some(Self::BuildDev),
             "build-release" => Some(Self::BuildRelease),
@@ -39,6 +47,7 @@ impl CliCommand {
             "package-plugin" => Some(Self::PackagePlugin),
             "export-schemas" => Some(Self::ExportSchemas),
             "diagnostics" => Some(Self::Diagnostics),
+            "explain" => Some(Self::Explain),
             _ => None,
         }
     }
@@ -104,6 +113,8 @@ impl CommandCatalog {
             "",
             "Commands:",
             "  new              Create a new Hawk2UI project",
+            "  run              Build and run the default native target",
+            "  dev              Watch, rebuild, validate, and hot-reload the native surface",
             "  validate         Validate manifests, sources, and capabilities",
             "  build-dev        Build a development artifact",
             "  build-release    Build a production artifact",
@@ -112,6 +123,7 @@ impl CommandCatalog {
             "  package-plugin   Package CLAP, VST3, AU, and standalone targets",
             "  export-schemas   Export the central generated JSON Schema catalog",
             "  diagnostics      Render structured diagnostics",
+            "  explain          Explain project targets, capabilities, and next commands",
         ]
         .join("\n")
     }

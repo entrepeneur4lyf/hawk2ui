@@ -14,7 +14,9 @@ fn main() {
                     std::process::exit(12);
                 }
             };
-            let execution = WorkspaceCommandRunner::new(root).execute(command);
+            let execution = WorkspaceCommandRunner::new(root)
+                .with_unbounded_dev_loop()
+                .execute(command);
             if !execution.stdout.is_empty() {
                 print!("{}", execution.stdout);
             }

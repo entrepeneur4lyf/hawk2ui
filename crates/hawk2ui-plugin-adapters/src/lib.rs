@@ -1938,6 +1938,179 @@ pub struct ClapCdylibScaffoldOutput {
     pub library_file_stem: String,
 }
 
+/// Files written for a generated VST3 `cdylib` scaffold.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Vst3CdylibScaffoldOutput {
+    /// Root project path.
+    pub root_path: String,
+    /// Generated `Cargo.toml` path.
+    pub cargo_toml_path: String,
+    /// Generated `src/lib.rs` path.
+    pub lib_rs_path: String,
+    /// Generated Cargo package name.
+    pub package_name: String,
+    /// Generated dynamic library file stem.
+    pub library_file_stem: String,
+}
+
+struct Vst3CdylibScaffold {
+    metadata: FormatMetadata,
+    package_name: String,
+    library_file_stem: String,
+    processor_class_id: String,
+    controller_class_id: String,
+}
+
+impl Vst3CdylibScaffold {
+    fn from_metadata(metadata: &FormatMetadata) -> Self {
+        Self {
+            metadata: metadata.clone(),
+            package_name: "hawk2ui-generated-vst3".into(),
+            library_file_stem: "hawk2ui_generated_vst3".into(),
+            processor_class_id: vst3_class_id_hex(&metadata.id, "processor"),
+            controller_class_id: vst3_class_id_hex(&metadata.id, "controller"),
+        }
+    }
+
+    fn write_to(
+        &self,
+        root: impl AsRef<Path>,
+    ) -> Result<Vst3CdylibScaffoldOutput, PackageMaterializationError> {
+        let root = root.as_ref();
+        let src_dir = root.join("src");
+        create_package_dir(&src_dir)?;
+        let cargo_toml_path = root.join("Cargo.toml");
+        let lib_rs_path = src_dir.join("lib.rs");
+        write_package_file(&cargo_toml_path, self.cargo_toml())?;
+        write_package_file(&lib_rs_path, self.lib_rs())?;
+        Ok(Vst3CdylibScaffoldOutput {
+            root_path: root.to_string_lossy().into_owned(),
+            cargo_toml_path: cargo_toml_path.to_string_lossy().into_owned(),
+            lib_rs_path: lib_rs_path.to_string_lossy().into_owned(),
+            package_name: self.package_name.clone(),
+            library_file_stem: self.library_file_stem.clone(),
+        })
+    }
+
+    fn cargo_toml(&self) -> String {
+        format!(
+            "[package]\nname = {}\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\nname = {}\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nhawk2ui-vst3 = \"0.1.0\"\nvst3 = \"0.3.0\"\n",
+            quoted_metadata_string(&self.package_name),
+            quoted_metadata_string(&self.library_file_stem)
+        )
+    }
+
+    fn lib_rs(&self) -> String {
+        VST3_CDYLIB_SOURCE_TEMPLATE
+            .replace("__PLUGIN_ID__", &escaped_metadata_string(&self.metadata.id))
+            .replace(
+                "__PLUGIN_NAME__",
+                &escaped_metadata_string(&self.metadata.display_name),
+            )
+            .replace(
+                "__VENDOR__",
+                &escaped_metadata_string(&self.metadata.vendor),
+            )
+            .replace(
+                "__VERSION__",
+                &escaped_metadata_string(&self.metadata.version),
+            )
+            .replace("__PROCESSOR_CLASS_ID__", &self.processor_class_id)
+            .replace("__CONTROLLER_CLASS_ID__", &self.controller_class_id)
+    }
+}
+
+const VST3_CDYLIB_SOURCE_TEMPLATE: &str = r#"//! Generated Hawk2UI VST3 entry library scaffold.
+#![allow(non_snake_case)]
+#![allow(unsafe_code)]
+
+use std::ffi::c_void;
+
+use hawk2ui_vst3::{
+    Vst3ClassCategory, Vst3ClassId, Vst3FactoryInfo, Vst3PluginClassInfo, Vst3String,
+};
+use vst3::Steinberg::Vst::IPluginFactory;
+
+const PLUGIN_ID: &str = "__PLUGIN_ID__";
+const PLUGIN_NAME: &str = "__PLUGIN_NAME__";
+const VENDOR: &str = "__VENDOR__";
+const VERSION: &str = "__VERSION__";
+const PROCESSOR_CLASS_ID_HEX: &str = "__PROCESSOR_CLASS_ID__";
+const CONTROLLER_CLASS_ID_HEX: &str = "__CONTROLLER_CLASS_ID__";
+
+fn factory_info() -> Option<Vst3FactoryInfo> {
+    let Ok(vendor) = Vst3String::new(VENDOR) else {
+        return None;
+    };
+    Some(Vst3FactoryInfo::new(vendor, None, None))
+}
+
+fn processor_class_info() -> Option<Vst3PluginClassInfo> {
+    let Ok(class_id) = Vst3ClassId::from_hex(PROCESSOR_CLASS_ID_HEX) else {
+        return None;
+    };
+    let Ok(name) = Vst3String::new(PLUGIN_NAME) else {
+        return None;
+    };
+    Vst3PluginClassInfo::new(class_id, Vst3ClassCategory::AudioModule, name).ok()
+}
+
+fn controller_class_info() -> Option<Vst3PluginClassInfo> {
+    let Ok(class_id) = Vst3ClassId::from_hex(CONTROLLER_CLASS_ID_HEX) else {
+        return None;
+    };
+    let Ok(name) = Vst3String::new(PLUGIN_NAME) else {
+        return None;
+    };
+    Vst3PluginClassInfo::new(class_id, Vst3ClassCategory::ComponentController, name).ok()
+}
+
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+extern "system" fn InitDll() -> bool {
+    let _ = (PLUGIN_ID, VERSION, factory_info(), processor_class_info(), controller_class_info());
+    true
+}
+
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+extern "system" fn ExitDll() -> bool {
+    true
+}
+
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+extern "system" fn BundleEntry(_bundle_ref: *mut c_void) -> bool {
+    let _ = (PLUGIN_ID, VERSION, factory_info(), processor_class_info(), controller_class_info());
+    true
+}
+
+#[cfg(target_os = "macos")]
+#[unsafe(no_mangle)]
+extern "system" fn BundleExit() -> bool {
+    true
+}
+
+#[cfg(target_os = "linux")]
+#[unsafe(no_mangle)]
+extern "system" fn ModuleEntry(_library_handle: *mut c_void) -> bool {
+    let _ = (PLUGIN_ID, VERSION, factory_info(), processor_class_info(), controller_class_info());
+    true
+}
+
+#[cfg(target_os = "linux")]
+#[unsafe(no_mangle)]
+extern "system" fn ModuleExit() -> bool {
+    true
+}
+
+#[unsafe(no_mangle)]
+extern "system" fn GetPluginFactory() -> *mut IPluginFactory {
+    std::ptr::null_mut()
+}
+"#;
+
 /// Package request.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PackageRequest {
@@ -2219,6 +2392,9 @@ impl PackageTargetPlan {
                 let binary_path = binary_dir.join(format!("{}.vst3", self.metadata.display_name));
                 write_package_file(&binary_path, self.entry_descriptor("vst3"))?;
                 written.push(binary_path);
+                let scaffold_output = self.write_vst3_cdylib_scaffold(resources_path)?;
+                written.push(PathBuf::from(scaffold_output.cargo_toml_path));
+                written.push(PathBuf::from(scaffold_output.lib_rs_path));
             }
             PackageFormat::Au | PackageFormat::Standalone | PackageFormat::DesktopBundle => {
                 let package_type = self.format.manifest_key();
@@ -2315,6 +2491,13 @@ impl PackageTargetPlan {
                         .join("x86_64-linux")
                         .join(format!("{}.vst3", self.metadata.display_name)),
                 );
+                files.push(resources_path.join("generated-vst3").join("Cargo.toml"));
+                files.push(
+                    resources_path
+                        .join("generated-vst3")
+                        .join("src")
+                        .join("lib.rs"),
+                );
             }
             PackageFormat::Au => {
                 files.push(output_path.join("Contents").join("Info.plist"));
@@ -2378,6 +2561,14 @@ impl PackageTargetPlan {
             scaffold = scaffold.with_runtime_editor_descriptor(descriptor);
         }
         scaffold.write_to(resources_path.join("generated-clap"))
+    }
+
+    fn write_vst3_cdylib_scaffold(
+        &self,
+        resources_path: &Path,
+    ) -> Result<Vst3CdylibScaffoldOutput, PackageMaterializationError> {
+        Vst3CdylibScaffold::from_metadata(&self.metadata)
+            .write_to(resources_path.join("generated-vst3"))
     }
 }
 
@@ -3333,6 +3524,15 @@ fn sha256(bytes: &[u8]) -> String {
         encoded.push(hex_nibble(byte & 0x0f));
     }
     encoded
+}
+
+fn vst3_class_id_hex(plugin_id: &str, role: &str) -> String {
+    let seed = format!("hawk2ui:vst3:{plugin_id}:{role}");
+    sha256(seed.as_bytes())
+        .chars()
+        .skip("sha256:".len())
+        .take(32)
+        .collect()
 }
 
 fn hex_nibble(value: u8) -> char {

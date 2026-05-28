@@ -17,6 +17,8 @@ allow = [
     "BSL-1.0",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    # notify 8.x uses CC0 for its Rust source. Accepted for the native dev watcher.
+    "CC0-1.0",
     "ISC",
     "MIT",
     "MIT-0",

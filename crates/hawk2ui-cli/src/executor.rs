@@ -2,8 +2,11 @@
 
 use std::{
     collections::BTreeSet,
+    fmt::Write as _,
     fs,
     path::{Component, Path, PathBuf},
+    sync::mpsc,
+    time::Duration,
 };
 
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits, AssetRecord};
@@ -12,7 +15,9 @@ use hawk2ui_build::{
     BuildWorkspaceOutput, CompiledScriptRecord, HawkManifest, ManifestError, PackageTarget,
 };
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
-use hawk2ui_host_winit::{WinitDesktopRuntime, WinitDesktopRuntimeConfig};
+use hawk2ui_host_winit::{
+    WinitDesktopReload, WinitDesktopReloadKind, WinitDesktopRuntime, WinitDesktopRuntimeConfig,
+};
 use hawk2ui_layout::{BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue};
 use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRange, ParameterRecord,
@@ -29,7 +34,11 @@ use hawk2ui_runtime::{
 use hawk2ui_schema::schema_catalog_json;
 use hawk2ui_script::{HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy};
 
-use crate::{CliCommand, CliDiagnostic, CliExitCode};
+use crate::{
+    CliCommand, CliDiagnostic, CliExitCode, DevChangeClassifier, DevLoop, DevPatchKind,
+    DevPatchPlan, DevWatchKind, DevWatchedPath, FileSystemWatcher, NotifyFileSystemWatcher,
+    RecordingReloadTarget, RecordingWatcher,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 struct DesktopEntryAppModel {
@@ -225,13 +234,31 @@ impl CommandExecution {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceCommandRunner {
     root: PathBuf,
+    dev_iteration_limit: Option<usize>,
 }
 
 impl WorkspaceCommandRunner {
     /// Creates a command runner rooted at a project directory.
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            dev_iteration_limit: Some(1),
+        }
+    }
+
+    /// Configures how many filesystem-backed dev reload cycles should run before returning.
+    #[must_use]
+    pub const fn with_dev_iteration_limit(mut self, limit: usize) -> Self {
+        self.dev_iteration_limit = Some(limit);
+        self
+    }
+
+    /// Configures the development loop to watch continuously until the process is interrupted.
+    #[must_use]
+    pub const fn with_unbounded_dev_loop(mut self) -> Self {
+        self.dev_iteration_limit = None;
+        self
     }
 
     /// Executes one parsed command.
@@ -239,6 +266,8 @@ impl WorkspaceCommandRunner {
     pub fn execute(&self, command: CliCommand) -> CommandExecution {
         match command {
             CliCommand::NewProject => self.new_project(),
+            CliCommand::Run => self.run(),
+            CliCommand::Dev => self.dev(),
             CliCommand::Validate => self.validate(),
             CliCommand::BuildDev => self.build("development"),
             CliCommand::BuildRelease => self.build("production"),
@@ -247,6 +276,7 @@ impl WorkspaceCommandRunner {
             CliCommand::PackagePlugin => self.package_plugin(),
             CliCommand::ExportSchemas => Self::export_schemas(),
             CliCommand::Diagnostics => self.diagnostics(),
+            CliCommand::Explain => self.explain(),
         }
     }
 
@@ -289,6 +319,236 @@ impl WorkspaceCommandRunner {
         }
     }
 
+    fn run(&self) -> CommandExecution {
+        let manifest = match self.validated_manifest() {
+            Ok(manifest) => manifest,
+            Err(execution) => return execution,
+        };
+        if manifest.has_target(PackageTarget::Desktop) {
+            return self.run_desktop();
+        }
+        if manifest.has_target(PackageTarget::Plugin) {
+            return self.package_plugin();
+        }
+        CommandExecution::failure(
+            CliExitCode::Validation,
+            vec![CliDiagnostic::target_incompatibility(
+                "run",
+                "manifest must declare a desktop or plugin target",
+            )],
+        )
+    }
+
+    fn dev(&self) -> CommandExecution {
+        let output = match self.build_workspace() {
+            Ok(output) => output,
+            Err(execution) => return execution,
+        };
+        if self.dev_iteration_limit.is_none() && output.manifest.has_target(PackageTarget::Desktop)
+        {
+            return self.dev_live_desktop(&output);
+        }
+        let mut watched_paths = dev_watched_paths(&output.manifest);
+        let mut classifier = DevChangeClassifier::new(watched_paths.clone());
+        let mut file_watcher =
+            FileSystemWatcher::new(&self.root, watched_paths.iter().map(DevWatchedPath::path));
+        let mut notify_watcher = None;
+        if self.dev_iteration_limit.is_none() {
+            let _ = file_watcher.changed_files();
+            match NotifyFileSystemWatcher::new(
+                &self.root,
+                watched_paths.iter().map(DevWatchedPath::path),
+                Duration::from_millis(75),
+            ) {
+                Ok(watcher) => notify_watcher = Some(watcher),
+                Err(error) => {
+                    eprintln!(
+                        "native filesystem watcher unavailable: {}; falling back to hash polling",
+                        error.message()
+                    );
+                }
+            }
+        }
+        let mut completed_iterations = 0_usize;
+        let mut stdout = String::from("development loop ready\n");
+
+        loop {
+            if self
+                .dev_iteration_limit
+                .is_some_and(|limit| completed_iterations >= limit)
+            {
+                return CommandExecution::success(stdout);
+            }
+
+            let changed_files =
+                match Self::dev_changed_files(&mut notify_watcher, &mut file_watcher) {
+                    Ok(files) => files,
+                    Err(execution) => return execution,
+                };
+            if changed_files.is_empty() {
+                if self.dev_iteration_limit.is_some() {
+                    return CommandExecution::success(stdout);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+
+            let output = match self.build_workspace() {
+                Ok(output) => output,
+                Err(execution) => return execution,
+            };
+            let patch_plan = classifier.classify(changed_files.clone());
+            watched_paths = dev_watched_paths(&output.manifest);
+            classifier = DevChangeClassifier::new(watched_paths.clone());
+            file_watcher.replace_watched_files(watched_paths.iter().map(DevWatchedPath::path));
+            if self.dev_iteration_limit.is_none() {
+                notify_watcher = match NotifyFileSystemWatcher::new(
+                    &self.root,
+                    watched_paths.iter().map(DevWatchedPath::path),
+                    Duration::from_millis(75),
+                ) {
+                    Ok(watcher) => Some(watcher),
+                    Err(error) => {
+                        eprintln!(
+                            "native filesystem watcher unavailable: {}; falling back to hash polling",
+                            error.message()
+                        );
+                        None
+                    }
+                };
+            }
+
+            let mut dev_loop = DevLoop::new(
+                RecordingWatcher::new(changed_files),
+                RecordingReloadTarget::default(),
+            )
+            .preserve_state(true);
+            match dev_loop.run_once() {
+                Ok(report) => {
+                    completed_iterations += 1;
+                    let _ = writeln!(stdout, "cycle: {completed_iterations}");
+                    stdout.push_str(&render_patch_plan(&patch_plan));
+                    for event in report.events {
+                        stdout.push_str("- ");
+                        stdout.push_str(&event_debug(&event));
+                        stdout.push('\n');
+                    }
+                }
+                Err(error) => {
+                    return CommandExecution::failure(
+                        CliExitCode::Runtime,
+                        vec![CliDiagnostic::error("dev.loop-failed", error)],
+                    );
+                }
+            }
+        }
+    }
+
+    fn dev_live_desktop(&self, output: &BuildWorkspaceOutput) -> CommandExecution {
+        let config = match desktop_runtime_config_with_assets(&self.root, output, false) {
+            Ok(config) => config,
+            Err(diagnostic) => {
+                return CommandExecution::failure(CliExitCode::Runtime, vec![*diagnostic]);
+            }
+        };
+        let root = self.root.clone();
+        let initial_watched_paths = dev_watched_paths(&output.manifest);
+        let (reload_sender, reload_receiver) = mpsc::channel();
+        println!("development loop ready; native desktop surface attached");
+        std::thread::spawn(move || {
+            let mut watched_paths = initial_watched_paths;
+            let mut classifier = DevChangeClassifier::new(watched_paths.clone());
+            let mut file_watcher =
+                FileSystemWatcher::new(&root, watched_paths.iter().map(DevWatchedPath::path));
+            let _ = file_watcher.changed_files();
+            let mut notify_watcher = match NotifyFileSystemWatcher::new(
+                &root,
+                watched_paths.iter().map(DevWatchedPath::path),
+                Duration::from_millis(75),
+            ) {
+                Ok(watcher) => Some(watcher),
+                Err(error) => {
+                    eprintln!(
+                        "native file watcher unavailable; falling back to hash polling: {}",
+                        error.message()
+                    );
+                    None
+                }
+            };
+
+            loop {
+                let changed_files =
+                    match Self::dev_changed_files(&mut notify_watcher, &mut file_watcher) {
+                        Ok(files) => files,
+                        Err(execution) => {
+                            eprintln!("{}", execution.stderr);
+                            break;
+                        }
+                    };
+                if changed_files.is_empty() {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                let patch_plan = classifier.classify(changed_files);
+                let runner = WorkspaceCommandRunner::new(&root);
+                let output = match runner.build_workspace() {
+                    Ok(output) => output,
+                    Err(execution) => {
+                        eprintln!("{}", execution.stderr);
+                        continue;
+                    }
+                };
+                let config = match desktop_runtime_config_with_assets(&root, &output, false) {
+                    Ok(config) => config,
+                    Err(diagnostic) => {
+                        eprintln!("{}", render_diagnostics(&[*diagnostic]));
+                        continue;
+                    }
+                };
+                let reload_kind = winit_reload_kind(&patch_plan);
+                let reload = WinitDesktopReload::new(reload_kind, config)
+                    .with_preserve_state(!reload_kind.requires_event_loop_restart());
+                if reload_sender.send(reload).is_err() {
+                    break;
+                }
+                eprintln!("dev reload queued: {reload_kind:?}");
+                watched_paths = dev_watched_paths(&output.manifest);
+                classifier = DevChangeClassifier::new(watched_paths.clone());
+                file_watcher.replace_watched_files(watched_paths.iter().map(DevWatchedPath::path));
+                notify_watcher = match NotifyFileSystemWatcher::new(
+                    &root,
+                    watched_paths.iter().map(DevWatchedPath::path),
+                    Duration::from_millis(75),
+                ) {
+                    Ok(watcher) => Some(watcher),
+                    Err(error) => {
+                        eprintln!(
+                            "native file watcher unavailable; falling back to hash polling: {}",
+                            error.message()
+                        );
+                        None
+                    }
+                };
+            }
+        });
+
+        match WinitDesktopRuntime::new().run_dev_blocking(config, reload_receiver) {
+            Ok(summary) => CommandExecution::success(format!(
+                "development loop exited cleanly\nframes-presented: {}\nresizes: {}\ndpi-changes: {}\ninput-events: {}\nnative-reloads: {}\nclose-requested: {}\n",
+                summary.frames_presented,
+                summary.resizes,
+                summary.dpi_changes,
+                summary.input_events,
+                summary.native_reloads,
+                summary.close_requested
+            )),
+            Err(error) => CommandExecution::failure(
+                CliExitCode::Runtime,
+                vec![CliDiagnostic::error(error.rule(), error.message())],
+            ),
+        }
+    }
+
     fn build(&self, profile: &str) -> CommandExecution {
         let output = match self.build_workspace() {
             Ok(output) => output,
@@ -303,6 +563,23 @@ impl WorkspaceCommandRunner {
             output.artifact.compiled_styles.len(),
             output.artifact.compiled_assets.len()
         ))
+    }
+
+    fn dev_changed_files(
+        notify_watcher: &mut Option<NotifyFileSystemWatcher>,
+        file_watcher: &mut FileSystemWatcher,
+    ) -> Result<Vec<String>, CommandExecution> {
+        match notify_watcher.as_mut() {
+            Some(watcher) => watcher
+                .next_changed_files(Duration::from_millis(500))
+                .map_err(|error| {
+                    CommandExecution::failure(
+                        CliExitCode::Runtime,
+                        vec![CliDiagnostic::error("dev.watch-failed", error.message())],
+                    )
+                }),
+            None => Ok(file_watcher.changed_files()),
+        }
     }
 
     fn verify_artifact(&self) -> CommandExecution {
@@ -355,20 +632,13 @@ impl WorkspaceCommandRunner {
             );
         }
         let exit_after_first_frame = std::env::var_os("HAWK2UI_EXIT_AFTER_FIRST_FRAME").is_some();
-        let mut config =
-            match desktop_runtime_config_from_build_output(&output, exit_after_first_frame) {
+        let config =
+            match desktop_runtime_config_with_assets(&self.root, &output, exit_after_first_frame) {
                 Ok(config) => config,
                 Err(diagnostic) => {
                     return CommandExecution::failure(CliExitCode::Runtime, vec![*diagnostic]);
                 }
             };
-        let runtime_assets = match desktop_runtime_assets(&self.root, manifest) {
-            Ok(assets) => assets,
-            Err(diagnostic) => {
-                return CommandExecution::failure(CliExitCode::Runtime, vec![*diagnostic]);
-            }
-        };
-        config = config.with_runtime_assets(runtime_assets);
         match WinitDesktopRuntime::new().run_blocking(config) {
             Ok(summary) => CommandExecution::success(format!(
                 "desktop runtime exited cleanly\nframes-presented: {}\nresizes: {}\ndpi-changes: {}\ninput-events: {}\nclose-requested: {}\n",
@@ -483,6 +753,47 @@ impl WorkspaceCommandRunner {
     fn diagnostics(&self) -> CommandExecution {
         match self.build_workspace() {
             Ok(_) => CommandExecution::success("no diagnostics\n"),
+            Err(execution) => execution,
+        }
+    }
+
+    fn explain(&self) -> CommandExecution {
+        match self.build_workspace() {
+            Ok(output) => {
+                let manifest = output.manifest;
+                let mut stdout = format!(
+                    "project: {}\nname: {}\nversion: {}\n",
+                    manifest.identity.id, manifest.identity.name, manifest.identity.version
+                );
+                stdout.push_str("targets:\n");
+                for target in &manifest.targets {
+                    stdout.push_str("- ");
+                    stdout.push_str(&target.name);
+                    stdout.push_str(" (");
+                    stdout.push_str(match target.kind {
+                        PackageTarget::Desktop => "desktop",
+                        PackageTarget::Plugin => "plugin",
+                    });
+                    stdout.push_str(")\n");
+                }
+                stdout.push_str("capabilities:\n");
+                for capability in &manifest.capabilities {
+                    stdout.push_str("- ");
+                    stdout.push_str(capability);
+                    stdout.push('\n');
+                }
+                stdout.push_str("next commands:\n");
+                stdout.push_str("- hawk2ui validate\n");
+                stdout.push_str("- hawk2ui build-release\n");
+                if manifest.has_target(PackageTarget::Desktop) {
+                    stdout.push_str("- hawk2ui run-desktop\n");
+                    stdout.push_str("- hawk2ui dev\n");
+                }
+                if manifest.has_target(PackageTarget::Plugin) {
+                    stdout.push_str("- hawk2ui package-plugin\n");
+                }
+                CommandExecution::success(stdout)
+            }
             Err(execution) => execution,
         }
     }
@@ -690,6 +1001,47 @@ fn bundle_name(identity_id: &str) -> String {
         .collect()
 }
 
+fn event_debug(event: &crate::DevLoopEvent) -> String {
+    format!("{event:?}")
+}
+
+fn dev_watched_paths(manifest: &HawkManifest) -> Vec<DevWatchedPath> {
+    let mut paths = BTreeSet::from([
+        DevWatchedPath::new("manifest.hawk.toml", DevWatchKind::Manifest),
+        DevWatchedPath::new(manifest.source.entry.clone(), DevWatchKind::RuntimeTree),
+    ]);
+    if let Some(style) = &manifest.source.style {
+        paths.insert(DevWatchedPath::new(style.clone(), DevWatchKind::Style));
+    }
+    if let Some(script) = &manifest.source.script {
+        paths.insert(DevWatchedPath::new(script.clone(), DevWatchKind::Script));
+    }
+    for asset in &manifest.assets {
+        paths.insert(DevWatchedPath::new(asset.path.clone(), DevWatchKind::Asset));
+    }
+    paths.into_iter().collect()
+}
+
+fn render_patch_plan(plan: &DevPatchPlan) -> String {
+    let mut output = format!("patch: {:?}\n", plan.kind());
+    for file in plan.changed_files() {
+        output.push_str("changed: ");
+        output.push_str(file);
+        output.push('\n');
+    }
+    output
+}
+
+fn winit_reload_kind(plan: &DevPatchPlan) -> WinitDesktopReloadKind {
+    match plan.kind() {
+        DevPatchKind::StylePatch => WinitDesktopReloadKind::StylePatch,
+        DevPatchKind::AssetPatch => WinitDesktopReloadKind::AssetPatch,
+        DevPatchKind::RuntimeTreePatch => WinitDesktopReloadKind::RuntimeTreePatch,
+        DevPatchKind::ScriptRebuild => WinitDesktopReloadKind::ScriptRebuild,
+        DevPatchKind::FullRebuildRequired => WinitDesktopReloadKind::FullRebuildRequired,
+    }
+}
+
 #[cfg(test)]
 fn desktop_runtime_config_from_manifest(
     manifest: &HawkManifest,
@@ -715,6 +1067,16 @@ fn desktop_runtime_config_from_build_output(
         &app_model,
         exit_after_first_frame,
     )
+}
+
+fn desktop_runtime_config_with_assets(
+    root: &Path,
+    output: &BuildWorkspaceOutput,
+    exit_after_first_frame: bool,
+) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
+    let config = desktop_runtime_config_from_build_output(output, exit_after_first_frame)?;
+    let runtime_assets = desktop_runtime_assets(root, &output.manifest)?;
+    Ok(config.with_runtime_assets(runtime_assets))
 }
 
 fn desktop_runtime_config_from_manifest_with_app_model(
@@ -1168,6 +1530,14 @@ mod tests {
     use hawk2ui_layout::Viewport;
     use hawk2ui_runtime::RuntimeSceneBridge;
 
+    fn float_eq(left: f32, right: f32) -> bool {
+        (left - right).abs() < f32::EPSILON
+    }
+
+    fn float_eq_f64(left: f64, right: f64) -> bool {
+        (left - right).abs() < f64::EPSILON
+    }
+
     #[test]
     fn desktop_runtime_config_from_manifest_uses_editor_size_and_title() {
         let manifest = HawkManifest::parse(
@@ -1194,8 +1564,8 @@ name = "linux-wayland"
             desktop_runtime_config_from_manifest(&manifest, true).expect("runtime config builds");
 
         assert_eq!(config.window().title, "Desktop Smoke");
-        assert_eq!(config.window().metrics.logical_width, 1280.0);
-        assert_eq!(config.window().metrics.logical_height, 720.0);
+        assert!(float_eq_f64(config.window().metrics.logical_width, 1280.0));
+        assert!(float_eq_f64(config.window().metrics.logical_height, 720.0));
         assert!(config.exit_after_first_frame());
 
         let scene = RuntimeSceneBridge::new(Viewport::new(1280.0, 720.0))
@@ -1571,9 +1941,9 @@ export function mount() {
                 color
             } if id.as_str() == "hero-title"
                 && text == "Styled Hero"
-                && geometry.width == 320.0
-                && geometry.height == 40.0
-                && *font_size == 18.0
+                && float_eq(geometry.width, 320.0)
+                && float_eq(geometry.height, 40.0)
+                && float_eq(*font_size, 18.0)
                 && *color == Color::rgba(170, 187, 204, 255)
         )));
     }

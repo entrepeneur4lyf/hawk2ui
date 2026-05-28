@@ -1218,7 +1218,21 @@ fn plugin_adapters_materialize_format_specific_layouts_and_hash_manifest() {
             PackageFormat::Vst3 => {
                 assert!(root.join("Contents/Info.plist").is_file());
                 assert!(root.join("Contents/x86_64-linux/Layout.vst3").is_file());
+                let generated_cargo = root.join("Contents/Resources/generated-vst3/Cargo.toml");
+                let generated_lib = root.join("Contents/Resources/generated-vst3/src/lib.rs");
+                assert!(generated_cargo.is_file());
+                assert!(generated_lib.is_file());
+                let generated_cargo =
+                    std::fs::read_to_string(generated_cargo).expect("VST3 scaffold manifest reads");
+                let generated_lib =
+                    std::fs::read_to_string(generated_lib).expect("VST3 scaffold source reads");
+                assert!(generated_cargo.contains("hawk2ui-vst3"));
+                assert!(generated_cargo.contains("vst3 = \"0.3.0\""));
+                assert!(generated_lib.contains("Vst3ClassId"));
+                assert!(generated_lib.contains("GetPluginFactory"));
                 assert!(hashes.contains("Contents/Info.plist"));
+                assert!(hashes.contains("Contents/Resources/generated-vst3/Cargo.toml"));
+                assert!(hashes.contains("Contents/Resources/generated-vst3/src/lib.rs"));
             }
             PackageFormat::Au => {
                 assert!(root.join("Contents/Info.plist").is_file());

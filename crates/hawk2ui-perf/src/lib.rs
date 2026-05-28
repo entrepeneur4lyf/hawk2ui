@@ -10,7 +10,8 @@ pub use budgets::{
     BudgetUnit, PerformanceBudget, PerformanceBudgets, PerformanceCategory, PerformanceError,
 };
 pub use harness::{
-    BenchmarkCase, BenchmarkError, BenchmarkKind, BenchmarkMeasurement, BenchmarkSuite,
+    BenchmarkArtifactSet, BenchmarkCase, BenchmarkError, BenchmarkKind, BenchmarkMeasurement,
+    BenchmarkReport, BenchmarkReportEntry, BenchmarkSuite,
 };
 pub use realtime::{
     RealtimeContext, RealtimeGuard, RealtimeGuardError, RealtimeLockPolicy, RealtimeOperation,
@@ -42,12 +43,17 @@ mod tests {
             "artifact-load",
             "first-frame",
             "layout-pass",
+            "style-compile",
             "scene-export",
             "frame-render",
             "text-measurement",
             "runtime-event-dispatch",
+            "js-evaluate",
+            "asset-decode",
             "memory-working-set",
             "package-size",
+            "package-verify",
+            "desktop-host-frame",
             "plugin-audio-allocation",
         ] {
             assert!(budgets.contains(name), "missing budget {name}");
@@ -165,6 +171,57 @@ mod tests {
                 maximum: 16,
             }
         );
+    }
+
+    #[test]
+    fn benchmark_suite_writes_release_evidence_report() {
+        let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+        let suite = BenchmarkSuite::new("production-matrix")
+            .with_case(
+                BenchmarkCase::new(
+                    "style-compile",
+                    "examples/style-gallery",
+                    BenchmarkKind::Style,
+                )
+                .with_measurement(BenchmarkMeasurement::new(7)),
+            )
+            .with_case(
+                BenchmarkCase::new(
+                    "js-evaluate",
+                    "examples/framework-svelte",
+                    BenchmarkKind::Script,
+                )
+                .with_measurement(BenchmarkMeasurement::new(25)),
+            );
+
+        let report = suite.evaluate_against(&budgets);
+        assert_eq!(report.case_count(), 2);
+        assert_eq!(report.failed_count(), 1);
+        assert!(!report.accepted());
+        assert!(
+            report
+                .artifact_payload()
+                .contains("budget = \"style-compile\"")
+        );
+        assert!(
+            report
+                .artifact_payload()
+                .contains("failure = \"budget-exceeded\"")
+        );
+
+        let root =
+            std::env::temp_dir().join(format!("hawk2ui-benchmark-evidence-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let artifacts = suite
+            .write_report_artifact(&budgets, &root)
+            .expect("benchmark evidence writes");
+        assert_eq!(artifacts.root(), root.as_path());
+        assert_eq!(artifacts.files().len(), 1);
+        let evidence =
+            std::fs::read_to_string(&artifacts.files()[0]).expect("benchmark evidence reads");
+        assert!(evidence.contains("suite = \"production-matrix\""));
+        assert!(evidence.contains("failed_count = 1"));
+        std::fs::remove_dir_all(root).expect("benchmark evidence temp directory cleans up");
     }
 
     #[test]
