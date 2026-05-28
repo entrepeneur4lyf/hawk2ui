@@ -397,7 +397,12 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
 
     let scaffold = ClapCdylibScaffold::from_metadata(&metadata)
         .with_editor(&editor)
-        .with_parameters(&parameters);
+        .with_parameters(&parameters)
+        .with_runtime_editor_descriptor(
+            "Contents/Resources/hawk2ui-runtime-artifact.json",
+            "baseview",
+            "skia",
+        );
     let output = scaffold
         .write_to(&output_root)
         .expect("CLAP scaffold should write");
@@ -419,6 +424,9 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     assert!(source.contains("clap_plugin_state"));
     assert!(source.contains("PARAMETERS"));
     assert!(source.contains("Gain"));
+    assert!(source.contains("hawk2ui_editor_descriptor"));
+    assert!(source.contains("Contents/Resources/hawk2ui-runtime-artifact.json"));
+    assert!(source.contains("host_adapter=baseview"));
 
     let target_dir = output_root.join("target");
     let status = std::process::Command::new("cargo")
@@ -603,12 +611,26 @@ fn main() {
         };
         assert!((gui.set_parent.expect("gui set parent"))(plugin, &parent));
         assert!((gui.set_size.expect("gui set size"))(plugin, 1200, 720));
-        assert!((gui.show.expect("gui show"))(plugin));
-        assert!((gui.hide.expect("gui hide"))(plugin));
-        (gui.destroy.expect("gui destroy"))(plugin);
+          assert!((gui.show.expect("gui show"))(plugin));
+          assert!((gui.hide.expect("gui hide"))(plugin));
+          (gui.destroy.expect("gui destroy"))(plugin);
+          let editor_descriptor: libloading::Symbol<unsafe extern "C" fn(*mut usize) -> *const u8> =
+              library.get(b"hawk2ui_editor_descriptor\0").expect("editor descriptor export resolves");
+          let mut descriptor_len = 0usize;
+          let descriptor_ptr = editor_descriptor(&mut descriptor_len);
+          assert!(!descriptor_ptr.is_null());
+          assert!(descriptor_len > 0);
+          let descriptor = std::str::from_utf8(std::slice::from_raw_parts(
+              descriptor_ptr,
+              descriptor_len,
+          ))
+          .expect("editor descriptor is utf8");
+          assert!(descriptor.contains("runtime_artifact=Contents/Resources/hawk2ui-runtime-artifact.json"));
+          assert!(descriptor.contains("host_adapter=baseview"));
+          assert!(descriptor.contains("renderer=skia"));
 
-        let params = ((*plugin).get_extension.expect("params extension"))(
-            plugin,
+          let params = ((*plugin).get_extension.expect("params extension"))(
+              plugin,
             b"clap.params\0".as_ptr().cast(),
         );
         assert!(!params.is_null());

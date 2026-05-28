@@ -1448,6 +1448,10 @@ Status:
 - CLAP GUI parent handles now have a safe typed bridge from CLAP window APIs into `Hawk2UI`
   platform handle records, including validation for nonzero raw handles, Linux display metadata,
   and Baseview's current native-Wayland attachment limitation.
+- Generated CLAP `cdylib` scaffolds can now embed a `Hawk2UI` runtime editor descriptor and expose
+  it through a stable `hawk2ui_editor_descriptor` dynamic-library export; the external generated
+  host checker resolves the export and verifies the runtime artifact path, host adapter, and
+  renderer metadata.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:
