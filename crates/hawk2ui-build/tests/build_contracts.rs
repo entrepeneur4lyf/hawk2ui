@@ -1,18 +1,49 @@
+use ed25519_dalek::{Signer, SigningKey};
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_build::{
-    ArtifactHash, ArtifactSchemaVersion, ArtifactSignature, ArtifactSignaturePolicy,
-    AssetCompilationError, AssetCompilationPlan, AssetDimensions, AssetKind, AssetManifestEntry,
-    AssetSanitizationStatus, AssetSource, AssetSourceIndex, BuildDiagnostic,
-    BuildDiagnosticSeverity, BuildPhase, BuildPipeline, BuildPipelineError, BuildWorkspace,
-    BuildWorkspaceError, CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord,
-    HawkManifest, ManifestError, PackageTarget, PackageTargetRecord, SealedArtifact,
-    SealedArtifactError, SourceSpan, VerificationReport,
+    ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1, ArtifactHash, ArtifactSchemaVersion,
+    ArtifactSignature, ArtifactSignaturePolicy, ArtifactSignatureVerificationKey,
+    ArtifactSignatureVerifier, AssetCompilationError, AssetCompilationPlan, AssetDimensions,
+    AssetKind, AssetManifestEntry, AssetSanitizationStatus, AssetSource, AssetSourceIndex,
+    BuildDiagnostic, BuildDiagnosticSeverity, BuildPhase, BuildPipeline, BuildPipelineError,
+    BuildWorkspace, BuildWorkspaceError, CompiledAssetRecord, CompiledScriptRecord,
+    CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget, PackageTargetRecord,
+    SealedArtifact, SealedArtifactError, SourceSpan, VerificationReport,
 };
 use std::{
     fs,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+fn sign_artifact(
+    artifact: SealedArtifact,
+    key_id: &str,
+) -> (SealedArtifact, ArtifactSignatureVerifier) {
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let signature = signing_key.sign(&artifact.signature_payload_bytes());
+    let verifier =
+        ArtifactSignatureVerifier::new([ArtifactSignatureVerificationKey::ed25519_sha256_v1(
+            key_id,
+            signing_key.verifying_key().to_bytes(),
+        )]);
+    let signed = artifact.with_signature(ArtifactSignature::verified(
+        ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1,
+        key_id,
+        encode_hex(&signature.to_bytes()),
+    ));
+    (signed, verifier)
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
 
 #[test]
 fn build_diagnostic_converts_to_shared_diagnostic_with_location_context() {
@@ -397,14 +428,68 @@ fn sealed_artifact_container_serializes_verifies_and_enforces_signature_policy()
         SealedArtifactError::SignaturePolicy { .. }
     ));
 
-    let signed = artifact.with_signature(ArtifactSignature::verified(
-        "ed25519",
-        "release-key",
-        "signature-bytes",
-    ));
-    signed
+    let (signed, verifier) = sign_artifact(artifact, "release-key");
+    let signed_bytes = signed
         .to_container_bytes(ArtifactSignaturePolicy::RequireVerifiedSignature)
-        .expect("release policy accepts verified signature metadata");
+        .expect("release policy accepts structurally valid signature metadata");
+    let trusted = SealedArtifact::from_trusted_container_bytes(
+        &signed_bytes,
+        ArtifactSchemaVersion::new(1, 0),
+        &verifier,
+    )
+    .expect("trusted release signature verifies");
+    assert_eq!(trusted, signed);
+}
+
+#[test]
+fn sealed_artifact_rejects_untrusted_or_invalid_release_signature() {
+    let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
+    let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(CompiledScriptRecord::new(
+            "main",
+            "src/main.ts",
+            "scripts/main.hawk.js",
+            ArtifactHash::from_bytes(b"script"),
+        ));
+    let (signed, verifier) = sign_artifact(artifact, "release-key");
+    let signed_bytes = signed
+        .to_container_bytes(ArtifactSignaturePolicy::RequireVerifiedSignature)
+        .expect("release container serializes");
+    let untrusted =
+        ArtifactSignatureVerifier::new([ArtifactSignatureVerificationKey::ed25519_sha256_v1(
+            "other-key",
+            [3; 32],
+        )]);
+    let error = SealedArtifact::from_trusted_container_bytes(
+        &signed_bytes,
+        ArtifactSchemaVersion::new(1, 0),
+        &untrusted,
+    )
+    .expect_err("untrusted key must fail");
+    assert!(matches!(
+        error,
+        SealedArtifactError::SignatureVerification { .. }
+    ));
+
+    let tampered = signed.with_compiled_script(CompiledScriptRecord::new(
+        "secondary",
+        "src/secondary.ts",
+        "scripts/secondary.hawk.js",
+        ArtifactHash::from_bytes(b"secondary"),
+    ));
+    let tampered_bytes = tampered
+        .to_container_bytes(ArtifactSignaturePolicy::RequireVerifiedSignature)
+        .expect("tampered signed metadata still serializes");
+    let error = SealedArtifact::from_trusted_container_bytes(
+        &tampered_bytes,
+        ArtifactSchemaVersion::new(1, 0),
+        &verifier,
+    )
+    .expect_err("payload changed after signing must fail");
+    assert!(matches!(
+        error,
+        SealedArtifactError::SignatureVerification { .. }
+    ));
 }
 
 #[test]
@@ -755,11 +840,17 @@ kind = "vector"
 path = "assets/logo.svg"
 "#,
     );
-    write_file(&root.join("src/main.ts"), "export const app = 'hawk';");
-    write_file(&root.join("src/bootstrap.ts"), "export const boot = true;");
+    write_file(
+        &root.join("src/main.ts"),
+        "export const app: string = 'hawk';",
+    );
+    write_file(
+        &root.join("src/bootstrap.ts"),
+        "export const boot: boolean = true;",
+    );
     write_file(
         &root.join("styles/main.hawk.css"),
-        ".root { color: white; }",
+        ".root { display: flex; font-size: 18px; background-color: token(color.surface); }",
     );
     write_file(&root.join("assets/logo.svg"), "<svg />");
 
@@ -776,11 +867,22 @@ path = "assets/logo.svg"
     assert_eq!(output.artifact.compiled_assets.len(), 1);
     assert_eq!(
         output.artifact.compiled_scripts[0].source_hash,
-        ArtifactHash::from_bytes(b"export const app = 'hawk';")
+        ArtifactHash::from_bytes(b"export const app: string = 'hawk';")
     );
-    assert_eq!(
-        output.artifact.compiled_scripts[0].compiled_source,
-        "export const app = 'hawk';"
+    assert!(
+        output.artifact.compiled_scripts[0]
+            .compiled_source
+            .contains("const app")
+    );
+    assert!(
+        output.artifact.compiled_scripts[0]
+            .compiled_source
+            .contains("hawk")
+    );
+    assert!(
+        !output.artifact.compiled_scripts[0]
+            .compiled_source
+            .contains(": string")
     );
     assert_eq!(
         output.artifact.compiled_styles[0].source_path,
@@ -790,6 +892,92 @@ path = "assets/logo.svg"
         output.artifact.asset_manifest[0].artifact_path,
         "assets/logo.pack"
     );
+}
+
+#[test]
+fn build_workspace_rejects_invalid_typescript_before_artifact_materialization() {
+    let root = temp_build_workspace("invalid-typescript");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.invalid-typescript"
+name = "Invalid TypeScript"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app: = ;");
+
+    let error = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect_err("invalid TypeScript must fail before artifact materialization");
+
+    assert!(matches!(
+        error,
+        BuildWorkspaceError::ScriptCompilation { path, .. } if path == "src/main.ts"
+    ));
+}
+
+#[test]
+fn build_workspace_rejects_unsupported_script_extensions() {
+    let root = temp_build_workspace("unsupported-script");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.unsupported-script"
+name = "Unsupported Script"
+version = "1.0.0"
+
+[source]
+entry = "src/main.jsx"
+"#,
+    );
+    write_file(&root.join("src/main.jsx"), "export const app = 'hawk';");
+
+    let error = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect_err("unsupported script extension must fail");
+
+    assert_eq!(
+        error,
+        BuildWorkspaceError::UnsupportedScriptExtension("src/main.jsx".into())
+    );
+}
+
+#[test]
+fn build_workspace_rejects_unsupported_styles_before_artifact_materialization() {
+    let root = temp_build_workspace("unsupported-style");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.unsupported-style"
+name = "Unsupported Style"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+style = "styles/main.hawk.css"
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'hawk';");
+    write_file(
+        &root.join("styles/main.hawk.css"),
+        "@media screen { .root { color: white; } }",
+    );
+
+    let error = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect_err("unsupported CSS must fail before artifact materialization");
+
+    assert!(matches!(
+        error,
+        BuildWorkspaceError::StyleCompilation { path, .. } if path == "styles/main.hawk.css"
+    ));
 }
 
 #[test]

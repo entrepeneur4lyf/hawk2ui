@@ -1,11 +1,16 @@
 //! Sealed artifact records and compatibility checks.
 
 use crate::{BuildDiagnostic, BuildDiagnosticSeverity, HawkManifest, PackageTarget};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const SEALED_ARTIFACT_CONTAINER_MAGIC: &[u8] = b"HAWK2UI-ARTIFACT-V1\n";
+const SEALED_ARTIFACT_SIGNATURE_PAYLOAD_MAGIC: &[u8] = b"HAWK2UI-ARTIFACT-SIGNATURE-V1\n";
+
+/// Supported release artifact signature algorithm.
+pub const ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1: &str = "ed25519-sha256-v1";
 
 /// Artifact schema version.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -43,17 +48,158 @@ impl ArtifactHash {
         let digest = Sha256::digest(bytes);
         let mut encoded = String::with_capacity("sha256:".len() + (digest.len() * 2));
         encoded.push_str("sha256:");
-        for byte in digest {
-            encoded.push(hex_nibble(byte >> 4));
-            encoded.push(hex_nibble(byte & 0x0f));
-        }
+        push_hex(&mut encoded, &digest);
         Self(encoded)
+    }
+}
+
+fn push_hex(output: &mut String, bytes: &[u8]) {
+    for byte in bytes {
+        output.push(hex_nibble(byte >> 4));
+        output.push(hex_nibble(byte & 0x0f));
     }
 }
 
 fn hex_nibble(value: u8) -> char {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     char::from(HEX[usize::from(value & 0x0f)])
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn decode_hex_array<const N: usize>(
+    value: &str,
+    rule: &'static str,
+    message: &'static str,
+) -> Result<[u8; N], SealedArtifactError> {
+    if value.len() != N * 2 {
+        return Err(signature_verification_error(rule, message));
+    }
+
+    let mut decoded = [0_u8; N];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let Some(high) = hex_value(chunk[0]) else {
+            return Err(signature_verification_error(rule, message));
+        };
+        let Some(low) = hex_value(chunk[1]) else {
+            return Err(signature_verification_error(rule, message));
+        };
+        decoded[index] = (high << 4) | low;
+    }
+    Ok(decoded)
+}
+
+/// Trusted public key used to verify release artifact signatures.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactSignatureVerificationKey {
+    /// Signature algorithm accepted for this key.
+    pub algorithm: String,
+    /// Stable signing key identifier.
+    pub key_id: String,
+    /// Hex-encoded Ed25519 public key bytes.
+    pub public_key: String,
+}
+
+impl ArtifactSignatureVerificationKey {
+    /// Creates an Ed25519 release verification key from raw public key bytes.
+    #[must_use]
+    pub fn ed25519_sha256_v1(key_id: impl Into<String>, public_key: [u8; 32]) -> Self {
+        let mut encoded = String::with_capacity(64);
+        push_hex(&mut encoded, &public_key);
+        Self {
+            algorithm: ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1.into(),
+            key_id: key_id.into(),
+            public_key: encoded,
+        }
+    }
+
+    /// Creates an Ed25519 release verification key from a hex-encoded public key.
+    #[must_use]
+    pub fn ed25519_sha256_v1_hex(key_id: impl Into<String>, public_key: impl Into<String>) -> Self {
+        Self {
+            algorithm: ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1.into(),
+            key_id: key_id.into(),
+            public_key: public_key.into(),
+        }
+    }
+}
+
+/// Trusted keyring verifier for release artifact signatures.
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactSignatureVerifier {
+    keys: Vec<ArtifactSignatureVerificationKey>,
+}
+
+impl ArtifactSignatureVerifier {
+    /// Creates a verifier from trusted public keys.
+    #[must_use]
+    pub fn new(keys: impl IntoIterator<Item = ArtifactSignatureVerificationKey>) -> Self {
+        Self {
+            keys: keys.into_iter().collect(),
+        }
+    }
+
+    /// Verifies a sealed artifact signature against the trusted keyring.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealedArtifactError`] when signature metadata is incomplete, unsupported, untrusted,
+    /// malformed, or cryptographically invalid for the artifact signing payload.
+    pub fn verify(&self, artifact: &SealedArtifact) -> Result<(), SealedArtifactError> {
+        artifact.ensure_signature_policy(ArtifactSignaturePolicy::RequireVerifiedSignature)?;
+        let signature = &artifact.signature;
+        if signature.algorithm != ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1 {
+            return Err(signature_verification_error(
+                "artifact.signature.unsupported-algorithm",
+                "sealed artifact signature algorithm is not supported",
+            ));
+        }
+        let Some(key) = self
+            .keys
+            .iter()
+            .find(|key| key.algorithm == signature.algorithm && key.key_id == signature.key_id)
+        else {
+            return Err(signature_verification_error(
+                "artifact.signature.untrusted-key",
+                "sealed artifact signature key is not trusted",
+            ));
+        };
+
+        let public_key = decode_hex_array::<32>(
+            &key.public_key,
+            "artifact.signature.invalid-public-key",
+            "sealed artifact signature public key is not valid hex Ed25519 key material",
+        )?;
+        let signature_bytes = decode_hex_array::<64>(
+            &signature.signature,
+            "artifact.signature.invalid-signature",
+            "sealed artifact signature is not valid hex Ed25519 signature material",
+        )?;
+        let verifying_key = VerifyingKey::from_bytes(&public_key).map_err(|_| {
+            signature_verification_error(
+                "artifact.signature.invalid-public-key",
+                "sealed artifact signature public key is not valid Ed25519 key material",
+            )
+        })?;
+        let signature = Signature::from_bytes(&signature_bytes);
+        verifying_key
+            .verify(&artifact.signature_payload_bytes(), &signature)
+            .map_err(|_| {
+                signature_verification_error(
+                    "artifact.signature.invalid",
+                    "sealed artifact signature does not match artifact payload",
+                )
+            })
+    }
 }
 
 /// Compiled script payload recorded in a sealed artifact.
@@ -256,10 +402,10 @@ impl ArtifactSignature {
 
     fn satisfies_release_policy(&self) -> bool {
         self.status == ArtifactSignatureStatus::Verified
-            && !self.algorithm.trim().is_empty()
-            && self.algorithm != "none"
+            && self.algorithm == ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1
             && !self.key_id.trim().is_empty()
-            && !self.signature.trim().is_empty()
+            && self.signature.len() == 128
+            && self.signature.bytes().all(|byte| byte.is_ascii_hexdigit())
     }
 }
 
@@ -268,7 +414,11 @@ impl ArtifactSignature {
 pub enum ArtifactSignaturePolicy {
     /// Allows unsigned artifacts for local development and tests.
     AllowUnsignedDevelopment,
-    /// Requires verified signature metadata for release artifacts.
+    /// Requires structurally valid release signature metadata.
+    ///
+    /// This does not prove key trust by itself; production loading must use
+    /// [`SealedArtifact::from_trusted_container_bytes`] or
+    /// [`SealedArtifact::verify_trusted_signature`] with an [`ArtifactSignatureVerifier`].
     RequireVerifiedSignature,
 }
 
@@ -490,10 +640,51 @@ impl SealedArtifact {
         Ok(container.artifact)
     }
 
+    /// Deserializes a container and verifies the release signature against a trusted keyring.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealedArtifactError`] when container verification fails or when the artifact
+    /// signature is missing, malformed, untrusted, or cryptographically invalid.
+    pub fn from_trusted_container_bytes(
+        bytes: &[u8],
+        expected_schema_version: ArtifactSchemaVersion,
+        verifier: &ArtifactSignatureVerifier,
+    ) -> Result<Self, SealedArtifactError> {
+        let artifact = Self::from_container_bytes(
+            bytes,
+            expected_schema_version,
+            ArtifactSignaturePolicy::RequireVerifiedSignature,
+        )?;
+        artifact.verify_trusted_signature(verifier)?;
+        Ok(artifact)
+    }
+
     /// Computes the stable hash for all content-addressed artifact records.
     #[must_use]
     pub fn content_hash(&self) -> ArtifactHash {
         ArtifactHash::from_bytes(self.stable_payload().as_bytes())
+    }
+
+    /// Returns the canonical bytes that release signing keys must sign.
+    #[must_use]
+    pub fn signature_payload_bytes(&self) -> Vec<u8> {
+        let mut payload = Vec::from(SEALED_ARTIFACT_SIGNATURE_PAYLOAD_MAGIC);
+        payload.extend(self.stable_payload_without_signature().as_bytes());
+        payload
+    }
+
+    /// Verifies the artifact signature against a trusted keyring.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealedArtifactError`] when signature metadata is missing, unsupported, untrusted,
+    /// malformed, or cryptographically invalid for the artifact signing payload.
+    pub fn verify_trusted_signature(
+        &self,
+        verifier: &ArtifactSignatureVerifier,
+    ) -> Result<(), SealedArtifactError> {
+        verifier.verify(self)
     }
 
     /// Returns true when the artifact schema is compatible with an expected schema.
@@ -602,6 +793,14 @@ impl SealedArtifact {
     }
 
     fn stable_payload(&self) -> String {
+        self.stable_payload_with_signature(true)
+    }
+
+    fn stable_payload_without_signature(&self) -> String {
+        self.stable_payload_with_signature(false)
+    }
+
+    fn stable_payload_with_signature(&self, include_signature: bool) -> String {
         let mut payload = format!(
             "schema={}.{};manifest={};generator={};profile={};",
             self.schema_version.major,
@@ -676,18 +875,20 @@ impl SealedArtifact {
             payload.push_str(&ArtifactHash::from_bytes(runtime_scene.to_string().as_bytes()).0);
             payload.push(';');
         }
-        payload.push_str("signature=");
-        payload.push_str(match self.signature.status {
-            ArtifactSignatureStatus::Unsigned => "unsigned",
-            ArtifactSignatureStatus::Verified => "verified",
-        });
-        payload.push(':');
-        payload.push_str(&self.signature.algorithm);
-        payload.push(':');
-        payload.push_str(&self.signature.key_id);
-        payload.push(':');
-        payload.push_str(&self.signature.signature);
-        payload.push(';');
+        if include_signature {
+            payload.push_str("signature=");
+            payload.push_str(match self.signature.status {
+                ArtifactSignatureStatus::Unsigned => "unsigned",
+                ArtifactSignatureStatus::Verified => "verified",
+            });
+            payload.push(':');
+            payload.push_str(&self.signature.algorithm);
+            payload.push(':');
+            payload.push_str(&self.signature.key_id);
+            payload.push(':');
+            payload.push_str(&self.signature.signature);
+            payload.push(';');
+        }
         payload
     }
 }
@@ -737,6 +938,11 @@ pub enum SealedArtifactError {
         /// Structured diagnostic.
         diagnostic: BuildDiagnostic,
     },
+    /// Artifact signature verification failed.
+    SignatureVerification {
+        /// Structured diagnostic.
+        diagnostic: BuildDiagnostic,
+    },
 }
 
 fn container_verification_error(
@@ -744,6 +950,15 @@ fn container_verification_error(
     message: impl Into<String>,
 ) -> SealedArtifactError {
     SealedArtifactError::ContainerVerification {
+        diagnostic: BuildDiagnostic::new(BuildDiagnosticSeverity::Error, rule, message),
+    }
+}
+
+fn signature_verification_error(
+    rule: impl Into<String>,
+    message: impl Into<String>,
+) -> SealedArtifactError {
+    SealedArtifactError::SignatureVerification {
         diagnostic: BuildDiagnostic::new(BuildDiagnosticSeverity::Error, rule, message),
     }
 }

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_layout::{
     BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue, TestTextMeasurer, Viewport,
@@ -117,8 +119,14 @@ fn runtime_records_report_host_call_errors() {
 #[test]
 fn runtime_records_register_lifecycle_hooks_in_order() {
     let registry = LifecycleRegistry::new([
+        LifecycleHook::new("main", LifecyclePhase::Initialize, "initialize"),
         LifecycleHook::new("main", LifecyclePhase::Mount, "mount"),
         LifecycleHook::new("main", LifecyclePhase::Update, "update"),
+        LifecycleHook::new("main", LifecyclePhase::Suspend, "suspend"),
+        LifecycleHook::new("main", LifecyclePhase::Resume, "resume"),
+        LifecycleHook::new("main", LifecyclePhase::HotReload, "hot_reload"),
+        LifecycleHook::new("main", LifecyclePhase::ErrorBoundary, "handle_error"),
+        LifecycleHook::new("main", LifecyclePhase::Shutdown, "shutdown"),
         LifecycleHook::new("main", LifecyclePhase::Teardown, "dispose"),
     ]);
 
@@ -133,7 +141,15 @@ fn runtime_records_register_lifecycle_hooks_in_order() {
         registry.hooks_for(LifecyclePhase::Teardown)[0].module_id,
         "main"
     );
-    assert_eq!(registry.all().len(), 3);
+    assert_eq!(
+        registry
+            .hooks_for(LifecyclePhase::HotReload)
+            .iter()
+            .map(|hook| hook.export_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["hot_reload"]
+    );
+    assert_eq!(registry.all().len(), 9);
 }
 
 #[test]
@@ -233,7 +249,7 @@ fn host_bindings_enforce_every_platform_runtime_capability_domain() {
         let denied = registry
             .call(
                 binding_name,
-                StructuredValue::Object(Default::default()),
+                StructuredValue::Object(BTreeMap::default()),
                 [],
                 LifecyclePhase::Update,
             )
@@ -244,7 +260,7 @@ fn host_bindings_enforce_every_platform_runtime_capability_domain() {
         let allowed = registry
             .call(
                 binding_name,
-                StructuredValue::Object(Default::default()),
+                StructuredValue::Object(BTreeMap::default()),
                 [capability],
                 LifecyclePhase::Update,
             )
@@ -324,10 +340,12 @@ fn host_bindings_reject_unavailable_lifecycle_phase() {
 fn event_dispatch_preserves_enqueue_order_across_event_kinds() {
     let mut dispatcher = RuntimeEventDispatcher::default();
     dispatcher.listen("root", RuntimeEventKind::Ui);
+    dispatcher.listen("app", RuntimeEventKind::Lifecycle);
     dispatcher.listen("meter", RuntimeEventKind::PluginParameter);
     dispatcher.listen("host", RuntimeEventKind::HostCallback);
 
     dispatcher.enqueue(RuntimeEvent::ui("root", "click"));
+    dispatcher.enqueue(RuntimeEvent::lifecycle("app", "lifecycle.hot-reloaded"));
     dispatcher.enqueue(RuntimeEvent::plugin_parameter("meter", "gain", 0.75));
     dispatcher.enqueue(RuntimeEvent::host_callback("host", "window.close"));
 
@@ -339,7 +357,10 @@ fn event_dispatch_preserves_enqueue_order_across_event_kinds() {
         .map(|delivery| delivery.event.name.as_str())
         .collect();
 
-    assert_eq!(names, vec!["click", "gain", "window.close"]);
+    assert_eq!(
+        names,
+        vec!["click", "lifecycle.hot-reloaded", "gain", "window.close"]
+    );
 }
 
 #[test]
@@ -1079,7 +1100,7 @@ fn runtime_scene_bridge_rejects_invalid_view_records_before_rendering() {
         .build(&invalid_root)
         .expect_err("empty runtime view IDs must fail before layout");
 
-    assert_eq!(error, RuntimeSceneError::InvalidNode("".into()));
+    assert_eq!(error, RuntimeSceneError::InvalidNode(String::new()));
 
     let invalid_text = RuntimeViewTree::new(RuntimeViewNode::new(
         RuntimeViewId::new("root"),
@@ -1193,10 +1214,10 @@ fn runtime_scene_bridge_output_renders_visible_pixels_with_skia() {
     backend.end_frame("main").expect("frame ends");
 
     let snapshot = backend.frame_snapshot("main").expect("snapshot exists");
-    assert!(snapshot.pixels().iter().any(|pixel| *pixel == 0xf05828));
+    assert!(snapshot.pixels().contains(&0x00f0_5828));
     let changed_text_pixels = count_changed_pixels(
         snapshot,
-        0x08080c,
+        0x0008_080c,
         frame.geometry_for(&RuntimeViewId::new("label")).unwrap(),
     );
     assert!(
@@ -1236,6 +1257,11 @@ fn render_frame_with_skia(frame: &RuntimeSceneFrame, backend: &mut SkiaRendererB
     }
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 fn count_changed_pixels(
     snapshot: &SkiaFrameSnapshot,
     background: u32,

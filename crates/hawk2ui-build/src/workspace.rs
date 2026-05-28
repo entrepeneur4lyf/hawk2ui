@@ -11,6 +11,8 @@ use crate::{
     CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError,
     PackageTargetRecord, SealedArtifact, VerificationReport,
 };
+use hawk2ui_script::{ScriptBackend, ScriptBackendError, ScriptExecutionLimits, ScriptModule};
+use hawk2ui_style::{StyleCompileError, compile_style_source};
 
 /// A Hawk project directory loaded from the filesystem.
 #[derive(Clone, Debug, PartialEq)]
@@ -125,8 +127,15 @@ impl BuildWorkspace {
         path: &str,
     ) -> Result<CompiledScriptRecord, BuildWorkspaceError> {
         let bytes = self.read_declared_file(path)?;
-        let compiled_source = String::from_utf8(bytes.clone())
+        let source = String::from_utf8(bytes.clone())
             .map_err(|_| BuildWorkspaceError::UnreadableFile(path.into()))?;
+        let module = script_module_from_path(path, entrypoint_id, source)?;
+        let compiled_source =
+            ScriptBackend::compile_module_source(&module, ScriptExecutionLimits::default())
+                .map_err(|error| BuildWorkspaceError::ScriptCompilation {
+                    path: path.into(),
+                    error,
+                })?;
         Ok(CompiledScriptRecord::new(
             entrypoint_id,
             path,
@@ -142,6 +151,12 @@ impl BuildWorkspace {
         path: &str,
     ) -> Result<CompiledStyleRecord, BuildWorkspaceError> {
         let bytes = self.read_declared_file(path)?;
+        let source = String::from_utf8(bytes.clone())
+            .map_err(|_| BuildWorkspaceError::UnreadableFile(path.into()))?;
+        compile_style_source(&source).map_err(|error| BuildWorkspaceError::StyleCompilation {
+            path: path.into(),
+            error,
+        })?;
         Ok(CompiledStyleRecord::new(
             entrypoint_id,
             path,
@@ -199,6 +214,24 @@ fn asset_kind_label(kind: crate::AssetKind) -> &'static str {
     }
 }
 
+fn script_module_from_path(
+    path: &str,
+    entrypoint_id: &str,
+    source: String,
+) -> Result<ScriptModule, BuildWorkspaceError> {
+    let Some(extension) = Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    else {
+        return Err(BuildWorkspaceError::UnsupportedScriptExtension(path.into()));
+    };
+    match extension {
+        "js" | "mjs" | "cjs" => Ok(ScriptModule::javascript(entrypoint_id, source)),
+        "ts" | "tsx" | "mts" | "cts" => Ok(ScriptModule::typescript(path, source)),
+        _ => Err(BuildWorkspaceError::UnsupportedScriptExtension(path.into())),
+    }
+}
+
 /// Filesystem-backed build workspace error.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BuildWorkspaceError {
@@ -212,6 +245,22 @@ pub enum BuildWorkspaceError {
     ManifestInvalid(ManifestError),
     /// Asset compilation failed.
     AssetCompilation(AssetCompilationError),
+    /// Script compilation failed.
+    ScriptCompilation {
+        /// Script path that failed compilation.
+        path: String,
+        /// Script compiler error.
+        error: ScriptBackendError,
+    },
+    /// Style compilation failed.
+    StyleCompilation {
+        /// Style path that failed compilation.
+        path: String,
+        /// Style compiler error.
+        error: StyleCompileError,
+    },
+    /// Script file extension is not supported by the production compiler.
+    UnsupportedScriptExtension(String),
     /// Production pipeline verification failed.
     PipelineBlocked(BuildPipelineError),
 }

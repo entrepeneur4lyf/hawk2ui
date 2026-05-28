@@ -107,7 +107,7 @@ fn validate_allowed_hosts(manifest: &NetworkManifest) -> Option<BTreeSet<String>
     }
     let mut hosts = BTreeSet::new();
     for allowed in &manifest.allowed_hosts {
-        let host = canonical_host(allowed)?;
+        let host = canonical_allowed_host(allowed)?;
         if !hosts.insert(host) {
             return None;
         }
@@ -121,21 +121,51 @@ fn parse_host(url: &str) -> Option<String> {
         "http" | "https" => {}
         _ => return None,
     }
-    if !parsed.username().is_empty() || parsed.password().is_some() {
-        return None;
-    }
-    parsed.host_str().and_then(canonical_host)
-}
-
-fn canonical_host(host: &str) -> Option<String> {
-    let trimmed = host.trim().trim_end_matches('.');
-    if trimmed.is_empty()
-        || trimmed.contains('/')
-        || trimmed.contains('\\')
-        || trimmed.contains('@')
-        || trimmed.contains(char::is_whitespace)
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+        || has_non_default_port(&parsed)
     {
         return None;
     }
-    Some(trimmed.to_ascii_lowercase())
+    parsed.host_str().and_then(canonical_parsed_host)
+}
+
+fn canonical_allowed_host(host: &str) -> Option<String> {
+    let trimmed = host.trim();
+    if trimmed.is_empty()
+        || trimmed.contains(char::is_whitespace)
+        || trimmed.contains(['/', '\\', '@', '?', '#', ':'])
+    {
+        return None;
+    }
+    let parsed = Url::parse(&format!("https://{trimmed}/")).ok()?;
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != "/"
+    {
+        return None;
+    }
+    parsed.host_str().and_then(canonical_parsed_host)
+}
+
+fn canonical_parsed_host(host: &str) -> Option<String> {
+    let trimmed = host.trim().trim_end_matches('.');
+    (!trimmed.is_empty()
+        && !trimmed.contains(['/', '\\', '@'])
+        && !trimmed.contains(char::is_whitespace))
+    .then(|| trimmed.to_ascii_lowercase())
+}
+
+fn has_non_default_port(url: &Url) -> bool {
+    matches!(
+        (url.scheme(), url.port()),
+        ("http", Some(port)) if port != 80
+    ) || matches!(
+        (url.scheme(), url.port()),
+        ("https", Some(port)) if port != 443
+    )
 }

@@ -36,6 +36,11 @@ fn native_authoring_runtime_emits_typed_operations_for_lifecycle_children_refs_e
                 [EventPayloadField::Position],
             )
             .with_lifecycle(NativeLifecycleEvent::Mounted, "on_mount")
+            .with_lifecycle(NativeLifecycleEvent::Suspended, "on_suspend")
+            .with_lifecycle(NativeLifecycleEvent::Resumed, "on_resume")
+            .with_lifecycle(NativeLifecycleEvent::HotReloaded, "on_hot_reload")
+            .with_lifecycle(NativeLifecycleEvent::ErrorBoundary, "on_error_boundary")
+            .with_lifecycle(NativeLifecycleEvent::Shutdown, "on_shutdown")
             .with_lifecycle(NativeLifecycleEvent::Unmounted, "on_unmount"),
     );
 
@@ -47,7 +52,7 @@ fn native_authoring_runtime_emits_typed_operations_for_lifecycle_children_refs_e
     assert_eq!(artifact.root().asset_refs()[0].path(), "assets/logo.svg");
     assert_eq!(artifact.root().refs()[0].name(), "root_ref");
     assert_eq!(artifact.root().keyed_child_order(), vec!["title", "cta"]);
-    assert_eq!(artifact.events().len(), 3);
+    assert_eq!(artifact.events().len(), 8);
     assert_eq!(artifact.events()[0].event().stable_key(), "pointer.press");
     assert_eq!(artifact.diagnostics(), []);
     assert_eq!(
@@ -58,6 +63,11 @@ fn native_authoring_runtime_emits_typed_operations_for_lifecycle_children_refs_e
             "mount-element:title",
             "mount-element:cta",
             "bind-event:root:pointer.press",
+            "lifecycle:suspended:root:on_suspend",
+            "lifecycle:resumed:root:on_resume",
+            "lifecycle:hot-reloaded:root:on_hot_reload",
+            "lifecycle:error-boundary:root:on_error_boundary",
+            "lifecycle:shutdown:root:on_shutdown",
             "lifecycle:unmounted:root:on_unmount",
         ]
     );
@@ -91,6 +101,37 @@ fn native_authoring_runtime_reports_source_diagnostics_for_duplicate_keys_and_in
     assert_eq!(
         rules,
         ["native.child-key.duplicate", "native.asset.path-invalid",]
+    );
+}
+
+#[test]
+fn native_authoring_runtime_collects_nested_lifecycle_bindings() {
+    let mut runtime = NativeAuthoringRuntime::new("native-nested-lifecycle");
+    runtime.mount(
+        NativeAuthoringElement::new("root", ElementKind::View).with_child(NativeChild::keyed(
+            "panel",
+            NativeAuthoringElement::new("panel", ElementKind::View)
+                .with_lifecycle(NativeLifecycleEvent::Mounted, "panel_mount")
+                .with_lifecycle(NativeLifecycleEvent::Shutdown, "panel_shutdown"),
+        )),
+    );
+
+    let artifact = runtime.finish().expect("native authoring should compile");
+    let event_keys: Vec<_> = artifact
+        .events()
+        .iter()
+        .map(|event| event.event().stable_key())
+        .collect();
+
+    assert_eq!(event_keys, ["lifecycle.mounted", "lifecycle.shutdown"]);
+    assert_eq!(
+        artifact.operation_keys(),
+        [
+            "lifecycle:mounted:panel:panel_mount",
+            "mount-element:root",
+            "mount-element:panel",
+            "lifecycle:shutdown:panel:panel_shutdown",
+        ]
     );
 }
 
@@ -181,14 +222,14 @@ fn native_runtime_bridge_converts_authoring_artifact_to_runtime_view_tree() {
 #[test]
 fn native_runtime_bridge_applies_compiled_style_refs_to_runtime_visuals() {
     let sheet = compile_style_source(
-        r#"
+        r"
 .surface {
   background-color: token(color.surface);
 }
 .headline {
   font-size: 22px;
 }
-"#,
+",
     )
     .expect("style source compiles");
     let tokens = TokenSet::production().with_color("color.surface", 8, 10, 14, 255);
@@ -241,7 +282,7 @@ fn native_runtime_bridge_applies_compiled_style_refs_to_runtime_visuals() {
                 id,
                 font_size,
                 ..
-            } if id.as_str() == "title" && *font_size == 22.0
+            } if id.as_str() == "title" && (*font_size - 22.0).abs() < f32::EPSILON
         )
     }));
 }
@@ -367,11 +408,11 @@ fn native_runtime_bridge_renders_authoring_artifact_to_visible_skia_pixels() {
     backend.end_frame("main").expect("frame ends");
 
     let snapshot = backend.frame_snapshot("main").expect("snapshot exists");
-    assert!(snapshot.pixels().iter().any(|pixel| *pixel == 0xf05828));
+    assert!(snapshot.pixels().contains(&0x00f0_5828));
     assert!(
         count_changed_pixels(
             snapshot,
-            0x080a0e,
+            0x0008_0a0e,
             frame.geometry_for(&RuntimeViewId::new("title")).unwrap()
         ) > 0
     );
@@ -407,6 +448,11 @@ fn render_runtime_frame_with_skia(frame: &RuntimeSceneFrame, backend: &mut SkiaR
     }
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 fn count_changed_pixels(
     snapshot: &SkiaFrameSnapshot,
     background: u32,

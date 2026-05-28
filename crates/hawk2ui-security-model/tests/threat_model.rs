@@ -1,7 +1,9 @@
+use ed25519_dalek::{Signer, SigningKey};
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_build::{
-    ArtifactHash, ArtifactSchemaVersion, ArtifactSignature, AssetManifestEntry,
-    CompiledAssetRecord, CompiledScriptRecord, HawkManifest, SealedArtifact,
+    ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1, ArtifactHash, ArtifactSchemaVersion,
+    ArtifactSignature, ArtifactSignatureVerificationKey, ArtifactSignatureVerifier,
+    AssetManifestEntry, CompiledAssetRecord, CompiledScriptRecord, HawkManifest, SealedArtifact,
 };
 use hawk2ui_security_model::{
     AttackFixtures, AttackFixturesError, CapabilityRejections, CapabilityRejectionsError,
@@ -13,6 +15,35 @@ use hawk2ui_security_model::{
 const THREAT_MODEL: &str = include_str!("../../../security/threat-model.toml");
 const REJECTION_CASES: &str = include_str!("../../../security/rejection-cases.toml");
 const ATTACK_FIXTURES: &str = include_str!("../../../security/source-asset-fixtures.toml");
+
+fn sign_artifact(
+    artifact: SealedArtifact,
+    key_id: &str,
+) -> (SealedArtifact, ArtifactSignatureVerifier) {
+    let signing_key = SigningKey::from_bytes(&[9; 32]);
+    let signature = signing_key.sign(&artifact.signature_payload_bytes());
+    let verifier =
+        ArtifactSignatureVerifier::new([ArtifactSignatureVerificationKey::ed25519_sha256_v1(
+            key_id,
+            signing_key.verifying_key().to_bytes(),
+        )]);
+    let signed = artifact.with_signature(ArtifactSignature::verified(
+        ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1,
+        key_id,
+        encode_hex(&signature.to_bytes()),
+    ));
+    (signed, verifier)
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
 
 #[test]
 fn security_threat_registry_covers_required_domains() {
@@ -283,15 +314,14 @@ name = "linux-wayland"
             "assets/hero.png",
             "assets/hero.pack",
             ArtifactHash::from_bytes(b"asset-source"),
-        ))
-        .with_signature(ArtifactSignature::verified(
-            "ed25519",
-            "release-key",
-            "signature",
         ));
+    let (artifact, verifier) = sign_artifact(artifact, "release-key");
 
-    let record =
-        PackageTrustRecord::from_sealed_artifact(&artifact, VerificationReportStatus::Present);
+    let record = PackageTrustRecord::from_trusted_sealed_artifact(
+        &artifact,
+        &verifier,
+        VerificationReportStatus::Present,
+    );
 
     assert_eq!(record.artifact_schema_version, 1);
     assert_eq!(
@@ -310,6 +340,19 @@ name = "linux-wayland"
     );
     assert_eq!(record.target_metadata, "desktop:linux-wayland");
     assert!(PackageTrustValidator::new(1).validate(&record).is_ok());
+
+    let metadata_only =
+        PackageTrustRecord::from_sealed_artifact(&artifact, VerificationReportStatus::Present);
+    assert_eq!(
+        metadata_only.signature_status,
+        PackageSignatureStatus::Invalid
+    );
+    assert_eq!(
+        PackageTrustValidator::new(1)
+            .validate(&metadata_only)
+            .expect_err("metadata-only signature status is not trusted"),
+        PackageTrustViolation::InvalidSignature
+    );
 }
 
 #[test]

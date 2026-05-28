@@ -7,6 +7,11 @@ use hawk2ui_platform::{
     PlatformDiagnostic, PlatformOperation, PlatformSecretManifest, PlatformSecretPolicy,
     RuntimeAvailability, ShortcutManifest, ShortcutPolicy,
 };
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[test]
 fn capability_table_denies_missing_capability() {
@@ -205,6 +210,42 @@ fn filesystem_scope_allows_user_selected_file_grants() {
     assert_eq!(access.resolved_path, "/home/user/session.hawk");
 }
 
+#[cfg(unix)]
+#[test]
+fn filesystem_scope_rejects_symlink_escape_from_existing_scope() {
+    let temp = temp_platform_dir("filesystem-symlink-escape");
+    let assets = temp.join("assets");
+    let secrets = temp.join("secrets");
+    fs::create_dir_all(&assets).expect("assets directory is created");
+    fs::create_dir_all(&secrets).expect("secrets directory is created");
+    fs::write(secrets.join("token.txt"), "secret").expect("secret fixture is written");
+    std::os::unix::fs::symlink(&secrets, assets.join("linked-secrets"))
+        .expect("symlink fixture is created");
+    let grant = FilesystemGrant::new(FilesystemScope::ProjectAssets, path_string(&assets));
+
+    let error = FilesystemPolicy::resolve(&grant, "linked-secrets/token.txt")
+        .expect_err("symlink escape must be denied after canonicalization");
+
+    assert_eq!(error.diagnostic.rule, "filesystem.path.escape");
+}
+
+#[test]
+fn filesystem_scope_canonicalizes_existing_roots_and_targets() {
+    let temp = temp_platform_dir("filesystem-canonical-access");
+    let assets = temp.join("assets");
+    fs::create_dir_all(assets.join("images")).expect("asset directory is created");
+    fs::write(assets.join("images/logo.svg"), "<svg />").expect("asset fixture is written");
+    let grant = FilesystemGrant::new(FilesystemScope::ProjectAssets, path_string(&assets));
+
+    let access = FilesystemPolicy::resolve(&grant, "images/logo.svg")
+        .expect("existing scoped asset should resolve");
+
+    assert_eq!(
+        access.resolved_path,
+        path_string(&assets.join("images/logo.svg"))
+    );
+}
+
 #[test]
 fn filesystem_scope_rejects_structurally_unsafe_user_selected_grants() {
     for path in [
@@ -300,6 +341,53 @@ fn network_capabilities_reject_invalid_manifest_hosts() {
 }
 
 #[test]
+fn network_capabilities_canonicalize_idna_hosts_and_reject_userinfo_ports_and_fragments() {
+    let table = CapabilityTable::new([CapabilityRecord::new("network.fetch")
+        .allow(PlatformOperation::NetworkRequest)
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)
+        .plugin(true)]);
+    let manifest = NetworkManifest::new("network.fetch", ["bücher.example"]);
+
+    let request = NetworkPolicy::request(
+        &table,
+        &manifest,
+        "https://BÜCHER.example/catalog",
+        PlatformContext::Desktop,
+    )
+    .expect("IDNA host should canonicalize consistently");
+    let userinfo = NetworkPolicy::request(
+        &table,
+        &manifest,
+        "https://user@bücher.example/catalog",
+        PlatformContext::Desktop,
+    )
+    .expect_err("userinfo must be rejected before host matching");
+    let fragment = NetworkPolicy::request(
+        &table,
+        &manifest,
+        "https://bücher.example/catalog#token",
+        PlatformContext::Desktop,
+    )
+    .expect_err("fragments must be rejected because they are not network request material");
+    let invalid_manifest = NetworkPolicy::request(
+        &table,
+        &NetworkManifest::new("network.fetch", ["api.hawk2ui.dev:443"]),
+        "https://api.hawk2ui.dev/v1/status",
+        PlatformContext::Desktop,
+    )
+    .expect_err("allowed host entries must not include ports");
+
+    assert_eq!(request.host, "xn--bcher-kva.example");
+    assert_eq!(userinfo.diagnostic.rule, "network.url.malformed");
+    assert_eq!(fragment.diagnostic.rule, "network.url.malformed");
+    assert_eq!(
+        invalid_manifest.diagnostic.rule,
+        "network.manifest.invalid-hosts"
+    );
+}
+
+#[test]
 fn clipboard_capabilities_allow_text() {
     let table = CapabilityTable::new([CapabilityRecord::new("clipboard.write")
         .allow(PlatformOperation::ClipboardWrite)
@@ -319,6 +407,23 @@ fn clipboard_capabilities_allow_text() {
     .expect("text clipboard write must be allowed");
 
     assert_eq!(access.data_type, ClipboardDataType::Text);
+}
+
+fn temp_platform_dir(label: &str) -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock supports test temp naming")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "hawk2ui-platform-{label}-{}-{unique}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&path).expect("temporary platform test directory is created");
+    path
+}
+
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 #[test]
@@ -452,6 +557,7 @@ fn database_migrations_require_stable_unique_ids() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn extended_platform_domains_enforce_capabilities_and_manifest_allowlists() {
     let capabilities = CapabilityTable::new([
         CapabilityRecord::new("audio.playback")

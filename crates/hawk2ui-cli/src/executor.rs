@@ -932,6 +932,35 @@ fn build_workspace_error_diagnostic(error: BuildWorkspaceError, root: &Path) -> 
         BuildWorkspaceError::ManifestInvalid(error) => manifest_error_diagnostic(error)
             .file(root.join("manifest.hawk.toml").display().to_string()),
         BuildWorkspaceError::AssetCompilation(error) => asset_compilation_diagnostic(error, root),
+        BuildWorkspaceError::ScriptCompilation { path, error } => CliDiagnostic::error(
+            error.diagnostic().rule(),
+            format!(
+                "declared script failed production compilation: {}",
+                error.diagnostic().message()
+            ),
+        )
+        .file(root.join(path).display().to_string()),
+        BuildWorkspaceError::UnsupportedScriptExtension(path) => CliDiagnostic::error(
+            "build.script.unsupported-extension",
+            format!("declared script file extension is not supported: {path}"),
+        )
+        .file(root.join(path).display().to_string()),
+        BuildWorkspaceError::StyleCompilation { path, error } => {
+            let diagnostic = error.diagnostics().first();
+            CliDiagnostic::error(
+                diagnostic.map_or("build.style.compile-failed", |diagnostic| diagnostic.rule()),
+                diagnostic.map_or_else(
+                    || "declared style failed production compilation".to_string(),
+                    |diagnostic| {
+                        format!(
+                            "declared style failed production compilation: {}",
+                            diagnostic.message()
+                        )
+                    },
+                ),
+            )
+            .file(root.join(path).display().to_string())
+        }
         BuildWorkspaceError::PipelineBlocked(error) => CliDiagnostic::error(
             "build.pipeline.blocked",
             format!("production build pipeline is blocked: {error:?}"),

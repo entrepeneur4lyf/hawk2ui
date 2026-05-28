@@ -11,6 +11,16 @@ pub enum LifecyclePhase {
     Mount,
     /// Reactive update.
     Update,
+    /// Temporary suspension that keeps state available for resume.
+    Suspend,
+    /// Resume after a suspension.
+    Resume,
+    /// Hot-reload patch application.
+    HotReload,
+    /// Error-boundary handling.
+    ErrorBoundary,
+    /// Ordered shutdown before teardown releases resources.
+    Shutdown,
     /// Final teardown.
     Teardown,
 }

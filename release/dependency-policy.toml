@@ -114,3 +114,12 @@ owner = "plugin"
 risk = "Low-level CLAP ABI bindings; upgrades must preserve generated CLAP entry metadata, factory IDs, versioning, and package materialization."
 release_blocker = false
 upgrade_gate = "cargo test -p hawk2ui-plugin-adapters plugin_adapters_build_clap_entry_plan_from_clap_sys_contract && cargo test -p hawk2ui-plugin-adapters plugin_adapters_materialize_package_metadata_outputs"
+
+[[dependencies]]
+name = "ed25519-dalek"
+source = "crates-io"
+version = "2.2.0"
+owner = "security"
+risk = "Release artifact signature verification primitive; upgrades must preserve trusted-key verification and invalid-signature rejection."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-build sealed_artifact && cargo test -p hawk2ui-security-model package_trust"

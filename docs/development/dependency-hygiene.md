@@ -35,6 +35,8 @@ policy before they can be committed.
   measurement, DPI, and plugin constraints.
 - `skia-safe` is accepted as the renderer binding with renderer and host tests
   required for upgrades.
+- `ed25519-dalek` is accepted for release artifact signature verification with
+  package-integrity tests required for upgrades.
 
 ## Adding A Dependency
 

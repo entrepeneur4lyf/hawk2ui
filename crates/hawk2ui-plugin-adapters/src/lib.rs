@@ -643,7 +643,8 @@ fn sealed_artifact_error_message(error: &hawk2ui_build::SealedArtifactError) -> 
         | hawk2ui_build::SealedArtifactError::SchemaValidation { diagnostic }
         | hawk2ui_build::SealedArtifactError::ContainerSerialization { diagnostic }
         | hawk2ui_build::SealedArtifactError::ContainerVerification { diagnostic }
-        | hawk2ui_build::SealedArtifactError::SignaturePolicy { diagnostic } => {
+        | hawk2ui_build::SealedArtifactError::SignaturePolicy { diagnostic }
+        | hawk2ui_build::SealedArtifactError::SignatureVerification { diagnostic } => {
             diagnostic.message.clone()
         }
     }

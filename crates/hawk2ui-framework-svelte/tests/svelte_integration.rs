@@ -248,11 +248,11 @@ fn svelte_5_runtime_bridge_renders_visible_skia_pixels() {
     backend.end_frame("main").expect("frame ends");
 
     let snapshot = backend.frame_snapshot("main").expect("snapshot exists");
-    assert!(snapshot.pixels().iter().any(|pixel| *pixel == 0x080a0e));
+    assert!(snapshot.pixels().contains(&0x0008_0a0e));
     assert!(
         count_changed_pixels(
             snapshot,
-            0x080a0e,
+            0x0008_0a0e,
             frame.geometry_for(&RuntimeViewId::new("title")).unwrap()
         ) > 0
     );
@@ -351,6 +351,11 @@ fn render_runtime_frame_with_skia(frame: &RuntimeSceneFrame, backend: &mut SkiaR
     }
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 fn count_changed_pixels(
     snapshot: &SkiaFrameSnapshot,
     background: u32,

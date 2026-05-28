@@ -345,22 +345,7 @@ impl ScriptBackend {
         module: ScriptModule,
     ) -> Result<ScriptExecution, ScriptBackendError> {
         self.ensure_running()?;
-        enforce_source_limit(
-            "script.source.too-large",
-            "script source exceeds configured execution limit",
-            module.source.len(),
-            self.execution_limits.max_source_bytes(),
-        )?;
-        let executable = match module.kind {
-            ScriptModuleKind::JavaScript => module.source.clone(),
-            ScriptModuleKind::TypeScript => compile_typescript(&module.id, &module.source)?,
-        };
-        enforce_source_limit(
-            "script.compiled-source.too-large",
-            "compiled JavaScript exceeds configured execution limit",
-            executable.len(),
-            self.execution_limits.max_compiled_source_bytes(),
-        )?;
+        let executable = Self::compile_module_source(&module, self.execution_limits)?;
         let value = evaluate_javascript(&executable)?;
         let execution = ScriptExecution {
             module_id: module.id.clone(),
@@ -389,11 +374,31 @@ impl ScriptBackend {
         module: ScriptModule,
     ) -> Result<ScriptExecution, ScriptBackendError> {
         self.ensure_running()?;
+        let executable = Self::compile_module_source(&module, self.execution_limits)?;
+        let value = evaluate_javascript_with_host_jobs(&executable, &self.promises, &self.timers)?;
+        let execution = ScriptExecution {
+            module_id: module.id.clone(),
+            value,
+        };
+        self.executed_modules.push(module);
+        Ok(execution)
+    }
+
+    /// Compiles a JavaScript or TypeScript module into executable JavaScript without evaluating it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptBackendError`] when source limits are exceeded or TypeScript parsing,
+    /// semantic analysis, or transformation fails.
+    pub fn compile_module_source(
+        module: &ScriptModule,
+        execution_limits: ScriptExecutionLimits,
+    ) -> Result<String, ScriptBackendError> {
         enforce_source_limit(
             "script.source.too-large",
             "script source exceeds configured execution limit",
             module.source.len(),
-            self.execution_limits.max_source_bytes(),
+            execution_limits.max_source_bytes(),
         )?;
         let executable = match module.kind {
             ScriptModuleKind::JavaScript => module.source.clone(),
@@ -403,15 +408,9 @@ impl ScriptBackend {
             "script.compiled-source.too-large",
             "compiled JavaScript exceeds configured execution limit",
             executable.len(),
-            self.execution_limits.max_compiled_source_bytes(),
+            execution_limits.max_compiled_source_bytes(),
         )?;
-        let value = evaluate_javascript_with_host_jobs(&executable, &self.promises, &self.timers)?;
-        let execution = ScriptExecution {
-            module_id: module.id.clone(),
-            value,
-        };
-        self.executed_modules.push(module);
-        Ok(execution)
+        Ok(executable)
     }
 
     /// Returns executed modules.

@@ -88,6 +88,16 @@ impl InputEventKind {
 pub enum LifecycleEventKind {
     /// Node mounted.
     Mounted,
+    /// Node temporarily suspended while retaining state.
+    Suspended,
+    /// Node resumed after suspension.
+    Resumed,
+    /// Node updated after a hot-reload patch.
+    HotReloaded,
+    /// Node entered an error boundary.
+    ErrorBoundary,
+    /// Node is shutting down before teardown.
+    Shutdown,
     /// Node unmounted.
     Unmounted,
 }
@@ -96,6 +106,11 @@ impl LifecycleEventKind {
     const fn stable_key(self) -> &'static str {
         match self {
             Self::Mounted => "lifecycle.mounted",
+            Self::Suspended => "lifecycle.suspended",
+            Self::Resumed => "lifecycle.resumed",
+            Self::HotReloaded => "lifecycle.hot-reloaded",
+            Self::ErrorBoundary => "lifecycle.error-boundary",
+            Self::Shutdown => "lifecycle.shutdown",
             Self::Unmounted => "lifecycle.unmounted",
         }
     }

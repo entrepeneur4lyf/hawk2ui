@@ -153,6 +153,14 @@ fn event_records_cover_native_event_domains() {
         hawk2ui_authoring::EventKind::Input(hawk2ui_authoring::InputEventKind::ValueChanged),
         hawk2ui_authoring::EventKind::Resize,
         hawk2ui_authoring::EventKind::Lifecycle(hawk2ui_authoring::LifecycleEventKind::Mounted),
+        hawk2ui_authoring::EventKind::Lifecycle(hawk2ui_authoring::LifecycleEventKind::Suspended),
+        hawk2ui_authoring::EventKind::Lifecycle(hawk2ui_authoring::LifecycleEventKind::Resumed),
+        hawk2ui_authoring::EventKind::Lifecycle(hawk2ui_authoring::LifecycleEventKind::HotReloaded),
+        hawk2ui_authoring::EventKind::Lifecycle(
+            hawk2ui_authoring::LifecycleEventKind::ErrorBoundary,
+        ),
+        hawk2ui_authoring::EventKind::Lifecycle(hawk2ui_authoring::LifecycleEventKind::Shutdown),
+        hawk2ui_authoring::EventKind::Lifecycle(hawk2ui_authoring::LifecycleEventKind::Unmounted),
         hawk2ui_authoring::EventKind::CustomComponent("knob.drag".to_string()),
         hawk2ui_authoring::EventKind::PluginParameter("gain".to_string()),
     ];
@@ -171,6 +179,12 @@ fn event_records_cover_native_event_domains() {
             "input.value-changed",
             "resize",
             "lifecycle.mounted",
+            "lifecycle.suspended",
+            "lifecycle.resumed",
+            "lifecycle.hot-reloaded",
+            "lifecycle.error-boundary",
+            "lifecycle.shutdown",
+            "lifecycle.unmounted",
             "component.knob.drag",
             "plugin-parameter.gain",
         ]

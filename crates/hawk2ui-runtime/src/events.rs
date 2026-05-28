@@ -14,6 +14,8 @@ pub type RuntimeEventPayload = StructuredValue;
 pub enum RuntimeEventKind {
     /// User-interface input or component event.
     Ui,
+    /// Runtime lifecycle transition.
+    Lifecycle,
     /// Custom component event.
     Custom,
     /// Plugin parameter event.
@@ -54,6 +56,17 @@ impl RuntimeEvent {
     pub fn ui(target: impl Into<String>, name: impl Into<String>) -> Self {
         Self::new(
             RuntimeEventKind::Ui,
+            target,
+            name,
+            RuntimeEventPayload::Null,
+        )
+    }
+
+    /// Creates a lifecycle event.
+    #[must_use]
+    pub fn lifecycle(target: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::new(
+            RuntimeEventKind::Lifecycle,
             target,
             name,
             RuntimeEventPayload::Null,

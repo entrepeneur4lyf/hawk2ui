@@ -82,6 +82,16 @@ impl NativeRef {
 pub enum NativeLifecycleEvent {
     /// Node mounted into the native tree.
     Mounted,
+    /// Node suspended while preserving native state.
+    Suspended,
+    /// Node resumed after a suspension.
+    Resumed,
+    /// Node reconciled after a hot-reload patch.
+    HotReloaded,
+    /// Node entered an error boundary.
+    ErrorBoundary,
+    /// Node received a shutdown notification before unmount.
+    Shutdown,
     /// Node removed from the native tree.
     Unmounted,
 }
@@ -90,6 +100,11 @@ impl NativeLifecycleEvent {
     const fn event_kind(self) -> LifecycleEventKind {
         match self {
             Self::Mounted => LifecycleEventKind::Mounted,
+            Self::Suspended => LifecycleEventKind::Suspended,
+            Self::Resumed => LifecycleEventKind::Resumed,
+            Self::HotReloaded => LifecycleEventKind::HotReloaded,
+            Self::ErrorBoundary => LifecycleEventKind::ErrorBoundary,
+            Self::Shutdown => LifecycleEventKind::Shutdown,
             Self::Unmounted => LifecycleEventKind::Unmounted,
         }
     }
@@ -97,8 +112,25 @@ impl NativeLifecycleEvent {
     const fn operation_key(self) -> &'static str {
         match self {
             Self::Mounted => "mounted",
+            Self::Suspended => "suspended",
+            Self::Resumed => "resumed",
+            Self::HotReloaded => "hot-reloaded",
+            Self::ErrorBoundary => "error-boundary",
+            Self::Shutdown => "shutdown",
             Self::Unmounted => "unmounted",
         }
+    }
+
+    const fn finalization_order() -> [Self; 7] {
+        [
+            Self::Mounted,
+            Self::Suspended,
+            Self::Resumed,
+            Self::HotReloaded,
+            Self::ErrorBoundary,
+            Self::Shutdown,
+            Self::Unmounted,
+        ]
     }
 }
 
@@ -391,17 +423,17 @@ impl NativeAuthoringRuntime {
 
         let mut events = Vec::new();
         let mut operation_keys = Vec::new();
-        collect_lifecycle(
+        collect_lifecycle_for(
             &root,
-            NativeLifecycleEvent::Mounted,
+            &[NativeLifecycleEvent::Mounted],
             &mut events,
             &mut operation_keys,
         );
         collect_mounts(&root, &mut operation_keys);
         collect_events(&root, &mut events, &mut operation_keys);
-        collect_lifecycle(
+        collect_lifecycle_for(
             &root,
-            NativeLifecycleEvent::Unmounted,
+            &NativeLifecycleEvent::finalization_order()[1..],
             &mut events,
             &mut operation_keys,
         );
@@ -446,6 +478,17 @@ fn validate_element(element: &NativeAuthoringElement, diagnostics: &mut Vec<Auth
     }
 }
 
+fn collect_lifecycle_for(
+    element: &NativeAuthoringElement,
+    ordered_events: &[NativeLifecycleEvent],
+    events: &mut Vec<EventBinding>,
+    operation_keys: &mut Vec<String>,
+) {
+    for event in ordered_events {
+        collect_lifecycle(element, *event, events, operation_keys);
+    }
+}
+
 fn collect_lifecycle(
     element: &NativeAuthoringElement,
     event: NativeLifecycleEvent,
@@ -468,6 +511,9 @@ fn collect_lifecycle(
             element.node.id().as_str(),
             binding.handler.as_str()
         ));
+    }
+    for child in &element.children {
+        collect_lifecycle(&child.element, event, events, operation_keys);
     }
 }
 

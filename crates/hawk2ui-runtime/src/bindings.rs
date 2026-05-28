@@ -32,7 +32,16 @@ impl BindingLifecycleAvailability {
         match self {
             Self::Always => true,
             Self::AfterMount => phase != LifecyclePhase::Initialize,
-            Self::MountedOnly => matches!(phase, LifecyclePhase::Mount | LifecyclePhase::Update),
+            Self::MountedOnly => matches!(
+                phase,
+                LifecyclePhase::Mount
+                    | LifecyclePhase::Update
+                    | LifecyclePhase::Suspend
+                    | LifecyclePhase::Resume
+                    | LifecyclePhase::HotReload
+                    | LifecyclePhase::ErrorBoundary
+                    | LifecyclePhase::Shutdown
+            ),
         }
     }
 }

@@ -97,9 +97,18 @@ impl FilesystemPolicy {
                 ),
             });
         }
+        let root = Path::new(&grant.root);
+        let resolved_path =
+            resolve_scoped_path(root, &scoped_path).ok_or_else(|| FilesystemDenied {
+                path: relative_path.into(),
+                diagnostic: PlatformDiagnostic::error(
+                    "filesystem.path.escape",
+                    "filesystem path escapes its scope",
+                ),
+            })?;
         Ok(FilesystemAccess {
             scope: grant.scope,
-            resolved_path: join_scope_path(&grant.root, &scoped_path),
+            resolved_path,
         })
     }
 
@@ -127,7 +136,9 @@ impl FilesystemPolicy {
                 ),
             });
         }
-        if grant.scope != FilesystemScope::UserSelectedFile || grant.root != requested_path {
+        if grant.scope != FilesystemScope::UserSelectedFile
+            || !same_user_selected_path(&grant.root, requested_path)
+        {
             return Err(FilesystemDenied {
                 path: requested_path.into(),
                 diagnostic: PlatformDiagnostic::error(
@@ -138,7 +149,7 @@ impl FilesystemPolicy {
         }
         Ok(FilesystemAccess {
             scope: FilesystemScope::UserSelectedFile,
-            resolved_path: requested_path.into(),
+            resolved_path: canonical_or_original(requested_path),
         })
     }
 }
@@ -183,9 +194,51 @@ fn is_valid_scope_root(root: &str) -> bool {
         })
 }
 
-fn join_scope_path(root: &str, relative_path: &Path) -> String {
-    Path::new(root)
-        .join(relative_path)
+fn resolve_scoped_path(root: &Path, relative_path: &Path) -> Option<String> {
+    let root_canonical = root.canonicalize().ok();
+    let candidate = root.join(relative_path);
+    let Some(root_canonical) = root_canonical else {
+        return Some(candidate.to_string_lossy().into_owned());
+    };
+    let resolved = canonicalize_existing_prefix(&candidate)?;
+    resolved
+        .starts_with(&root_canonical)
+        .then(|| resolved.to_string_lossy().into_owned())
+}
+
+fn canonicalize_existing_prefix(path: &Path) -> Option<PathBuf> {
+    if path.exists() {
+        return path.canonicalize().ok();
+    }
+
+    let mut missing = Vec::new();
+    let mut current = path;
+    while !current.exists() {
+        let file_name = current.file_name()?.to_owned();
+        missing.push(file_name);
+        current = current.parent()?;
+    }
+
+    let mut canonical = current.canonicalize().ok()?;
+    for component in missing.iter().rev() {
+        canonical.push(component);
+    }
+    Some(canonical)
+}
+
+fn same_user_selected_path(granted_path: &str, requested_path: &str) -> bool {
+    if granted_path == requested_path {
+        return true;
+    }
+    let granted = Path::new(granted_path).canonicalize();
+    let requested = Path::new(requested_path).canonicalize();
+    matches!((granted, requested), (Ok(granted), Ok(requested)) if granted == requested)
+}
+
+fn canonical_or_original(path: &str) -> String {
+    Path::new(path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(path))
         .to_string_lossy()
         .into_owned()
 }

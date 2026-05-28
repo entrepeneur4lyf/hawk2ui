@@ -1055,12 +1055,23 @@ Status:
 - Added an end-to-end runtime test proving lifecycle update hook registration, event dispatch,
   visual mutation, scene diff repaint requirement, invalidated view IDs, and updated draw command
   output.
+- Expanded authoring lifecycle contracts beyond mount/unmount to include suspend, resume,
+  hot reload, error boundary, shutdown, and unmount with stable event keys and native operation
+  keys.
+- Wired the expanded native lifecycle set through React, Svelte, Solid, and Vue adapter mappings
+  so framework output cannot silently drop lifecycle phases.
+- Expanded runtime lifecycle phases and event dispatch to include typed lifecycle events, while
+  retaining deterministic queue order, bubbling, teardown cancellation, and lifecycle-scoped host
+  binding availability.
+- Added nested lifecycle collection coverage so child component lifecycle bindings are materialized
+  instead of only root-level handlers.
 
 Review check:
 
 - As the delivering engineer, I am satisfied with this remediation slice for production readiness:
-  the runtime now has a typed event-to-render update path with repaint evidence. No corrective
-  revision is required before continuing broader runtime ownership work.
+  the runtime now has a typed event-to-render update path with repaint evidence, complete lifecycle
+  phase records, framework adapter mappings, and nested authoring coverage. No corrective revision
+  is required before continuing broader runtime ownership work.
 
 ## Runtime Remediation
 
@@ -1203,7 +1214,9 @@ Review check:
 Evidence:
 
 - `hawk2ui-build` contains manifest, artifact, assets, pipeline, report, workspace modules.
-- Full source compilation, framework tooling, JS/TS, style, layout/render artifacts, and packaging are incomplete.
+- Workspace builds now load declared project files, compile JavaScript/TypeScript entrypoints through
+  the production script compiler, validate declared CSS through the production style subset compiler,
+  compile declared assets, and emit sealed artifacts plus verification reports.
 
 Required remediation:
 
@@ -1212,6 +1225,20 @@ Required remediation:
 Acceptance:
 
 - `hawk2ui build` creates deterministic artifacts for desktop and plugin targets.
+
+Status:
+
+- Remediated for the current manifest-backed artifact boundary: `BuildWorkspace::build` now rejects
+  missing/unsafe files, unsupported script extensions, invalid TypeScript, unsupported CSS, unsafe
+  assets, and blocked pipeline diagnostics before materializing a sealed artifact.
+- The CLI `build-release` path uses the same workspace build path and now fails with source-specific
+  diagnostics when declared scripts or styles fail production compilation.
+
+Review check:
+
+- As the delivering engineer, I am satisfied with this build-pipeline boundary for production
+  stability: source, script, style, asset, artifact, and verification stages are real code paths with
+  deterministic tests, and invalid inputs fail closed before package/runtime consumption.
 
 ### REM-BUILD-002: Complete Sealed Artifact Format
 
@@ -1234,14 +1261,15 @@ Status:
 
 - Remediated: sealed artifact records have deterministic content hashing, compatibility checks,
   generated JSON Schema, schema validation, deterministic container bytes, content-hash container
-  verification, and explicit development-vs-release signature policy enforcement.
+  verification, explicit development-vs-release signature policy enforcement, and trusted-key
+  Ed25519 release signature verification.
 
 Review check:
 
 - As the delivering engineer, I am satisfied with this sealed-artifact boundary for production
   stability: artifacts have a stable serialized container, release policy rejects unsigned payloads,
-  and container loading verifies schema compatibility plus content hashes before returning an
-  artifact.
+  container loading verifies schema compatibility plus content hashes before returning an artifact,
+  and production loading can require a trusted public key before accepting signed release payloads.
 
 ### REM-BUILD-003: Implement Dev Server And Hot Reload
 
@@ -1616,13 +1644,19 @@ Remediation delivered:
 - Added platform operations for audio playback, AI provider requests, MCP tool calls,
   notifications, shortcut registration, localization reads, dialogs, and file pickers.
 - Added allow/deny coverage for every extended platform domain in `hawk2ui-platform` tests.
+- Hardened filesystem scope resolution with canonical root/target checks for existing paths,
+  symlink escape denial, safe missing-leaf handling, and canonical user-selected grant matching.
+- Hardened network host validation with URL parsing, HTTP/HTTPS-only request policy, userinfo and
+  fragment denial, IDNA host canonicalization, duplicate normalized host rejection, and explicit
+  port rejection in manifest allowlists.
 
 Review check:
 
 - As the delivering engineer, I am satisfied with this policy/record layer for production
   stability: all platform domains are denied by default, explicit manifest allowlists are required,
-  and denials are structured. Native OS execution backends remain a separate host/platform
-  integration concern, not a gap in this capability policy layer.
+  scoped filesystem resolution is canonicalized, network hosts are parsed and normalized with URL
+  semantics, and denials are structured. Native OS execution backends remain a separate
+  host/platform integration concern, not a gap in this capability policy layer.
 
 ## Security Remediation
 
@@ -1668,12 +1702,16 @@ Status:
 - Package trust records can now be derived from actual sealed artifact payloads, including manifest
   hash, compiled asset hashes, compiled script payload hashes, target metadata, signature policy
   state, and verification report state.
+- Release artifacts now have a trusted-key verification path: sealed containers can be loaded through
+  Ed25519 signature verification, tampered post-signing payloads are rejected, and package trust
+  records can require cryptographic verification instead of trusting non-empty signature metadata.
 
 Review check:
 
 - As the delivering engineer, I am satisfied with this package-integrity boundary for production
-  stability: trust failures have stable rules and user-facing messages, and trust records can be
-  derived from the artifact that will actually be packaged instead of manually duplicated metadata.
+  stability: trust failures have stable rules and user-facing messages, trust records can be derived
+  from the artifact that will actually be packaged instead of manually duplicated metadata, and the
+  release path can verify signatures against a trusted public keyring before execution.
 
 
 ## Accessibility Remediation

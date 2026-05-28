@@ -104,7 +104,7 @@ path = "assets/logo.svg"
     write_file(&root.join("src/bootstrap.ts"), "export const boot = true;");
     write_file(
         &root.join("styles/main.hawk.css"),
-        ".root { color: white; }",
+        ".root { display: flex; font-size: 18px; background-color: token(color.surface); }",
     );
     write_file(&root.join("assets/logo.svg"), "<svg />");
 
@@ -254,7 +254,7 @@ path = "assets/logo.svg"
     write_file(&root.join("src/bootstrap.ts"), "export const boot = true;");
     write_file(
         &root.join("styles/main.hawk.css"),
-        ".root { color: white; }",
+        ".root { display: flex; font-size: 18px; background-color: token(color.surface); }",
     );
     write_file(&root.join("assets/logo.svg"), "<svg />");
 
@@ -611,6 +611,6 @@ name = "linux-wayland"
     write_file(&root.join("src/main.ts"), "export const app = 'desktop';");
     write_file(
         &root.join("styles/main.hawk.css"),
-        ".root { color: white; }",
+        ".root { display: flex; font-size: 18px; background-color: token(color.surface); }",
     );
 }

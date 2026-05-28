@@ -532,6 +532,11 @@ fn framework_program_events(native_program: &FrameworkNativeProgram) -> Vec<Even
 fn lifecycle_event_kind(event: NativeLifecycleEvent) -> EventKind {
     EventKind::Lifecycle(match event {
         NativeLifecycleEvent::Mounted => LifecycleEventKind::Mounted,
+        NativeLifecycleEvent::Suspended => LifecycleEventKind::Suspended,
+        NativeLifecycleEvent::Resumed => LifecycleEventKind::Resumed,
+        NativeLifecycleEvent::HotReloaded => LifecycleEventKind::HotReloaded,
+        NativeLifecycleEvent::ErrorBoundary => LifecycleEventKind::ErrorBoundary,
+        NativeLifecycleEvent::Shutdown => LifecycleEventKind::Shutdown,
         NativeLifecycleEvent::Unmounted => LifecycleEventKind::Unmounted,
     })
 }
@@ -552,6 +557,11 @@ fn bridge_error(author_file: &str, error: &NativeRuntimeBridgeError) -> SolidRen
 fn lifecycle_handler_label(event: NativeLifecycleEvent, handler: &str) -> String {
     match event {
         NativeLifecycleEvent::Mounted => format!("mounted:{handler}"),
+        NativeLifecycleEvent::Suspended => format!("suspended:{handler}"),
+        NativeLifecycleEvent::Resumed => format!("resumed:{handler}"),
+        NativeLifecycleEvent::HotReloaded => format!("hot-reloaded:{handler}"),
+        NativeLifecycleEvent::ErrorBoundary => format!("error-boundary:{handler}"),
+        NativeLifecycleEvent::Shutdown => format!("shutdown:{handler}"),
         NativeLifecycleEvent::Unmounted => format!("unmounted:{handler}"),
     }
 }

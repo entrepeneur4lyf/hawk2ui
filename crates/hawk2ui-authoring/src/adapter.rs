@@ -718,6 +718,11 @@ fn element_kind_key(kind: ElementKind) -> &'static str {
 fn lifecycle_key(event: NativeLifecycleEvent) -> &'static str {
     match event {
         NativeLifecycleEvent::Mounted => "mounted",
+        NativeLifecycleEvent::Suspended => "suspended",
+        NativeLifecycleEvent::Resumed => "resumed",
+        NativeLifecycleEvent::HotReloaded => "hot-reloaded",
+        NativeLifecycleEvent::ErrorBoundary => "error-boundary",
+        NativeLifecycleEvent::Shutdown => "shutdown",
         NativeLifecycleEvent::Unmounted => "unmounted",
     }
 }

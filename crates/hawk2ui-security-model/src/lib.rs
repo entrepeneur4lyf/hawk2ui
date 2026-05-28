@@ -457,10 +457,44 @@ impl PackageTrustRecord {
     ///
     /// The derived hashes are taken from the artifact manifest, compiled asset records, and compiled
     /// script payload bytes so trust validation is tied to the produced artifact instead of a
-    /// handwritten metadata summary.
+    /// handwritten metadata summary. This metadata-only constructor cannot prove release signature
+    /// trust; use [`Self::from_trusted_sealed_artifact`] for production package validation.
     #[must_use]
     pub fn from_sealed_artifact(
         artifact: &hawk2ui_build::SealedArtifact,
+        verification_report_status: VerificationReportStatus,
+    ) -> Self {
+        Self::from_artifact_parts(
+            artifact,
+            package_signature_status(artifact),
+            verification_report_status,
+        )
+    }
+
+    /// Builds a trust record from a sealed artifact after trusted-key signature verification.
+    ///
+    /// Use this constructor for release package validation. It only reports
+    /// [`PackageSignatureStatus::Verified`] when the artifact signature is valid for one of the
+    /// trusted public keys in `verifier`.
+    #[must_use]
+    pub fn from_trusted_sealed_artifact(
+        artifact: &hawk2ui_build::SealedArtifact,
+        verifier: &hawk2ui_build::ArtifactSignatureVerifier,
+        verification_report_status: VerificationReportStatus,
+    ) -> Self {
+        let signature_status = if artifact.verify_trusted_signature(verifier).is_ok() {
+            PackageSignatureStatus::Verified
+        } else if artifact.signature.status == hawk2ui_build::ArtifactSignatureStatus::Unsigned {
+            PackageSignatureStatus::Missing
+        } else {
+            PackageSignatureStatus::Invalid
+        };
+        Self::from_artifact_parts(artifact, signature_status, verification_report_status)
+    }
+
+    fn from_artifact_parts(
+        artifact: &hawk2ui_build::SealedArtifact,
+        signature_status: PackageSignatureStatus,
         verification_report_status: VerificationReportStatus,
     ) -> Self {
         let mut compiled_asset_hashes = artifact
@@ -497,7 +531,7 @@ impl PackageTrustRecord {
             compiled_asset_hashes,
             compiled_script_hashes,
             target_metadata: artifact_target_metadata(artifact),
-            signature_status: package_signature_status(artifact),
+            signature_status,
             verification_report_status,
         }
     }
@@ -606,12 +640,7 @@ fn is_supported_hash(hash: &str) -> bool {
 }
 
 fn package_signature_status(artifact: &hawk2ui_build::SealedArtifact) -> PackageSignatureStatus {
-    if artifact
-        .ensure_signature_policy(hawk2ui_build::ArtifactSignaturePolicy::RequireVerifiedSignature)
-        .is_ok()
-    {
-        PackageSignatureStatus::Verified
-    } else if artifact.signature.status == hawk2ui_build::ArtifactSignatureStatus::Unsigned {
+    if artifact.signature.status == hawk2ui_build::ArtifactSignatureStatus::Unsigned {
         PackageSignatureStatus::Missing
     } else {
         PackageSignatureStatus::Invalid

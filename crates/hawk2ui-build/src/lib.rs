@@ -10,8 +10,9 @@ pub mod report;
 pub mod workspace;
 
 pub use artifact::{
-    ArtifactHash, ArtifactHashes, ArtifactSchemaVersion, ArtifactSignature,
-    ArtifactSignaturePolicy, ArtifactSignatureStatus, AssetManifestEntry, BuildMetadata,
+    ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1, ArtifactHash, ArtifactHashes,
+    ArtifactSchemaVersion, ArtifactSignature, ArtifactSignaturePolicy, ArtifactSignatureStatus,
+    ArtifactSignatureVerificationKey, ArtifactSignatureVerifier, AssetManifestEntry, BuildMetadata,
     CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord, SealedArtifact,
     SealedArtifactError, TargetArtifactMetadata,
 };

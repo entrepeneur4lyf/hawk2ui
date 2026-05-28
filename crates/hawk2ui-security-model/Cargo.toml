@@ -21,3 +21,6 @@ hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
 hawk2ui-build = { version = "0.1.0", path = "../hawk2ui-build" }
 serde.workspace = true
 toml.workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true

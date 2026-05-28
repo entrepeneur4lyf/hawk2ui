@@ -36,6 +36,16 @@ Source validation commands run during review:
 
 Tests were intentionally not used as evidence for this review.
 
+## Remediation Notes
+
+- Artifact integrity has been remediated with deterministic SHA-256 payload hashing and trusted
+  Ed25519 signature verification on sealed artifacts.
+- Workspace builds now route TypeScript through the script backend compiler and CSS through the
+  style compiler instead of blindly copying source text.
+- Authoring/runtime lifecycle coverage now includes mount, suspend, resume, hot reload, error
+  boundary, shutdown, and unmount records with framework adapter mappings and typed runtime
+  lifecycle events.
+
 ## Executive Conclusion
 
 The current crate source is not production ready as a functional Hawk2UI framework.
@@ -136,13 +146,17 @@ Evidence:
 - `crates/hawk2ui-build/src/pipeline.rs:55` constructs a production pipeline as phase records.
 - `crates/hawk2ui-build/src/pipeline.rs:97` injects diagnostics manually.
 - `crates/hawk2ui-build/src/pipeline.rs:128` checks release readiness by inspecting recorded diagnostics.
-- `crates/hawk2ui-build/src/artifact.rs:33` computes artifact hashes with FNV-1a 64-bit.
+- Remediated after this review: artifact hashes now use SHA-256, and release containers have an
+  Ed25519 trusted-key verification path instead of relying only on non-empty signature metadata.
 - `crates/hawk2ui-build/src/artifact.rs:235` creates a sealed artifact from manifest metadata with empty script/style/asset payload vectors.
 - `crates/hawk2ui-build/src/manifest.rs:157` validates only a narrow subset of manifest correctness.
 
 Impact:
 
-The build crate cannot yet compile, seal, verify, or package actual application artifacts with production trust guarantees. FNV-1a is not suitable for artifact integrity/security claims.
+The build crate still needs continued work for full package-format coverage, but sealed artifact
+integrity is no longer based on non-cryptographic hashing. Release verification can now reject
+tampered post-signing payloads through trusted Ed25519 public keys, and workspace builds now compile
+declared TypeScript plus validate declared CSS before artifact materialization.
 
 Production status: Not production ready.
 
@@ -207,7 +221,16 @@ Impact:
 
 Capability enforcement can be bypassed or misapplied in real hostile input scenarios. Production security boundaries need canonical parsing and OS-aware path handling.
 
-Production status: Not production ready.
+Remediation:
+
+- Filesystem resolution now canonicalizes existing grant roots and targets, rejects symlink escapes,
+  preserves safe missing-leaf paths under the canonical root, and canonicalizes user-selected grant
+  matching.
+- Network policy now uses URL parsing, rejects unsupported schemes/userinfo/fragments/non-default
+  request ports, canonicalizes IDNA hosts, rejects duplicate normalized allowlist hosts, and denies
+  explicit port syntax in manifest hosts.
+
+Production status: Remediated at the policy layer.
 
 ## Medium Findings
 
