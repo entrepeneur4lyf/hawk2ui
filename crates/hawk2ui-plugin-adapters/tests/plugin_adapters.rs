@@ -611,6 +611,7 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     assert!(source.contains("PARAMETERS"));
     assert!(source.contains("Gain"));
     assert!(source.contains("hawk2ui_editor_descriptor"));
+    assert!(source.contains("hawk2ui_editor_state"));
     assert!(source.contains("Contents/Resources/hawk2ui-runtime-artifact.json"));
     assert!(source.contains("host_adapter=baseview"));
 
@@ -703,6 +704,16 @@ libloading = "0.8.9"
 
 fn generated_clap_host_check_source() -> &'static str {
     r#"use std::{env, ffi::{c_void, CStr}, ptr};
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct Hawk2uiEditorState {
+    created: bool,
+    attached: bool,
+    visible: bool,
+    width: u32,
+    height: u32,
+}
 
 fn main() {
     let library_path = env::args().nth(1).expect("library path argument");
@@ -804,21 +815,8 @@ fn main() {
                   false,
               ));
           }
-          assert!((gui.create.expect("gui create"))(plugin, preferred_api, false));
-        assert!(!(gui.show.expect("gui show before parent"))(plugin));
-        let parent = clap_sys::ext::gui::clap_window {
-            api: preferred_api,
-            specific: clap_sys::ext::gui::clap_window_handle {
-                ptr: 0x1usize as *mut c_void,
-            },
-        };
-        assert!((gui.set_parent.expect("gui set parent"))(plugin, &parent));
-        assert!((gui.set_size.expect("gui set size"))(plugin, 1200, 720));
-          assert!((gui.show.expect("gui show"))(plugin));
-          assert!((gui.hide.expect("gui hide"))(plugin));
-          (gui.destroy.expect("gui destroy"))(plugin);
-          let editor_descriptor: libloading::Symbol<unsafe extern "C" fn(*mut usize) -> *const u8> =
-              library.get(b"hawk2ui_editor_descriptor\0").expect("editor descriptor export resolves");
+            let editor_descriptor: libloading::Symbol<unsafe extern "C" fn(*mut usize) -> *const u8> =
+                library.get(b"hawk2ui_editor_descriptor\0").expect("editor descriptor export resolves");
           let mut descriptor_len = 0usize;
           let descriptor_ptr = editor_descriptor(&mut descriptor_len);
           assert!(!descriptor_ptr.is_null());
@@ -828,12 +826,35 @@ fn main() {
               descriptor_len,
           ))
           .expect("editor descriptor is utf8");
-          assert!(descriptor.contains("runtime_artifact=Contents/Resources/hawk2ui-runtime-artifact.json"));
-          assert!(descriptor.contains("host_adapter=baseview"));
-          assert!(descriptor.contains("renderer=skia"));
+            assert!(descriptor.contains("runtime_artifact=Contents/Resources/hawk2ui-runtime-artifact.json"));
+            assert!(descriptor.contains("host_adapter=baseview"));
+            assert!(descriptor.contains("renderer=skia"));
+            let editor_state: libloading::Symbol<unsafe extern "C" fn() -> Hawk2uiEditorState> =
+                library.get(b"hawk2ui_editor_state\0").expect("editor state export resolves");
+            assert_editor_state(editor_state(), false, false, false, 1024, 640);
+            assert!((gui.create.expect("gui create"))(plugin, preferred_api, false));
+            assert_editor_state(editor_state(), true, false, false, 1024, 640);
+            assert!(!(gui.show.expect("gui show before parent"))(plugin));
+            assert_editor_state(editor_state(), true, false, false, 1024, 640);
+            let parent = clap_sys::ext::gui::clap_window {
+                api: preferred_api,
+                specific: clap_sys::ext::gui::clap_window_handle {
+                    ptr: 0x1usize as *mut c_void,
+                },
+            };
+            assert!((gui.set_parent.expect("gui set parent"))(plugin, &parent));
+            assert_editor_state(editor_state(), true, true, false, 1024, 640);
+            assert!((gui.set_size.expect("gui set size"))(plugin, 1200, 720));
+            assert_editor_state(editor_state(), true, true, false, 1200, 720);
+            assert!((gui.show.expect("gui show"))(plugin));
+            assert_editor_state(editor_state(), true, true, true, 1200, 720);
+            assert!((gui.hide.expect("gui hide"))(plugin));
+            assert_editor_state(editor_state(), true, true, false, 1200, 720);
+            (gui.destroy.expect("gui destroy"))(plugin);
+            assert_editor_state(editor_state(), false, false, false, 1200, 720);
 
-          let params = ((*plugin).get_extension.expect("params extension"))(
-              plugin,
+            let params = ((*plugin).get_extension.expect("params extension"))(
+                plugin,
             b"clap.params\0".as_ptr().cast(),
         );
         assert!(!params.is_null());
@@ -924,9 +945,24 @@ fn main() {
       offset: usize,
   }
 
-  struct SingleInputEvent {
-      event: clap_sys::events::clap_event_param_value,
-  }
+    struct SingleInputEvent {
+        event: clap_sys::events::clap_event_param_value,
+    }
+
+    fn assert_editor_state(
+        state: Hawk2uiEditorState,
+        created: bool,
+        attached: bool,
+        visible: bool,
+        width: u32,
+        height: u32,
+    ) {
+        assert_eq!(state.created, created);
+        assert_eq!(state.attached, attached);
+        assert_eq!(state.visible, visible);
+        assert_eq!(state.width, width);
+        assert_eq!(state.height, height);
+    }
 
 unsafe extern "C" fn write_stream(
     stream: *const clap_sys::stream::clap_ostream,

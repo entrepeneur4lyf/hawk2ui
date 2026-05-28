@@ -1489,8 +1489,11 @@ Status:
     package, builds the CLAP parent-to-Baseview handoff, attaches the Baseview adapter to the validated
     native parent fixture, renders the sealed runtime scene through Skia, and verifies the presented
     surface pixels.
-- Remaining work under this item is to connect the verified runtime editor session path into the
-  generated CLAP dynamic library GUI callbacks and host-test that live callback path.
+  - Generated CLAP dynamic-library scaffolds now expose a stable `hawk2ui_editor_state` export backed by
+    the same atomics updated by the CLAP GUI callbacks, and the external host-load test verifies
+    create, parent attach, resize, show, hide, and destroy transitions through the compiled library.
+- Remaining work under this item is to replace the generated CLAP GUI callback state machine with live
+  `Hawk2UI` runtime editor session attachment/rendering inside the plugin surface.
 
 Required remediation:
 
