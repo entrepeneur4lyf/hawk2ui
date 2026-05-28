@@ -26,6 +26,22 @@ fn plugin_contract_downstream_code_uses_parameter_editor_and_automation_records(
 }
 
 #[test]
+fn plugin_parameter_contract_sanitizes_invalid_normalized_values() {
+    let parameter = PluginParameterContract::new(ParameterId::new("gain"), "Gain", f32::NAN, true)
+        .with_normalized_range(0.25, 0.75);
+    let invalid_range = PluginParameterContract::new(ParameterId::new("mix"), "Mix", 2.0, true)
+        .with_normalized_range(f32::INFINITY, 0.25);
+
+    assert!((parameter.default_normalized - 0.25).abs() < f32::EPSILON);
+    assert!(!parameter.accepts_normalized(f32::NAN));
+    assert!(!parameter.accepts_normalized(0.1));
+    assert!(parameter.accepts_normalized(0.5));
+    assert!((invalid_range.default_normalized - 1.0).abs() < f32::EPSILON);
+    assert!((invalid_range.normalized_min - 0.0).abs() < f32::EPSILON);
+    assert!((invalid_range.normalized_max - 1.0).abs() < f32::EPSILON);
+}
+
+#[test]
 fn plugin_contract_downstream_code_uses_state_and_preset_records() {
     let state = PluginStateContract::new(PluginStateFormat::Json, "application/json")
         .with_entry("gain", "0.5")

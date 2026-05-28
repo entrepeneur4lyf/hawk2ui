@@ -145,10 +145,37 @@ impl CompiledAssetRecord {
         }
     }
 
+    /// Creates a compiled vector asset record.
+    #[must_use]
+    pub fn vector(id: impl Into<String>, hash: ArtifactHash) -> Self {
+        Self::unbounded(id, hash, CompiledAssetKind::Vector)
+    }
+
+    /// Creates a compiled font asset record.
+    #[must_use]
+    pub fn font(id: impl Into<String>, hash: ArtifactHash) -> Self {
+        Self::unbounded(id, hash, CompiledAssetKind::Font)
+    }
+
     /// Returns the asset ID.
     #[must_use]
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Returns the compiled asset kind.
+    #[must_use]
+    pub const fn kind(&self) -> CompiledAssetKind {
+        self.kind
+    }
+
+    /// Returns image dimensions when the asset has bounded pixel dimensions.
+    #[must_use]
+    pub const fn dimensions(&self) -> Option<(u32, u32)> {
+        match (self.width, self.height) {
+            (Some(width), Some(height)) => Some((width, height)),
+            _ => None,
+        }
     }
 
     /// Returns a deterministic asset key.
@@ -158,11 +185,15 @@ impl CompiledAssetRecord {
             || "unbounded".to_string(),
             |(width, height)| format!("{width}x{height}"),
         );
+        let hash = self.hash.as_str();
         format!(
-            "{}:{}:{}:{dimensions}",
+            "kind={};id#{}:{};hash#{}:{};dimensions#{}:{dimensions}",
             self.kind_key(),
+            self.id.len(),
             self.id,
-            self.hash.as_str()
+            hash.len(),
+            hash,
+            dimensions.len()
         )
     }
 
@@ -171,6 +202,16 @@ impl CompiledAssetRecord {
             CompiledAssetKind::Image => "image",
             CompiledAssetKind::Vector => "vector",
             CompiledAssetKind::Font => "font",
+        }
+    }
+
+    fn unbounded(id: impl Into<String>, hash: ArtifactHash, kind: CompiledAssetKind) -> Self {
+        Self {
+            id: id.into(),
+            hash,
+            kind,
+            width: None,
+            height: None,
         }
     }
 }

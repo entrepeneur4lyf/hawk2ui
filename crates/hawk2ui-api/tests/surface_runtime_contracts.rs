@@ -24,6 +24,15 @@ fn surface_runtime_contracts_downstream_code_uses_surface_events_and_repaint_con
 }
 
 #[test]
+fn surface_metrics_sanitize_non_finite_or_invalid_values() {
+    let metrics = SurfaceMetrics::new(f32::NAN, f32::INFINITY, 0, 0, -1.0);
+
+    assert!((metrics.logical_width - 0.0).abs() < f32::EPSILON);
+    assert!((metrics.logical_height - 0.0).abs() < f32::EPSILON);
+    assert!((metrics.scale_factor - 1.0).abs() < f32::EPSILON);
+}
+
+#[test]
 fn surface_runtime_contracts_downstream_code_uses_keyboard_and_lifecycle_contracts_from_root_exports()
  {
     let event = InputEvent::KeyPressed(KeyEvent::new(

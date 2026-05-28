@@ -1,7 +1,7 @@
 use hawk2ui_api::{ApiInventory, ApiModule, ApiTypeAudience, ApiTypeEntry, ApiTypeStatus};
 
 #[test]
-fn api_inventory_classifies_public_internal_feature_gated_and_test_only_types() {
+fn api_inventory_classifies_only_real_public_production_contracts() {
     let inventory = ApiInventory::production_baseline();
 
     assert!(
@@ -27,14 +27,18 @@ fn api_inventory_classifies_public_internal_feature_gated_and_test_only_types() 
         inventory
             .types()
             .iter()
-            .any(|ty| ty.status() == ApiTypeStatus::FeatureGated)
+            .all(|ty| ty.status() == ApiTypeStatus::Public)
     );
-    assert!(
-        inventory
-            .types()
-            .iter()
-            .any(|ty| ty.status() == ApiTypeStatus::TestOnly)
-    );
+    for phantom in [
+        "ExperimentalScriptEngineContract",
+        "ArtifactBuilderInternals",
+        "SurfaceCompileFixture",
+    ] {
+        assert!(
+            inventory.types().iter().all(|ty| ty.name() != phantom),
+            "production inventory must not list phantom type {phantom}"
+        );
+    }
 }
 
 #[test]

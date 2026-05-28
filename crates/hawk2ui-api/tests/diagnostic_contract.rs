@@ -18,6 +18,17 @@ fn diagnostic_contract_serializes_cli_ready_payloads() {
 }
 
 #[test]
+fn diagnostic_redacted_flag_is_advisory_and_does_not_scrub_payloads() {
+    let diagnostic = Diagnostic::error("secret.leaked", "token=abc123")
+        .with_related(RelatedContext::new("secret", "abc123"))
+        .redacted();
+
+    assert!(diagnostic.redacted);
+    assert_eq!(diagnostic.message, "token=abc123");
+    assert!(diagnostic.to_cli_string().contains("abc123"));
+}
+
+#[test]
 fn diagnostic_contract_formats_stable_cli_snapshot() {
     let diagnostic = Diagnostic::warning("style.unsupported", "property is not supported")
         .with_source(SourceSpan::new("styles/main.hawk.css", 12, 5, 12, 18))

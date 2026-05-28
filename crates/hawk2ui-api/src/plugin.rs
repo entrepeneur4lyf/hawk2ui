@@ -66,9 +66,9 @@ pub struct PluginParameterContract {
     pub automatable: bool,
     /// Optional display unit.
     pub unit: Option<String>,
-    /// Minimum accepted normalized value.
+    /// Minimum accepted finite normalized value.
     pub normalized_min: f32,
-    /// Maximum accepted normalized value.
+    /// Maximum accepted finite normalized value.
     pub normalized_max: f32,
 }
 
@@ -84,7 +84,7 @@ impl PluginParameterContract {
         Self {
             id,
             name: name.into(),
-            default_normalized,
+            default_normalized: sanitize_normalized(default_normalized),
             automatable,
             unit: None,
             normalized_min: 0.0,
@@ -99,19 +99,59 @@ impl PluginParameterContract {
         self
     }
 
-    /// Sets the accepted normalized range.
+    /// Sets the accepted finite normalized range.
+    ///
+    /// Invalid or reversed ranges fall back to `0.0..=1.0`. The default value is
+    /// clamped into the resulting range so a freshly built contract remains
+    /// internally consistent.
     #[must_use]
     pub const fn with_normalized_range(mut self, min: f32, max: f32) -> Self {
+        let (min, max) = sanitize_normalized_range(min, max);
         self.normalized_min = min;
         self.normalized_max = max;
+        self.default_normalized = clamp_normalized(self.default_normalized, min, max);
         self
     }
 
     /// Returns true when the normalized value is inside this parameter's accepted range.
     #[must_use]
     pub fn accepts_normalized(&self, normalized: f32) -> bool {
-        normalized >= self.normalized_min && normalized <= self.normalized_max
+        normalized.is_finite()
+            && normalized >= self.normalized_min
+            && normalized <= self.normalized_max
     }
+}
+
+const fn sanitize_normalized(value: f32) -> f32 {
+    if value >= 0.0 && value <= 1.0 {
+        value
+    } else if value > 1.0 && value <= f32::MAX {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+const fn sanitize_normalized_range(min: f32, max: f32) -> (f32, f32) {
+    if !is_finite(min) || !is_finite(max) || min > max {
+        (0.0, 1.0)
+    } else {
+        (sanitize_normalized(min), sanitize_normalized(max))
+    }
+}
+
+const fn clamp_normalized(value: f32, min: f32, max: f32) -> f32 {
+    if value < min {
+        min
+    } else if value > max {
+        max
+    } else {
+        value
+    }
+}
+
+const fn is_finite(value: f32) -> bool {
+    value >= -f32::MAX && value <= f32::MAX
 }
 
 /// Plugin editor implementation kind.

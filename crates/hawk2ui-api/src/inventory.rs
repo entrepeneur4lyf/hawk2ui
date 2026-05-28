@@ -136,8 +136,8 @@ impl ApiInventory {
             Artifact as ArtifactModule, Diagnostic as DiagnosticModule, Plugin as PluginModule,
             Runtime as RuntimeModule, Surface as SurfaceModule,
         };
-        use ApiTypeAudience::{Author, Build, Plugin, Runtime, Test};
-        use ApiTypeStatus::{FeatureGated, Internal, Public, TestOnly};
+        use ApiTypeAudience::{Author, Build, Plugin, Runtime};
+        use ApiTypeStatus::Public;
 
         Self {
             types: vec![
@@ -190,14 +190,6 @@ impl ApiInventory {
                 ApiTypeEntry::new(PluginModule, "RealtimeDataKind", Public, Plugin),
                 ApiTypeEntry::new(PluginModule, "RealtimeDataDirection", Public, Plugin),
                 ApiTypeEntry::new(PluginModule, "RealtimeDataContract", Public, Plugin),
-                ApiTypeEntry::new(
-                    RuntimeModule,
-                    "ExperimentalScriptEngineContract",
-                    FeatureGated,
-                    Runtime,
-                ),
-                ApiTypeEntry::new(ArtifactModule, "ArtifactBuilderInternals", Internal, Build),
-                ApiTypeEntry::new(SurfaceModule, "SurfaceCompileFixture", TestOnly, Test),
             ],
         }
     }

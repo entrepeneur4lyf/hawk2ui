@@ -20,15 +20,15 @@ pub enum SurfaceKind {
 /// Logical and physical metrics for a host surface.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SurfaceMetrics {
-    /// Logical width in UI units.
+    /// Finite non-negative logical width in UI units.
     pub logical_width: f32,
-    /// Logical height in UI units.
+    /// Finite non-negative logical height in UI units.
     pub logical_height: f32,
     /// Physical width in pixels.
     pub physical_width: u32,
     /// Physical height in pixels.
     pub physical_height: u32,
-    /// Device scale factor.
+    /// Finite positive device scale factor.
     pub scale_factor: f32,
 }
 
@@ -43,12 +43,28 @@ impl SurfaceMetrics {
         scale_factor: f32,
     ) -> Self {
         Self {
-            logical_width,
-            logical_height,
+            logical_width: sanitize_non_negative(logical_width),
+            logical_height: sanitize_non_negative(logical_height),
             physical_width,
             physical_height,
-            scale_factor,
+            scale_factor: sanitize_positive(scale_factor),
         }
+    }
+}
+
+const fn sanitize_non_negative(value: f32) -> f32 {
+    if value >= 0.0 && value <= f32::MAX {
+        value
+    } else {
+        0.0
+    }
+}
+
+const fn sanitize_positive(value: f32) -> f32 {
+    if value > 0.0 && value <= f32::MAX {
+        value
+    } else {
+        1.0
     }
 }
 
@@ -117,7 +133,7 @@ impl KeyModifiers {
         self.0
     }
 
-    /// Creates keyboard modifier state.
+    /// Adds the Shift modifier.
     #[must_use]
     pub const fn with_shift(self) -> Self {
         Self(self.0 | Self::SHIFT)

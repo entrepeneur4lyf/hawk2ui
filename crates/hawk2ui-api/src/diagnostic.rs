@@ -124,7 +124,11 @@ pub struct Diagnostic {
     pub fixes: Vec<SuggestedFix>,
     /// Related context values.
     pub related: Vec<RelatedContext>,
-    /// Whether sensitive values were redacted.
+    /// Whether the producer asserts that sensitive values were redacted before this record was built.
+    ///
+    /// This flag is advisory metadata. It is not a redaction boundary, and
+    /// consumers must not assume that setting it scrubbed `message`, `source`,
+    /// `fixes`, or `related` values.
     pub redacted: bool,
 }
 
@@ -169,6 +173,9 @@ impl Diagnostic {
     }
 
     /// Marks this diagnostic as having redacted sensitive data.
+    ///
+    /// This method only records the producer's assertion; it does not mutate or
+    /// scrub any existing payload fields.
     #[must_use]
     pub const fn redacted(mut self) -> Self {
         self.redacted = true;
