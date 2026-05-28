@@ -10,7 +10,7 @@ use std::{
 };
 
 use hawk2ui_build::SealedArtifact;
-use hawk2ui_host::HostPlatformHandle;
+use hawk2ui_host::{HostPlatformHandle, PluginEditorConfig, PluginParentHandle, SurfaceMetrics};
 use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRecord, ParameterValue, PluginEditor,
     PluginEditorSize,
@@ -425,6 +425,27 @@ pub struct ClapRuntimeEditorSession {
     sealed_artifact: SealedArtifact,
 }
 
+/// Host configuration needed to attach a verified CLAP runtime editor through Baseview.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClapRuntimeEditorHostConfig {
+    editor_config: PluginEditorConfig,
+    host_parent: HostPlatformHandle,
+}
+
+impl ClapRuntimeEditorHostConfig {
+    /// Returns the format-neutral plugin editor configuration.
+    #[must_use]
+    pub const fn editor_config(&self) -> &PluginEditorConfig {
+        &self.editor_config
+    }
+
+    /// Returns the validated native host parent handle for Baseview attachment.
+    #[must_use]
+    pub const fn host_parent(&self) -> HostPlatformHandle {
+        self.host_parent
+    }
+}
+
 impl ClapRuntimeEditorSession {
     /// Loads a runtime-backed editor session from a materialized CLAP package directory.
     ///
@@ -523,6 +544,37 @@ impl ClapRuntimeEditorSession {
     #[must_use]
     pub const fn sealed_artifact(&self) -> &SealedArtifact {
         &self.sealed_artifact
+    }
+
+    /// Builds the host configuration needed to attach this editor to a CLAP parent window.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageDiagnostic`] when the CLAP parent cannot be represented by the current
+    /// Baseview bridge.
+    pub fn baseview_host_config(
+        &self,
+        parent: ClapGuiParentHandle,
+        linux_display_handle: Option<u64>,
+    ) -> Result<ClapRuntimeEditorHostConfig, PackageDiagnostic> {
+        let host_parent = parent.to_baseview_host_handle(linux_display_handle)?;
+        let editor_config = PluginEditorConfig::new(
+            self.descriptor.editor_id(),
+            PluginParentHandle::opaque(format!(
+                "clap:{}:{}",
+                parent.api().clap_name(),
+                parent.raw_handle()
+            )),
+            SurfaceMetrics::new(
+                self.descriptor.logical_width(),
+                self.descriptor.logical_height(),
+                self.descriptor.scale_factor(),
+            ),
+        );
+        Ok(ClapRuntimeEditorHostConfig {
+            editor_config,
+            host_parent,
+        })
     }
 }
 

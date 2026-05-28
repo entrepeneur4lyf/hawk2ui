@@ -326,6 +326,21 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
     assert_eq!(editor_session.descriptor().scale_factor(), 1.25);
     assert_eq!(editor_session.runtime_artifact(), &runtime_artifact);
     assert_eq!(editor_session.sealed_artifact(), &sealed_artifact);
+    let host_config = editor_session
+        .baseview_host_config(
+            ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::X11, 42)
+                .expect("CLAP parent handle validates"),
+            Some(7),
+        )
+        .expect("Baseview host config builds");
+    assert_eq!(
+        host_config.host_parent(),
+        hawk2ui_host::HostPlatformHandle::linux_x11(7, 42)
+    );
+    assert_eq!(host_config.editor_config().editor_id, "main-editor");
+    assert_eq!(host_config.editor_config().metrics.logical_width, 1024.0);
+    assert_eq!(host_config.editor_config().metrics.logical_height, 640.0);
+    assert_eq!(host_config.editor_config().metrics.scale_factor, 1.25);
 
     let invalid_output_root = std::env::temp_dir().join(format!(
         "hawk2ui-plugin-invalid-runtime-artifact-{}",

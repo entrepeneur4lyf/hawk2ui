@@ -1479,6 +1479,9 @@ Status:
   - Runtime-backed CLAP package requests now carry `PluginEditor` metadata into materialized editor
     descriptors and generated CLAP scaffolds, so the verified session has stable editor ID, logical
     size, and DPI scale for the Baseview surface instead of relying on hard-coded defaults.
+  - Verified CLAP runtime editor sessions can now build a Baseview handoff record from a CLAP GUI
+    parent handle, producing the validated native parent handle plus the format-neutral
+    `PluginEditorConfig` consumed by the Baseview adapter.
 - Remaining work under this item is to connect generated runtime artifacts to live `Hawk2UI` editor rendering inside the attached CLAP GUI surface.
 
 Required remediation:
