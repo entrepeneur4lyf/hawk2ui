@@ -11,6 +11,8 @@ pub enum ParameterValue {
     Bool(bool),
     /// Indexed choice value.
     Choice(u32),
+    /// Integer value.
+    Int(i64),
 }
 
 /// Parameter numeric range.
@@ -211,6 +213,33 @@ impl ParameterRecord {
         }
     }
 
+    /// Creates an integer parameter over a discrete `[min, max]` range.
+    ///
+    /// The caller is responsible for an integer-valued `range.default` — the
+    /// manifest validator enforces this; a fractional default is truncated
+    /// toward zero.
+    #[allow(clippy::cast_possible_truncation)]
+    #[must_use]
+    pub fn integer(
+        id: impl Into<String>,
+        display_name: impl Into<String>,
+        unit: impl Into<String>,
+        range: ParameterRange,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            display_name: display_name.into(),
+            unit: unit.into(),
+            range: Some(range),
+            default_value: ParameterValue::Int(range.default as i64),
+            distribution: ParameterDistribution::Linear,
+            steps: None,
+            smoothing: None,
+            flags: ParameterFlags::default(),
+            group_id: None,
+        }
+    }
+
     /// Creates a boolean parameter.
     #[must_use]
     pub fn boolean(
@@ -304,6 +333,14 @@ impl ParameterRecord {
                 }
                 Ok(((value - range.min) / (range.max - range.min)).clamp(0.0, 1.0))
             }
+            (Some(range), ParameterValue::Int(value)) => {
+                range.validate().map_err(|error| error.message)?;
+                // Integer bounds are small enough that the i64→f64 widening is
+                // exact for any realistic parameter range.
+                #[allow(clippy::cast_precision_loss)]
+                let value = *value as f64;
+                Ok(((value - range.min) / (range.max - range.min)).clamp(0.0, 1.0))
+            }
             (None, ParameterValue::Bool(value)) => Ok(f64::from(u8::from(*value))),
             _ => Err("parameter value type is incompatible".into()),
         }
@@ -318,6 +355,8 @@ impl ParameterRecord {
         match value {
             ParameterValue::Float(value) if self.unit.is_empty() => Ok(display_float(*value)),
             ParameterValue::Float(value) => Ok(format!("{} {}", display_float(*value), self.unit)),
+            ParameterValue::Int(value) if self.unit.is_empty() => Ok(value.to_string()),
+            ParameterValue::Int(value) => Ok(format!("{value} {}", self.unit)),
             ParameterValue::Bool(value) => Ok(value.to_string()),
             ParameterValue::Choice(value) => Ok(value.to_string()),
         }

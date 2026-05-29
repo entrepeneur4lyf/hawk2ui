@@ -2335,7 +2335,10 @@ fn validate_parameter_event(
             "baseview.clap-runtime-editor.parameter-invalid",
             "CLAP runtime editor parameter float values must be finite",
         )),
-        ParameterValue::Float(_) | ParameterValue::Bool(_) | ParameterValue::Choice(_) => Ok(()),
+        ParameterValue::Float(_)
+        | ParameterValue::Int(_)
+        | ParameterValue::Bool(_)
+        | ParameterValue::Choice(_) => Ok(()),
     }
 }
 
@@ -2344,6 +2347,10 @@ fn state_value_from_parameter(value: &ParameterValue) -> StateValue {
         ParameterValue::Float(value) => StateValue::Float(*value),
         ParameterValue::Bool(value) => StateValue::Bool(*value),
         ParameterValue::Choice(value) => StateValue::Float(f64::from(*value)),
+        // StateValue has no integer variant; an integer persists as a float,
+        // which round-trips exactly for any realistic parameter range.
+        #[allow(clippy::cast_precision_loss)]
+        ParameterValue::Int(value) => StateValue::Float(*value as f64),
     }
 }
 

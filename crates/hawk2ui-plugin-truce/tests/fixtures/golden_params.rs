@@ -8,4 +8,8 @@ pub struct SpikeParams {
     pub osc_mix: FloatParam,
     #[param(id = 1, name = "Cutoff", range = "linear(20, 20000)", unit = "Hz", default = 1000)]
     pub filter_cutoff: FloatParam,
+    #[param(id = 2, name = "Voices", range = "discrete(1, 8)", unit = "none", default = 4)]
+    pub voices: IntParam,
+    #[param(id = 3, name = "Bypass", default = 0)]
+    pub bypass: BoolParam,
 }

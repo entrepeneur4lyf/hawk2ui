@@ -3124,6 +3124,8 @@ fn parameter_default_value(parameter: &ParameterRecord) -> f64 {
         ParameterValue::Float(value) => value,
         ParameterValue::Bool(value) => f64::from(u8::from(value)),
         ParameterValue::Choice(_) => 0.0,
+        #[allow(clippy::cast_precision_loss)]
+        ParameterValue::Int(value) => value as f64,
     }
 }
 

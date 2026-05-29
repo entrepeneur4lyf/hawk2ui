@@ -3,19 +3,20 @@
 //! `Hawk2UI` defines parameters once — in the plugin manifest, surfaced as a
 //! [`hawk2ui_plugin::ParameterModel`] — and this module emits the Rust
 //! `#[derive(Params)]` struct the truce DSP side compiles. A sibling emitter
-//! (added with the editor wiring) produces the editor-side TypeScript
-//! accessors from the same model, so both sides stay addressable by the same
-//! parameter `u32` through truce's [`EditorBridge`](truce_core::editor::EditorBridge).
+//! (added once the editor runtime exposes a parameter binding) produces the
+//! editor-side TypeScript accessors from the same model, so both sides stay
+//! addressable by the same parameter `u32` through truce's
+//! [`EditorBridge`](truce_core::editor::EditorBridge).
 //!
 //! The emitter is pure string generation: it produces truce *source text* and
 //! takes no dependency on `truce` itself. Verification that the emitted source
 //! actually compiles against truce lives in `tests/params_codegen.rs`, which
 //! `include!`s a checked-in golden produced by this emitter.
 //!
-//! This is the parameter-codegen spike: it covers the `FloatParam` path end to
-//! end (emit → compile → bridge read-back). Integer, boolean, and enum
-//! parameters, custom curves, meters, and the manifest-to-model bridge land as
-//! the model and manifest schema grow to match.
+//! Continuous (`FloatParam`), integer (`IntParam`), and boolean (`BoolParam`)
+//! parameters are covered. Indexed choices are emitted as a discrete
+//! `IntParam` for now; named enums (`EnumParam` + a generated `ParamEnum`) and
+//! meters land as the model grows to carry variant names and meter records.
 
 use std::fmt::Write as _;
 
@@ -51,15 +52,50 @@ pub fn emit_truce_params_struct(struct_name: &str, model: &ParameterModel) -> St
 /// Emits a single `#[param(...)]` field for `parameter` at `id`.
 fn emit_param_field(out: &mut String, id: u32, parameter: &ParameterRecord) {
     let field = field_ident(&parameter.id);
-    let range = range_literal(parameter);
+    let (field_type, attrs) = field_spec(id, parameter);
+    let _ = writeln!(out, "    #[param({attrs})]");
+    let _ = writeln!(out, "    pub {field}: {field_type},");
+}
+
+/// Returns the truce field type and the `#[param(...)]` attribute body for a
+/// parameter, branching on its typed value: continuous floats keep their
+/// linear/logarithmic range, integers map to a discrete range, booleans carry
+/// only an id/name/default (truce defaults a `BoolParam`'s range to
+/// `Discrete{0,1}`), and an indexed choice is emitted as a discrete integer
+/// until named-enum codegen lands.
+fn field_spec(id: u32, parameter: &ParameterRecord) -> (&'static str, String) {
+    let name = format!("{:?}", parameter.display_name);
     let unit = map_unit(&parameter.unit);
-    let default = format_number(default_plain(parameter));
-    let _ = writeln!(
-        out,
-        "    #[param(id = {id}, name = {name:?}, range = \"{range}\", unit = \"{unit}\", default = {default})]",
-        name = parameter.display_name,
-    );
-    let _ = writeln!(out, "    pub {field}: FloatParam,");
+    match parameter.default_value {
+        ParameterValue::Float(value) => (
+            "FloatParam",
+            format!(
+                "id = {id}, name = {name}, range = \"{}\", unit = \"{unit}\", default = {}",
+                continuous_range(parameter),
+                format_number(value),
+            ),
+        ),
+        ParameterValue::Int(value) => (
+            "IntParam",
+            format!(
+                "id = {id}, name = {name}, range = \"{}\", unit = \"{unit}\", default = {value}",
+                discrete_range(parameter),
+            ),
+        ),
+        ParameterValue::Bool(value) => (
+            "BoolParam",
+            format!("id = {id}, name = {name}, default = {}", u8::from(value)),
+        ),
+        ParameterValue::Choice(value) => {
+            let max = parameter.steps.map_or(1, |steps| steps.saturating_sub(1));
+            (
+                "IntParam",
+                format!(
+                    "id = {id}, name = {name}, range = \"discrete(0, {max})\", default = {value}"
+                ),
+            )
+        }
+    }
 }
 
 /// Derives a valid Rust field identifier from a stable parameter id.
@@ -78,12 +114,10 @@ fn field_ident(id: &str) -> String {
     ident
 }
 
-/// Builds the truce range literal (e.g. `linear(20, 20000)`) for a parameter.
-///
-/// The spike emits only continuous ranges; a parameter without a numeric range
-/// falls back to the unit interval so the emitted struct still compiles, which
-/// the integer/enum work will replace with discrete/enum ranges.
-fn range_literal(parameter: &ParameterRecord) -> String {
+/// Builds the truce continuous range literal (e.g. `linear(20, 20000)`,
+/// `log(20, 20000)`) for a float parameter, falling back to the unit interval
+/// when no numeric range is declared.
+fn continuous_range(parameter: &ParameterRecord) -> String {
     match parameter.range {
         Some(range) => {
             let curve = match parameter.distribution {
@@ -100,11 +134,30 @@ fn range_literal(parameter: &ParameterRecord) -> String {
     }
 }
 
+/// Builds the truce discrete range literal (e.g. `discrete(1, 8)`) for an
+/// integer parameter, rounding the model's float bounds to whole numbers.
+fn discrete_range(parameter: &ParameterRecord) -> String {
+    match parameter.range {
+        Some(range) => format!(
+            "discrete({}, {})",
+            round_int(range.min),
+            round_int(range.max)
+        ),
+        None => "discrete(0, 1)".to_string(),
+    }
+}
+
+/// Rounds a model range bound to the nearest integer for a discrete range.
+#[allow(clippy::cast_possible_truncation)]
+fn round_int(value: f64) -> i64 {
+    value.round() as i64
+}
+
 /// Maps a parameter's free-form unit label onto a truce `ParamUnit` token.
 ///
-/// Unmappable labels collapse to `none` for the spike; rejecting them with a
-/// diagnostic is a model-validation decision deferred to the manifest schema
-/// work.
+/// Unmappable labels collapse to `none`; the manifest validator already
+/// rejects unknown units, so this is a defensive fallback rather than the
+/// primary check.
 fn map_unit(unit: &str) -> &'static str {
     match unit {
         "dB" | "Db" | "db" => "dB",
@@ -115,15 +168,6 @@ fn map_unit(unit: &str) -> &'static str {
         "st" => "st",
         "pan" => "pan",
         _ => "none",
-    }
-}
-
-/// Extracts the plain (denormalized) default value to emit for a parameter.
-fn default_plain(parameter: &ParameterRecord) -> f64 {
-    match parameter.default_value {
-        ParameterValue::Float(value) => value,
-        ParameterValue::Bool(value) => f64::from(u8::from(value)),
-        ParameterValue::Choice(value) => f64::from(value),
     }
 }
 
