@@ -173,7 +173,13 @@ impl SolidRenderedArtifact {
         &self.lifecycle_handlers
     }
 
-    /// Returns fine-grained update records.
+    /// Returns a fixed Solid reactivity-capability descriptor
+    /// (`signal:items` / `for-each:keyed` / `effect:root-props`).
+    ///
+    /// These are **not** derived per component: the raw-source path emits this constant set, and
+    /// the `from_native_program` boundary cannot supply real signal/effect records either —
+    /// [`FrameworkNativeProgram`] carries no reactivity model. Deriving a genuine fine-grained
+    /// update set is gated on a Solid reactivity model the workspace has not yet defined.
     #[must_use]
     pub fn fine_grained_updates(&self) -> &[String] {
         &self.fine_grained_updates
@@ -219,6 +225,17 @@ impl SolidIntegration {
     }
 
     /// Renders a Solid component into typed `Hawk2UI` records.
+    ///
+    /// # Source grammar (raw-source path)
+    ///
+    /// When the component carries raw author source (rather than a
+    /// [`SolidComponentSource::from_native_program`] boundary), this method is an intentional
+    /// substring heuristic, **not** a Solid/JSX parser. It models only a single root `View` plus a
+    /// flat list of `<hawk-text>` / keyed children, and several record fields are fixed labels
+    /// rather than parsed from the source: handler identifiers (`onPointerDown` → `handlePress`),
+    /// the ref name (gated on the literal `ref={root_ref}`), and `fine_grained_updates` (a fixed
+    /// reactivity descriptor — see [`SolidRenderedArtifact::fine_grained_updates`]). High-fidelity
+    /// authoring is expected to arrive through [`SolidComponentSource::from_native_program`].
     ///
     /// # Errors
     ///
@@ -295,6 +312,17 @@ impl SolidIntegration {
             ));
         }
 
+        // Lifecycle labels mirror the same `source.contains(…)` gating as the lifecycle `events`
+        // above so the two public surfaces agree; `solid_artifact_from_native_program` derives them
+        // from the program's declared lifecycle instead.
+        let mut lifecycle_handlers = Vec::new();
+        if component.source.contains("onMount") {
+            lifecycle_handlers.push("mounted:onMount".to_string());
+        }
+        if component.source.contains("onCleanup") {
+            lifecycle_handlers.push("unmounted:onCleanup".to_string());
+        }
+
         Ok(SolidRenderedArtifact {
             root: ElementNode::new(ElementId::new(root_id), ElementKind::View),
             keyed_children: keyed_children(&component.source),
@@ -309,7 +337,7 @@ impl SolidIntegration {
                 .map(|path| AssetRef::new("solid.asset", path))
                 .collect(),
             events,
-            lifecycle_handlers: vec!["mounted:onMount".into(), "unmounted:onCleanup".into()],
+            lifecycle_handlers,
             fine_grained_updates: vec![
                 "signal:items".into(),
                 "for-each:keyed".into(),

@@ -272,6 +272,51 @@ fn solid_smoke_app_declares_public_package_entrypoint() {
     assert!(app.contains("assets/logo.svg"));
 }
 
+#[test]
+fn solid_source_path_lifecycle_handlers_track_declared_hooks() {
+    // A source that declares no lifecycle hooks must report no lifecycle handlers — the field is
+    // derived from the source, not canned. (Regression: it previously always returned both hooks,
+    // disagreeing with the conditionally-built `events`.)
+    let none = SolidIntegration::new()
+        .render(SolidComponentSource::new(
+            "src/NoLifecycle.tsx",
+            r#"<hawk-view id="root"></hawk-view>"#,
+        ))
+        .expect("source without lifecycle hooks should render");
+    assert!(none.lifecycle_handlers().is_empty());
+    assert!(
+        !none
+            .events()
+            .iter()
+            .any(|event| matches!(event.event(), EventKind::Lifecycle(_)))
+    );
+
+    // Only the declared hook is reported, so `events` and `lifecycle_handlers` agree.
+    let mount_only = SolidIntegration::new()
+        .render(SolidComponentSource::new(
+            "src/MountOnly.tsx",
+            r#"<hawk-view id="root" onMount={onMount}></hawk-view>"#,
+        ))
+        .expect("source with a single lifecycle hook should render");
+    assert_eq!(mount_only.lifecycle_handlers(), ["mounted:onMount"]);
+}
+
+#[test]
+fn solid_reports_unsupported_event() {
+    let error = SolidIntegration::new()
+        .render(SolidComponentSource::new(
+            "src/Unsupported.tsx",
+            r#"<hawk-view id="root" onClick={handleClick}></hawk-view>"#,
+        ))
+        .expect_err("a DOM-style onClick handler should be rejected");
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.rule.as_str() == "solid.event.unsupported")
+    );
+}
+
 fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
     FrameworkNativeProgram::new(
         FrameworkNativeNode::new("root", ElementKind::View)
