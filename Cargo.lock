@@ -1840,6 +1840,11 @@ dependencies = [
 name = "hawk2ui-plugin-truce"
 version = "0.1.0"
 dependencies = [
+ "hawk2ui-host",
+ "hawk2ui-host-baseview",
+ "hawk2ui-layout",
+ "hawk2ui-render",
+ "hawk2ui-runtime",
  "truce-core",
  "truce-params",
 ]

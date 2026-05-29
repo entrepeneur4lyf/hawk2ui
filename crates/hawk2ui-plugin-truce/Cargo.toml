@@ -23,3 +23,10 @@ pedantic = "warn"
 [dependencies]
 truce-core = "0.49.14"
 truce-params = "0.49.14"
+hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
+hawk2ui-host-baseview = { version = "0.1.0", path = "../hawk2ui-host-baseview" }
+hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
+
+[dev-dependencies]
+hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
+hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }

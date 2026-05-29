@@ -682,6 +682,43 @@ impl WindowHandler for BaseviewX11SkiaFrameHandler {
     }
 }
 
+/// `Send` owner of a live Baseview child window for an embedded plugin editor.
+///
+/// `baseview::WindowHandle` holds a raw native child-window pointer and is not
+/// auto-`Send`, but the truce `Editor` trait that consumers of this crate
+/// implement *is* `Send`. This wrapper carries the justified `unsafe impl Send`
+/// so an embedder outside this crate — notably the `unsafe`-free
+/// `hawk2ui-plugin-truce` editor binding — can own a live editor window without
+/// writing `unsafe` itself. The window must still be driven (`is_open`,
+/// `close`) only from the GUI thread that opened it.
+pub struct BaseviewEditorWindowHandle {
+    handle: WindowHandle,
+}
+
+// SAFETY: the wrapped `WindowHandle` is `!Send` because it carries a raw native
+// child-window pointer (HWND / NSView / X11 Window). The embedded-editor
+// lifecycle guarantees single-threaded access: the DAW host opens, polls
+// (`idle`), and closes the editor on one dedicated GUI thread, never
+// concurrently and never from the audio thread, so the handle is only ever
+// touched on the thread that created it. This is the same single-GUI-thread
+// invariant truce's own `GpuEditor` relies on for its `unsafe impl Send`, and
+// the same lifetime contract `BaseviewNativeParent`'s raw-handle impls assume.
+#[allow(unsafe_code)]
+unsafe impl Send for BaseviewEditorWindowHandle {}
+
+impl BaseviewEditorWindowHandle {
+    /// Returns whether the native child window is still open.
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        self.handle.is_open()
+    }
+
+    /// Closes the native child window. Idempotent once the window is gone.
+    pub fn close(&mut self) {
+        self.handle.close();
+    }
+}
+
 /// Headless-safe Baseview plugin adapter.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaseviewPluginAdapter {
@@ -911,6 +948,41 @@ impl BaseviewPluginAdapter {
                 "baseview editor has already been destroyed",
             ))
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl BaseviewPluginAdapter {
+    /// Opens a real Baseview child window that renders `scene` each frame and
+    /// returns a [`Send`] owner of its native handle.
+    ///
+    /// Linux/X11 software-presentation path: every frame is rendered to a CPU
+    /// Skia snapshot and presented into the child window via X11 `PutImage`
+    /// (see [`BaseviewX11SkiaFrameHandler`]). `presented_frames`, `last_error`,
+    /// and `event_sink` are shared with the frame handler so the caller can
+    /// observe rendering progress, surface errors, and drain host events while
+    /// the window lives. The returned [`BaseviewEditorWindowHandle`] is `Send`
+    /// so a truce `Editor` can own it, but must still be driven from the GUI
+    /// thread that opened it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the editor is destroyed, the parent
+    /// handle is invalid, or the parent handle backend does not match the
+    /// current target OS.
+    pub fn open_editor_window(
+        &self,
+        scene: RuntimeSceneFrame,
+        presented_frames: Arc<AtomicU64>,
+        last_error: Arc<Mutex<Option<BaseviewHostError>>>,
+        event_sink: Arc<Mutex<Vec<PluginHostEvent>>>,
+    ) -> Result<BaseviewEditorWindowHandle, BaseviewHostError> {
+        let metrics = self.config.metrics;
+        let handle = self.open_parented_window(move |_window| {
+            BaseviewX11SkiaFrameHandler::new(scene, metrics, presented_frames, last_error)
+                .with_event_sink(event_sink)
+        })?;
+        Ok(BaseviewEditorWindowHandle { handle })
     }
 }
 
