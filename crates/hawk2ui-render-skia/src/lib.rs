@@ -31,6 +31,9 @@ pub const fn crate_name() -> &'static str {
 pub enum SkiaSurfaceKind {
     /// CPU raster surface. This is the required first production backend.
     CpuRaster,
+    /// GPU surface backed by an OpenGL (Ganesh) render target, adopted from a
+    /// host that owns the GL context and `GrDirectContext`.
+    GpuGl,
 }
 
 impl SkiaSurfaceKind {
@@ -39,6 +42,7 @@ impl SkiaSurfaceKind {
     pub const fn stable_key(self) -> &'static str {
         match self {
             Self::CpuRaster => "cpu-raster",
+            Self::GpuGl => "gpu-gl",
         }
     }
 }
@@ -1658,16 +1662,27 @@ impl RendererBackend for SkiaRendererBackend {
             );
         }
         let surface = self.surface_mut(id)?;
-        let snapshot = match capture_frame_snapshot(surface) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                self.diagnostics.push(error.diagnostic().clone());
-                return Err(error);
+        match surface.kind {
+            // GPU surfaces present via the host's GL buffer swap; there is no
+            // CPU-side frame buffer to snapshot, and a readback would force an
+            // expensive, origin-flipped GPU->CPU transfer every frame.
+            SkiaSurfaceKind::GpuGl => {
+                surface.frame_active = false;
+                surface.presented_frames = surface.presented_frames.saturating_add(1);
             }
-        };
-        surface.frame_active = false;
-        surface.presented_frames = surface.presented_frames.saturating_add(1);
-        surface.last_presented_frame = Some(snapshot);
+            SkiaSurfaceKind::CpuRaster => {
+                let snapshot = match capture_frame_snapshot(surface) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        self.diagnostics.push(error.diagnostic().clone());
+                        return Err(error);
+                    }
+                };
+                surface.frame_active = false;
+                surface.presented_frames = surface.presented_frames.saturating_add(1);
+                surface.last_presented_frame = Some(snapshot);
+            }
+        }
         self.active_surface = None;
         self.commands.push(format!("end-frame:{id}"));
         Ok(())
@@ -2529,6 +2544,31 @@ mod tests {
         assert_eq!(
             adopted_snapshot, created_snapshot,
             "an adopted surface must render identically to a created one"
+        );
+    }
+
+    #[test]
+    fn gpu_surface_end_frame_skips_cpu_snapshot() {
+        // A raster surface labelled `GpuGl` exercises the GPU end-of-frame
+        // branch without needing a live GL context: the branch must skip the
+        // CPU readback (the host presents GPU frames via a GL buffer swap).
+        let surface =
+            skia_safe::surfaces::raster_n32_premul((16, 16)).expect("external raster surface");
+        let mut backend = SkiaRendererBackend::new();
+        backend
+            .adopt_surface("gpu", surface, 16, 16, 1.0, SkiaSurfaceKind::GpuGl)
+            .expect("adopt gpu surface");
+        backend.begin_frame("gpu").expect("begin");
+        backend.clear(Color::rgba(0, 0, 0, 255)).expect("clear");
+        backend.end_frame("gpu").expect("end");
+
+        assert_eq!(
+            backend.surface("gpu").expect("surface").presented_frames(),
+            1
+        );
+        assert!(
+            backend.frame_snapshot("gpu").is_err(),
+            "GPU frames retain no CPU snapshot"
         );
     }
 }
