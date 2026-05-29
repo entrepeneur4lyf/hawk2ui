@@ -221,6 +221,18 @@ impl ReactIntegration {
 
     /// Renders a React element tree into typed `Hawk2UI` records.
     ///
+    /// # Source grammar (raw-source path)
+    ///
+    /// When the tree carries raw author source (rather than a
+    /// [`ReactElementTree::from_native_program`] boundary), this method is an intentional substring
+    /// heuristic, **not** a React/TSX parser. It models only a single root `View` element plus a
+    /// flat list of `<hawk-text>` / keyed children; it does not parse nested component trees,
+    /// non-text leaf kinds, or handler binding expressions (handler identifiers on this path are
+    /// fixed labels — e.g. `onPointerDown` always records `handlePress` — not parsed from the
+    /// `={…}` expression). High-fidelity authoring is expected to arrive through
+    /// [`ReactElementTree::from_native_program`], which carries explicit native-compiler output and
+    /// derives handlers, lifecycle, and the nested element tree from that program.
+    ///
     /// # Errors
     ///
     /// Returns [`ReactRenderError`] when the source violates the renderer contract.
@@ -289,6 +301,18 @@ impl ReactIntegration {
             ));
         }
 
+        // Lifecycle handler labels are gated on the same `source.contains(…)` checks as the
+        // lifecycle `events` above, so the two public surfaces agree for a given source instead of
+        // reporting canned hooks the source never declared. The `from_native_program` path derives
+        // these from the program's declared lifecycle in `react_artifact_from_native_program`.
+        let mut lifecycle_handlers = Vec::new();
+        if tree.source.contains("onMount") {
+            lifecycle_handlers.push("mounted:onMount".to_string());
+        }
+        if tree.source.contains("onUnmount") {
+            lifecycle_handlers.push("unmounted:onUnmount".to_string());
+        }
+
         let keyed_children = keyed_children(&tree.source);
         let refs: Vec<_> = extract_attribute(&tree.source, "ref").into_iter().collect();
         let style_refs = style_refs_from_attribute(&tree.source, "className");
@@ -314,7 +338,7 @@ impl ReactIntegration {
             style_refs,
             asset_refs,
             events,
-            lifecycle_handlers: vec!["mounted:onMount".into(), "unmounted:onUnmount".into()],
+            lifecycle_handlers,
             native_program: None,
             source_map,
             reconciler_operations,
@@ -716,9 +740,20 @@ fn apply_react_protocol_operation(
         .map_err(|error| custom_renderer_error(author_file, &error))
 }
 
+/// Rewrites the authoring layer's internal `append-child:{parent}:{child}[:key:{key}]` operation
+/// key into the public `append:{child}` form.
+///
+/// This is parent-agnostic: it does not assume the parent is `"root"`, so a custom root id
+/// (`id="app"`) or a nested `from_native_program` tree (whose grandchildren are parented at a
+/// non-root id) no longer leaks the raw internal key shape into `reconciler_operations()`.
 fn react_public_operation_key(key: &str) -> String {
-    key.strip_prefix("append-child:root:")
-        .and_then(|rest| rest.split(":key:").next())
+    let Some(rest) = key.strip_prefix("append-child:") else {
+        return key.to_string();
+    };
+    let descriptor = rest.split(":key:").next().unwrap_or(rest);
+    descriptor
+        .rsplit(':')
+        .next()
         .map_or_else(|| key.to_string(), |child| format!("append:{child}"))
 }
 

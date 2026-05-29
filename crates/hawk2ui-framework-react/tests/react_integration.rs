@@ -305,6 +305,78 @@ fn react_smoke_app_declares_public_package_entrypoint() {
     assert!(app.contains("assets/logo.svg"));
 }
 
+#[test]
+fn react_source_path_lifecycle_handlers_track_declared_hooks() {
+    // A source that declares no lifecycle hooks must report no lifecycle handlers — the field is
+    // derived from the source, not canned. (Regression: it previously always returned both hooks,
+    // disagreeing with the conditionally-built `events`.)
+    let none = ReactIntegration::new()
+        .render(ReactElementTree::new(
+            "src/NoLifecycle.tsx",
+            r#"<hawk-view id="root"></hawk-view>"#,
+        ))
+        .expect("source without lifecycle hooks should render");
+    assert!(none.lifecycle_handlers().is_empty());
+    assert!(
+        !none
+            .events()
+            .iter()
+            .any(|event| matches!(event.event(), EventKind::Lifecycle(_)))
+    );
+
+    // Only the declared hook is reported, so `events` and `lifecycle_handlers` agree.
+    let mount_only = ReactIntegration::new()
+        .render(ReactElementTree::new(
+            "src/MountOnly.tsx",
+            r#"<hawk-view id="root" onMount={onMount}></hawk-view>"#,
+        ))
+        .expect("source with a single lifecycle hook should render");
+    assert_eq!(mount_only.lifecycle_handlers(), ["mounted:onMount"]);
+}
+
+#[test]
+fn react_public_operation_keys_use_actual_root_id() {
+    // A non-`"root"` root id must still lower append operations to the public `append:{child}`
+    // form rather than leaking the raw internal `append-child:{root}:…` key.
+    let artifact = ReactIntegration::new()
+        .render(ReactElementTree::new(
+            "src/App.tsx",
+            r#"<hawk-view id="app"><hawk-text id="title">Hi</hawk-text></hawk-view>"#,
+        ))
+        .expect("custom-root-id source should render");
+
+    assert_eq!(artifact.root().id().as_str(), "app");
+    assert!(
+        artifact
+            .reconciler_operations()
+            .contains(&"append:title".to_string())
+    );
+    assert!(
+        !artifact
+            .reconciler_operations()
+            .iter()
+            .any(|key| key.starts_with("append-child:")),
+        "raw internal append-child keys must not leak into reconciler_operations: {:?}",
+        artifact.reconciler_operations()
+    );
+}
+
+#[test]
+fn react_reports_unsupported_event() {
+    let error = ReactIntegration::new()
+        .render(ReactElementTree::new(
+            "src/Unsupported.tsx",
+            r#"<hawk-view id="root" onClick={handleClick}></hawk-view>"#,
+        ))
+        .expect_err("a DOM-style onClick handler should be rejected");
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.rule.as_str() == "react.event.unsupported")
+    );
+}
+
 fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
     FrameworkNativeProgram::new(
         FrameworkNativeNode::new("root", ElementKind::View)
