@@ -91,9 +91,9 @@ upgrade_gate = "cargo test -p hawk2ui-layout"
 [[dependencies]]
 name = "skia-safe"
 source = "crates-io"
-version = "0.97.0"
+version = "0.97.2"
 owner = "render"
-risk = "Native graphics binding with binary artifacts; upgrades must pass renderer, host software frame, and visual smoke tests."
+risk = "Native graphics binding with binary artifacts. Ganesh GPU needs the `gl` feature WITH skia-safe's default features on — that matches rust-skia's published prebuilt (`-gl-jpegd-jpege-pdf` on x86_64-linux); `default-features = false` plus `gl` is an unpublished combo and forces a from-source Skia compile. Upgrades must pass renderer, host software frame, and visual smoke tests."
 release_blocker = false
 upgrade_gate = "cargo test -p hawk2ui-render-skia && cargo test -p hawk2ui-host-winit"
 
