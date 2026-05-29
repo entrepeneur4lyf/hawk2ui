@@ -123,7 +123,6 @@ pub struct RecordingPluginAdapter {
     capabilities: HostCapabilities,
     focus: PluginEditorFocus,
     visibility: PluginEditorVisibility,
-    requested_process_quit: bool,
     lifetime: PluginEditorLifetime,
     events: Vec<PluginHostEvent>,
 }
@@ -159,15 +158,8 @@ impl RecordingPluginAdapter {
             capabilities: HostCapabilities::plugin(),
             focus: PluginEditorFocus::Unfocused,
             visibility: PluginEditorVisibility::Visible,
-            requested_process_quit: false,
             lifetime: PluginEditorLifetime::Live,
         }
-    }
-
-    /// Returns whether the adapter requested process quit.
-    #[must_use]
-    pub const fn requested_process_quit(&self) -> bool {
-        self.requested_process_quit
     }
 
     /// Drains recorded plugin host events.

@@ -46,6 +46,29 @@ fn surface_contract_reports_logical_physical_size_dpi_and_focus() {
 }
 
 #[test]
+fn surface_metrics_physical_size_guards_non_finite_and_overflow() {
+    // Non-finite scale collapses to zero rather than panicking or producing NaN.
+    assert_eq!(
+        SurfaceMetrics::new(640.0, 360.0, f64::NAN).physical_size(),
+        (0, 0)
+    );
+    assert_eq!(
+        SurfaceMetrics::new(640.0, 360.0, f64::INFINITY).physical_size(),
+        (0, 0)
+    );
+    // Negative logical dimensions clamp to zero instead of wrapping under `as u32`.
+    assert_eq!(
+        SurfaceMetrics::new(-100.0, -50.0, 2.0).physical_size(),
+        (0, 0)
+    );
+    // Dimensions beyond `u32::MAX` saturate rather than wrapping.
+    assert_eq!(
+        SurfaceMetrics::new(f64::MAX, f64::MAX, 1.0).physical_size(),
+        (u32::MAX, u32::MAX)
+    );
+}
+
+#[test]
 fn surface_contract_reports_repaint_resize_and_teardown_events() {
     let mut surface = RecordingHostSurface::new(
         SurfaceMetrics::new(400.0, 300.0, 1.0),
@@ -281,7 +304,12 @@ fn plugin_lifecycle_teardown_never_requests_process_quit() {
 
     adapter.destroy_editor("host destroyed editor");
 
-    assert!(!adapter.requested_process_quit());
+    // A plugin editor structurally cannot request host-process quit: `RequestQuit`
+    // is absent from the plugin capability set, and no `PluginHostEvent` or
+    // `SurfaceWindowCommand` encodes a quit (`Close` destroys the editor, not the
+    // host). This asserts the real enforcement; it fails if `RequestQuit` is ever
+    // added to `HostCapabilities::plugin()`.
+    assert!(!HostCapabilities::plugin().supports(HostCapability::RequestQuit));
     assert_eq!(
         adapter.drain_events(),
         vec![
