@@ -17,6 +17,8 @@ use hawk2ui_plugin_adapters::{
     PackageMaterializationError,
 };
 use hawk2ui_render::{Color, RendererBackend};
+#[cfg(target_os = "linux")]
+use hawk2ui_render_skia::SkiaSurfaceKind;
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend, SkiaSurfaceConfig};
 use hawk2ui_runtime::RuntimeSceneFrame;
 use keyboard_types::{Key, KeyState, KeyboardEvent};
@@ -24,6 +26,15 @@ use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasRawDisplayHandle, HasRawWindowHandle,
     RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle, XcbDisplayHandle,
     XcbWindowHandle, XlibDisplayHandle, XlibWindowHandle,
+};
+#[cfg(target_os = "linux")]
+use skia_safe::{
+    ColorType,
+    gpu::{
+        DirectContext, Protected, SurfaceOrigin, backend_render_targets, direct_contexts,
+        gl::{FramebufferInfo, Interface},
+        surfaces,
+    },
 };
 #[cfg(target_os = "linux")]
 use std::sync::{
@@ -682,6 +693,450 @@ impl WindowHandler for BaseviewX11SkiaFrameHandler {
     }
 }
 
+/// `GL_RGBA8` internal format for a standard 8-bit RGBA framebuffer. Paired with
+/// the non-sRGB `GlConfig` the GPU editor requests so Skia writes sRGB-encoded
+/// bytes into a plain UNORM buffer — byte-identical to the CPU raster snapshot.
+#[cfg(target_os = "linux")]
+const GL_RGBA8: u32 = 0x8058;
+
+/// Stable identifier for the GPU editor's adopted Ganesh surface.
+#[cfg(target_os = "linux")]
+const GPU_EDITOR_SURFACE_ID: &str = "baseview-gpu-editor";
+
+/// The `GlConfig` for the GPU editor window: a plain (non-sRGB) double-buffered
+/// RGBA8 framebuffer with an 8-bit stencil, matching the Ganesh surface Skia
+/// wraps over it.
+///
+/// A **compatibility** profile is requested deliberately. Skia's assembled GL
+/// interface queries extensions with the legacy `glGetString(GL_EXTENSIONS)`,
+/// which returns NULL in a core profile (3.2+), so building the interface
+/// segfaults; a compatibility profile keeps that query valid. Desktop drivers
+/// (NVIDIA/AMD/Intel) expose full compatibility profiles, which is what this
+/// 2D editor needs.
+#[cfg(target_os = "linux")]
+fn gpu_editor_gl_config() -> baseview::gl::GlConfig {
+    baseview::gl::GlConfig {
+        srgb: false,
+        profile: baseview::gl::Profile::Compatibility,
+        ..baseview::gl::GlConfig::default()
+    }
+}
+
+// SAFETY: Baseview's `GlContext::make_current`/`make_not_current` are `unsafe`
+// because making a context current is only sound on a single thread at a time.
+// Every caller below invokes these on Baseview's GUI thread — the thread that
+// created the window and owns the context — inside a frame or close callback,
+// never concurrently and never from the audio thread. This is the same
+// single-GUI-thread invariant the `byo_gui_gl` reference and truce's own GPU
+// editor rely on. Isolating the two FFI calls here keeps the handler body
+// `unsafe`-free.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn gl_make_current(gl: &baseview::gl::GlContext) {
+    unsafe { gl.make_current() }
+}
+
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn gl_make_not_current(gl: &baseview::gl::GlContext) {
+    unsafe { gl.make_not_current() }
+}
+
+/// Resolves OpenGL function pointers for Skia's assembled GL interface.
+///
+/// Baseview's `get_proc_address` (`glXGetProcAddress`) resolves extension and
+/// modern entry points but returns null for core GL 1.0/1.1 functions on common
+/// drivers. Skia's interface needs those too, so this falls back to `dlsym`
+/// against `libGL` for any symbol Baseview cannot resolve — the hybrid strategy
+/// GL loaders such as glutin use. A failed `dlopen` simply disables the
+/// fallback (the interface assembly then fails cleanly rather than crashing).
+#[cfg(target_os = "linux")]
+struct GlProcAddressLoader {
+    libgl: *mut c_void,
+}
+
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+impl GlProcAddressLoader {
+    fn open() -> Self {
+        // SAFETY: opens the already-resident GL client library by soname; the
+        // handle is only used for `dlsym` and released in `Drop`.
+        let libgl =
+            unsafe { libc::dlopen(c"libGL.so.1".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        Self { libgl }
+    }
+
+    fn resolve(&self, gl: &baseview::gl::GlContext, symbol: &str) -> *const c_void {
+        // Hide EGL from Skia. On a GLX/libglvnd system `glXGetProcAddress`
+        // resolves EGL symbols to non-null stubs, so while assembling the GL
+        // interface Skia would conclude EGL is available and call
+        // `eglGetCurrentDisplay`/`eglQueryString` against a bogus display,
+        // segfaulting. Returning null for `egl*` keeps Skia on the GLX path.
+        if symbol.starts_with("egl") {
+            return std::ptr::null();
+        }
+        let from_glx = gl.get_proc_address(symbol);
+        if !from_glx.is_null() || self.libgl.is_null() {
+            return from_glx;
+        }
+        let Ok(name) = std::ffi::CString::new(symbol) else {
+            return std::ptr::null();
+        };
+        // SAFETY: `libgl` is a valid handle from `dlopen`; `name` is a valid
+        // NUL-terminated C string. `dlsym` returns null for absent symbols.
+        unsafe { libc::dlsym(self.libgl, name.as_ptr()).cast_const() }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+impl Drop for GlProcAddressLoader {
+    fn drop(&mut self) {
+        if !self.libgl.is_null() {
+            // SAFETY: `libgl` came from a successful `dlopen`; this balances it.
+            unsafe {
+                libc::dlclose(self.libgl);
+            }
+        }
+    }
+}
+
+/// Linux/X11 Baseview handler that renders a runtime scene with Skia's Ganesh
+/// GPU backend into the child window's OpenGL framebuffer and presents it with
+/// a buffer swap.
+///
+/// Unlike [`BaseviewX11SkiaFrameHandler`] (CPU raster surface blitted via X11
+/// `PutImage`), this wraps the Baseview-owned GL framebuffer as a Skia surface
+/// through a Ganesh [`DirectContext`] and draws on the GPU. The GL context is
+/// borrowed from the [`Window`] every callback and never owned, so GPU resource
+/// release must happen while a live window is in hand: teardown runs on
+/// `WillClose` — delivered by Baseview on every close path (user close, host
+/// parent-drop, and programmatic `close`) with a live `Window` — not in `Drop`,
+/// which has no window and therefore cannot make the context current.
+#[cfg(target_os = "linux")]
+pub struct BaseviewGlSkiaFrameHandler {
+    backend: SkiaRendererBackend,
+    context: Option<DirectContext>,
+    scene: RuntimeSceneFrame,
+    dpi_scale: f32,
+    event_translator: BaseviewEventTranslator,
+    event_sink: Arc<Mutex<Vec<PluginHostEvent>>>,
+    presented_frames: Arc<AtomicU64>,
+    last_error: Arc<Mutex<Option<BaseviewHostError>>>,
+    snapshot_sink: Option<Arc<Mutex<Option<SkiaFrameSnapshot>>>>,
+    close_after_first_frame: bool,
+    torn_down: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl BaseviewGlSkiaFrameHandler {
+    /// Creates a GPU frame handler, building a Ganesh [`DirectContext`] and a
+    /// Skia surface wrapping the window's GL framebuffer.
+    ///
+    /// Must be called from Baseview's `open_parented` builder closure, which
+    /// runs on the GUI thread with the GL context available. If GL/Ganesh
+    /// initialization fails, the error is recorded into `last_error` and the
+    /// handler renders nothing — its first frame closes the window so the editor
+    /// lifecycle can observe the failure.
+    #[must_use]
+    pub fn new(
+        window: &mut Window,
+        scene: RuntimeSceneFrame,
+        metrics: SurfaceMetrics,
+        presented_frames: Arc<AtomicU64>,
+        last_error: Arc<Mutex<Option<BaseviewHostError>>>,
+    ) -> Self {
+        let mut handler = Self {
+            backend: SkiaRendererBackend::new(),
+            context: None,
+            scene,
+            dpi_scale: 1.0,
+            event_translator: BaseviewEventTranslator::new(metrics),
+            event_sink: Arc::new(Mutex::new(Vec::new())),
+            presented_frames,
+            last_error,
+            snapshot_sink: None,
+            close_after_first_frame: false,
+            torn_down: false,
+        };
+        if let Err(error) = handler.init_gpu_surface(window, metrics) {
+            handler.record_error(error);
+        }
+        handler
+    }
+
+    /// Records translated native events into a caller-owned sink.
+    #[must_use]
+    pub fn with_event_sink(mut self, event_sink: Arc<Mutex<Vec<PluginHostEvent>>>) -> Self {
+        self.event_sink = event_sink;
+        self
+    }
+
+    /// Captures the first presented frame's pixels into a caller-owned sink for
+    /// verification. Without a sink, no readback is performed (the fast path).
+    #[must_use]
+    pub fn with_snapshot_sink(mut self, sink: Arc<Mutex<Option<SkiaFrameSnapshot>>>) -> Self {
+        self.snapshot_sink = Some(sink);
+        self
+    }
+
+    /// Configures whether the handler closes the native child after the first
+    /// presented frame.
+    #[must_use]
+    pub const fn close_after_first_frame(mut self, close_after_first_frame: bool) -> Self {
+        self.close_after_first_frame = close_after_first_frame;
+        self
+    }
+
+    fn record_error(&self, error: BaseviewHostError) {
+        if let Ok(mut last_error) = self.last_error.lock() {
+            *last_error = Some(error);
+        }
+    }
+
+    fn record_events(&self, events: Vec<PluginHostEvent>) {
+        if events.is_empty() {
+            return;
+        }
+        if let Ok(mut event_sink) = self.event_sink.lock() {
+            event_sink.extend(events);
+        }
+    }
+
+    fn init_gpu_surface(
+        &mut self,
+        window: &mut Window,
+        metrics: SurfaceMetrics,
+    ) -> Result<(), BaseviewHostError> {
+        let (width, height) = metrics.physical_size();
+        let dpi_scale = scale_factor_to_f32(metrics.scale_factor)?;
+        let skia_width = i32::try_from(width).map_err(|_| gl_surface_size_error())?;
+        let skia_height = i32::try_from(height).map_err(|_| gl_surface_size_error())?;
+        let gl = window.gl_context().ok_or_else(|| {
+            BaseviewHostError::new(
+                "baseview.gl.context-missing",
+                "baseview did not create an OpenGL context; the window must be opened with a GlConfig",
+            )
+        })?;
+
+        gl_make_current(gl);
+        let result =
+            self.build_ganesh_surface(gl, (skia_width, skia_height), width, height, dpi_scale);
+        gl_make_not_current(gl);
+
+        result.inspect(|()| {
+            self.dpi_scale = dpi_scale;
+        })
+    }
+
+    fn build_ganesh_surface(
+        &mut self,
+        gl: &baseview::gl::GlContext,
+        (skia_width, skia_height): (i32, i32),
+        width: u32,
+        height: u32,
+        dpi_scale: f32,
+    ) -> Result<(), BaseviewHostError> {
+        // Assemble Skia's GL interface from a hybrid loader. Baseview's
+        // `get_proc_address` wraps `glXGetProcAddress`, which resolves extension
+        // and modern entry points but returns null for core GL 1.0/1.1 functions
+        // (`glGetString`, `glGetIntegerv`, ...) on common drivers — Skia would
+        // then call a null pointer while querying extensions and segfault. The
+        // loader falls back to `dlsym` for those. (Skia's own `new_native` loader
+        // is the no-op stub in the rust-skia prebuilt, so it cannot be used.)
+        let loader = GlProcAddressLoader::open();
+        let interface =
+            Interface::new_load_with(|symbol| loader.resolve(gl, symbol)).ok_or_else(|| {
+                BaseviewHostError::new(
+                    "baseview.gl.interface-failed",
+                    "failed to load an OpenGL interface for Skia Ganesh",
+                )
+            })?;
+        let mut context = direct_contexts::make_gl(interface, None).ok_or_else(|| {
+            BaseviewHostError::new(
+                "baseview.gl.context-failed",
+                "failed to create a Skia Ganesh GL DirectContext",
+            )
+        })?;
+        let framebuffer_info = FramebufferInfo {
+            fboid: 0,
+            format: GL_RGBA8,
+            protected: Protected::No,
+        };
+        let render_target =
+            backend_render_targets::make_gl((skia_width, skia_height), None, 8, framebuffer_info);
+        let surface = surfaces::wrap_backend_render_target(
+            &mut context,
+            &render_target,
+            SurfaceOrigin::BottomLeft,
+            ColorType::RGBA8888,
+            None,
+            None,
+        )
+        .ok_or_else(|| {
+            BaseviewHostError::new(
+                "baseview.gl.surface-failed",
+                "failed to wrap the OpenGL framebuffer as a Skia surface",
+            )
+        })?;
+        self.backend
+            .adopt_surface(
+                GPU_EDITOR_SURFACE_ID,
+                surface,
+                width,
+                height,
+                dpi_scale,
+                SkiaSurfaceKind::GpuGl,
+            )
+            .map_err(|error| map_backend_error(&error))?;
+        self.context = Some(context);
+        Ok(())
+    }
+
+    fn render_gpu_frame(&mut self, window: &mut Window) -> Result<(), BaseviewHostError> {
+        let gl = window.gl_context().ok_or_else(|| {
+            BaseviewHostError::new(
+                "baseview.gl.context-missing",
+                "baseview OpenGL context disappeared before a frame could be drawn",
+            )
+        })?;
+        gl_make_current(gl);
+        let render = self.draw_and_present(gl);
+        gl_make_not_current(gl);
+        render
+    }
+
+    fn draw_and_present(&mut self, gl: &baseview::gl::GlContext) -> Result<(), BaseviewHostError> {
+        let frame_index = self.presented_frames.load(Ordering::SeqCst);
+        self.backend
+            .begin_frame(GPU_EDITOR_SURFACE_ID)
+            .map_err(|error| map_backend_error(&error))?;
+        self.backend
+            .clear(Color::rgba(0, 0, 0, 0))
+            .map_err(|error| map_backend_error(&error))?;
+        self.backend
+            .draw_runtime_scene_frame(&self.scene, frame_index, self.dpi_scale)
+            .map_err(|error| map_backend_error(&error))?;
+        self.backend
+            .end_frame(GPU_EDITOR_SURFACE_ID)
+            .map_err(|error| map_backend_error(&error))?;
+        // Submit the recorded GPU work, then optionally read it back once for
+        // verification (no frame active, work submitted, context current), then
+        // present with the buffer swap.
+        if let Some(context) = self.context.as_mut() {
+            context.flush_and_submit();
+        }
+        self.capture_verification_snapshot();
+        gl.swap_buffers();
+        Ok(())
+    }
+
+    fn capture_verification_snapshot(&mut self) {
+        let Some(sink) = self.snapshot_sink.clone() else {
+            return;
+        };
+        if sink.lock().is_ok_and(|guard| guard.is_some()) {
+            return;
+        }
+        if let Ok(snapshot) = self.backend.read_surface_snapshot(GPU_EDITOR_SURFACE_ID)
+            && let Ok(mut guard) = sink.lock()
+        {
+            *guard = Some(snapshot);
+        }
+    }
+
+    /// Releases GPU resources while the GL context is still live. Idempotent.
+    /// `abandon` orphans the Ganesh objects without issuing GL deletes; Baseview
+    /// then destroys the GL context itself, reclaiming everything.
+    fn teardown(&mut self, window: &mut Window) {
+        if self.torn_down {
+            return;
+        }
+        self.torn_down = true;
+        if let Some(gl) = window.gl_context() {
+            gl_make_current(gl);
+            if let Some(context) = self.context.as_mut() {
+                context.abandon();
+            }
+            gl_make_not_current(gl);
+        } else if let Some(context) = self.context.as_mut() {
+            context.abandon();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl WindowHandler for BaseviewGlSkiaFrameHandler {
+    fn on_frame(&mut self, window: &mut Window) {
+        if self.torn_down {
+            return;
+        }
+        if self.context.is_none() {
+            // GL initialization failed in `new`; the error is already recorded.
+            // Close so the editor lifecycle (and the smoke) can observe it and end.
+            window.close();
+            return;
+        }
+        let metrics = self.event_translator.metrics();
+        match self.render_gpu_frame(window) {
+            Ok(()) => {
+                let frame_index = self.presented_frames.fetch_add(1, Ordering::SeqCst);
+                self.record_events(vec![PluginHostEvent::FramePresented {
+                    frame_id: frame_index,
+                    metrics,
+                }]);
+                if self.close_after_first_frame {
+                    window.close();
+                }
+            }
+            Err(error) => {
+                self.record_error(error);
+                window.close();
+            }
+        }
+    }
+
+    fn on_event(&mut self, window: &mut Window, event: baseview::Event) -> EventStatus {
+        // Teardown must run here, not in `Drop`: `WillClose` is the last callback
+        // delivered with a live `Window` (hence a current-able GL context) on
+        // every close path.
+        if matches!(
+            event,
+            baseview::Event::Window(baseview::WindowEvent::WillClose)
+        ) {
+            self.teardown(window);
+        }
+        let translated = self.event_translator.translate(&event);
+        self.record_events(translated.events);
+        translated.status
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for BaseviewGlSkiaFrameHandler {
+    fn drop(&mut self) {
+        // Safety net only. Normal teardown runs on `WillClose` with a live
+        // context. By `Drop` the window and its GL context are gone, so the
+        // context cannot be made current — but `abandon` frees Skia's CPU-side
+        // bookkeeping without issuing GL calls, preventing the `DirectContext`
+        // destructor from deleting GL objects against a dead context. If
+        // `WillClose` already abandoned, this is a harmless no-op.
+        if !self.torn_down
+            && let Some(context) = self.context.as_mut()
+        {
+            context.abandon();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn gl_surface_size_error() -> BaseviewHostError {
+    BaseviewHostError::new(
+        "baseview.gl.size-overflow",
+        "baseview GPU editor surface size exceeds the Skia render-target range",
+    )
+}
+
 /// `Send` owner of a live Baseview child window for an embedded plugin editor.
 ///
 /// `baseview::WindowHandle` holds a raw native child-window pointer and is not
@@ -765,6 +1220,10 @@ impl BaseviewPluginAdapter {
             title: config.editor_id.clone(),
             size: Size::new(config.metrics.logical_width, config.metrics.logical_height),
             scale: WindowScalePolicy::ScaleFactor(config.metrics.scale_factor),
+            // Enabling Baseview's `opengl` feature (for the GPU editor path) adds
+            // this field to `WindowOpenOptions`; the CPU/X11 software path opens
+            // without a GL context. The GPU path sets it in `open_gpu_editor_window`.
+            gl_config: None,
         };
         Ok(Self {
             events: vec![
@@ -852,14 +1311,30 @@ impl BaseviewPluginAdapter {
         H: WindowHandler + 'static,
         B: FnOnce(&mut Window) -> H + Send + 'static,
     {
+        self.open_parented_window_with_options(self.open_options.clone(), build)
+    }
+
+    /// Opens a real Baseview child window with caller-provided open options
+    /// (e.g. a `GlConfig` for the GPU presentation path) against the validated
+    /// native parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the editor is destroyed, the parent handle is invalid, or
+    /// the parent handle backend does not match the current target OS.
+    pub fn open_parented_window_with_options<H, B>(
+        &self,
+        options: WindowOpenOptions,
+        build: B,
+    ) -> Result<WindowHandle, BaseviewHostError>
+    where
+        H: WindowHandler + 'static,
+        B: FnOnce(&mut Window) -> H + Send + 'static,
+    {
         self.ensure_accepts_host_event()?;
         let native_parent = self.native_parent()?;
         native_parent.ensure_supported_on_current_target()?;
-        Ok(Window::open_parented(
-            &native_parent,
-            self.open_options.clone(),
-            build,
-        ))
+        Ok(Window::open_parented(&native_parent, options, build))
     }
 
     /// Drains host events.
@@ -991,6 +1466,41 @@ impl BaseviewPluginAdapter {
         let metrics = self.config.metrics;
         let handle = self.open_parented_window(move |_window| {
             BaseviewX11SkiaFrameHandler::new(scene, metrics, presented_frames, last_error)
+                .with_event_sink(event_sink)
+        })?;
+        Ok(BaseviewEditorWindowHandle { handle })
+    }
+
+    /// Opens a real Baseview child window that renders `scene` each frame with
+    /// Skia's Ganesh GPU backend and presents it with an OpenGL buffer swap,
+    /// returning a [`Send`] owner of its native handle.
+    ///
+    /// The cross-platform GPU presentation path: the window is opened with a
+    /// non-sRGB `GlConfig`, Skia wraps its framebuffer as a Ganesh surface, and
+    /// frames are drawn on the GPU (see [`BaseviewGlSkiaFrameHandler`]). GPU
+    /// resources are released on `WillClose`, so the returned handle tears down
+    /// cleanly when closed. `presented_frames`, `last_error`, and `event_sink`
+    /// are shared with the frame handler as in [`Self::open_editor_window`]. The
+    /// returned [`BaseviewEditorWindowHandle`] is `Send` so a truce `Editor` can
+    /// own it, but must still be driven from the GUI thread that opened it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the editor is destroyed, the parent
+    /// handle is invalid, or the parent handle backend does not match the
+    /// current target OS.
+    pub fn open_gpu_editor_window(
+        &self,
+        scene: RuntimeSceneFrame,
+        presented_frames: Arc<AtomicU64>,
+        last_error: Arc<Mutex<Option<BaseviewHostError>>>,
+        event_sink: Arc<Mutex<Vec<PluginHostEvent>>>,
+    ) -> Result<BaseviewEditorWindowHandle, BaseviewHostError> {
+        let metrics = self.config.metrics;
+        let mut options = self.open_options.clone();
+        options.gl_config = Some(gpu_editor_gl_config());
+        let handle = self.open_parented_window_with_options(options, move |window| {
+            BaseviewGlSkiaFrameHandler::new(window, scene, metrics, presented_frames, last_error)
                 .with_event_sink(event_sink)
         })?;
         Ok(BaseviewEditorWindowHandle { handle })

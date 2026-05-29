@@ -21,7 +21,7 @@ all = "warn"
 pedantic = "warn"
 
 [dependencies]
-baseview = { package = "baseview-truce", version = "0.1.1-truce.4" }
+baseview = { package = "baseview-truce", version = "0.1.1-truce.4", features = ["opengl"] }
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
@@ -31,8 +31,10 @@ hawk2ui-render-skia = { version = "0.1.0", path = "../hawk2ui-render-skia" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
 keyboard-types = "0.6.2"
 raw-window-handle = "0.5"
+skia-safe = { version = "0.97.2", features = ["binary-cache", "gl"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 x11rb = "0.13.2"
 
 [dev-dependencies]
