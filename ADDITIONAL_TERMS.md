@@ -117,9 +117,8 @@ conditions, and time limits) as a condition of the grant. Past grants do not
 bind future decisions.
 
 Requests for a Framework License should be sent to
-`<FRAMEWORK-LICENSING CONTACT — set this, e.g. licensing@your-domain>`, or
-initiated as a private discussion on the project's GitHub repository with the
-maintainers tagged. A well-formed request describes:
+`shawn@hawk2ui.com`, or initiated as a private discussion on the project's
+GitHub repository tagging the maintainer ([@entrepeneur4lyf](https://github.com/entrepeneur4lyf)). A well-formed request describes:
 
   (a) the product being built, its developer audience, and what that
       audience receives from it;

@@ -90,3 +90,11 @@ resolve in favor of the standard grant — no other use is affected.
 
 Unless you state otherwise, any contribution you submit for inclusion is
 dual-licensed as above.
+
+## Contact
+
+Maintained by Shawn ([@entrepeneur4lyf](https://github.com/entrepeneur4lyf)).
+
+- **Framework licensing & inquiries** — shawn@hawk2ui.com
+- **GitHub** — [@entrepeneur4lyf](https://github.com/entrepeneur4lyf)
+- **X** — [@entrepeneur4lyf](https://x.com/entrepeneur4lyf)
