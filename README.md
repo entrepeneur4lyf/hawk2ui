@@ -12,12 +12,6 @@
 
 Hawk2UI compiles familiar web authoring primitives into a signed native artifact, rendered by a pure-Rust engine — for both standalone desktop windows and editors embedded inside a DAW.
 
-```bash
-cargo run -p hawk2ui-cli -- new            # scaffold a project
-cargo run -p hawk2ui-cli -- dev            # hot-reload the native surface
-cargo run -p hawk2ui-cli -- build-release  # produce a sealed artifact
-```
-
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Rust](https://img.shields.io/badge/Rust-2024-orange.svg)](https://www.rust-lang.org/)
 [![Targets](https://img.shields.io/badge/targets-desktop%20%C2%B7%20VST3%20%C2%B7%20CLAP%20%C2%B7%20AU-blueviolet.svg)]()
@@ -29,6 +23,12 @@ cargo run -p hawk2ui-cli -- build-release  # produce a sealed artifact
 </table>
 
 ---
+
+```bash
+cargo run -p hawk2ui-cli -- new            # scaffold a project
+cargo run -p hawk2ui-cli -- dev            # hot-reload the native surface
+cargo run -p hawk2ui-cli -- build-release  # produce a sealed artifact
+```
 
 ## How It Works
 
