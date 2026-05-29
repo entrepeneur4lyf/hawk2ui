@@ -98,39 +98,106 @@ impl ScriptExecution {
     }
 }
 
-/// Deterministic limits enforced before script source is handed to the JavaScript engine.
+/// Default maximum accepted source byte length (1 MiB).
+const DEFAULT_MAX_SOURCE_BYTES: usize = 1_048_576;
+
+/// Default maximum accepted compiled `JavaScript` byte length (4 MiB).
+const DEFAULT_MAX_COMPILED_SOURCE_BYTES: usize = 4_194_304;
+
+/// Default maximum loop iterations permitted before untrusted execution is aborted.
+///
+/// `boa` leaves its loop-iteration limit at [`u64::MAX`] (unbounded) by default, so an
+/// infinite or pathological loop in untrusted script would run forever on the calling thread
+/// and wedge the host (or the DAW hosting a plugin editor). This bound makes such a loop
+/// terminate with a recoverable error instead.
+const DEFAULT_MAX_LOOP_ITERATIONS: u64 = 10_000_000;
+
+/// Default maximum source nesting depth permitted before parsing.
+///
+/// `JavaScript`/`TypeScript` are parsed by unguarded recursive descent, so deeply nested
+/// source can overflow the native stack *before* any runtime limit applies — an uncatchable
+/// process abort. Source is depth-bounded before it reaches either parser. Mirrors
+/// `hawk2ui_a11y`'s `A11Y_MAX_TREE_DEPTH`.
+const DEFAULT_MAX_NESTING_DEPTH: usize = 256;
+
+/// Resource limits enforced on untrusted script source and execution.
+///
+/// Byte-length limits bound parser/codegen workload; the loop-iteration limit bounds runtime
+/// CPU and the nesting-depth limit bounds parse-time native stack usage, so that untrusted
+/// script cannot hang, exhaust memory, or crash the host.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScriptExecutionLimits {
-    max_source_bytes: usize,
-    max_compiled_source_bytes: usize,
+    source_bytes: usize,
+    compiled_source_bytes: usize,
+    loop_iterations: u64,
+    nesting_depth: usize,
 }
 
 impl ScriptExecutionLimits {
-    /// Creates source-size limits for original and compiled JavaScript.
+    /// Default limits: 1 MiB source, 4 MiB compiled, 10,000,000 loop iterations, depth 256.
+    pub const DEFAULT: Self = Self {
+        source_bytes: DEFAULT_MAX_SOURCE_BYTES,
+        compiled_source_bytes: DEFAULT_MAX_COMPILED_SOURCE_BYTES,
+        loop_iterations: DEFAULT_MAX_LOOP_ITERATIONS,
+        nesting_depth: DEFAULT_MAX_NESTING_DEPTH,
+    };
+
+    /// Creates source-size limits for original and compiled `JavaScript`.
+    ///
+    /// Runtime limits (loop iterations, nesting depth) take their default values; override
+    /// them with [`Self::with_max_loop_iterations`] / [`Self::with_max_nesting_depth`].
     #[must_use]
     pub const fn new(max_source_bytes: usize, max_compiled_source_bytes: usize) -> Self {
         Self {
-            max_source_bytes,
-            max_compiled_source_bytes,
+            source_bytes: max_source_bytes,
+            compiled_source_bytes: max_compiled_source_bytes,
+            loop_iterations: DEFAULT_MAX_LOOP_ITERATIONS,
+            nesting_depth: DEFAULT_MAX_NESTING_DEPTH,
         }
+    }
+
+    /// Overrides the maximum loop iterations permitted during execution.
+    #[must_use]
+    pub const fn with_max_loop_iterations(mut self, max_loop_iterations: u64) -> Self {
+        self.loop_iterations = max_loop_iterations;
+        self
+    }
+
+    /// Overrides the maximum source nesting depth permitted before parsing.
+    #[must_use]
+    pub const fn with_max_nesting_depth(mut self, max_nesting_depth: usize) -> Self {
+        self.nesting_depth = max_nesting_depth;
+        self
     }
 
     /// Returns the maximum accepted source byte length.
     #[must_use]
     pub const fn max_source_bytes(&self) -> usize {
-        self.max_source_bytes
+        self.source_bytes
     }
 
-    /// Returns the maximum accepted compiled JavaScript byte length.
+    /// Returns the maximum accepted compiled `JavaScript` byte length.
     #[must_use]
     pub const fn max_compiled_source_bytes(&self) -> usize {
-        self.max_compiled_source_bytes
+        self.compiled_source_bytes
+    }
+
+    /// Returns the maximum loop iterations permitted during execution.
+    #[must_use]
+    pub const fn max_loop_iterations(&self) -> u64 {
+        self.loop_iterations
+    }
+
+    /// Returns the maximum source nesting depth permitted before parsing.
+    #[must_use]
+    pub const fn max_nesting_depth(&self) -> usize {
+        self.nesting_depth
     }
 }
 
 impl Default for ScriptExecutionLimits {
     fn default() -> Self {
-        Self::new(1_048_576, 4_194_304)
+        Self::DEFAULT
     }
 }
 
@@ -317,10 +384,7 @@ impl ScriptBackend {
             promises: BTreeMap::new(),
             timers: Vec::new(),
             host_calls: Vec::new(),
-            execution_limits: ScriptExecutionLimits {
-                max_source_bytes: 1_048_576,
-                max_compiled_source_bytes: 4_194_304,
-            },
+            execution_limits: ScriptExecutionLimits::DEFAULT,
             next_promise_id: 1,
             next_timer_id: 1,
             interrupted: None,
@@ -346,7 +410,7 @@ impl ScriptBackend {
     ) -> Result<ScriptExecution, ScriptBackendError> {
         self.ensure_running()?;
         let executable = Self::compile_module_source(&module, self.execution_limits)?;
-        let value = evaluate_javascript(&executable)?;
+        let value = evaluate_javascript(&executable, self.execution_limits)?;
         let execution = ScriptExecution {
             module_id: module.id.clone(),
             value,
@@ -375,7 +439,12 @@ impl ScriptBackend {
     ) -> Result<ScriptExecution, ScriptBackendError> {
         self.ensure_running()?;
         let executable = Self::compile_module_source(&module, self.execution_limits)?;
-        let value = evaluate_javascript_with_host_jobs(&executable, &self.promises, &self.timers)?;
+        let value = evaluate_javascript_with_host_jobs(
+            &executable,
+            self.execution_limits,
+            &self.promises,
+            &self.timers,
+        )?;
         let execution = ScriptExecution {
             module_id: module.id.clone(),
             value,
@@ -402,7 +471,11 @@ impl ScriptBackend {
         )?;
         let executable = match module.kind {
             ScriptModuleKind::JavaScript => module.source.clone(),
-            ScriptModuleKind::TypeScript => compile_typescript(&module.id, &module.source)?,
+            ScriptModuleKind::TypeScript => compile_typescript(
+                &module.id,
+                &module.source,
+                execution_limits.max_nesting_depth(),
+            )?,
         };
         enforce_source_limit(
             "script.compiled-source.too-large",
@@ -565,7 +638,101 @@ fn enforce_source_limit(
     ))
 }
 
-fn compile_typescript(module_id: &str, source: &str) -> Result<String, ScriptBackendError> {
+/// Rejects source whose bracket nesting depth exceeds `max_depth`.
+///
+/// `JavaScript`/`TypeScript` are parsed by unguarded recursive descent (neither `oxc_parser`
+/// nor `boa`'s parser bounds nesting depth), so deeply nested source can overflow the native
+/// thread stack *during parsing* — a `SIGSEGV`/abort that [`std::panic::catch_unwind`] cannot
+/// recover. This bound therefore runs before either parser sees the source.
+///
+/// The scan counts `(`, `[`, `{` as openers and their closers, saturating at zero so leading
+/// closers cannot mask later nesting. It tracks depth (not raw count), so balanced brackets in
+/// string literals do not trip it, and because every opener counts the bound cannot be bypassed.
+fn enforce_nesting_depth(source: &str, max_depth: usize) -> Result<(), ScriptBackendError> {
+    let mut depth: usize = 0;
+    for &byte in source.as_bytes() {
+        match byte {
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                if depth > max_depth {
+                    return Err(ScriptBackendError::new(
+                        "script.source.too-deeply-nested",
+                        format!(
+                            "script source nesting depth exceeds configured limit of {max_depth}"
+                        ),
+                    ));
+                }
+            }
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Applies runtime resource limits to a freshly created context before untrusted execution.
+///
+/// `boa` leaves the loop-iteration limit unbounded ([`u64::MAX`]) by default; bounding it makes
+/// an infinite or pathological loop terminate with a recoverable error instead of hanging the
+/// calling thread. `boa`'s recursion and stack-size limits are already bounded by its own
+/// defaults.
+fn apply_runtime_limits(context: &mut Context, limits: ScriptExecutionLimits) {
+    context
+        .runtime_limits_mut()
+        .set_loop_iteration_limit(limits.max_loop_iterations());
+}
+
+/// Stack size for the worker thread that parses and evaluates untrusted source.
+///
+/// Untrusted parsing runs on a dedicated thread with this fixed, generous stack so the
+/// nesting-depth bound is calibrated against a *known* stack rather than whatever (possibly
+/// small) stack the host or DAW happens to invoke us on. The worker does not *contain* a stack
+/// overflow — that remains prevented by [`enforce_nesting_depth`] — but it decouples the safe
+/// parse depth from the caller's thread, which matters for the embedded plugin editor.
+const SCRIPT_WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+/// Runs untrusted parsing/evaluation on a dedicated worker thread, returning its result.
+///
+/// The worker has a known, generous stack ([`SCRIPT_WORKER_STACK_BYTES`]) so legitimately nested
+/// source parses regardless of the caller's stack size. Joining the worker also converts a
+/// catchable `boa`/`oxc` panic into a diagnostic instead of letting it unwind through the host. A
+/// native stack overflow is not a catchable panic — that case is prevented up front by
+/// [`enforce_nesting_depth`].
+fn run_on_worker<T: Send>(
+    panic_rule: &'static str,
+    operation: impl FnOnce() -> Result<T, ScriptBackendError> + Send,
+) -> Result<T, ScriptBackendError> {
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .stack_size(SCRIPT_WORKER_STACK_BYTES)
+            .spawn_scoped(scope, operation)
+            .map_err(|error| {
+                ScriptBackendError::new(
+                    "script.worker.spawn-failed",
+                    format!("failed to spawn script worker thread: {error}"),
+                )
+            })?;
+        worker.join().map_err(|_| {
+            ScriptBackendError::new(
+                panic_rule,
+                "script engine panicked while processing untrusted source",
+            )
+        })?
+    })
+}
+
+fn compile_typescript(
+    module_id: &str,
+    source: &str,
+    max_nesting_depth: usize,
+) -> Result<String, ScriptBackendError> {
+    enforce_nesting_depth(source, max_nesting_depth)?;
+    run_on_worker("script.typescript.panicked", || {
+        compile_typescript_inner(module_id, source)
+    })
+}
+
+fn compile_typescript_inner(module_id: &str, source: &str) -> Result<String, ScriptBackendError> {
     let allocator = Allocator::default();
     let source_path = Path::new(module_id);
     let source_type = SourceType::from_path(source_path).unwrap_or_else(|_| SourceType::ts());
@@ -615,29 +782,50 @@ fn format_oxc_diagnostics<T: fmt::Debug>(prefix: &'static str, errors: Vec<T>) -
     format!("{prefix}: {details}")
 }
 
-fn evaluate_javascript(source: &str) -> Result<StructuredValue, ScriptBackendError> {
-    let mut context = Context::default();
-    let value = context.eval(Source::from_bytes(source)).map_err(|error| {
-        ScriptBackendError::new(
-            "script.eval.failed",
-            format!("JavaScript execution failed: {error}"),
-        )
-    })?;
-    context.run_jobs().map_err(|error| {
-        ScriptBackendError::new(
-            "script.jobs.failed",
-            format!("JavaScript job queue failed: {error}"),
-        )
-    })?;
-    structured_value_from_js(&value)
+fn evaluate_javascript(
+    source: &str,
+    limits: ScriptExecutionLimits,
+) -> Result<StructuredValue, ScriptBackendError> {
+    enforce_nesting_depth(source, limits.max_nesting_depth())?;
+    run_on_worker("script.eval.panicked", || {
+        let mut context = Context::default();
+        apply_runtime_limits(&mut context, limits);
+        let value = context.eval(Source::from_bytes(source)).map_err(|error| {
+            ScriptBackendError::new(
+                "script.eval.failed",
+                format!("JavaScript execution failed: {error}"),
+            )
+        })?;
+        context.run_jobs().map_err(|error| {
+            ScriptBackendError::new(
+                "script.jobs.failed",
+                format!("JavaScript job queue failed: {error}"),
+            )
+        })?;
+        structured_value_from_js(&value)
+    })
 }
 
 fn evaluate_javascript_with_host_jobs(
     source: &str,
+    limits: ScriptExecutionLimits,
+    promises: &BTreeMap<PromiseId, PromiseState>,
+    timers: &[TimerRecord],
+) -> Result<StructuredValue, ScriptBackendError> {
+    enforce_nesting_depth(source, limits.max_nesting_depth())?;
+    run_on_worker("script.host-jobs.panicked", || {
+        evaluate_javascript_with_host_jobs_inner(source, limits, promises, timers)
+    })
+}
+
+fn evaluate_javascript_with_host_jobs_inner(
+    source: &str,
+    limits: ScriptExecutionLimits,
     promises: &BTreeMap<PromiseId, PromiseState>,
     timers: &[TimerRecord],
 ) -> Result<StructuredValue, ScriptBackendError> {
     let mut context = Context::default();
+    apply_runtime_limits(&mut context, limits);
     eval_js_unit(
         &mut context,
         host_job_prelude(),

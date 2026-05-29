@@ -220,3 +220,65 @@ fn script_backend_rejects_modules_that_exceed_execution_limits() {
     assert!(source_limited.executed_modules().is_empty());
     assert!(compiled_limited.executed_modules().is_empty());
 }
+
+#[test]
+fn script_backend_bounds_runaway_loops() {
+    let limits = ScriptExecutionLimits::new(1_048_576, 4_194_304).with_max_loop_iterations(1_000);
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic())
+        .with_execution_limits(limits);
+
+    let error = backend
+        .execute_module(ScriptModule::javascript("runaway.js", "while (true) {}"))
+        .expect_err("an unbounded loop terminates with an error instead of hanging the host");
+
+    assert_eq!(error.diagnostic().rule(), "script.eval.failed");
+    assert!(backend.executed_modules().is_empty());
+}
+
+#[test]
+fn script_backend_rejects_deeply_nested_javascript_before_parsing() {
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+    let open = "(".repeat(300);
+    let close = ")".repeat(300);
+    let nested = format!("{open}1{close}");
+
+    let error = backend
+        .execute_module(ScriptModule::javascript("nested.js", nested))
+        .expect_err("deeply nested source is rejected before it reaches the parser");
+
+    assert_eq!(error.diagnostic().rule(), "script.source.too-deeply-nested");
+    assert!(backend.executed_modules().is_empty());
+}
+
+#[test]
+fn script_backend_rejects_deeply_nested_typescript_before_parsing() {
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+    let open = "(".repeat(300);
+    let close = ")".repeat(300);
+    let nested = format!("const value: number = {open}1{close};");
+
+    let error = backend
+        .execute_module(ScriptModule::typescript("nested.ts", nested))
+        .expect_err("deeply nested TypeScript is rejected before the oxc parser runs");
+
+    assert_eq!(error.diagnostic().rule(), "script.source.too-deeply-nested");
+}
+
+#[test]
+fn script_backend_parses_deep_nesting_on_the_worker_thread_stack() {
+    // 100-deep nesting overflows a default 2 MiB thread stack during parsing (it does abort the
+    // process when parsed on the test thread directly), but parses on the dedicated worker
+    // thread's larger stack (`SCRIPT_WORKER_STACK_BYTES`, 16 MiB), well inside the depth bound.
+    // If this ever flakes, parser stack frames grew — raise the worker stack rather than this
+    // depth.
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+    let open = "(".repeat(100);
+    let close = ")".repeat(100);
+    let nested = format!("{open}1 + 2{close}");
+
+    let execution = backend
+        .execute_module(ScriptModule::javascript("deep-nesting.js", nested))
+        .expect("legitimate deep nesting parses on the worker thread's larger stack");
+
+    assert_eq!(execution.value(), &StructuredValue::Number(3.0));
+}
