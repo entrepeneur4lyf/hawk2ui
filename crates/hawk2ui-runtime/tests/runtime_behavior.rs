@@ -1288,3 +1288,80 @@ fn count_changed_pixels(
     }
     changed
 }
+
+#[test]
+fn runtime_scene_payload_rejects_deeply_nested_input_before_overflow() {
+    let mut node = serde_json::json!({
+        "id": "leaf",
+        "width": 10.0,
+        "height": 10.0,
+        "visual": { "fill": [10, 20, 30, 255] },
+        "children": []
+    });
+    for _ in 0..300 {
+        node = serde_json::json!({
+            "id": "branch",
+            "width": 10.0,
+            "height": 10.0,
+            "visual": { "fill": [10, 20, 30, 255] },
+            "children": [node]
+        });
+    }
+    let payload = serde_json::json!({
+        "viewport": { "width": 100.0, "height": 100.0 },
+        "root": node
+    });
+
+    let error = hawk2ui_runtime::RuntimeScenePayload::from_json(&payload)
+        .expect_err("a deeply nested scene payload is rejected before it can overflow the stack");
+
+    assert_eq!(error.rule(), "runtime-scene.payload.too-deeply-nested");
+}
+
+#[test]
+fn runtime_scene_payload_builds_a_well_formed_frame() {
+    let payload = serde_json::json!({
+        "viewport": { "width": 320.0, "height": 240.0 },
+        "root": {
+            "id": "root",
+            "width": 320.0,
+            "height": 240.0,
+            "visual": { "fill": [255, 255, 255, 255] },
+            "children": [
+                {
+                    "id": "panel",
+                    "width": 100.0,
+                    "height": 50.0,
+                    "visual": { "fill": [10, 20, 30, 255] },
+                    "children": []
+                }
+            ]
+        }
+    });
+
+    let scene = hawk2ui_runtime::RuntimeScenePayload::from_json(&payload)
+        .expect("a well-formed scene payload parses");
+    scene
+        .build_frame()
+        .expect("a valid scene payload builds a runtime scene frame");
+}
+
+#[test]
+fn runtime_scene_payload_rejects_unknown_fields() {
+    let payload = serde_json::json!({
+        "viewport": { "width": 100.0, "height": 100.0 },
+        "root": {
+            "id": "root",
+            "width": 100.0,
+            "height": 100.0,
+            "visual": { "fill": [0, 0, 0, 255] },
+            "children": [],
+            "unexpected": true
+        }
+    });
+
+    let error = hawk2ui_runtime::RuntimeScenePayload::from_json(&payload)
+        .expect_err("unknown fields are rejected by deny_unknown_fields");
+
+    assert_eq!(error.rule(), "runtime-scene.payload.parse-failed");
+}

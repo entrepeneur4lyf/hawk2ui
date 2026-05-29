@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
-//! Script loading, host bindings, event dispatch, scheduling, lifecycle, and runtime safety for `Hawk2UI`.
+//! Runtime core for `Hawk2UI`: host-binding validation, event dispatch, scheduling, runtime safety,
+//! state persistence, and the view→render bridge. Script engines and lifecycle hooks are modeled
+//! here as boundaries (a recording engine and a hook registry); script execution and lifecycle
+//! sequencing are supplied by the host, not performed in this crate.
 
 pub mod bindings;
 pub mod events;

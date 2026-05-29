@@ -9,6 +9,13 @@ use crate::{
     RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
 };
 
+/// Maximum nesting depth accepted in a runtime scene payload.
+///
+/// Scene payloads are deserialized from caller-supplied JSON carried by sealed artifacts, so
+/// traversal is bounded to avoid stack exhaustion from adversarial input. Mirrors
+/// `hawk2ui_a11y`'s `A11Y_MAX_TREE_DEPTH`.
+const RUNTIME_SCENE_MAX_DEPTH: usize = 256;
+
 /// Serializable runtime scene payload decoded from a sealed artifact.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +31,7 @@ impl RuntimeScenePayload {
     ///
     /// Returns [`RuntimeScenePayloadError`] when the payload is malformed.
     pub fn from_json(value: &serde_json::Value) -> Result<Self, RuntimeScenePayloadError> {
+        enforce_value_depth(value)?;
         serde_json::from_value(value.clone()).map_err(|error| {
             RuntimeScenePayloadError::new(
                 "runtime-scene.payload.parse-failed",
@@ -48,7 +56,7 @@ impl RuntimeScenePayload {
     fn validate(&self) -> Result<(), RuntimeScenePayloadError> {
         validate_positive_f32("viewport.width", self.viewport.width)?;
         validate_positive_f32("viewport.height", self.viewport.height)?;
-        self.root.validate()
+        self.root.validate_at_depth(0)
     }
 }
 
@@ -83,7 +91,7 @@ impl RuntimeScenePayloadNode {
     fn to_runtime_tree(&self) -> Result<RuntimeViewTree, RuntimeScenePayloadError> {
         let root_id = RuntimeViewId::new(&self.id);
         let tree = RuntimeViewTree::new(self.to_runtime_node());
-        append_children(tree, &root_id, &self.children)
+        append_children(tree, &root_id, &self.children, 1)
     }
 
     fn to_runtime_node(&self) -> RuntimeViewNode {
@@ -95,7 +103,10 @@ impl RuntimeScenePayloadNode {
         )
     }
 
-    fn validate(&self) -> Result<(), RuntimeScenePayloadError> {
+    fn validate_at_depth(&self, depth: usize) -> Result<(), RuntimeScenePayloadError> {
+        if depth > RUNTIME_SCENE_MAX_DEPTH {
+            return Err(too_deeply_nested_error());
+        }
         if self.id.trim().is_empty() {
             return Err(RuntimeScenePayloadError::new(
                 "runtime-scene.node.id-invalid",
@@ -106,7 +117,7 @@ impl RuntimeScenePayloadNode {
         validate_positive_f32("node.height", self.height)?;
         self.visual.validate()?;
         for child in &self.children {
-            child.validate()?;
+            child.validate_at_depth(depth + 1)?;
         }
         Ok(())
     }
@@ -218,15 +229,55 @@ fn append_children(
     mut tree: RuntimeViewTree,
     parent_id: &RuntimeViewId,
     children: &[RuntimeScenePayloadNode],
+    depth: usize,
 ) -> Result<RuntimeViewTree, RuntimeScenePayloadError> {
+    if depth > RUNTIME_SCENE_MAX_DEPTH {
+        return Err(too_deeply_nested_error());
+    }
     for child in children {
         let child_id = RuntimeViewId::new(&child.id);
         tree = tree
             .with_child(parent_id, child.to_runtime_node())
             .map_err(RuntimeScenePayloadError::from)?;
-        tree = append_children(tree, &child_id, &child.children)?;
+        tree = append_children(tree, &child_id, &child.children, depth + 1)?;
     }
     Ok(tree)
+}
+
+/// Rejects a scene-payload `Value` whose nesting depth exceeds [`RUNTIME_SCENE_MAX_DEPTH`].
+///
+/// Runs before `serde_json::from_value` (and the recursive `Value::clone` it follows), using an
+/// explicit work stack so the depth check itself cannot overflow the stack on adversarial input.
+fn enforce_value_depth(value: &serde_json::Value) -> Result<(), RuntimeScenePayloadError> {
+    let mut stack = vec![(value, 1usize)];
+    while let Some((node, depth)) = stack.pop() {
+        if depth > RUNTIME_SCENE_MAX_DEPTH {
+            return Err(too_deeply_nested_error());
+        }
+        match node {
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    stack.push((item, depth + 1));
+                }
+            }
+            serde_json::Value::Object(entries) => {
+                for entry in entries.values() {
+                    stack.push((entry, depth + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn too_deeply_nested_error() -> RuntimeScenePayloadError {
+    RuntimeScenePayloadError::new(
+        "runtime-scene.payload.too-deeply-nested",
+        format!(
+            "runtime scene payload nesting depth exceeds the maximum of {RUNTIME_SCENE_MAX_DEPTH}"
+        ),
+    )
 }
 
 fn validate_positive_f32(name: &str, value: f32) -> Result<(), RuntimeScenePayloadError> {
