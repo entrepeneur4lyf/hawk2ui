@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Retained scene records, paint layers, renderer backend boundary, text contracts, and custom draw surfaces for `Hawk2UI`.
+//! Retained scene records, paint layers, renderer backend boundary, and custom draw surfaces for `Hawk2UI`.
 
 pub mod assets;
 pub mod backend;
@@ -7,7 +7,6 @@ pub mod custom_surface;
 pub mod export;
 pub mod layer;
 pub mod scene;
-pub mod text;
 
 pub use assets::{
     AssetDiagnostic, AssetDrawRecord, AssetError, AssetKind, BackendRequirement, CompiledAsset,
@@ -29,10 +28,6 @@ pub use scene::{
     AccessibilityRef, Geometry, HitTestGeometry, InvalidationReason, OpacityGroup, OpacityGroupId,
     SceneEffectId, SceneGraph, SceneGraphDiff, SceneGraphError, SceneLayerId, SceneNode,
     SceneNodeId, Transform,
-};
-pub use text::{
-    DeterministicTextMeasurer, FontRegistry, GlyphCacheKey, LineBreakMode, TextMeasureOutput,
-    TextRenderInput, TextRenderTextError,
 };
 
 /// The canonical Cargo package name for this crate.
