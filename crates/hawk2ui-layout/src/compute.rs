@@ -34,9 +34,12 @@ impl Viewport {
 /// Computed node geometry.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ComputedGeometry {
-    /// X coordinate.
+    /// X coordinate **relative to the parent node's border box** (Taffy's coordinate space) — not
+    /// an absolute/viewport coordinate. `SceneGeometry` and the render/hit-test/a11y consumers copy
+    /// this verbatim, so a consumer that treats it as absolute mis-places every nested node; to get
+    /// absolute positions, accumulate ancestor offsets.
     pub x: f32,
-    /// Y coordinate.
+    /// Y coordinate, parent-relative — see [`ComputedGeometry::x`].
     pub y: f32,
     /// Width.
     pub width: f32,
@@ -105,7 +108,14 @@ impl LayoutOutput {
 }
 
 impl LayoutTree {
-    /// Computes layout geometry for this tree.
+    /// Computes layout geometry for this tree, returning an **empty** [`LayoutOutput`] on any
+    /// failure (invalid viewport/style, missing root, or backend error).
+    ///
+    /// The empty result is indistinguishable from a legitimately empty tree, so a frame that
+    /// silently fails to lay out renders nothing with no diagnostic. Callers that must distinguish
+    /// failure from emptiness — hosts especially — should use [`Self::try_compute_layout`]. Note
+    /// also that text-measured leaves collapse to zero size on this path (no measurer is supplied);
+    /// use [`Self::try_compute_layout_with_text_measurer`] for trees containing measured text.
     #[must_use]
     pub fn compute_layout(&self, viewport: Viewport) -> LayoutOutput {
         self.try_compute_layout(viewport)
@@ -113,6 +123,9 @@ impl LayoutTree {
     }
 
     /// Computes layout geometry for this tree and reports validation/backend failures.
+    ///
+    /// Text-measured leaves collapse to `Size::ZERO` on this path because no measurer is supplied;
+    /// use [`Self::try_compute_layout_with_text_measurer`] for trees containing measured text.
     ///
     /// # Errors
     ///

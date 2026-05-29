@@ -52,6 +52,57 @@ fn layout_tree_preserves_parent_child_relationships() {
 }
 
 #[test]
+fn computed_geometry_is_parent_relative_not_absolute() {
+    // Pins the documented contract: ComputedGeometry x/y are relative to the parent's border box,
+    // not absolute. A grandchild's coordinate is its offset within its parent, not the accumulated
+    // ancestor offset. If this is ever changed to accumulate absolute positions, this test must be
+    // updated deliberately (render/hit-test/a11y consumers depend on the coordinate space).
+    let tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_padding(BoxEdges::all(LayoutValue::px(10.0))),
+    ))
+    .with_child(
+        LayoutNodeId::new("root"),
+        LayoutNode::new(
+            LayoutNodeId::new("parent"),
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_padding(BoxEdges::all(LayoutValue::px(20.0)))
+                .with_size(LayoutSizing::fixed(200.0, 200.0)),
+        ),
+    )
+    .expect("child insertion succeeds")
+    .with_child(
+        LayoutNodeId::new("parent"),
+        LayoutNode::new(
+            LayoutNodeId::new("child"),
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_size(LayoutSizing::fixed(30.0, 30.0)),
+        ),
+    )
+    .expect("nested child insertion succeeds");
+
+    let output = tree.compute_layout(Viewport::new(400.0, 400.0));
+    let entries = output.geometry_entries();
+
+    // `parent` sits at the root's padding (10,10), relative to the root.
+    let (_, parent) = entries
+        .iter()
+        .find(|(id, _)| id.as_str() == "parent")
+        .expect("parent geometry present");
+    assert_eq!(parent.x, 10.0);
+    assert_eq!(parent.y, 10.0);
+
+    // `child` sits at `parent`'s padding (20,20) RELATIVE TO PARENT — not the absolute (30,30).
+    let (_, child) = entries
+        .iter()
+        .find(|(id, _)| id.as_str() == "child")
+        .expect("child geometry present");
+    assert_eq!(child.x, 20.0);
+    assert_eq!(child.y, 20.0);
+}
+
+#[test]
 fn layout_tree_converts_style_values_to_layout_records() {
     let style = LayoutStyle::absolute_region()
         .with_size(LayoutSizing::percent(50.0, 25.0))
