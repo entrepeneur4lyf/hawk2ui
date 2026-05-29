@@ -1,0 +1,41 @@
+#![forbid(unsafe_code)]
+//! Truce audio-plugin framework binding for `Hawk2UI`.
+//!
+//! `Hawk2UI`'s multi-format audio-plugin backend is built on the
+//! [`truce`](https://github.com/truce-audio/truce) framework. This crate
+//! implements truce's [`truce_core::editor::Editor`] seam by re-hosting the
+//! existing baseview + Skia editor render path owned by `hawk2ui-host-baseview`
+//! inside a truce plugin — so the editor surface is drawn by `Hawk2UI`'s own
+//! renderer while truce supplies the CLAP / VST3 / AU / AAX / LV2 / standalone
+//! format wrappers, the parameter system, and the host bridge.
+//!
+//! The window-owning machinery and the raw-window-handle FFI stay inside
+//! `hawk2ui-host-baseview` (the workspace's sole `unsafe`-permitting crate);
+//! this crate is `unsafe`-free and drives that machinery through safe APIs.
+
+/// Truce's plugin-editor seam. `Hawk2UI`'s editor type implements this so a
+/// truce `PluginLogic::editor()` can return a `Hawk2UI`-rendered surface.
+pub use truce_core::editor::Editor as TruceEditor;
+
+/// Truce's parameter trait, backing the `PluginContext<P>` handed to the
+/// editor on open.
+pub use truce_params::Params as TruceParams;
+
+/// The canonical Cargo package name for this crate.
+pub const CRATE_NAME: &str = "hawk2ui-plugin-truce";
+
+/// Returns the canonical Cargo package name for diagnostics and conformance checks.
+#[must_use]
+pub const fn crate_name() -> &'static str {
+    CRATE_NAME
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exposes_crate_identity() {
+        assert_eq!(crate_name(), "hawk2ui-plugin-truce");
+    }
+}

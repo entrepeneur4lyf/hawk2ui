@@ -1837,6 +1837,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hawk2ui-plugin-truce"
+version = "0.1.0"
+dependencies = [
+ "truce-core",
+ "truce-params",
+]
+
+[[package]]
 name = "hawk2ui-render"
 version = "0.1.0"
 dependencies = [
@@ -4983,6 +4991,32 @@ name = "tracing-core"
 version = "0.1.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
+
+[[package]]
+name = "truce-core"
+version = "0.49.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39ee8174424d01c097870c50337d0b7f4ee8030732e14e0462fb7f89b9b7c36a"
+dependencies = [
+ "png",
+ "truce-params",
+ "truce-utils",
+]
+
+[[package]]
+name = "truce-params"
+version = "0.49.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ceba26f1f04988f6389d1933122a3f6584fc7de21b1325f8b8b8f10108ac8922"
+dependencies = [
+ "bitflags 2.11.1",
+]
+
+[[package]]
+name = "truce-utils"
+version = "0.49.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e9690514be01e246b0a5f7de6417c02056263c8a43c234fa74addafe300218f"
 
 [[package]]
 name = "ttf-parser"
