@@ -37,12 +37,12 @@ contained fixes).
 | # | Crate | Class | Action |
 |---|-------|-------|--------|
 | DEC-05a | plugin-adapters | Bug | Fix CLAP multi-instance state corruption (`plugin_data:null` → process-global statics); make the inert `realtime_guard` real or delete its enforcement claim |
-| DEC-06 | vst3 | Bug | Fix ARM `c_char` compile break, byte-vs-char length limits, Serde-bypasses-validation, endianness |
+| ~~DEC-06~~ | vst3 | Bug | ✅ **DONE** (`411380ba`): Serde `try_from` validation, `c_char` ARM fix, byte-length limits, nil-GUID, byte-order doc; +6 tests |
 | DEC-07a | text | Bug | Push resolved family to Parley (`text` #1, 2-line); add input-length cap (DoS); fix truncation width vs `max_width_px` |
 | DEC-08 | security | Remove | Remove decorative policy verdicts + tautological tests (zero consumers); keep+harden `SecretValue` redaction (add `Zeroize`) |
 | DEC-15 | testkit | Remove | Remove string-`VisualSnapshot` proxy + tautological tests + 6 dangling `fixtures/security/*` helpers; keep strict pixel-diff core |
 | DEC-17 | render, render-skia | Bug | Fix compiled-vector opaque-white color loss; fix text re-shape divergence; fix scene-graph O(N²) per-frame path |
-| DEC-18 | runtime, conformance | Bug | Bound recursion over `Deserialize` scene payload (DoS); complete the conformance anti-panic gate (misses `unreachable!`/`assert!`/index/overflow/recursion) |
+| DEC-18 | ~~runtime~~, conformance | Bug | runtime recursion ✅ **already closed** at HEAD (`RUNTIME_SCENE_MAX_DEPTH`, `e7918972`); remaining: complete the conformance anti-panic gate (misses `unreachable!`/`assert!`/index/overflow/recursion) |
 | DEC-19 | conformance | Remove | Security fixtures asserted-as-*mentioned*, never validated → remove the false-assurance or wire real validation |
 
 ## Tier 2 — Decisions (genuine forks, your call)
