@@ -194,7 +194,12 @@ fn parameter_model_rejects_duplicate_parameter_ids() {
     // automation and `parameter_state` (a BTreeMap) by id, so two records sharing an id silently
     // alias one parameter's value onto the other. The model must reject the collision.
     let model = ParameterModel::new([
-        ParameterRecord::numeric("osc.mix", "Osc Mix", "%", ParameterRange::new(0.0, 100.0, 50.0)),
+        ParameterRecord::numeric(
+            "osc.mix",
+            "Osc Mix",
+            "%",
+            ParameterRange::new(0.0, 100.0, 50.0),
+        ),
         ParameterRecord::boolean("osc.mix", "Osc Mix Enable", true),
     ]);
     let errors = model
