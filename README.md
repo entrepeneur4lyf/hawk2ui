@@ -79,4 +79,14 @@ The Hawk2UI logo assets in `assets/` were carried forward from the archived `haw
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0, at your option.
+Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at
+your option — build, ship, and sell desktop apps, plugin editors, plugins, hosts,
+and end-user software with no further permission or fee.
+
+One narrow exception ([ADDITIONAL_TERMS.md](ADDITIONAL_TERMS.md)): redistributing
+Hawk2UI *itself as a commercial framework* to third-party developers requires a
+Framework License. Free / open-source frameworks are exempt, and ambiguities
+resolve in favor of the standard grant — no other use is affected.
+
+Unless you state otherwise, any contribution you submit for inclusion is
+dual-licensed as above.

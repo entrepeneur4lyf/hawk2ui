@@ -1,0 +1,28 @@
+Hawk2UI License
+===============
+
+Hawk2UI is dual-licensed under either of:
+
+  * Apache License, Version 2.0  (full text in LICENSE-APACHE,
+    also at <https://www.apache.org/licenses/LICENSE-2.0>)
+
+  * MIT License                  (full text in LICENSE-MIT,
+    also at <https://opensource.org/licenses/MIT>)
+
+at your option. The SPDX identifier is `MIT OR Apache-2.0`. Build,
+ship, and sell desktop applications, audio-plugin editors, plugins,
+hosts, end-user software, and internal SDKs under either license — no
+further permission, fee, splash screen, or revenue cap.
+
+Additional terms apply in one narrow case only: if you intend to
+redistribute Hawk2UI itself as a commercial framework offered to
+third-party developers for building applications or plugin editors.
+See ADDITIONAL_TERMS.md for the boundary, the exemption for free /
+open-source frameworks, and the request procedure. Those terms do not
+affect the standard dual MIT / Apache-2.0 grant above for any other
+use, and ambiguities are resolved in favor of the standard grant.
+
+Contributions: unless you explicitly state otherwise, any contribution
+intentionally submitted for inclusion in the work by you, as defined in
+the Apache-2.0 license, shall be dual-licensed as above, without any
+additional terms or conditions.
