@@ -331,39 +331,6 @@ pub struct WinitDesktopRuntimeSummary {
     pub close_requested: bool,
 }
 
-/// Runtime event category used for host repaint policy.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum DesktopRuntimeEvent {
-    /// Native surface was resized.
-    Resized {
-        /// New physical width.
-        physical_width: u32,
-        /// New physical height.
-        physical_height: u32,
-        /// Current scale factor.
-        scale_factor: f64,
-    },
-    /// Native DPI scale changed.
-    DpiChanged {
-        /// Current scale factor rounded for deterministic classification.
-        scale_factor: f64,
-    },
-    /// Keyboard input was received.
-    KeyboardInput,
-    /// Pointer input was received.
-    PointerInput,
-    /// Focus state changed.
-    FocusChanged,
-}
-
-impl DesktopRuntimeEvent {
-    /// Returns whether the event requires full-surface repaint.
-    #[must_use]
-    pub const fn requires_full_repaint(self) -> bool {
-        matches!(self, Self::Resized { .. } | Self::DpiChanged { .. })
-    }
-}
-
 /// Production `winit` desktop runtime.
 #[derive(Clone, Debug, Default)]
 pub struct WinitDesktopRuntime {

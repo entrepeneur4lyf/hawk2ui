@@ -2,9 +2,8 @@ use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits};
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
-    DesktopErrorOverlay, DesktopRuntimeEvent, SoftwareFrameRenderer, WinitDesktopReload,
-    WinitDesktopReloadKind, WinitDesktopRuntimeConfig, WinitDesktopRuntimeSurfaceState,
-    WinitHostError,
+    DesktopErrorOverlay, SoftwareFrameRenderer, WinitDesktopReload, WinitDesktopReloadKind,
+    WinitDesktopRuntimeConfig, WinitDesktopRuntimeSurfaceState, WinitHostError,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_render::{Color, CustomSurfaceCategory, CustomSurfaceDataSnapshot};
@@ -421,20 +420,6 @@ fn runtime_surface_state_flags_full_rebuild_as_event_loop_restart() {
     assert!(!report.redraw_requested());
     assert_eq!(state.reload_generation(), 0);
     assert_eq!(state.config().window().title, "app");
-}
-
-#[test]
-fn runtime_events_request_repaint_after_resize() {
-    assert!(
-        DesktopRuntimeEvent::Resized {
-            physical_width: 1280,
-            physical_height: 720,
-            scale_factor: 1.0,
-        }
-        .requires_full_repaint()
-    );
-    assert!(DesktopRuntimeEvent::DpiChanged { scale_factor: 2.0 }.requires_full_repaint());
-    assert!(!DesktopRuntimeEvent::KeyboardInput.requires_full_repaint());
 }
 
 fn runtime_tree(id: &str, color: Color) -> RuntimeViewTree {

@@ -17,9 +17,8 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 
 pub use runtime::{
-    DesktopRuntimeEvent, WinitDesktopReload, WinitDesktopReloadKind, WinitDesktopReloadReport,
-    WinitDesktopRuntime, WinitDesktopRuntimeConfig, WinitDesktopRuntimeSummary,
-    WinitDesktopRuntimeSurfaceState,
+    WinitDesktopReload, WinitDesktopReloadKind, WinitDesktopReloadReport, WinitDesktopRuntime,
+    WinitDesktopRuntimeConfig, WinitDesktopRuntimeSummary, WinitDesktopRuntimeSurfaceState,
 };
 pub use software_frame::{
     DesktopErrorOverlay, SoftwareFrame, SoftwareFrameRenderer, physical_frame_size,
@@ -275,7 +274,12 @@ impl WinitClipboardBackend for ArboardClipboardBackend {
     }
 
     fn clear_text(&mut self) -> Result<(), WinitHostError> {
-        self.write_text(String::new())
+        self.clipboard.clear().map_err(|error| {
+            WinitHostError::new(
+                "desktop.clipboard.clear-failed",
+                format!("failed to clear native clipboard text: {error}"),
+            )
+        })
     }
 }
 
