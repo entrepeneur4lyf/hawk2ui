@@ -372,8 +372,9 @@ impl RuntimeSceneBridge {
         tree.validate_for_bridge()?;
         let layout_tree = tree.to_layout_tree()?;
         let layout = layout_tree.try_compute_layout(self.viewport)?;
-        let geometry = collect_geometry(tree, &layout)?;
-        let scene = tree.to_scene_graph(&layout)?;
+        let absolute = resolve_absolute_geometry(tree, &layout)?;
+        let geometry = collect_geometry(&absolute);
+        let scene = tree.to_scene_graph(&absolute)?;
         let (layers, draw_commands) = tree.to_layers_and_draw_commands(&geometry);
         let paint_commands = export_paint_commands(&layers)?;
 
@@ -401,8 +402,9 @@ impl RuntimeSceneBridge {
         tree.validate_for_bridge()?;
         let layout_tree = tree.to_layout_tree()?;
         let layout = layout_tree.try_compute_layout_with_text_measurer(self.viewport, measurer)?;
-        let geometry = collect_geometry(tree, &layout)?;
-        let scene = tree.to_scene_graph(&layout)?;
+        let absolute = resolve_absolute_geometry(tree, &layout)?;
+        let geometry = collect_geometry(&absolute);
+        let scene = tree.to_scene_graph(&absolute)?;
         let (layers, draw_commands) = tree.to_layers_and_draw_commands(&geometry);
         let paint_commands = export_paint_commands(&layers)?;
 
@@ -705,12 +707,12 @@ impl RuntimeViewTree {
         Ok(layout_tree)
     }
 
-    fn to_scene_graph(&self, layout: &LayoutOutput) -> Result<SceneGraph, RuntimeSceneError> {
+    fn to_scene_graph(&self, absolute: &AbsoluteGeometry) -> Result<SceneGraph, RuntimeSceneError> {
         let root = self
             .entries
             .first()
             .ok_or_else(|| RuntimeSceneError::MissingNode("root".to_string()))?;
-        let mut scene = SceneGraph::new(scene_node_for(root.node.id(), layout)?);
+        let mut scene = SceneGraph::new(scene_node_for(root.node.id(), absolute)?);
         for entry in self.entries.iter().skip(1) {
             let Some(parent_id) = entry.parent.as_ref() else {
                 return Err(RuntimeSceneError::MissingParent(
@@ -719,7 +721,7 @@ impl RuntimeViewTree {
             };
             scene = scene.with_child(
                 SceneNodeId::new(parent_id.as_str()),
-                scene_node_for(entry.node.id(), layout)?,
+                scene_node_for(entry.node.id(), absolute)?,
             )?;
         }
         for entry in self.entries.iter().filter(|entry| entry.invalidated) {
@@ -805,36 +807,113 @@ struct RuntimeViewEntry {
     invalidated: bool,
 }
 
-fn collect_geometry(
+/// Absolute (viewport-space) geometry for every runtime view node.
+///
+/// Taffy reports each node's location relative to its parent's border box, so the raw
+/// [`LayoutOutput`] coordinates are parent-relative. The wired renderer blits each draw command
+/// verbatim and never walks the tree to accumulate ancestor offsets, so the bridge resolves
+/// absolute coordinates here — for both the flat draw-command path and the scene graph's
+/// layout/hit-test rects — before handing geometry to the renderer or accessibility consumers.
+struct AbsoluteGeometry {
+    nodes: Vec<(RuntimeViewId, ComputedGeometry)>,
+    clips: Vec<(RuntimeViewId, ComputedGeometry)>,
+}
+
+impl AbsoluteGeometry {
+    fn node(&self, view_id: &RuntimeViewId) -> Option<ComputedGeometry> {
+        self.nodes
+            .iter()
+            .find(|(id, _)| id.as_str() == view_id.as_str())
+            .map(|(_, geometry)| *geometry)
+    }
+
+    fn clip(&self, view_id: &RuntimeViewId) -> Option<ComputedGeometry> {
+        self.clips
+            .iter()
+            .find(|(id, _)| id.as_str() == view_id.as_str())
+            .map(|(_, geometry)| *geometry)
+    }
+}
+
+/// Resolves absolute geometry for every node by accumulating parent-relative Taffy locations down
+/// the ancestor chain (`absolute(node) = location(node) + absolute(parent)`, root at the origin).
+///
+/// `entries` is ordered parent-before-child — [`RuntimeViewTree::with_child`] only appends a child
+/// after its parent already exists — so each parent's absolute origin is resolved before its
+/// children are visited. A child whose parent is not yet resolved is a malformed tree and surfaces
+/// as [`RuntimeSceneError::MissingParent`].
+fn resolve_absolute_geometry(
     tree: &RuntimeViewTree,
     layout: &LayoutOutput,
-) -> Result<Vec<(RuntimeViewId, Geometry)>, RuntimeSceneError> {
-    tree.entries
+) -> Result<AbsoluteGeometry, RuntimeSceneError> {
+    let mut nodes: Vec<(RuntimeViewId, ComputedGeometry)> = Vec::with_capacity(tree.entries.len());
+    let mut clips: Vec<(RuntimeViewId, ComputedGeometry)> = Vec::new();
+    for entry in &tree.entries {
+        let view_id = entry.node.id();
+        let layout_id = LayoutNodeId::new(view_id.as_str());
+        let relative = *layout
+            .geometry(&layout_id)
+            .ok_or_else(|| RuntimeSceneError::MissingNode(view_id.as_str().to_string()))?;
+        let (origin_x, origin_y) = match entry.parent.as_ref() {
+            Some(parent_id) => {
+                let parent = nodes
+                    .iter()
+                    .find(|(id, _)| id.as_str() == parent_id.as_str())
+                    .map(|(_, geometry)| *geometry)
+                    .ok_or_else(|| {
+                        RuntimeSceneError::MissingParent(view_id.as_str().to_string())
+                    })?;
+                (parent.x, parent.y)
+            }
+            None => (0.0, 0.0),
+        };
+        if let Some(clip) = layout.clip(&layout_id) {
+            clips.push((
+                view_id.clone(),
+                ComputedGeometry::new(
+                    origin_x + clip.x,
+                    origin_y + clip.y,
+                    clip.width,
+                    clip.height,
+                    clip.absolute,
+                ),
+            ));
+        }
+        nodes.push((
+            view_id.clone(),
+            ComputedGeometry::new(
+                origin_x + relative.x,
+                origin_y + relative.y,
+                relative.width,
+                relative.height,
+                relative.absolute,
+            ),
+        ));
+    }
+    Ok(AbsoluteGeometry { nodes, clips })
+}
+
+fn collect_geometry(absolute: &AbsoluteGeometry) -> Vec<(RuntimeViewId, Geometry)> {
+    absolute
+        .nodes
         .iter()
-        .map(|entry| {
-            let layout_id = LayoutNodeId::new(entry.node.id().as_str());
-            let geometry = layout.geometry(&layout_id).ok_or_else(|| {
-                RuntimeSceneError::MissingNode(entry.node.id().as_str().to_string())
-            })?;
-            Ok((entry.node.id().clone(), render_geometry(*geometry)))
-        })
+        .map(|(view_id, geometry)| (view_id.clone(), render_geometry(*geometry)))
         .collect()
 }
 
 fn scene_node_for(
     view_id: &RuntimeViewId,
-    layout: &LayoutOutput,
+    absolute: &AbsoluteGeometry,
 ) -> Result<SceneNode, RuntimeSceneError> {
-    let layout_id = LayoutNodeId::new(view_id.as_str());
-    let geometry = layout
-        .geometry(&layout_id)
+    let geometry = absolute
+        .node(view_id)
         .ok_or_else(|| RuntimeSceneError::MissingNode(view_id.as_str().to_string()))?;
-    let node_geometry = render_geometry(*geometry);
+    let node_geometry = render_geometry(geometry);
     let mut node = SceneNode::new(SceneNodeId::new(view_id.as_str()))
         .with_layout(node_geometry)
         .with_hit_test(node_geometry);
-    if let Some(clip) = layout.clip(&layout_id) {
-        node = node.with_clip(render_geometry(*clip));
+    if let Some(clip) = absolute.clip(view_id) {
+        node = node.with_clip(render_geometry(clip));
     }
     Ok(node)
 }

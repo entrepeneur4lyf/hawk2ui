@@ -943,6 +943,87 @@ fn runtime_scene_bridge_computes_layout_scene_and_paint_commands() {
 }
 
 #[test]
+fn runtime_scene_bridge_resolves_absolute_geometry_for_nested_nodes() {
+    // Taffy reports each node's location relative to its parent's border box. A node whose parent is
+    // the root is already at an absolute position (the root sits at the origin), so a depth-2 tree
+    // never exposes the bug. This tree is depth-3: `panel` stacks below `spacer` at y=150, and `dot`
+    // sits at `panel`'s content origin. `dot`'s parent-relative origin is therefore (0, 0), but its
+    // absolute origin is (0, 150). The bridge must accumulate `panel`'s offset, because the wired
+    // renderer blits each draw command verbatim and never walks the tree to add ancestor offsets.
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(400.0, 400.0)),
+        RuntimeVisual::None,
+    ))
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("spacer"),
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_size(LayoutSizing::fixed(400.0, 150.0)),
+            RuntimeVisual::Fill(Color::rgba(20, 20, 20, 255)),
+        ),
+    )
+    .expect("spacer attaches to root")
+    .with_child(
+        &RuntimeViewId::new("root"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("panel"),
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_size(LayoutSizing::fixed(400.0, 200.0)),
+            RuntimeVisual::Fill(Color::rgba(40, 40, 40, 255)),
+        ),
+    )
+    .expect("panel attaches to root")
+    .with_child(
+        &RuntimeViewId::new("panel"),
+        RuntimeViewNode::new(
+            RuntimeViewId::new("dot"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(40.0, 40.0)),
+            RuntimeVisual::Fill(Color::rgba(255, 80, 48, 255)),
+        ),
+    )
+    .expect("dot attaches to panel");
+
+    let frame = RuntimeSceneBridge::new(Viewport::new(400.0, 400.0))
+        .build(&tree)
+        .expect("nested runtime view tree bridges into render data");
+
+    // Depth-2 nodes are correct with or without accumulation (their parent is the root at origin).
+    assert_eq!(
+        frame.geometry_for(&RuntimeViewId::new("panel")).unwrap(),
+        Geometry::new(0.0, 150.0, 400.0, 200.0)
+    );
+
+    // Depth-3: `dot` is at `panel`'s content origin, so its absolute geometry must equal `panel`'s
+    // origin — NOT its parent-relative (0, 0). This is the regression guard for the nested-node bug.
+    let dot = frame.geometry_for(&RuntimeViewId::new("dot")).unwrap();
+    assert_eq!(
+        dot,
+        Geometry::new(0.0, 150.0, 40.0, 40.0),
+        "nested node geometry must be absolute (parent offset accumulated), not parent-relative"
+    );
+
+    // The visible draw command for `dot` carries the same absolute geometry the renderer blits.
+    let dot_command = frame
+        .draw_commands()
+        .iter()
+        .find(|command| command.id().as_str() == "dot")
+        .expect("dot produces a draw command");
+    assert_eq!(dot_command.geometry(), dot);
+
+    // The scene-graph hit-test rect (consumed by a11y/hit-test/invalidation) must also be absolute.
+    let dot_hit_test = frame
+        .scene()
+        .node(&SceneNodeId::new("dot"))
+        .expect("dot is present in the scene graph")
+        .hit_test()
+        .expect("dot has hit-test geometry");
+    assert_eq!(dot_hit_test, dot);
+}
+
+#[test]
 fn runtime_scene_bridge_uses_text_measurement_for_intrinsic_text_geometry() {
     let tree = RuntimeViewTree::new(RuntimeViewNode::new(
         RuntimeViewId::new("root"),
