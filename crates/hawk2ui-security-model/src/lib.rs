@@ -399,7 +399,7 @@ impl RuntimeAuthorityPolicy {
     /// and `Bearer`/`Authorization` tokens) plus `eval(...)` / `Function(...)` payloads —
     /// punctuation- and quote-aware, and it preserves the surrounding text. It reduces the chance
     /// of leaking common secrets but is **not exhaustive and not a guarantee**: it must not be the
-    /// sole control against secret leakage, and new formats must be added to [`SECRET_PREFIXES`].
+    /// sole control against secret leakage, and new formats must be added to `SECRET_PREFIXES`.
     /// Unknown secret shapes pass through unredacted.
     #[must_use]
     pub fn redact_diagnostic(&self, diagnostic: &str) -> String {
