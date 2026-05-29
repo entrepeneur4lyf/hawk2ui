@@ -50,12 +50,11 @@ fn host_handle_from_truce(
     parent: RawWindowHandle,
 ) -> Result<HostPlatformHandle, BaseviewHostError> {
     match parent {
-        RawWindowHandle::Win32(hwnd) => {
-            Ok(HostPlatformHandle::windows_hwnd(hwnd.addr() as u64))
-        }
-        RawWindowHandle::X11(window) => {
-            Ok(HostPlatformHandle::linux_x11(X11_PLACEHOLDER_DISPLAY, window))
-        }
+        RawWindowHandle::Win32(hwnd) => Ok(HostPlatformHandle::windows_hwnd(hwnd.addr() as u64)),
+        RawWindowHandle::X11(window) => Ok(HostPlatformHandle::linux_x11(
+            X11_PLACEHOLDER_DISPLAY,
+            window,
+        )),
         RawWindowHandle::AppKit(_) => Err(BaseviewHostError::new(
             "hawk2ui-truce.parent.appkit-unsupported",
             "macOS AppKit parenting needs the owning NSWindow alongside the NSView that truce exposes; supported with the GPU presentation path",
@@ -252,10 +251,9 @@ mod tests {
 
     #[test]
     fn converts_win32_parent_handle_to_integer_record() {
-        let handle = host_handle_from_truce(RawWindowHandle::Win32(ptr::without_provenance_mut(
-            0x1234,
-        )))
-        .expect("win32 handle converts");
+        let handle =
+            host_handle_from_truce(RawWindowHandle::Win32(ptr::without_provenance_mut(0x1234)))
+                .expect("win32 handle converts");
         assert_eq!(handle, HostPlatformHandle::windows_hwnd(0x1234));
     }
 
@@ -271,8 +269,9 @@ mod tests {
 
     #[test]
     fn rejects_appkit_and_uikit_parent_handles() {
-        let appkit = host_handle_from_truce(RawWindowHandle::AppKit(ptr::without_provenance_mut(1)))
-            .expect_err("appkit is rejected");
+        let appkit =
+            host_handle_from_truce(RawWindowHandle::AppKit(ptr::without_provenance_mut(1)))
+                .expect_err("appkit is rejected");
         assert_eq!(appkit.rule(), "hawk2ui-truce.parent.appkit-unsupported");
 
         let uikit = host_handle_from_truce(RawWindowHandle::UiKit(ptr::without_provenance_mut(1)))

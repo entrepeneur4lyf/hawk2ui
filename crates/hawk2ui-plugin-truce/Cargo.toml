@@ -30,3 +30,12 @@ hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
 [dev-dependencies]
 hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
+
+# Test-only: the sealed `Params` trait can only be produced by `#[derive(Params)]`,
+# whose generated code references `::truce::` paths, so the umbrella crate (not
+# just `truce-derive`) is required to build a `PluginContext` for the native
+# editor smoke. `default-features = false` keeps the format/SDK wrappers out.
+# `x11rb` creates a real X11 parent window for that gated test.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+truce = { version = "0.49.14", default-features = false }
+x11rb = "0.13.2"

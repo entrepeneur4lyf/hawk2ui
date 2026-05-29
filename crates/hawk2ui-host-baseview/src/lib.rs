@@ -719,6 +719,17 @@ impl BaseviewEditorWindowHandle {
     }
 }
 
+impl Drop for BaseviewEditorWindowHandle {
+    fn drop(&mut self) {
+        // Dropping a baseview `WindowHandle` does not by itself cancel the
+        // platform frame timer, so a handle dropped without a prior explicit
+        // `close()` would keep firing `on_frame` into a dead surface — the same
+        // defect truce's own `GpuEditor` guards against in its `Drop`. `close()`
+        // is idempotent, so this composes with an earlier explicit close.
+        self.handle.close();
+    }
+}
+
 /// Headless-safe Baseview plugin adapter.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaseviewPluginAdapter {

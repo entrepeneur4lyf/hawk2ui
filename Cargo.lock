@@ -1845,8 +1845,10 @@ dependencies = [
  "hawk2ui-layout",
  "hawk2ui-render",
  "hawk2ui-runtime",
+ "truce",
  "truce-core",
  "truce-params",
+ "x11rb",
 ]
 
 [[package]]
@@ -4998,6 +5000,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 
 [[package]]
+name = "truce"
+version = "0.49.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f829e3c4a9c73ba7d3cad280944103fc7a028a4a03edd9cfa6dd0585386fcea"
+dependencies = [
+ "truce-core",
+ "truce-derive",
+ "truce-gui-types",
+ "truce-loader",
+ "truce-params",
+ "truce-plugin",
+]
+
+[[package]]
+name = "truce-build"
+version = "0.49.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7c177f490f0f42d2789136a1a00450698842e377449d2a0de141bb0db534b52"
+dependencies = [
+ "serde",
+ "toml 1.1.2+spec-1.1.0",
+]
+
+[[package]]
 name = "truce-core"
 version = "0.49.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5009,12 +5035,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "truce-derive"
+version = "0.49.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4600f75c2df5398a8fde8e26fe39c7dd77ac9178ca89ee8e1010e8a62ced336e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "toml 1.1.2+spec-1.1.0",
+ "truce-build",
+ "truce-params",
+ "truce-utils",
+]
+
+[[package]]
+name = "truce-gui-types"
+version = "0.49.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be3b979ec93fb418dca73cfdad21df280b850f13d01ee721179f1891910e7a99"
+dependencies = [
+ "objc2 0.6.4",
+ "truce-core",
+]
+
+[[package]]
+name = "truce-loader"
+version = "0.49.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46779e23832992b250fd51586d97b97d9811fb418f61f94076bb5bd408c11321"
+dependencies = [
+ "crc32fast",
+ "log",
+ "truce-core",
+ "truce-gui-types",
+ "truce-params",
+ "truce-plugin",
+]
+
+[[package]]
 name = "truce-params"
 version = "0.49.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ceba26f1f04988f6389d1933122a3f6584fc7de21b1325f8b8b8f10108ac8922"
 dependencies = [
  "bitflags 2.11.1",
+]
+
+[[package]]
+name = "truce-plugin"
+version = "0.49.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d27bf0591ff540f13431e6903f9ce48e26876d06068283a72c8c0db0d9d167c"
+dependencies = [
+ "truce-core",
+ "truce-gui-types",
+ "truce-params",
 ]
 
 [[package]]
