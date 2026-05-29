@@ -51,15 +51,60 @@ pub fn product_model_json_schema() -> Result<serde_json::Value, SchemaValidation
     })
 }
 
-/// Validates a JSON value against the generated [`ProductModel`] schema.
+/// Validates a JSON value against the [`ProductModel`] contract.
+///
+/// Enforces both the generated JSON Schema (structure, types, `additionalProperties: false`) and
+/// the model's semantic invariants — no duplicate members, and the required production surfaces
+/// ([`ProductModel::validate_required_surfaces`]) — so a document accepted here is one the
+/// in-process builder would also accept.
 ///
 /// # Errors
 ///
-/// Returns [`SchemaValidationError`] when the schema cannot be compiled or the value fails
-/// validation.
+/// Returns [`SchemaValidationError`] when the schema cannot be compiled, the value fails structural
+/// validation, carries duplicate members, or is missing a required surface.
 pub fn validate_product_model_json(value: &serde_json::Value) -> Result<(), SchemaValidationError> {
     let schema = product_model_json_schema()?;
-    validate_json_value(&schema, value, "schema.product.invalid")
+    validate_json_value(&schema, value, "schema.product.invalid")?;
+
+    // Structural validity is not full conformance: enforce the invariants the in-process builder
+    // upholds, so the public JSON gate accepts only models the constructor would.
+    let model: ProductModel = serde_json::from_value(value.clone()).map_err(|error| {
+        SchemaValidationError::new(
+            "schema.product.invalid",
+            format!("product model document could not be decoded: {error}"),
+        )
+    })?;
+    enforce_no_duplicate_members(&model)?;
+    model.validate_required_surfaces().map_err(|error| {
+        SchemaValidationError::new(
+            "schema.product.surface.missing",
+            format!("product model is missing a required surface: {error:?}"),
+        )
+    })
+}
+
+/// Rejects a product model carrying duplicate host targets, surfaces, or capabilities.
+///
+/// The `with_*` builders dedup, but `Deserialize` does not, so duplicates can survive the untrusted
+/// JSON boundary and bypass the builder's set invariant; the public gate rejects them.
+fn enforce_no_duplicate_members(model: &ProductModel) -> Result<(), SchemaValidationError> {
+    if has_duplicates(&model.host_targets)
+        || has_duplicates(&model.surface_kinds)
+        || has_duplicates(&model.capabilities)
+    {
+        return Err(SchemaValidationError::new(
+            "schema.product.duplicate-member",
+            "product model contains duplicate host targets, surfaces, or capabilities",
+        ));
+    }
+    Ok(())
+}
+
+fn has_duplicates<T: PartialEq>(items: &[T]) -> bool {
+    items
+        .iter()
+        .enumerate()
+        .any(|(index, item)| items[..index].contains(item))
 }
 
 /// Generates the central production schema catalog.

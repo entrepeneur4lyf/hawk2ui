@@ -244,4 +244,34 @@ mod tests {
         let diagnostic = hawk2ui_api::Diagnostic::from(error);
         assert_eq!(diagnostic.rule.as_str(), "schema.product.invalid");
     }
+
+    #[test]
+    fn validate_product_model_json_enforces_required_surfaces() {
+        // Structurally valid but missing the PluginEditor surface: the JSON gate now enforces the
+        // full conformance contract, not just structure.
+        let value = serde_json::json!({
+            "id": "desktop-only",
+            "host_targets": ["LinuxWayland"],
+            "surface_kinds": ["DesktopWindow"],
+            "capabilities": ["NativeWindowing"]
+        });
+        let error = crate::validate_product_model_json(&value)
+            .expect_err("a structurally valid but incomplete model is rejected");
+        assert_eq!(error.rule(), "schema.product.surface.missing");
+    }
+
+    #[test]
+    fn validate_product_model_json_rejects_duplicate_members() {
+        // Duplicates survive `Deserialize` (the builder dedups, the wire format does not); the gate
+        // rejects them so the deserialize path agrees with the constructor's set invariant.
+        let value = serde_json::json!({
+            "id": "dupes",
+            "host_targets": ["LinuxWayland", "LinuxWayland"],
+            "surface_kinds": ["DesktopWindow", "PluginEditor"],
+            "capabilities": ["NativeWindowing"]
+        });
+        let error = crate::validate_product_model_json(&value)
+            .expect_err("duplicate members are rejected on the deserialize boundary");
+        assert_eq!(error.rule(), "schema.product.duplicate-member");
+    }
 }
