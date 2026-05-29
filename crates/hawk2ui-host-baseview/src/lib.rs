@@ -707,17 +707,18 @@ const GPU_EDITOR_SURFACE_ID: &str = "baseview-gpu-editor";
 /// RGBA8 framebuffer with an 8-bit stencil, matching the Ganesh surface Skia
 /// wraps over it.
 ///
-/// A **compatibility** profile is requested deliberately. Skia's assembled GL
-/// interface queries extensions with the legacy `glGetString(GL_EXTENSIONS)`,
-/// which returns NULL in a core profile (3.2+), so building the interface
-/// segfaults; a compatibility profile keeps that query valid. Desktop drivers
-/// (NVIDIA/AMD/Intel) expose full compatibility profiles, which is what this
-/// 2D editor needs.
+/// A **core** profile (Baseview's default) is chosen deliberately over
+/// compatibility. The Skia-on-GLX crash this path first hit was Skia probing
+/// EGL while assembling its interface — fixed by hiding `egl*` in
+/// [`GlProcAddressLoader`], independent of the GL profile (a smoke run with a
+/// core profile and the EGL hide passes). Core keeps the macOS port viable:
+/// macOS exposes GL 3.2 core but caps the compatibility profile at GL 2.1,
+/// below what Ganesh needs.
 #[cfg(target_os = "linux")]
 fn gpu_editor_gl_config() -> baseview::gl::GlConfig {
     baseview::gl::GlConfig {
         srgb: false,
-        profile: baseview::gl::Profile::Compatibility,
+        profile: baseview::gl::Profile::Core,
         ..baseview::gl::GlConfig::default()
     }
 }

@@ -70,7 +70,7 @@ fn gpu_editor_opens_gl_window_renders_and_tears_down_when_smoke_enabled() {
     let mut options = adapter.open_options().clone();
     options.gl_config = Some(GlConfig {
         srgb: false,
-        profile: Profile::Compatibility,
+        profile: Profile::Core,
         ..GlConfig::default()
     });
 
