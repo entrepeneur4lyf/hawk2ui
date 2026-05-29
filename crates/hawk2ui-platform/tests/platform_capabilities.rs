@@ -247,6 +247,21 @@ fn filesystem_scope_canonicalizes_existing_roots_and_targets() {
 }
 
 #[test]
+fn filesystem_scope_rejects_uncanonicalizable_root() {
+    // A scope root that does not exist on disk cannot be canonicalized, so containment
+    // (`resolved.starts_with(root_canonical)`) cannot be verified. The resolver must fail closed
+    // rather than return an unchecked `root.join(..)` (the previous silent fallback).
+    let temp = temp_platform_dir("filesystem-missing-root");
+    let missing_root = temp.join("does-not-exist");
+    let grant = FilesystemGrant::new(FilesystemScope::ProjectAssets, path_string(&missing_root));
+
+    let error = FilesystemPolicy::resolve(&grant, "config.toml")
+        .expect_err("an uncanonicalizable scope root must be denied, not resolved unchecked");
+
+    assert_eq!(error.diagnostic.rule, "filesystem.path.escape");
+}
+
+#[test]
 fn filesystem_scope_rejects_structurally_unsafe_user_selected_grants() {
     for path in [
         "relative/session.hawk",

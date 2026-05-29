@@ -1,4 +1,17 @@
 //! Scoped filesystem API records.
+//!
+//! This is a policy/decision layer, not the syscall layer. Two obligations fall on the host that
+//! performs the actual IO:
+//!
+//! - **Capability gating (grant-as-capability).** A [`FilesystemGrant`] *is* the minted permission;
+//!   resolution here takes a grant, not a `PlatformContext`, so this module does not gate
+//!   `FilesystemRead`/`FilesystemWrite` through the capability table. The host must call
+//!   `CapabilityTable::ensure_allowed` (e.g. to honor a `plugin: false` capability) *before* minting
+//!   a grant; `FilesystemGrant::new`/`user_selected_file` are ungated by design.
+//! - **Resolve-vs-open TOCTOU.** Resolution returns a path *string* whose scope was verified at
+//!   resolve time; a symlink swapped in before the host opens it can still escape. The host must
+//!   open the resolved path with `O_NOFOLLOW`/`openat`-relative semantics rather than trusting the
+//!   string across the resolve→open gap. A record layer cannot close this.
 
 use crate::PlatformDiagnostic;
 use std::path::{Component, Path, PathBuf};
@@ -195,12 +208,13 @@ fn is_valid_scope_root(root: &str) -> bool {
 }
 
 fn resolve_scoped_path(root: &Path, relative_path: &Path) -> Option<String> {
-    let root_canonical = root.canonicalize().ok();
-    let candidate = root.join(relative_path);
-    let Some(root_canonical) = root_canonical else {
-        return Some(candidate.to_string_lossy().into_owned());
-    };
-    let resolved = canonicalize_existing_prefix(&candidate)?;
+    // The scope root must canonicalize: containment is defined as
+    // `resolved.starts_with(root_canonical)`, so an uncanonicalizable root (missing or
+    // inaccessible) cannot be verified. Fail closed by returning `None` (which the policy maps to
+    // `filesystem.path.escape`) rather than returning an unchecked `root.join(..)` that could
+    // escape the intended scope.
+    let root_canonical = root.canonicalize().ok()?;
+    let resolved = canonicalize_existing_prefix(&root.join(relative_path))?;
     resolved
         .starts_with(&root_canonical)
         .then(|| resolved.to_string_lossy().into_owned())
