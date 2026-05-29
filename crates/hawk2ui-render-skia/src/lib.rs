@@ -2187,14 +2187,32 @@ fn geometry_intersects(left: Geometry, right: Geometry) -> bool {
         && left.y + left.height > right.y
 }
 
+/// Maximum physical (DPI-scaled) pixel dimension for a raster surface.
+///
+/// Surface dimensions are caller-influenced and only checked non-zero upstream, so without a
+/// ceiling a finite-but-enormous request (e.g. `30000x30000`, or a modest logical size at a large
+/// DPI) allocates an N32 raster surface gated only by `i32` — and `capture_frame_snapshot` then
+/// allocates ~2x more transiently. `16384` covers an 8K display at 2x scale (`15360x8640`) with
+/// headroom while turning a pathological request into a pre-allocation `skia.surface.too-large`
+/// rejection.
+const MAX_SURFACE_DIMENSION: u32 = 16_384;
+
 fn create_raster_surface(width: u32, height: u32, dpi_scale: f32) -> Result<Surface, BackendError> {
-    let pixel_width = i32::try_from(scaled_pixels(width, dpi_scale)).map_err(|_| {
+    let physical_width = scaled_pixels(width, dpi_scale);
+    let physical_height = scaled_pixels(height, dpi_scale);
+    if physical_width > MAX_SURFACE_DIMENSION || physical_height > MAX_SURFACE_DIMENSION {
+        return Err(BackendError::new(
+            "skia.surface.too-large",
+            "surface pixel dimensions exceed the maximum supported raster size",
+        ));
+    }
+    let pixel_width = i32::try_from(physical_width).map_err(|_| {
         BackendError::new(
             "skia.surface.pixel-size-overflow",
             "surface pixel width exceeds Skia raster limits",
         )
     })?;
-    let pixel_height = i32::try_from(scaled_pixels(height, dpi_scale)).map_err(|_| {
+    let pixel_height = i32::try_from(physical_height).map_err(|_| {
         BackendError::new(
             "skia.surface.pixel-size-overflow",
             "surface pixel height exceeds Skia raster limits",

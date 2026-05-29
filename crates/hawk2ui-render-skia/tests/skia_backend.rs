@@ -59,6 +59,30 @@ fn skia_backend_tracks_surface_resize_dpi_frame_and_dirty_state() {
 }
 
 #[test]
+fn skia_backend_rejects_oversized_surface_allocation() {
+    // Surface dimensions are caller-influenced and only checked non-zero upstream, so without a
+    // ceiling a finite-but-enormous request allocates an unbounded N32 raster surface (memory
+    // exhaustion), with `capture_frame_snapshot` then allocating ~2x more. An over-cap physical
+    // dimension must be refused *before* allocation. The small height keeps this test's pre-cap
+    // allocation cheap while the width alone trips the bound.
+    let mut backend = SkiaRendererBackend::new();
+    let create_error = backend
+        .create_surface_with_config(SkiaSurfaceConfig::cpu_raster("huge", 20_000, 64))
+        .expect_err("an over-cap surface dimension is rejected before allocation");
+    assert_eq!(create_error.diagnostic().rule(), "skia.surface.too-large");
+
+    // The bound is on the *physical* (DPI-scaled) dimension: a modest logical size at a large DPI
+    // is also rejected (9000 x 2.0 = 18000 physical).
+    backend
+        .create_surface_with_config(SkiaSurfaceConfig::cpu_raster("ok", 1280, 64))
+        .expect("an in-bounds surface still allocates");
+    let resize_error = backend
+        .resize_surface("ok", 9000, 64, 2.0)
+        .expect_err("an over-cap resize is rejected on the scaled dimension");
+    assert_eq!(resize_error.diagnostic().rule(), "skia.surface.too-large");
+}
+
+#[test]
 fn frame_snapshot_reads_presented_pixels_and_enforces_lifecycle() {
     let mut backend = SkiaRendererBackend::new();
     backend.create_surface("main", 16, 16).unwrap();
