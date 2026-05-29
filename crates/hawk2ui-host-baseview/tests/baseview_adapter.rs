@@ -860,8 +860,6 @@ fn baseview_clap_runtime_editor_host_drains_realtime_visuals_with_frame_gate() {
     let push = writer.audio_thread_push(RealtimeVisualPacket::meter("meter", 0.8));
     assert!(push.accepted);
     assert_eq!(push.dropped_frames, 0);
-    assert_eq!(writer.allocation_count(), 0);
-    assert_eq!(writer.blocking_wait_count(), 0);
     assert_eq!(
         host.drain_realtime_visuals(&mut reader, 0, &mut gate)
             .expect("first realtime drain is due"),
@@ -869,10 +867,10 @@ fn baseview_clap_runtime_editor_host_drains_realtime_visuals_with_frame_gate() {
     );
     assert_eq!(
         host.latest_realtime_visual_packets(),
-        &[RealtimeVisualPacket::meter("meter", 0.8)]
+        std::slice::from_ref(&RealtimeVisualPacket::meter("meter", 0.8))
     );
 
-    let _ = writer.audio_thread_push(RealtimeVisualPacket::analyzer("analyzer", vec![0.1, 0.4]));
+    let _ = writer.audio_thread_push(RealtimeVisualPacket::analyzer("analyzer", &[0.1, 0.4]));
     assert_eq!(
         host.drain_realtime_visuals(&mut reader, 1, &mut gate)
             .expect("early realtime drain is gated"),
@@ -880,7 +878,7 @@ fn baseview_clap_runtime_editor_host_drains_realtime_visuals_with_frame_gate() {
     );
     assert_eq!(
         host.latest_realtime_visual_packets(),
-        &[RealtimeVisualPacket::meter("meter", 0.8)]
+        std::slice::from_ref(&RealtimeVisualPacket::meter("meter", 0.8))
     );
     assert_eq!(
         host.drain_realtime_visuals(&mut reader, 17, &mut gate)
@@ -889,7 +887,7 @@ fn baseview_clap_runtime_editor_host_drains_realtime_visuals_with_frame_gate() {
     );
     assert_eq!(
         host.latest_realtime_visual_packets(),
-        &[RealtimeVisualPacket::analyzer("analyzer", vec![0.1, 0.4])]
+        std::slice::from_ref(&RealtimeVisualPacket::analyzer("analyzer", &[0.1, 0.4]))
     );
 
     host.destroy().expect("destroy succeeds");
@@ -1120,7 +1118,7 @@ fn baseview_clap_runtime_editor_host_binds_generated_text_abi_to_live_editor() {
     );
     assert_eq!(
         host.latest_realtime_visual_packets(),
-        &[RealtimeVisualPacket::meter("meter", 0.8)]
+        std::slice::from_ref(&RealtimeVisualPacket::meter("meter", 0.8))
     );
     assert_eq!(
         bridge

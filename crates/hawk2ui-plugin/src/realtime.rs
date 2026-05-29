@@ -3,6 +3,27 @@
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use serde::{Deserialize, Serialize};
 
+/// Maximum number of `f32` samples carried inline by a single [`RealtimeVisualPacket`].
+///
+/// Packets store their channel id and samples in fixed inline buffers so that
+/// constructing, moving, and dropping a packet performs **no heap allocation or
+/// deallocation** — the hard requirement for [`RealtimeVisualAudioWriter::audio_thread_push`],
+/// which runs on the realtime audio thread. Payloads longer than this are clamped to
+/// their leading `MAX_VISUAL_SAMPLES` values: a spectrum or scope frame degrades
+/// gracefully rather than being rejected (and made invisible) on the hot path.
+///
+/// A packet is therefore roughly `MAX_VISUAL_SAMPLES * 4` bytes, and a transport
+/// preallocates `capacity` packets — so a 4096-sample bound at capacity 64 reserves
+/// about 1 MiB. Raise this if an analyzer needs more bins; the only cost is that
+/// preallocated footprint.
+pub const MAX_VISUAL_SAMPLES: usize = 4096;
+
+/// Maximum byte length of a channel identifier carried inline by a [`RealtimeVisualPacket`].
+///
+/// Channel ids are short labels (`"out"`, `"fft"`, `"scope.left"`); a longer id is
+/// truncated on a UTF-8 character boundary.
+pub const MAX_CHANNEL_ID_LEN: usize = 32;
+
 /// Realtime visual channel kind.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum RealtimeChannelKind {
@@ -26,56 +47,90 @@ pub enum FrameDropPolicy {
 }
 
 /// Realtime visual packet.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+///
+/// Carries its channel id and samples in fixed inline buffers, so the packet owns no
+/// heap: constructing it, moving it through the transport ring, and dropping it never
+/// allocate or free. That is what makes pushing one from the realtime audio thread
+/// safe. The invariant is proven structurally by the `realtime_visual_packet_owns_no_heap`
+/// test (`!std::mem::needs_drop`); it breaks the build the moment a heap-owning field
+/// (`Vec`/`String`/`Box`) is reintroduced. Inputs larger than [`MAX_VISUAL_SAMPLES`] /
+/// [`MAX_CHANNEL_ID_LEN`] are clamped on construction rather than allocating.
+#[derive(Clone, Debug, PartialEq)]
 pub struct RealtimeVisualPacket {
     /// Channel kind.
     pub kind: RealtimeChannelKind,
-    /// Channel identifier.
-    pub channel_id: String,
-    /// Visual samples or scalar payload.
-    pub values: Vec<f32>,
+    channel_id: [u8; MAX_CHANNEL_ID_LEN],
+    channel_id_len: usize,
+    values: [f32; MAX_VISUAL_SAMPLES],
+    values_len: usize,
 }
 
 impl RealtimeVisualPacket {
     /// Creates a meter packet.
     #[must_use]
-    pub fn meter(channel_id: impl Into<String>, value: f32) -> Self {
-        Self {
-            kind: RealtimeChannelKind::Meter,
-            channel_id: channel_id.into(),
-            values: vec![value],
-        }
+    pub fn meter(channel_id: &str, value: f32) -> Self {
+        Self::with_samples(RealtimeChannelKind::Meter, channel_id, &[value])
     }
 
-    /// Creates an analyzer packet.
+    /// Creates an analyzer packet from a bin slice (clamped to [`MAX_VISUAL_SAMPLES`]).
     #[must_use]
-    pub fn analyzer(channel_id: impl Into<String>, bins: Vec<f32>) -> Self {
-        Self {
-            kind: RealtimeChannelKind::Analyzer,
-            channel_id: channel_id.into(),
-            values: bins,
-        }
+    pub fn analyzer(channel_id: &str, bins: &[f32]) -> Self {
+        Self::with_samples(RealtimeChannelKind::Analyzer, channel_id, bins)
     }
 
-    /// Creates a scope packet.
+    /// Creates a scope packet from a sample slice (clamped to [`MAX_VISUAL_SAMPLES`]).
     #[must_use]
-    pub fn scope(channel_id: impl Into<String>, samples: Vec<f32>) -> Self {
-        Self {
-            kind: RealtimeChannelKind::Scope,
-            channel_id: channel_id.into(),
-            values: samples,
-        }
+    pub fn scope(channel_id: &str, samples: &[f32]) -> Self {
+        Self::with_samples(RealtimeChannelKind::Scope, channel_id, samples)
     }
 
     /// Creates a modulation packet.
     #[must_use]
-    pub fn modulation(channel_id: impl Into<String>, value: f32) -> Self {
+    pub fn modulation(channel_id: &str, value: f32) -> Self {
+        Self::with_samples(RealtimeChannelKind::Modulation, channel_id, &[value])
+    }
+
+    /// Returns the channel identifier.
+    #[must_use]
+    pub fn channel_id(&self) -> &str {
+        std::str::from_utf8(&self.channel_id[..self.channel_id_len]).unwrap_or_default()
+    }
+
+    /// Returns the visual sample payload.
+    #[must_use]
+    pub fn values(&self) -> &[f32] {
+        &self.values[..self.values_len]
+    }
+
+    /// Builds a packet by copying `channel_id` and `samples` into inline buffers.
+    ///
+    /// Performs no heap allocation: an oversized `channel_id` is truncated on a UTF-8
+    /// boundary and an oversized `samples` slice is clamped to the leading
+    /// [`MAX_VISUAL_SAMPLES`] values. Clamping is silent and non-panicking by design —
+    /// this runs on the realtime audio thread, so an over-capacity payload degrades the
+    /// frame rather than aborting; producers should size payloads to [`MAX_VISUAL_SAMPLES`].
+    fn with_samples(kind: RealtimeChannelKind, channel_id: &str, samples: &[f32]) -> Self {
+        let mut channel_id_buffer = [0_u8; MAX_CHANNEL_ID_LEN];
+        let channel_id_len = copy_channel_id(&mut channel_id_buffer, channel_id);
+        let mut values = [0.0_f32; MAX_VISUAL_SAMPLES];
+        let values_len = samples.len().min(MAX_VISUAL_SAMPLES);
+        values[..values_len].copy_from_slice(&samples[..values_len]);
         Self {
-            kind: RealtimeChannelKind::Modulation,
-            channel_id: channel_id.into(),
-            values: vec![value],
+            kind,
+            channel_id: channel_id_buffer,
+            channel_id_len,
+            values,
+            values_len,
         }
     }
+}
+
+/// Copies `channel_id` into `buffer`, truncating on a UTF-8 boundary, and returns the
+/// byte length written.
+fn copy_channel_id(buffer: &mut [u8; MAX_CHANNEL_ID_LEN], channel_id: &str) -> usize {
+    let end = channel_id.floor_char_boundary(MAX_CHANNEL_ID_LEN);
+    buffer[..end].copy_from_slice(&channel_id.as_bytes()[..end]);
+    end
 }
 
 /// Result of an audio-thread visual packet write.
@@ -183,15 +238,15 @@ pub struct RealtimeVisualAudioWriter {
     capacity: usize,
     drop_policy: FrameDropPolicy,
     producer: Producer<RealtimeVisualPacket>,
-    allocation_count: usize,
-    blocking_wait_count: usize,
 }
 
 impl RealtimeVisualAudioWriter {
-    /// Writes a packet from the audio thread without blocking.
+    /// Writes a packet from the audio thread without blocking or allocating.
     ///
-    /// Split writers cannot remove old packets because they do not own the UI reader endpoint.
-    /// When full, the write degrades to dropping the newest packet and reports the drop.
+    /// The packet owns no heap (see [`RealtimeVisualPacket`]), so moving it into the
+    /// preallocated ring — and dropping a rejected packet — never allocates or frees.
+    /// Split writers cannot remove old packets because they do not own the UI reader
+    /// endpoint, so a full buffer degrades to dropping the newest packet and reports it.
     #[must_use]
     pub fn audio_thread_push(&mut self, packet: RealtimeVisualPacket) -> RealtimePushResult {
         push_without_waiting(&mut self.producer, packet, self.drop_policy)
@@ -201,18 +256,6 @@ impl RealtimeVisualAudioWriter {
     #[must_use]
     pub const fn capacity(&self) -> usize {
         self.capacity
-    }
-
-    /// Returns allocation count observed in audio-thread writes.
-    #[must_use]
-    pub const fn allocation_count(&self) -> usize {
-        self.allocation_count
-    }
-
-    /// Returns blocking wait count observed in audio-thread writes.
-    #[must_use]
-    pub const fn blocking_wait_count(&self) -> usize {
-        self.blocking_wait_count
     }
 }
 
@@ -260,8 +303,6 @@ pub struct RealtimeVisualTransport {
     drop_policy: FrameDropPolicy,
     producer: Producer<RealtimeVisualPacket>,
     consumer: Consumer<RealtimeVisualPacket>,
-    allocation_count: usize,
-    blocking_wait_count: usize,
 }
 
 impl RealtimeVisualTransport {
@@ -274,8 +315,6 @@ impl RealtimeVisualTransport {
             drop_policy,
             producer,
             consumer,
-            allocation_count: 0,
-            blocking_wait_count: 0,
         }
     }
 
@@ -291,14 +330,12 @@ impl RealtimeVisualTransport {
                 capacity,
                 drop_policy,
                 producer,
-                allocation_count: 0,
-                blocking_wait_count: 0,
             },
             RealtimeVisualUiReader { capacity, consumer },
         )
     }
 
-    /// Writes a packet from the audio thread without blocking.
+    /// Writes a packet from the audio thread without blocking or allocating.
     #[must_use]
     pub fn audio_thread_push(&mut self, packet: RealtimeVisualPacket) -> RealtimePushResult {
         match self.producer.push(packet) {
@@ -342,18 +379,6 @@ impl RealtimeVisualTransport {
     #[must_use]
     pub fn pending_len(&self) -> usize {
         self.consumer.slots()
-    }
-
-    /// Returns allocation count observed in audio-thread writes.
-    #[must_use]
-    pub const fn allocation_count(&self) -> usize {
-        self.allocation_count
-    }
-
-    /// Returns blocking wait count observed in audio-thread writes.
-    #[must_use]
-    pub const fn blocking_wait_count(&self) -> usize {
-        self.blocking_wait_count
     }
 }
 

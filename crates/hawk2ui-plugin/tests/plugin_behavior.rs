@@ -384,23 +384,56 @@ fn state_presets_keep_factory_and_user_presets_separate() {
 }
 
 use hawk2ui_plugin::{
-    FrameDropPolicy, RealtimeChannelKind, RealtimeVisualFrameGate, RealtimeVisualPacket,
-    RealtimeVisualTransport,
+    FrameDropPolicy, MAX_CHANNEL_ID_LEN, MAX_VISUAL_SAMPLES, RealtimeChannelKind,
+    RealtimeVisualFrameGate, RealtimeVisualPacket, RealtimeVisualTransport,
 };
 
 #[test]
 fn realtime_visual_data_records_meters_analyzers_scopes_and_modulation() {
-    let packets = [
-        RealtimeVisualPacket::meter("out", 0.9),
-        RealtimeVisualPacket::analyzer("fft", vec![0.1, 0.2]),
-        RealtimeVisualPacket::scope("osc", vec![-0.5, 0.5]),
-        RealtimeVisualPacket::modulation("lfo", 0.25),
-    ];
+    assert_eq!(
+        RealtimeVisualPacket::meter("out", 0.9).kind,
+        RealtimeChannelKind::Meter
+    );
+    assert_eq!(
+        RealtimeVisualPacket::analyzer("fft", &[0.1, 0.2]).kind,
+        RealtimeChannelKind::Analyzer
+    );
+    assert_eq!(
+        RealtimeVisualPacket::scope("osc", &[-0.5, 0.5]).kind,
+        RealtimeChannelKind::Scope
+    );
+    assert_eq!(
+        RealtimeVisualPacket::modulation("lfo", 0.25).kind,
+        RealtimeChannelKind::Modulation
+    );
+}
 
-    assert_eq!(packets[0].kind, RealtimeChannelKind::Meter);
-    assert_eq!(packets[1].kind, RealtimeChannelKind::Analyzer);
-    assert_eq!(packets[2].kind, RealtimeChannelKind::Scope);
-    assert_eq!(packets[3].kind, RealtimeChannelKind::Modulation);
+#[test]
+fn realtime_visual_packet_owns_no_heap() {
+    // RT-safety proof: no drop glue implies no owned heap allocation (`Vec`, `String`,
+    // and `Box` all carry drop glue), so constructing, moving, and dropping a packet on
+    // the audio thread never allocates or frees. This replaces the former inert
+    // `allocation_count`/`blocking_wait_count` counters (which only ever returned 0) with
+    // a guarantee the compiler enforces: it breaks the build the instant a heap-owning
+    // field is reintroduced to `RealtimeVisualPacket`.
+    assert!(!std::mem::needs_drop::<RealtimeVisualPacket>());
+}
+
+#[test]
+fn realtime_visual_packet_clamps_oversized_payload_and_channel_id() {
+    // Over-capacity input is clamped (not rejected, not panicking) — the realtime-thread
+    // graceful-degradation contract that replaced the removed debug assertion.
+    let oversized = vec![0.5_f32; MAX_VISUAL_SAMPLES + 64];
+    let packet = RealtimeVisualPacket::analyzer("analyzer", &oversized);
+    assert_eq!(packet.values().len(), MAX_VISUAL_SAMPLES);
+
+    let long_id = "x".repeat(MAX_CHANNEL_ID_LEN + 16);
+    assert_eq!(
+        RealtimeVisualPacket::meter(&long_id, 1.0)
+            .channel_id()
+            .len(),
+        MAX_CHANNEL_ID_LEN
+    );
 }
 
 #[test]
@@ -423,8 +456,6 @@ fn realtime_visual_data_audio_thread_write_is_non_blocking_and_preallocated() {
     assert_eq!(third.dropped_frames, 1);
     assert_eq!(transport.capacity(), 2);
     assert_eq!(transport.pending_len(), 2);
-    assert_eq!(transport.allocation_count(), 0);
-    assert_eq!(transport.blocking_wait_count(), 0);
 }
 
 #[test]
@@ -433,11 +464,10 @@ fn realtime_visual_data_ui_reads_do_not_block_audio_writes() {
     let _ = transport.audio_thread_push(RealtimeVisualPacket::modulation("lfo", 0.5));
 
     let packets = transport.ui_drain();
-    let write = transport.audio_thread_push(RealtimeVisualPacket::scope("osc", vec![0.0]));
+    let write = transport.audio_thread_push(RealtimeVisualPacket::scope("osc", &[0.0]));
 
     assert_eq!(packets.len(), 1);
     assert!(write.accepted);
-    assert_eq!(transport.blocking_wait_count(), 0);
 }
 
 #[test]
@@ -449,29 +479,20 @@ fn realtime_visual_data_split_transport_moves_audio_writer_across_threads() {
         let first = audio_writer.audio_thread_push(RealtimeVisualPacket::meter("out", 0.1));
         let second = audio_writer.audio_thread_push(RealtimeVisualPacket::meter("out", 0.2));
         let third = audio_writer.audio_thread_push(RealtimeVisualPacket::meter("out", 0.3));
-        (
-            first,
-            second,
-            third,
-            audio_writer.allocation_count(),
-            audio_writer.blocking_wait_count(),
-        )
+        (first, second, third)
     });
 
-    let (first, second, third, allocations, blocking_waits) =
-        handle.join().expect("audio writer thread should not panic");
+    let (first, second, third) = handle.join().expect("audio writer thread should not panic");
     let packets = ui_reader.ui_drain();
 
     assert!(first.accepted);
     assert!(second.accepted);
     assert!(!third.accepted);
     assert_eq!(third.dropped_frames, 1);
-    assert_eq!(allocations, 0);
-    assert_eq!(blocking_waits, 0);
     assert_eq!(ui_reader.capacity(), 2);
     assert_eq!(packets.len(), 2);
-    assert_eq!(packets[0].values, vec![0.1]);
-    assert_eq!(packets[1].values, vec![0.2]);
+    assert_eq!(packets[0].values(), [0.1_f32].as_slice());
+    assert_eq!(packets[1].values(), [0.2_f32].as_slice());
 }
 
 #[test]
@@ -506,6 +527,6 @@ fn realtime_visual_data_ui_frame_gate_reduces_drain_cadence() {
         .expect("30hz gate should present after the reduced interval");
 
     assert_eq!(reduced_frame.len(), 1);
-    assert_eq!(reduced_frame[0].values, vec![0.2]);
+    assert_eq!(reduced_frame[0].values(), [0.2_f32].as_slice());
     assert!(RealtimeVisualFrameGate::new(0).is_err());
 }

@@ -3,7 +3,7 @@
 **Reviewed at:** `5a042c51` · 2026-05-28 · **Remediated (contained subset):** 2026-05-29
 **Scope:** `src/{lib,parameter,state,automation,editor,format,realtime}.rs` + `tests/plugin_behavior.rs` (7 src files ~1500 LoC / 1 test file ~480 LoC)
 **Purpose:** Format-neutral plugin model shared by the VST3/CLAP/AU adapters — typed parameters with range normalization, automation gesture sequencing, editor-embedding lifecycle records, package-format metadata + JSON-schema validation, versioned state/preset envelopes with migrations, and a preallocated realtime visual-data transport (audio-thread → UI-thread).
-**Note:** Findings reflect the SHA above. The **contained subset** (#4 duplicate-id, #7 group-recursion) was remediated 2026-05-29 — see the Remediation section. The **High (#1 RT-allocation)** and the **Choice/Bool fidelity cluster (#2/#3)** are **bucket-(c)** — they require design/capability decisions the project has not made (a bounded RT packet representation + max-sample capacity, and the parameter-type/state-format model for `Choice`), so they are surfaced for decision, not unilaterally fixed.
+**Note:** Findings reflect the SHA above. The **High #1 (RT audio-thread allocation)** and the inert RT metrics (#5) were **remediated 2026-05-29** — the realtime transport now carries heap-free POD packets (see the Remediation section). The remaining **Choice/Bool fidelity cluster (#2/#3)** is **bucket-(c)** — it requires the parameter-type/state-format-model decision the project has not made — so it is surfaced for decision, not unilaterally fixed. The earlier contained subset (#4 duplicate-id, #7 group-recursion) was also remediated.
 
 ## Summary
 

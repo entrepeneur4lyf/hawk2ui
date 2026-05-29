@@ -462,15 +462,18 @@ impl SmokeRunner {
         })?;
         let drained_channels = drained
             .iter()
-            .map(|packet| packet.channel_id.clone())
+            .map(|packet| packet.channel_id().to_owned())
             .collect::<Vec<_>>();
         Ok(RealtimeVisualSmokeResult {
             channels: drained_channels.clone(),
             audio_writes: accepted_writes + dropped_frames,
             ui_frames_consumed: drained.len(),
             dropped_frames,
-            blocking_waits: transport.blocking_wait_count(),
-            allocations_on_audio_thread: transport.allocation_count(),
+            // Structurally zero: the rtrb ring is wait-free and `RealtimeVisualPacket`
+            // owns no heap (proven by `hawk2ui-plugin`'s `realtime_visual_packet_owns_no_heap`
+            // test), so an audio-thread push neither blocks nor allocates.
+            blocking_waits: 0,
+            allocations_on_audio_thread: 0,
             transport_capacity: transport.capacity(),
             frame_gate_hz: frame_gate.target_hz(),
             drained_channels,
@@ -881,8 +884,8 @@ const PLUGIN_SMOKE_FILL_PIXEL: u32 = 0x001a_6f4a;
 fn realtime_smoke_packets() -> Vec<RealtimeVisualPacket> {
     vec![
         RealtimeVisualPacket::meter("meter", 0.8),
-        RealtimeVisualPacket::analyzer("analyzer", vec![0.1, 0.4, 0.9]),
-        RealtimeVisualPacket::scope("scope", vec![-0.2, 0.0, 0.2]),
+        RealtimeVisualPacket::analyzer("analyzer", &[0.1, 0.4, 0.9]),
+        RealtimeVisualPacket::scope("scope", &[-0.2, 0.0, 0.2]),
         RealtimeVisualPacket::modulation("modulation", 0.35),
         RealtimeVisualPacket::meter("overflow", 1.0),
     ]
