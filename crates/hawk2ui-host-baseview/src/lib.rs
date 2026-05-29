@@ -334,6 +334,15 @@ impl BaseviewNativeParent {
 // SAFETY: Baseview 0.1 accepts `raw-window-handle` 0.5 parent values by contract.
 // `BaseviewNativeParent` is constructed only after validating that every pointer/window ID
 // required by the selected backend is non-zero and representable on this target.
+//
+// Lifetime caveat (inherent to embedded plugin hosting; NOT covered by the validation above):
+// these handles are *borrowed* from the DAW-owned parent and stored as plain integers, so this
+// `Copy` value cannot observe the parent being destroyed. `raw-window-handle`'s contract — that
+// the handle is valid for the lifetime of the value — therefore holds only while the DAW keeps
+// the parent alive. Upholding it is the plugin lifecycle's responsibility (attach before
+// `open_parented`, no use after the host tears the editor down); validation gates value and
+// representability, not liveness or provenance, so a handle used after DAW-side teardown is a
+// use-after-free this crate cannot detect.
 #[allow(unsafe_code)]
 unsafe impl HasRawWindowHandle for BaseviewNativeParent {
     fn raw_window_handle(&self) -> RawWindowHandle {
@@ -368,7 +377,10 @@ unsafe impl HasRawWindowHandle for BaseviewNativeParent {
 }
 
 // SAFETY: The display handle is derived from the same validated parent record as the window
-// handle. The selected variants match Baseview's platform backend expectations.
+// handle. The selected variants match Baseview's platform backend expectations. The same
+// borrowed-handle lifetime caveat as `HasRawWindowHandle` applies: the display/connection pointer
+// is reconstituted from an integer checked only for non-zero, pointer-width-representable value —
+// not for liveness or provenance — so it is valid only while the DAW keeps the parent alive.
 #[allow(unsafe_code)]
 unsafe impl HasRawDisplayHandle for BaseviewNativeParent {
     fn raw_display_handle(&self) -> RawDisplayHandle {
@@ -679,7 +691,6 @@ pub struct BaseviewPluginAdapter {
     open_options: WindowOpenOptions,
     destroyed: bool,
     visible: bool,
-    requested_process_quit: bool,
     events: Vec<PluginHostEvent>,
     repaint_reasons: Vec<String>,
     presented_frame_count: u64,
@@ -718,7 +729,6 @@ impl BaseviewPluginAdapter {
             open_options,
             destroyed: false,
             visible: true,
-            requested_process_quit: false,
             repaint_reasons: Vec::new(),
             presented_frame_count: 0,
             last_presented_frame: None,
@@ -747,12 +757,6 @@ impl BaseviewPluginAdapter {
     #[must_use]
     pub const fn visible(&self) -> bool {
         self.visible
-    }
-
-    /// Returns whether process quit was requested.
-    #[must_use]
-    pub const fn requested_process_quit(&self) -> bool {
-        self.requested_process_quit
     }
 
     /// Returns repaint reasons.
@@ -1885,13 +1889,32 @@ fn present_snapshot_to_x11_window(
             "baseview X11 presentation height must fit u16",
         )
     })?;
-    let (connection, screen_number) = x11rb::connect(None).map_err(|error| {
+    let (connection, _screen_number) = x11rb::connect(None).map_err(|error| {
         BaseviewHostError::new(
             "baseview.x11-present.connect-failed",
             format!("failed to connect to X11 display for Baseview presentation: {error}"),
         )
     })?;
-    let depth = connection.setup().roots[screen_number].root_depth;
+    // `PutImage` requires `depth` to equal the *drawable's* depth. Baseview creates the child
+    // window at depth 32 whenever the screen exposes a 32-bit TrueColor visual, so the root
+    // window's depth (commonly 24) is the wrong value and the server rejects the request with
+    // `BadMatch`. Query the child drawable's actual depth instead of assuming the root's.
+    let depth = connection
+        .get_geometry(drawable)
+        .map_err(|error| {
+            BaseviewHostError::new(
+                "baseview.x11-present.geometry-failed",
+                format!("failed to request Baseview X11 child window geometry: {error}"),
+            )
+        })?
+        .reply()
+        .map_err(|error| {
+            BaseviewHostError::new(
+                "baseview.x11-present.geometry-failed",
+                format!("failed to read Baseview X11 child window geometry: {error}"),
+            )
+        })?
+        .depth;
     let gc = create_x11_gc(&connection, drawable)?;
     let data = snapshot_to_x11_bgrx(snapshot);
     connection
@@ -1965,8 +1988,14 @@ fn create_x11_gc(connection: &RustConnection, drawable: u32) -> Result<u32, Base
 
 #[cfg(target_os = "linux")]
 fn snapshot_to_x11_bgrx(snapshot: &SkiaFrameSnapshot) -> Vec<u8> {
-    let mut data = Vec::with_capacity(snapshot.pixels().len().saturating_mul(4));
-    for pixel in snapshot.pixels() {
+    pixels_to_x11_bgrx(snapshot.pixels())
+}
+
+/// Converts `0x00RRGGBB` snapshot pixels into X11 `Z_PIXMAP` 32-bpp bytes laid out `[B, G, R, 0]`.
+#[cfg(target_os = "linux")]
+fn pixels_to_x11_bgrx(pixels: &[u32]) -> Vec<u8> {
+    let mut data = Vec::with_capacity(pixels.len().saturating_mul(4));
+    for pixel in pixels {
         data.push((pixel & 0x0000_00ff) as u8);
         data.push(((pixel & 0x0000_ff00) >> 8) as u8);
         data.push(((pixel & 0x00ff_0000) >> 16) as u8);
@@ -2064,5 +2093,15 @@ mod tests {
     #[test]
     fn exposes_crate_identity() {
         assert_eq!(crate_name(), "hawk2ui-host-baseview");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pixels_convert_to_x11_bgrx_byte_layout() {
+        // A `0x00RRGGBB` snapshot pixel must become `[B, G, R, 0]` for an X11 `Z_PIXMAP` put_image.
+        assert_eq!(
+            pixels_to_x11_bgrx(&[0x0012_3456, 0x00ff_8800]),
+            vec![0x56, 0x34, 0x12, 0x00, 0x00, 0x88, 0xff, 0x00]
+        );
     }
 }

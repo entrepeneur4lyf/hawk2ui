@@ -41,7 +41,6 @@ fn baseview_adapter_attaches_editor_to_daw_owned_parent() {
 
     assert_eq!(adapter.parent_fixture().id(), "linux-x11-parent");
     assert!(adapter.capabilities().embedded_parent_attachment());
-    assert!(!adapter.requested_process_quit());
     assert_eq!(adapter.drain_events().len(), 2);
 }
 
@@ -325,7 +324,6 @@ fn baseview_adapter_records_host_driven_show_hide_without_process_quit() {
     adapter.show_editor("duplicate show ignored");
 
     assert!(adapter.visible());
-    assert!(!adapter.requested_process_quit());
     assert_eq!(
         adapter.drain_events(),
         vec![
@@ -1151,7 +1149,6 @@ fn baseview_adapter_teardown_destroys_editor_without_process_quit() {
 
     let events = adapter.drain_events();
     assert!(adapter.destroyed());
-    assert!(!adapter.requested_process_quit());
     assert_eq!(
         events
             .iter()
