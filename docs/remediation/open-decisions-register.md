@@ -36,7 +36,7 @@ contained fixes).
 
 | # | Crate | Class | Action |
 |---|-------|-------|--------|
-| DEC-05a | plugin-adapters | Bug | Fix CLAP multi-instance state corruption (`plugin_data:null` → process-global statics); make the inert `realtime_guard` real or delete its enforcement claim |
+| DEC-05a | plugin-adapters | Bug | CLAP multi-instance state corruption (`plugin_data:null` → process-global statics) + inert `realtime_guard`. **Decision 2026-05-29: migrate the CLAP codegen onto `clack`** (safe per-instance `MainThread`/`AudioProcessor`/`Shared` model dissolves this bug class structurally) rather than a raw-`clap-sys` `plugin_data` patch. Adds `clack-plugin`/`clack-extensions` 0.1.0 to every generated plugin → needs a `dependency-policy.toml` entry (REM-CRATE-007). Focused multi-commit migration; advisor design pass first |
 | ~~DEC-06~~ | vst3 | Bug | ✅ **DONE** (`411380ba`): Serde `try_from` validation, `c_char` ARM fix, byte-length limits, nil-GUID, byte-order doc; +6 tests |
 | DEC-07a | text | Bug | Push resolved family to Parley (`text` #1, 2-line); add input-length cap (DoS); fix truncation width vs `max_width_px` |
 | DEC-08 | security | Remove | Remove decorative policy verdicts + tautological tests (zero consumers); keep+harden `SecretValue` redaction (add `Zeroize`) |
