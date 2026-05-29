@@ -341,6 +341,13 @@ default = 0.25
         single.replace("default = 0.5", "min = 20.0\nmax = 100.0\ndefault = 5.0");
     // An unrecognized unit label is a typo, not silently dropped.
     let unknown_unit = single.replace("default = 0.5", "default = 0.5\nunit = \"decibels\"");
+    // An integer parameter rejects a fractional default.
+    let fractional_int = single.replace(
+        "default = 0.5",
+        "kind = \"int\"\nmin = 0.0\nmax = 10.0\ndefault = 2.5",
+    );
+    // A boolean parameter must default to exactly 0 or 1.
+    let non_binary_bool = single.replace("default = 0.5", "kind = \"bool\"\ndefault = 0.5");
 
     assert_eq!(
         HawkManifest::parse(duplicate).expect_err("duplicate parameters must fail"),
@@ -364,6 +371,14 @@ default = 0.25
     );
     assert_eq!(
         HawkManifest::parse(&unknown_unit).expect_err("unknown unit label must fail"),
+        ManifestError::InvalidPluginParameter("gain".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&fractional_int).expect_err("fractional int default must fail"),
+        ManifestError::InvalidPluginParameter("gain".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&non_binary_bool).expect_err("non-binary bool default must fail"),
         ManifestError::InvalidPluginParameter("gain".into())
     );
 }
@@ -423,6 +438,62 @@ fn manifest_exposes_a_parameter_model_for_codegen() {
         Some(ParameterRange::new(20.0, 20000.0, 1000.0))
     );
     assert_eq!(cutoff.default_value, ParameterValue::Float(1000.0));
+}
+
+const KINDED_PARAMS_MANIFEST: &str = r#"
+[identity]
+id = "com.hawk2ui.kinded"
+name = "Kinded"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.kinded"
+name = "Kinded"
+
+[[parameters]]
+id = "filter.cutoff"
+name = "Cutoff"
+min = 20.0
+max = 20000.0
+default = 1000.0
+unit = "Hz"
+
+[[parameters]]
+id = "osc.voices"
+name = "Voices"
+kind = "int"
+min = 1.0
+max = 8.0
+default = 4.0
+
+[[parameters]]
+id = "fx.bypass"
+name = "Bypass"
+kind = "bool"
+default = 0.0
+"#;
+
+#[test]
+fn manifest_parameter_model_covers_float_int_and_bool_kinds() {
+    let manifest = HawkManifest::parse(KINDED_PARAMS_MANIFEST).expect("kinded manifest parses");
+    let model = manifest.parameter_model();
+    model
+        .validate()
+        .expect("the generated parameter model is valid");
+    assert_eq!(model.parameters.len(), 3);
+
+    assert_eq!(
+        model.parameters[0].default_value,
+        ParameterValue::Float(1000.0)
+    );
+    assert_eq!(model.parameters[1].default_value, ParameterValue::Int(4));
+    assert_eq!(
+        model.parameters[2].default_value,
+        ParameterValue::Bool(false)
+    );
 }
 
 #[test]

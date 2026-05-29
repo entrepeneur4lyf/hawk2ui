@@ -139,6 +139,19 @@ pub struct EditorMetadata {
 /// value inside `[min, max]`. `unit`, when present, must be one of the
 /// host-display units the parameter codegen understands (`dB`, `Hz`, `ms`,
 /// `s`, `%`, `st`, `pan`); an empty unit is unitless.
+/// The value kind of a plugin parameter.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginParameterKind {
+    /// Continuous floating-point parameter.
+    #[default]
+    Float,
+    /// Discrete integer parameter.
+    Int,
+    /// Boolean on/off parameter.
+    Bool,
+}
+
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginParameter {
@@ -146,6 +159,9 @@ pub struct PluginParameter {
     pub id: String,
     /// Display name.
     pub name: String,
+    /// Value kind: `float` (default), `int`, or `bool`.
+    #[serde(default)]
+    pub kind: PluginParameterKind,
     /// Minimum plain value.
     #[serde(default = "unit_interval_min")]
     pub min: f64,
@@ -243,20 +259,36 @@ impl HawkManifest {
     /// Builds the validated parameter model that parameter/meter code
     /// generation consumes.
     ///
-    /// Each manifest parameter becomes a numeric [`ParameterRecord`] over its
-    /// plain `[min, max]` range. Manifest validation already guarantees the
-    /// range and default are well-formed, so the returned model is valid by
-    /// construction and ready to drive the truce `Params` and editor-side
-    /// TypeScript emitters from this single source.
+    /// Each manifest parameter becomes a [`ParameterRecord`] of the matching
+    /// kind — numeric, integer, or boolean — over its plain `[min, max]` range.
+    /// Manifest validation already guarantees the range and default are
+    /// well-formed for the kind, so the returned model is valid by construction
+    /// and ready to drive the truce `Params` and editor-side TypeScript
+    /// emitters from this single source.
     #[must_use]
     pub fn parameter_model(&self) -> ParameterModel {
         ParameterModel::new(self.parameters.iter().map(|parameter| {
-            ParameterRecord::numeric(
-                parameter.id.clone(),
-                parameter.name.clone(),
-                parameter.unit.clone(),
-                ParameterRange::new(parameter.min, parameter.max, parameter.default),
-            )
+            let range = ParameterRange::new(parameter.min, parameter.max, parameter.default);
+            match parameter.kind {
+                PluginParameterKind::Float => ParameterRecord::numeric(
+                    parameter.id.clone(),
+                    parameter.name.clone(),
+                    parameter.unit.clone(),
+                    range,
+                ),
+                PluginParameterKind::Int => ParameterRecord::integer(
+                    parameter.id.clone(),
+                    parameter.name.clone(),
+                    parameter.unit.clone(),
+                    range,
+                ),
+                // Validation guarantees a 0/1 default; `>= 0.5` selects `true`.
+                PluginParameterKind::Bool => ParameterRecord::boolean(
+                    parameter.id.clone(),
+                    parameter.name.clone(),
+                    parameter.default >= 0.5,
+                ),
+            }
         }))
     }
 
@@ -292,18 +324,7 @@ impl HawkManifest {
             if !is_stable_id(&parameter.id) {
                 return Err(ManifestError::InvalidPluginParameter(parameter.id.clone()));
             }
-            if !parameter.min.is_finite()
-                || !parameter.max.is_finite()
-                || !parameter.default.is_finite()
-                || parameter.max <= parameter.min
-                || parameter.default < parameter.min
-                || parameter.default > parameter.max
-            {
-                return Err(ManifestError::InvalidPluginParameter(parameter.id.clone()));
-            }
-            if !is_supported_unit(&parameter.unit) {
-                return Err(ManifestError::InvalidPluginParameter(parameter.id.clone()));
-            }
+            validate_parameter_kind(parameter)?;
             if !parameter_ids.insert(parameter.id.clone()) {
                 return Err(ManifestError::DuplicateParameter(parameter.id.clone()));
             }
@@ -367,6 +388,55 @@ fn unit_interval_max() -> f64 {
 /// `ParamUnit` spellings.
 fn is_supported_unit(unit: &str) -> bool {
     matches!(unit, "" | "dB" | "Hz" | "ms" | "s" | "%" | "st" | "pan")
+}
+
+/// Validates a parameter's bounds, default, and unit for its declared kind.
+fn validate_parameter_kind(parameter: &PluginParameter) -> Result<(), ManifestError> {
+    let reject = || ManifestError::InvalidPluginParameter(parameter.id.clone());
+    match parameter.kind {
+        PluginParameterKind::Float => {
+            if !is_finite_range(parameter.min, parameter.max, parameter.default)
+                || !is_supported_unit(&parameter.unit)
+            {
+                return Err(reject());
+            }
+        }
+        PluginParameterKind::Int => {
+            if !is_finite_range(parameter.min, parameter.max, parameter.default)
+                || !is_integer_valued(parameter.min)
+                || !is_integer_valued(parameter.max)
+                || !is_integer_valued(parameter.default)
+                || !is_supported_unit(&parameter.unit)
+            {
+                return Err(reject());
+            }
+        }
+        PluginParameterKind::Bool => {
+            // A boolean's default must be exactly 0 or 1, and it carries no unit.
+            if !((0.0..=1.0).contains(&parameter.default)
+                && is_integer_valued(parameter.default)
+                && parameter.unit.is_empty())
+            {
+                return Err(reject());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether a `[min, max]` range with `default` inside it is finite and ordered.
+fn is_finite_range(min: f64, max: f64, default: f64) -> bool {
+    min.is_finite()
+        && max.is_finite()
+        && default.is_finite()
+        && max > min
+        && default >= min
+        && default <= max
+}
+
+/// Whether a value has no fractional part (an exact integer).
+fn is_integer_valued(value: f64) -> bool {
+    value.fract() == 0.0
 }
 
 /// Manifest validation error.
