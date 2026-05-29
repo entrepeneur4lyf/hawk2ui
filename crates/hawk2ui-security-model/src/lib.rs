@@ -393,31 +393,116 @@ impl RuntimeAuthorityPolicy {
         self.denied.contains(&operation)
     }
 
-    /// Redacts secret-looking values and executable source payloads from diagnostics.
+    /// Best-effort redaction of common secret formats and executable source payloads.
+    ///
+    /// This is a **denylist** of well-known credential shapes (Stripe/GitHub/AWS/Slack prefixes
+    /// and `Bearer`/`Authorization` tokens) plus `eval(...)` / `Function(...)` payloads —
+    /// punctuation- and quote-aware, and it preserves the surrounding text. It reduces the chance
+    /// of leaking common secrets but is **not exhaustive and not a guarantee**: it must not be the
+    /// sole control against secret leakage, and new formats must be added to [`SECRET_PREFIXES`].
+    /// Unknown secret shapes pass through unredacted.
     #[must_use]
     pub fn redact_diagnostic(&self, diagnostic: &str) -> String {
-        diagnostic
-            .split_whitespace()
-            .map(redact_token)
-            .collect::<Vec<_>>()
-            .join(" ")
-            .replace("Function('return secrets')", "[redacted-source]")
+        redact_executable_payloads(&redact_secret_tokens(diagnostic))
     }
 }
 
-fn redact_token(token: &str) -> &str {
-    if token.starts_with("sk_") {
-        "[redacted-secret]"
-    } else {
-        token
+/// Well-known credential token prefixes redacted by [`RuntimeAuthorityPolicy::redact_diagnostic`].
+const SECRET_PREFIXES: &[&str] = &[
+    "sk_", "pk_", "rk_", // Stripe-style keys
+    "ghp_", "gho_", "ghu_", "ghs_", "ghr_", // GitHub tokens
+    "AKIA", "ASIA", // AWS access key IDs
+    "xoxb-", "xoxp-", "xoxa-", "xoxr-", // Slack tokens
+];
+
+/// Redacts secret-shaped tokens while preserving surrounding punctuation and whitespace.
+///
+/// Scans maximal runs of token characters (ASCII alphanumeric / `_` / `-`) so a quoted or
+/// punctuation-adjacent secret (e.g. `"sk_live_…"`) is still caught, and redacts the opaque token
+/// that follows a `Bearer` / `Authorization` keyword.
+fn redact_secret_tokens(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut token = String::new();
+    let mut redact_next_opaque = false;
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            token.push(ch);
+        } else {
+            redact_next_opaque = flush_redacted_token(&mut token, &mut output, redact_next_opaque);
+            output.push(ch);
+        }
     }
+    flush_redacted_token(&mut token, &mut output, redact_next_opaque);
+    output
 }
+
+/// Emits `token` (redacted if secret-shaped), returning whether the next opaque token should be
+/// redacted because this token was an authorization keyword.
+fn flush_redacted_token(token: &mut String, output: &mut String, redact_next_opaque: bool) -> bool {
+    if token.is_empty() {
+        return redact_next_opaque;
+    }
+    let has_secret_prefix = SECRET_PREFIXES
+        .iter()
+        .any(|prefix| token.starts_with(prefix));
+    let is_opaque_credential = redact_next_opaque && token.len() >= 12;
+    if has_secret_prefix || is_opaque_credential {
+        output.push_str("[redacted-secret]");
+    } else {
+        output.push_str(token);
+    }
+    let authorizes_next =
+        token.eq_ignore_ascii_case("bearer") || token.eq_ignore_ascii_case("authorization");
+    token.clear();
+    authorizes_next
+}
+
+/// Redacts `eval(...)` / `Function(...)` executable source payloads from a diagnostic.
+fn redact_executable_payloads(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some((keyword_start, after_open)) = next_executable_call(rest) {
+        output.push_str(&rest[..keyword_start]);
+        output.push_str("[redacted-source]");
+        let tail = &rest[after_open..];
+        if let Some(close) = tail.find(')') {
+            rest = &tail[close + 1..];
+        } else {
+            rest = "";
+            break;
+        }
+    }
+    output.push_str(rest);
+    output
+}
+
+/// Finds the earliest `eval(` / `Function(` call, returning the byte offset of the keyword and
+/// the byte offset just after its opening parenthesis.
+fn next_executable_call(input: &str) -> Option<(usize, usize)> {
+    ["eval(", "Function("]
+        .iter()
+        .filter_map(|keyword| {
+            input
+                .find(keyword)
+                .map(|start| (start, start + keyword.len()))
+        })
+        .min_by_key(|(start, _)| *start)
+}
+
+/// Proof that a package signature was cryptographically verified.
+///
+/// Unconstructable outside this crate, so [`PackageSignatureStatus::Verified`] can only be
+/// produced by [`PackageTrustRecord::from_trusted_sealed_artifact`] after a real Ed25519 check.
+/// [`PackageTrustValidator::validate`] therefore tests an *established* fact, not a forgeable
+/// caller-asserted claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedSignature(());
 
 /// Package signature verification state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PackageSignatureStatus {
-    /// Package signature is verified.
-    Verified,
+    /// Package signature was cryptographically verified (constructible only in-crate).
+    Verified(VerifiedSignature),
     /// Package signature is missing.
     Missing,
     /// Package signature is invalid.
@@ -483,7 +568,7 @@ impl PackageTrustRecord {
         verification_report_status: VerificationReportStatus,
     ) -> Self {
         let signature_status = if artifact.verify_trusted_signature(verifier).is_ok() {
-            PackageSignatureStatus::Verified
+            PackageSignatureStatus::Verified(VerifiedSignature(()))
         } else if artifact.signature.status == hawk2ui_build::ArtifactSignatureStatus::Unsigned {
             PackageSignatureStatus::Missing
         } else {
@@ -599,7 +684,7 @@ impl PackageTrustValidator {
         }
 
         match record.signature_status {
-            PackageSignatureStatus::Verified => {}
+            PackageSignatureStatus::Verified(_) => {}
             PackageSignatureStatus::Missing => return Err(PackageTrustViolation::MissingSignature),
             PackageSignatureStatus::Invalid => return Err(PackageTrustViolation::InvalidSignature),
         }

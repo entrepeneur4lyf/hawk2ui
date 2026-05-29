@@ -71,6 +71,24 @@ fn security_threat_registry_covers_required_domains() {
 }
 
 #[test]
+fn security_threat_registry_required_tests_exist() {
+    // Each threat's `required_test` must name a real test fn in this file, so the registry's
+    // "every threat is test-covered" promise is enforced rather than decorative. All security
+    // tests live here; a cross-crate `required_test` would (correctly) fail this check.
+    let source = include_str!("threat_model.rs");
+    let model = ThreatModel::parse(THREAT_MODEL).expect("threat model parses");
+    for threat in &model.threats {
+        let definition = format!("fn {}(", threat.required_test);
+        assert!(
+            source.contains(&definition),
+            "threat `{}` references required_test `{}`, which is not a test fn in this file",
+            threat.id,
+            threat.required_test
+        );
+    }
+}
+
+#[test]
 fn threat_registry_rejects_duplicate_ids() {
     let input = r#"
 [[threats]]
@@ -261,17 +279,46 @@ fn runtime_authority_redacts_secret_payloads() {
 }
 
 #[test]
-fn package_trust_accepts_complete_verified_record() {
-    let record = PackageTrustRecord {
-        artifact_schema_version: 1,
-        manifest_snapshot_hash: valid_hash("manifest"),
-        compiled_asset_hashes: vec![valid_hash("asset")],
-        compiled_script_hashes: vec![valid_hash("script")],
-        target_metadata: "linux-wayland-desktop".into(),
-        signature_status: PackageSignatureStatus::Verified,
-        verification_report_status: VerificationReportStatus::Present,
-    };
+fn runtime_authority_redacts_diverse_secret_formats() {
+    let policy = RuntimeAuthorityPolicy::sandboxed();
 
+    for secret in [
+        "pk_live_abcdefghij",
+        "rk_test_0987654321",
+        "AKIAIOSFODNN7EXAMPLE",
+        "ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789",
+        "xoxb-111-222-aaaaaaaaaaaa",
+    ] {
+        // Quoted and punctuation-adjacent occurrences must still be redacted.
+        let message = format!("leaked \"{secret}\" in config={secret};");
+        let redacted = policy.redact_diagnostic(&message);
+        assert!(
+            !redacted.contains(secret),
+            "expected `{secret}` to be redacted, got `{redacted}`"
+        );
+        assert!(redacted.contains("[redacted-secret]"));
+        assert!(
+            redacted.contains("config="),
+            "surrounding text must be preserved"
+        );
+    }
+
+    let bearer = policy.redact_diagnostic("auth Bearer eyJhbGciOiJIUzI1NiJ9abcdefghij next");
+    assert!(!bearer.contains("eyJhbGciOiJIUzI1NiJ9abcdefghij"));
+    assert!(bearer.contains("[redacted-secret]"));
+    assert!(bearer.contains("Bearer") && bearer.contains("next"));
+
+    let eval = policy.redact_diagnostic("ran eval(danger) at runtime");
+    assert!(!eval.contains("eval(danger"));
+    assert!(eval.contains("[redacted-source]"));
+    assert!(eval.contains("at runtime"));
+}
+
+#[test]
+fn package_trust_accepts_complete_verified_record() {
+    // `Verified` is only obtainable via the crypto path; a complete, genuinely-verified record
+    // with a present verification report validates.
+    let record = signed_trust_record(VerificationReportStatus::Present);
     assert!(PackageTrustValidator::new(1).validate(&record).is_ok());
 }
 
@@ -363,7 +410,7 @@ fn package_trust_rejects_tampered_artifact() {
         compiled_asset_hashes: vec![valid_hash("asset")],
         compiled_script_hashes: vec![valid_hash("script")],
         target_metadata: "linux-wayland-desktop".into(),
-        signature_status: PackageSignatureStatus::Verified,
+        signature_status: PackageSignatureStatus::Missing,
         verification_report_status: VerificationReportStatus::Present,
     };
 
@@ -382,19 +429,13 @@ fn package_trust_rejects_tampered_artifact() {
 
 #[test]
 fn package_trust_rejects_missing_verification_report() {
-    let record = PackageTrustRecord {
-        artifact_schema_version: 1,
-        manifest_snapshot_hash: valid_hash("manifest"),
-        compiled_asset_hashes: vec![valid_hash("asset")],
-        compiled_script_hashes: vec![valid_hash("script")],
-        target_metadata: "linux-wayland-desktop".into(),
-        signature_status: PackageSignatureStatus::Verified,
-        verification_report_status: VerificationReportStatus::Missing,
-    };
+    // `Verified` can only come from the crypto path, so build a genuinely-verified record and
+    // confirm a missing verification report still fails closed.
+    let record = signed_trust_record(VerificationReportStatus::Missing);
 
     let error = PackageTrustValidator::new(1)
         .validate(&record)
-        .expect_err("missing report must fail");
+        .expect_err("missing report must fail even for a verified signature");
 
     assert_eq!(error, PackageTrustViolation::MissingVerificationReport);
 }
@@ -410,7 +451,7 @@ fn package_trust_rejects_malformed_hashes() {
                 compiled_asset_hashes: vec![valid_hash("asset")],
                 compiled_script_hashes: vec![valid_hash("script")],
                 target_metadata: "linux-wayland-desktop".into(),
-                signature_status: PackageSignatureStatus::Verified,
+                signature_status: PackageSignatureStatus::Missing,
                 verification_report_status: VerificationReportStatus::Present,
             },
         ),
@@ -422,7 +463,7 @@ fn package_trust_rejects_malformed_hashes() {
                 compiled_asset_hashes: vec!["sha256:not-hex".into()],
                 compiled_script_hashes: vec![valid_hash("script")],
                 target_metadata: "linux-wayland-desktop".into(),
-                signature_status: PackageSignatureStatus::Verified,
+                signature_status: PackageSignatureStatus::Missing,
                 verification_report_status: VerificationReportStatus::Present,
             },
         ),
@@ -434,7 +475,7 @@ fn package_trust_rejects_malformed_hashes() {
                 compiled_asset_hashes: vec![valid_hash("asset")],
                 compiled_script_hashes: vec!["md5:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()],
                 target_metadata: "linux-wayland-desktop".into(),
-                signature_status: PackageSignatureStatus::Verified,
+                signature_status: PackageSignatureStatus::Missing,
                 verification_report_status: VerificationReportStatus::Present,
             },
         ),
@@ -471,4 +512,43 @@ fn valid_hash(label: &str) -> String {
         _ => 'd',
     };
     format!("sha256:{}", fill.to_string().repeat(64))
+}
+
+/// Builds a genuinely signature-verified trust record via the crypto path (the only way to
+/// obtain `PackageSignatureStatus::Verified`), with the given verification-report status.
+fn signed_trust_record(report: VerificationReportStatus) -> PackageTrustRecord {
+    let manifest = HawkManifest::parse(
+        r#"
+[identity]
+id = "com.hawk2ui.secure"
+name = "Secure"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+    )
+    .expect("manifest parses");
+    let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(
+            CompiledScriptRecord::new(
+                "main",
+                "src/main.ts",
+                "scripts/main.hawk.js",
+                ArtifactHash::from_bytes(b"script-source"),
+            )
+            .with_compiled_source("compiled script"),
+        )
+        .with_asset_manifest_entry(AssetManifestEntry::new(
+            "hero",
+            "image",
+            "assets/hero.pack",
+            ArtifactHash::from_bytes(b"asset-payload"),
+        ));
+    let (artifact, verifier) = sign_artifact(artifact, "release-key");
+    PackageTrustRecord::from_trusted_sealed_artifact(&artifact, &verifier, report)
 }

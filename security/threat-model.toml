@@ -3,7 +3,7 @@ id = "malicious-source"
 severity = "critical"
 affected_domain = "source-validation"
 mitigation = "Reject unsupported source syntax, undeclared capabilities, malformed manifests, and invalid metadata before runtime."
-required_test = "source_asset_fixtures_reject_unsupported_style"
+required_test = "source_asset_fixtures_map_each_attack_to_diagnostic"
 
 [[threats]]
 id = "malformed-artifact"
@@ -31,14 +31,14 @@ id = "malicious-plugin-host-data"
 severity = "critical"
 affected_domain = "plugin-host"
 mitigation = "Treat plugin host metadata, parent handles, parameter input, state chunks, and realtime visual data as untrusted."
-required_test = "capability_rejections_cover_plugin_metadata"
+required_test = "capability_rejections_cover_all_capabilities"
 
 [[threats]]
 id = "untrusted-user-data"
 severity = "high"
 affected_domain = "runtime-input"
 mitigation = "Validate and sanitize user-provided data before it enters scripts, layout, rendering, platform APIs, or diagnostics."
-required_test = "runtime_authority_denies_undeclared_host_api"
+required_test = "runtime_authority_denies_unsafe_operations"
 
 [[threats]]
 id = "secret-exposure"
