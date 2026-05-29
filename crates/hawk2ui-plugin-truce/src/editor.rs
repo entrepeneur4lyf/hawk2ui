@@ -3,8 +3,9 @@
 //! [`Hawk2uiTruceEditor`] implements truce's [`Editor`] seam: on
 //! [`Editor::open`] it attaches a Baseview child window to the DAW-provided
 //! parent and renders the `Hawk2UI` runtime scene into it through
-//! `hawk2ui-host-baseview`'s software-presentation path. The window-owning
-//! machinery and the raw-window-handle FFI live in `hawk2ui-host-baseview`
+//! `hawk2ui-host-baseview`'s Skia Ganesh GPU presentation path. The
+//! window-owning machinery and the raw-window-handle FFI live in
+//! `hawk2ui-host-baseview`
 //! (the workspace's sole `unsafe`-permitting crate); this module is
 //! `unsafe`-free — [`Hawk2uiTruceEditor`] is `Send` because every field is
 //! already `Send`, including the [`BaseviewEditorWindowHandle`] that carries
@@ -28,10 +29,9 @@ const EDITOR_FIXTURE_ID: &str = "hawk2ui-truce-editor";
 ///
 /// Truce's [`RawWindowHandle::X11`] carries only the parent window id, whereas
 /// `Hawk2UI`'s [`HostPlatformHandle::LinuxX11`] also records a display handle.
-/// The software-presentation path opens its own X11 connection from `$DISPLAY`
-/// and Baseview parents off the window id, so the recorded display is a
-/// non-zero placeholder rather than a live pointer. A real per-host display
-/// handle arrives with the GPU (Ganesh) presentation path.
+/// Baseview opens its own X11 connection from `$DISPLAY` and parents off the
+/// window id — for both the GLX context and X11 — so the recorded display is a
+/// non-zero placeholder rather than a live pointer.
 const X11_PLACEHOLDER_DISPLAY: u64 = 1;
 
 /// Converts a truce parent window handle into `Hawk2UI`'s host platform handle.
@@ -150,7 +150,7 @@ impl Hawk2uiTruceEditor {
         // The frame handler records into its own clones of these; the editor
         // observes progress through `presented_frame_count` / `has_error`.
         let events = Arc::new(Mutex::new(Vec::new()));
-        match adapter.open_editor_window(
+        match adapter.open_gpu_editor_window(
             self.scene.clone(),
             Arc::clone(&self.presented_frames),
             Arc::clone(&self.last_error),
@@ -165,7 +165,7 @@ impl Hawk2uiTruceEditor {
     fn open_window(&mut self, _adapter: &BaseviewPluginAdapter) {
         self.record_error(BaseviewHostError::new(
             "hawk2ui-truce.present.unsupported-platform",
-            "Hawk2UI truce editor presentation is currently implemented for the Linux/X11 software path; other platforms arrive with the GPU presentation path",
+            "Hawk2UI truce editor GPU presentation is currently wired for Linux; macOS and Windows arrive once their Baseview parent-handle conversion lands",
         ));
     }
 }
