@@ -172,6 +172,8 @@ pub struct SkiaSurface {
     height: u32,
     dpi_scale: f32,
     kind: SkiaSurfaceKind,
+    // Backing Skia surface: a CPU raster surface for `CpuRaster`, or a GPU
+    // render target adopted from a host that owns the `GrDirectContext`.
     raster_surface: Surface,
     frame_active: bool,
     presented_frames: u64,
@@ -194,6 +196,28 @@ impl SkiaSurface {
             dirty_regions: Vec::new(),
             last_presented_frame: None,
         })
+    }
+
+    fn adopt(
+        id: String,
+        surface: Surface,
+        width: u32,
+        height: u32,
+        dpi_scale: f32,
+        kind: SkiaSurfaceKind,
+    ) -> Self {
+        Self {
+            id,
+            width,
+            height,
+            dpi_scale,
+            kind,
+            raster_surface: surface,
+            frame_active: false,
+            presented_frames: 0,
+            dirty_regions: Vec::new(),
+            last_presented_frame: None,
+        }
     }
 
     /// Returns the surface identifier.
@@ -571,6 +595,45 @@ impl SkiaRendererBackend {
             config.height()
         ));
         self.surfaces.insert(id, SkiaSurface::new(config)?);
+        Ok(())
+    }
+
+    /// Registers an externally-created Skia surface as a managed draw target.
+    ///
+    /// The host creates the surface — for the GPU path, a Ganesh render target
+    /// wrapping a window framebuffer, owned alongside its `GrDirectContext` —
+    /// and hands it here; the backend then drives it through the same draw path
+    /// as a surface it created itself. Presentation (flush/submit and buffer
+    /// swap) stays with the host that owns the GPU context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when the surface ID, size, or DPI scale is
+    /// invalid, or a surface with the same ID already exists.
+    pub fn adopt_surface(
+        &mut self,
+        id: impl Into<String>,
+        surface: Surface,
+        width: u32,
+        height: u32,
+        dpi_scale: f32,
+        kind: SkiaSurfaceKind,
+    ) -> Result<(), BackendError> {
+        let id = id.into();
+        validate_surface_id(&id)?;
+        validate_surface_size(width, height)?;
+        validate_dpi_scale(dpi_scale)?;
+        if self.surfaces.contains_key(&id) {
+            return self.fail("skia.surface.duplicate", "surface already exists");
+        }
+        self.commands.push(format!(
+            "adopt-surface:{id}:{width}x{height}:{}",
+            kind.stable_key()
+        ));
+        self.surfaces.insert(
+            id.clone(),
+            SkiaSurface::adopt(id, surface, width, height, dpi_scale, kind),
+        );
         Ok(())
     }
 
@@ -2431,5 +2494,41 @@ mod tests {
     #[test]
     fn exposes_crate_identity() {
         assert_eq!(crate_name(), "hawk2ui-render-skia");
+    }
+
+    #[test]
+    fn adopted_surface_clears_and_snapshots_like_a_created_surface() {
+        let color = Color::rgba(40, 120, 200, 255);
+
+        let mut created = SkiaRendererBackend::new();
+        created
+            .create_surface_with_config(SkiaSurfaceConfig::cpu_raster("created", 48, 32))
+            .expect("create surface");
+        created.begin_frame("created").expect("begin created");
+        created.clear(color).expect("clear created");
+        created.end_frame("created").expect("end created");
+        let created_snapshot = created
+            .frame_snapshot("created")
+            .expect("created snapshot")
+            .clone();
+
+        let surface =
+            skia_safe::surfaces::raster_n32_premul((48, 32)).expect("external raster surface");
+        let mut adopted = SkiaRendererBackend::new();
+        adopted
+            .adopt_surface("adopted", surface, 48, 32, 1.0, SkiaSurfaceKind::CpuRaster)
+            .expect("adopt surface");
+        adopted.begin_frame("adopted").expect("begin adopted");
+        adopted.clear(color).expect("clear adopted");
+        adopted.end_frame("adopted").expect("end adopted");
+        let adopted_snapshot = adopted
+            .frame_snapshot("adopted")
+            .expect("adopted snapshot")
+            .clone();
+
+        assert_eq!(
+            adopted_snapshot, created_snapshot,
+            "an adopted surface must render identically to a created one"
+        );
     }
 }
