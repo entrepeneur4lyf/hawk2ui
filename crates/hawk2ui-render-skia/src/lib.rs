@@ -705,6 +705,33 @@ impl SkiaRendererBackend {
         })
     }
 
+    /// Reads back the current pixel contents of a surface on demand, returning
+    /// an owned snapshot independent of the frame lifecycle.
+    ///
+    /// Unlike [`Self::frame_snapshot`] — which returns the snapshot captured at
+    /// the end of a frame and is therefore absent for `GpuGl` surfaces (whose
+    /// `end_frame` deliberately skips the CPU readback) — this performs the
+    /// readback at call time. It is the screenshot and verification path for
+    /// GPU surfaces. Call it with no frame active (i.e. after the frame has
+    /// ended), and for a GPU surface, while the surface's GL context is current
+    /// and its commands have been submitted, since the readback forces a
+    /// GPU→CPU transfer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when the surface is missing, a frame is still
+    /// active, or the pixel readback fails.
+    pub fn read_surface_snapshot(&mut self, id: &str) -> Result<SkiaFrameSnapshot, BackendError> {
+        let surface = self.surface_mut(id)?;
+        if surface.frame_active {
+            return Err(BackendError::new(
+                "skia.frame.active",
+                "cannot read a surface snapshot while a frame is active",
+            ));
+        }
+        capture_frame_snapshot(surface)
+    }
+
     /// Registers an encoded compiled image payload for later drawing by asset ID.
     ///
     /// # Errors
@@ -2570,5 +2597,47 @@ mod tests {
             backend.frame_snapshot("gpu").is_err(),
             "GPU frames retain no CPU snapshot"
         );
+    }
+
+    #[test]
+    fn read_surface_snapshot_matches_end_of_frame_snapshot() {
+        // The on-demand readback must reproduce exactly what the frame lifecycle
+        // captures, so a GPU caller (which has no end-of-frame snapshot) can rely
+        // on it for screenshots and pixel verification.
+        let color = Color::rgba(40, 120, 200, 255);
+        let mut backend = SkiaRendererBackend::new();
+        backend
+            .create_surface_with_config(SkiaSurfaceConfig::cpu_raster("surface", 48, 32))
+            .expect("create surface");
+        backend.begin_frame("surface").expect("begin");
+        backend.clear(color).expect("clear");
+        backend.end_frame("surface").expect("end");
+
+        let lifecycle = backend
+            .frame_snapshot("surface")
+            .expect("lifecycle snapshot")
+            .clone();
+        let on_demand = backend
+            .read_surface_snapshot("surface")
+            .expect("on-demand snapshot");
+
+        assert_eq!(
+            on_demand, lifecycle,
+            "on-demand readback must match the end-of-frame snapshot"
+        );
+    }
+
+    #[test]
+    fn read_surface_snapshot_rejects_reads_during_an_active_frame() {
+        let mut backend = SkiaRendererBackend::new();
+        backend
+            .create_surface_with_config(SkiaSurfaceConfig::cpu_raster("surface", 16, 16))
+            .expect("create surface");
+        backend.begin_frame("surface").expect("begin");
+
+        let error = backend
+            .read_surface_snapshot("surface")
+            .expect_err("reading a snapshot mid-frame must fail");
+        assert_eq!(error.diagnostic().rule(), "skia.frame.active");
     }
 }
