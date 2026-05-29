@@ -21,7 +21,7 @@ all = "warn"
 pedantic = "warn"
 
 [dependencies]
-baseview = "0.1.1"
+baseview = { package = "baseview-truce", version = "0.1.1-truce.4" }
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }

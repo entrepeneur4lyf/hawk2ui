@@ -169,10 +169,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "baseview"
-version = "0.1.1"
+name = "baseview-truce"
+version = "0.1.1-truce.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c2e1134ffe5d36d958190bc7e58e2ca03822881d8ac865996c93245fb98a0f1"
+checksum = "11b0cd521716327c239f9f8f5926cb58e97376a1563f3f4c5caa41dec74451ca"
 dependencies = [
  "keyboard-types",
  "nix",
@@ -1745,7 +1745,7 @@ dependencies = [
 name = "hawk2ui-host-baseview"
 version = "0.1.0"
 dependencies = [
- "baseview",
+ "baseview-truce",
  "hawk2ui-build",
  "hawk2ui-host",
  "hawk2ui-layout",
@@ -1968,6 +1968,7 @@ version = "0.1.0"
 dependencies = [
  "schemars",
  "serde",
+ "serde_json",
  "vst3",
 ]
 
@@ -2820,6 +2821,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
 ]
 
 [[package]]
