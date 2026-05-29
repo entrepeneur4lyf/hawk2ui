@@ -327,6 +327,10 @@ Status:
 
 - Realtime visual data now uses `rtrb`-backed preallocated transport records.
 - `RealtimeVisualTransport::split_preallocated` returns separate audio-writer and UI-reader endpoints, and tests move the audio writer across a thread boundary.
+- Realtime visual packets are now heap-free POD records: the audio-thread push/drop path neither
+  allocates nor frees, proven structurally by `!std::mem::needs_drop::<RealtimeVisualPacket>()` (the
+  former inert `allocation_count`/`blocking_wait_count` counters were removed in favor of that
+  compiler-enforced guarantee). Commit `de431c3f`.
 - CLAP generated `cdylib` scaffolding and host-load tests exist.
 - VST3 remains a tracked package-layout/compatibility target but is not release-gated. AU/LV2 remain
   package-layout or compatibility-matrix targets unless separately implemented or removed from the
@@ -340,11 +344,24 @@ Required remediation:
   Hawk2UI editor rendering inside the attached plugin GUI surface.
 - Implement VST3/AU/LV2 adapters only if they remain in the selected production compatibility
   matrix; VST3 must not be restored to the release gate unless that decision changes explicitly.
+- Expose plugin processing-latency reporting (host delay compensation / PDC). A delay-introducing
+  plugin (lookahead limiter, linear-phase EQ, FFT/overlap-add, oversampling) must declare its latency
+  in samples so the host can time-align it; unreported latency causes phase/timing errors in the mix.
+  No latency concept exists today in the format-neutral plugin model or the generated CLAP scaffold
+  (`clap_plugin_latency` is absent). Wire a declared-latency value through the plugin model and each
+  format adapter (`clap_plugin_latency`, VST3 `getLatencySamples`, AU `kAudioUnitProperty_Latency`)
+  when the author-DSP/`process` integration seam is implemented — design it with that seam, not before.
+- Add audio-thread deadline / process-time monitoring (RT-budget overrun detection), extending the
+  generated scaffold's existing `realtime_guard` from operation flags (alloc/blocking-wait) to timing.
+  The timing instrumentation must itself be RT-safe (lock-free clock read + accumulation), so design
+  it as part of the performance measurement-infrastructure decision rather than as a one-off timer.
 
 Acceptance:
 
 - At least one plugin format can build a real loadable plugin editor bundle.
-- Realtime data tests prove audio-thread-safe behavior.
+- Realtime data tests prove audio-thread-safe behavior (the visual transport is now proven
+  allocation-free; audio-thread deadline monitoring is tracked with the performance measurement work).
+- A plugin that introduces processing latency reports it to the host for delay compensation.
 
 ### REM-CRATE-007: Define Workspace Dependency Stability Policy
 
