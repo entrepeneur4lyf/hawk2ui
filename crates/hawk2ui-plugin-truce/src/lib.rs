@@ -21,10 +21,8 @@ pub use truce_core::editor::Editor as TruceEditor;
 /// editor on open.
 pub use truce_params::Params as TruceParams;
 
-pub mod codegen;
 pub mod editor;
 
-pub use codegen::emit_truce_params_struct;
 pub use editor::Hawk2uiTruceEditor;
 
 /// The canonical Cargo package name for this crate.

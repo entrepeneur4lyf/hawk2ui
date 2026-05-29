@@ -1,17 +1,19 @@
 //! Code generation from the validated parameter model to truce sources.
 //!
 //! `Hawk2UI` defines parameters once — in the plugin manifest, surfaced as a
-//! [`hawk2ui_plugin::ParameterModel`] — and this module emits the Rust
-//! `#[derive(Params)]` struct the truce DSP side compiles. A sibling emitter
-//! (added once the editor runtime exposes a parameter binding) produces the
-//! editor-side TypeScript accessors from the same model, so both sides stay
-//! addressable by the same parameter `u32` through truce's
-//! [`EditorBridge`](truce_core::editor::EditorBridge).
+//! [`HawkManifest::parameter_model`](crate::HawkManifest::parameter_model) —
+//! and this module emits the Rust `#[derive(Params)]` struct the truce DSP side
+//! compiles. A sibling emitter (added once the editor runtime exposes a
+//! parameter binding) will produce the editor-side TypeScript accessors from
+//! the same model, so both sides stay addressable by the same parameter `u32`
+//! through truce's `EditorBridge`.
 //!
 //! The emitter is pure string generation: it produces truce *source text* and
-//! takes no dependency on `truce` itself. Verification that the emitted source
-//! actually compiles against truce lives in `tests/params_codegen.rs`, which
-//! `include!`s a checked-in golden produced by this emitter.
+//! takes no dependency on `truce` itself, so it lives in `hawk2ui-build`
+//! alongside the manifest and can be driven by the CLI without pulling in the
+//! renderer or windowing stack. Verification that the emitted source actually
+//! compiles against truce lives in `tests/param_codegen.rs`, which `include!`s
+//! a checked-in golden produced by this emitter.
 //!
 //! Continuous (`FloatParam`), integer (`IntParam`), and boolean (`BoolParam`)
 //! parameters are covered. Indexed choices are emitted as a discrete

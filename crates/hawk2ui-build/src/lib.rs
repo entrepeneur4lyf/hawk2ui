@@ -5,6 +5,7 @@ pub mod artifact;
 pub mod assets;
 pub mod diagnostic;
 pub mod manifest;
+pub mod param_codegen;
 pub mod pipeline;
 pub mod report;
 pub mod workspace;
@@ -22,6 +23,7 @@ pub use assets::{
 };
 pub use diagnostic::{BuildDiagnostic, BuildDiagnosticSeverity, DiagnosticLocation, SourceSpan};
 pub use manifest::{HawkManifest, ManifestError, PackageTarget};
+pub use param_codegen::emit_truce_params_struct;
 pub use pipeline::{BuildPhase, BuildPhaseDiagnostic, BuildPipeline, BuildPipelineError};
 pub use report::{PackageTargetRecord, VerificationReport};
 pub use workspace::{BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput};

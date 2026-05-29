@@ -1,15 +1,14 @@
 //! Parameter-codegen check: prove the emit → compile → bridge-read loop.
 //!
-//! `hawk2ui_plugin_truce::emit_truce_params_struct` turns a validated
-//! [`ParameterModel`] into truce `#[derive(Params)]` source. A *string* match
-//! alone can't catch a bad `::truce::` path or a malformed `#[param(...)]`
-//! attribute — that only surfaces when the output is compiled against truce.
-//! So the golden fixture is both `include!`d (rustc compiles it, catching path
-//! / attribute / field-type errors) and `include_str!`d (the emitter must
-//! reproduce it byte-for-byte, catching drift). The same fixture is then driven
-//! through `for_test_params` to confirm the emitted parameters expose the right
-//! `ParamInfo`s and read back through the `EditorBridge` by the `u32` ids the
-//! editor side will use.
+//! `hawk2ui_build::emit_truce_params_struct` turns a validated [`ParameterModel`]
+//! into truce `#[derive(Params)]` source. A *string* match alone can't catch a
+//! bad `::truce::` path or a malformed `#[param(...)]` attribute — that only
+//! surfaces when the output is compiled against truce. So the golden fixture is
+//! both `include!`d (rustc compiles it, catching path / attribute / field-type
+//! errors) and `include_str!`d (the emitter must reproduce it byte-for-byte,
+//! catching drift). The same fixture is then driven through `for_test_params`
+//! to confirm the emitted parameters expose the right `ParamInfo`s and read back
+//! through the `EditorBridge` by the `u32` ids the editor side will use.
 //!
 //! Covers the float, integer, and boolean kinds. `for_test_params`' bridge has
 //! a no-op `set_param`, so this verifies the read/format path (defaults,
@@ -18,8 +17,8 @@
 
 use std::sync::Arc;
 
+use hawk2ui_build::emit_truce_params_struct;
 use hawk2ui_plugin::{ParameterModel, ParameterRange, ParameterRecord};
-use hawk2ui_plugin_truce::emit_truce_params_struct;
 use truce::params::{ParamRange, ParamUnit, ParamValueKind, Params};
 use truce_core::editor::for_test_params;
 
