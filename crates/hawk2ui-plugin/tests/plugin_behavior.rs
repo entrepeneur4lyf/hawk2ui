@@ -189,6 +189,34 @@ fn parameter_model_validates_stable_ids_and_group_nesting() {
 }
 
 #[test]
+fn parameter_model_rejects_duplicate_parameter_ids() {
+    // Both ids are individually valid in format, so the per-id checks pass. But the host keys
+    // automation and `parameter_state` (a BTreeMap) by id, so two records sharing an id silently
+    // alias one parameter's value onto the other. The model must reject the collision.
+    let model = ParameterModel::new([
+        ParameterRecord::numeric("osc.mix", "Osc Mix", "%", ParameterRange::new(0.0, 100.0, 50.0)),
+        ParameterRecord::boolean("osc.mix", "Osc Mix Enable", true),
+    ]);
+    let errors = model
+        .validate()
+        .expect_err("duplicate parameter ids must fail validation");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.code == "parameter.id-duplicate"),
+        "expected a parameter.id-duplicate error, got {errors:?}"
+    );
+    // A duplicated id is reported exactly once, not once per extra occurrence.
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|error| error.code == "parameter.id-duplicate")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn parameter_model_converts_normalized_values_and_display_text() {
     let parameter =
         ParameterRecord::numeric("gain", "Gain", "dB", ParameterRange::new(-60.0, 12.0, 0.0))

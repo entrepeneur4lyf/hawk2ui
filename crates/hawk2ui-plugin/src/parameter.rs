@@ -364,11 +364,23 @@ impl ParameterGroup {
         self
     }
 
+    /// Finds a group by id using an explicit work stack rather than recursion.
+    ///
+    /// `ParameterGroup` is a `Deserialize`-able recursive type, so a recursive search overflows the
+    /// stack on a deeply nested tree. This iterative pre-order walk (children pushed reversed so the
+    /// leftmost is visited first) preserves the recursive search order without a call-stack bound.
+    /// (The trust boundary is developer-authored plugin metadata, not a disk/DAW artifact, so this
+    /// is defense-in-depth on the search path; `serde` deserialize/drop of such a tree still
+    /// recurses.)
     fn find(&self, id: &str) -> Option<&ParameterGroup> {
-        if self.id == id {
-            return Some(self);
+        let mut stack = vec![self];
+        while let Some(group) = stack.pop() {
+            if group.id == id {
+                return Some(group);
+            }
+            stack.extend(group.children.iter().rev());
         }
-        self.children.iter().find_map(|child| child.find(id))
+        None
     }
 }
 
@@ -464,6 +476,22 @@ impl ParameterModel {
                 errors.push(ParameterValidationError::new(
                     "parameter.steps.invalid",
                     format!("parameter {} has zero discrete steps", parameter.id),
+                ));
+            }
+        }
+        // Parameter ids must be unique: host automation and `parameter_state` (a `BTreeMap` keyed
+        // by id) collapse duplicates, silently aliasing one parameter's value onto another. The
+        // per-id format check above does not catch this. Report each duplicated id exactly once
+        // (at its second occurrence).
+        for (index, parameter) in self.parameters.iter().enumerate() {
+            let earlier_occurrences = self.parameters[..index]
+                .iter()
+                .filter(|other| other.id == parameter.id)
+                .count();
+            if earlier_occurrences == 1 {
+                errors.push(ParameterValidationError::new(
+                    "parameter.id-duplicate",
+                    format!("parameter id is not unique: {}", parameter.id),
                 ));
             }
         }
