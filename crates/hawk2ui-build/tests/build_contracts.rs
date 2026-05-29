@@ -10,6 +10,7 @@ use hawk2ui_build::{
     CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget, PackageTargetRecord,
     SealedArtifact, SealedArtifactError, SourceSpan, VerificationReport,
 };
+use hawk2ui_plugin::{ParameterRange, ParameterValue};
 use image::{ColorType, ImageEncoder};
 use std::{
     fs,
@@ -333,7 +334,13 @@ default = 0.25
 "#;
     let invalid_id = single.replace("id = \"gain\"", "id = \"Bad Id\"");
     let empty_name = single.replace("name = \"Gain\"", "name = \"   \"");
+    // Default 2.0 sits above the implicit unit-interval max (no min/max given).
     let out_of_range = single.replace("default = 0.5", "default = 2.0");
+    // A default below an explicit custom min must also be rejected.
+    let below_custom_min =
+        single.replace("default = 0.5", "min = 20.0\nmax = 100.0\ndefault = 5.0");
+    // An unrecognized unit label is a typo, not silently dropped.
+    let unknown_unit = single.replace("default = 0.5", "default = 0.5\nunit = \"decibels\"");
 
     assert_eq!(
         HawkManifest::parse(duplicate).expect_err("duplicate parameters must fail"),
@@ -348,9 +355,74 @@ default = 0.25
         ManifestError::MissingField("parameter.name")
     );
     assert_eq!(
-        HawkManifest::parse(&out_of_range).expect_err("invalid normalized default must fail"),
+        HawkManifest::parse(&out_of_range).expect_err("default above the implicit max must fail"),
         ManifestError::InvalidPluginParameter("gain".into())
     );
+    assert_eq!(
+        HawkManifest::parse(&below_custom_min).expect_err("default below a custom min must fail"),
+        ManifestError::InvalidPluginParameter("gain".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&unknown_unit).expect_err("unknown unit label must fail"),
+        ManifestError::InvalidPluginParameter("gain".into())
+    );
+}
+
+const RANGED_PARAMS_MANIFEST: &str = r#"
+[identity]
+id = "com.hawk2ui.ranged"
+name = "Ranged"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.ranged"
+name = "Ranged"
+
+[[parameters]]
+id = "osc.mix"
+name = "Osc Mix"
+default = 0.4
+
+[[parameters]]
+id = "filter.cutoff"
+name = "Cutoff"
+min = 20.0
+max = 20000.0
+default = 1000.0
+unit = "Hz"
+"#;
+
+#[test]
+fn manifest_exposes_a_parameter_model_for_codegen() {
+    let manifest = HawkManifest::parse(RANGED_PARAMS_MANIFEST).expect("ranged manifest parses");
+    let model = manifest.parameter_model();
+    model
+        .validate()
+        .expect("the generated parameter model is valid");
+
+    assert_eq!(model.parameters.len(), 2);
+
+    // A parameter that omits min/max behaves like a normalized unit-interval
+    // control, and its plain default carries through unchanged.
+    let mix = &model.parameters[0];
+    assert_eq!(mix.id, "osc.mix");
+    assert_eq!(mix.unit, "");
+    assert_eq!(mix.range, Some(ParameterRange::new(0.0, 1.0, 0.4)));
+    assert_eq!(mix.default_value, ParameterValue::Float(0.4));
+
+    // An explicit plain range and unit flow straight into the model the truce
+    // and TypeScript emitters consume.
+    let cutoff = &model.parameters[1];
+    assert_eq!(cutoff.id, "filter.cutoff");
+    assert_eq!(cutoff.unit, "Hz");
+    assert_eq!(
+        cutoff.range,
+        Some(ParameterRange::new(20.0, 20000.0, 1000.0))
+    );
+    assert_eq!(cutoff.default_value, ParameterValue::Float(1000.0));
 }
 
 #[test]

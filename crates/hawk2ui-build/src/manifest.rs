@@ -2,11 +2,9 @@
 
 use std::collections::BTreeSet;
 
+use hawk2ui_plugin::{ParameterModel, ParameterRange, ParameterRecord};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-const NORMALIZED_PARAMETER_MIN: f64 = 0.0;
-const NORMALIZED_PARAMETER_MAX: f64 = 1.0;
 
 /// Supported package target class.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -134,6 +132,13 @@ pub struct EditorMetadata {
 }
 
 /// Plugin parameter metadata.
+///
+/// `min`/`max` bound the parameter's plain (denormalized) value and default to
+/// the unit interval, so a parameter that declares neither behaves like a
+/// normalized `0.0..=1.0` control — the historical shape. `default` is a plain
+/// value inside `[min, max]`. `unit`, when present, must be one of the
+/// host-display units the parameter codegen understands (`dB`, `Hz`, `ms`,
+/// `s`, `%`, `st`, `pan`); an empty unit is unitless.
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginParameter {
@@ -141,8 +146,17 @@ pub struct PluginParameter {
     pub id: String,
     /// Display name.
     pub name: String,
-    /// Default normalized value.
+    /// Minimum plain value.
+    #[serde(default = "unit_interval_min")]
+    pub min: f64,
+    /// Maximum plain value.
+    #[serde(default = "unit_interval_max")]
+    pub max: f64,
+    /// Default plain value, inside `[min, max]`.
     pub default: f64,
+    /// Host-display unit label, or empty when unitless.
+    #[serde(default)]
+    pub unit: String,
 }
 
 /// Asset declaration.
@@ -226,6 +240,26 @@ impl HawkManifest {
         )
     }
 
+    /// Builds the validated parameter model that parameter/meter code
+    /// generation consumes.
+    ///
+    /// Each manifest parameter becomes a numeric [`ParameterRecord`] over its
+    /// plain `[min, max]` range. Manifest validation already guarantees the
+    /// range and default are well-formed, so the returned model is valid by
+    /// construction and ready to drive the truce `Params` and editor-side
+    /// TypeScript emitters from this single source.
+    #[must_use]
+    pub fn parameter_model(&self) -> ParameterModel {
+        ParameterModel::new(self.parameters.iter().map(|parameter| {
+            ParameterRecord::numeric(
+                parameter.id.clone(),
+                parameter.name.clone(),
+                parameter.unit.clone(),
+                ParameterRange::new(parameter.min, parameter.max, parameter.default),
+            )
+        }))
+    }
+
     fn validate(&self) -> Result<(), ManifestError> {
         require_non_empty("identity.id", &self.identity.id)?;
         require_non_empty("identity.name", &self.identity.name)?;
@@ -258,10 +292,16 @@ impl HawkManifest {
             if !is_stable_id(&parameter.id) {
                 return Err(ManifestError::InvalidPluginParameter(parameter.id.clone()));
             }
-            if !parameter.default.is_finite()
-                || !(NORMALIZED_PARAMETER_MIN..=NORMALIZED_PARAMETER_MAX)
-                    .contains(&parameter.default)
+            if !parameter.min.is_finite()
+                || !parameter.max.is_finite()
+                || !parameter.default.is_finite()
+                || parameter.max <= parameter.min
+                || parameter.default < parameter.min
+                || parameter.default > parameter.max
             {
+                return Err(ManifestError::InvalidPluginParameter(parameter.id.clone()));
+            }
+            if !is_supported_unit(&parameter.unit) {
                 return Err(ManifestError::InvalidPluginParameter(parameter.id.clone()));
             }
             if !parameter_ids.insert(parameter.id.clone()) {
@@ -310,6 +350,23 @@ fn is_stable_id(value: &str) -> bool {
         && value.chars().all(|ch| {
             ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-')
         })
+}
+
+/// Default lower bound for a parameter that omits `min` — the unit interval.
+fn unit_interval_min() -> f64 {
+    0.0
+}
+
+/// Default upper bound for a parameter that omits `max` — the unit interval.
+fn unit_interval_max() -> f64 {
+    1.0
+}
+
+/// Whether a parameter unit label maps onto a host-display unit the codegen
+/// understands. Empty means unitless; the rest mirror the canonical truce
+/// `ParamUnit` spellings.
+fn is_supported_unit(unit: &str) -> bool {
+    matches!(unit, "" | "dB" | "Hz" | "ms" | "s" | "%" | "st" | "pan")
 }
 
 /// Manifest validation error.
