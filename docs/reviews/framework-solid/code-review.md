@@ -15,11 +15,8 @@ Fixed the one finding that is a bug *within* the scanner's existing design (a pu
 - **#9 (real subset) — added the lifecycle-tracking regression test + `solid.event.unsupported` coverage** (`solid_reports_unsupported_event`; the `onClick`/… denylist was entirely untested).
 
 **Surfaced / deferred (NOT fixed — would prejudge an open decision):**
-- **#1 — `fine_grained_updates` is a canned literal, not a reactivity model (SURFACED → `frameworks-real-compiler`, Medium).** Both paths emit `["signal:items","for-each:keyed","effect:root-props"]` unconditionally. The real fix needs a Solid reactivity model in the type system — `FrameworkNativeProgram` has **no** signal/effect/memo concept, so it cannot be derived from either path today. Doc now states this honestly; surfaced for the model decision.
-- **#2 (handlers) / #3 (refs) — hardcoded, not parsed from `{…}` brace expressions (SURFACED → `frameworks-real-compiler`, Medium).** Same class as React #2: extracting from JSX brace expressions is "how much should the source-scan path parse," a miniature of the open real-compiler decision; a partial bare-identifier fix is worst-of-both (silent mix of real/fabricated bindings). Disclosed in the `render()` doc instead.
-- **#5 (whole) — no Solid-specific protocol/operation surface (SURFACED, Low).** Building a real reactivity/operation surface is the same model decision as #1.
-- **#6 — four-way copy-paste, no `hawk2ui-framework-core` (SURFACED, Low/architecture).** Already drifted (Vue grew `:id=` guards the others lack). Extracting a shared core is an architecture decision.
-- **#7 (magic visual defaults) / #10 (substring-based, bypassable input validation) — deferred Low.** Shared family-wide; theme-owned defaults and allowlist validation are design improvements, not contained bugs.
+**Decision-gated items → tracked as live decisions, not deferred prose** (see `docs/remediation/open-decisions-register.md`):
+- #1 (canned `fine_grained_updates` reactivity literal), #2/#3 (handler/ref hardcoding, not parsed from `{…}`), #5 (no Solid-specific protocol/operation surface), #6 (four-way copy-paste / no shared `hawk2ui-framework-core`), #7 (magic visual defaults), #10 (substring-based, bypassable input validation) → **DEC-01** (framework source-scan fidelity). Recommended resolution: make `from_native_program` the sole honest path and strip the scanner fabrications — the raw-source path has no build/CLI caller.
 
 ## Summary
 
