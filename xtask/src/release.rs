@@ -194,6 +194,19 @@ impl VersionPolicy {
             &self.manual_version,
         )?;
 
+        // Anchor the declared version to a real compiled crate version, not just to the sibling
+        // fields in this file: comparing against `env!("CARGO_PKG_VERSION")` (xtask's own version,
+        // which moves with a workspace version bump) makes the gate fail on real policy-vs-crate
+        // drift instead of passing whenever the three in-file strings agree. Validating every
+        // member crate via `cargo metadata` is the fuller check; this anchors to the compiled
+        // version with no new dependency.
+        require_matching_version(
+            "crate_version",
+            &self.crate_version,
+            "compiled crate version",
+            env!("CARGO_PKG_VERSION"),
+        )?;
+
         if !self.compatibility_notes_required {
             return Err(VersionPolicyError::CompatibilityNotesNotRequired);
         }
@@ -401,6 +414,17 @@ enum DependencyPolicyError {
     MissingRequiredField { name: String, field: &'static str },
 }
 
+/// Sections every release changelog must contain; enforced by [`Changelog::parse`].
+const REQUIRED_CHANGELOG_SECTIONS: [&str; 7] = [
+    "Added",
+    "Changed",
+    "Fixed",
+    "Security",
+    "Compatibility",
+    "Migration",
+    "Known Limitations",
+];
+
 #[derive(Debug)]
 struct Changelog<'a> {
     text: &'a str,
@@ -422,6 +446,16 @@ impl<'a> Changelog<'a> {
             return Err(ChangelogError::MissingVerificationEvidence);
         }
 
+        // Enforce the mandated sections in production, not only in tests: `has_section` was
+        // previously test-only (silenced by the module `allow(dead_code)`), so `--changelog-only`
+        // passed on a changelog with the title + the two evidence substrings but none of the
+        // required sections. Checked after the evidence gate to preserve existing error ordering.
+        for section in REQUIRED_CHANGELOG_SECTIONS {
+            if !changelog.has_section(section) {
+                return Err(ChangelogError::MissingSection(section.to_owned()));
+            }
+        }
+
         Ok(changelog)
     }
 
@@ -437,8 +471,13 @@ impl<'a> Changelog<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// The shared `Missing` prefix is intentional — each variant names exactly what the changelog is
+// missing — and renaming would churn the existing `MissingTitle`/`MissingVerificationEvidence`
+// variants that callers and tests already match on.
+#[allow(clippy::enum_variant_names)]
 enum ChangelogError {
     MissingTitle,
+    MissingSection(String),
     MissingVerificationEvidence,
 }
 
@@ -733,5 +772,47 @@ release_gate = true
             assert!(checklist.contains(command), "checklist missing {command}");
             assert!(manual.contains(command), "manual missing {command}");
         }
+    }
+
+    #[test]
+    fn rejects_policy_version_diverging_from_compiled_crate_version() {
+        // The three in-file version fields agree with each other but not with the real compiled
+        // crate version, so the gate must reject it (the former tautology accepted it).
+        let input = r#"
+crate_version = "9.9.9"
+artifact_schema_version = 1
+package_version = "9.9.9"
+manual_version = "9.9.9"
+compatibility_notes_required = true
+"#;
+
+        let error = VersionPolicy::parse(input)
+            .expect_err("a policy version diverging from the compiled crate version must fail");
+
+        assert!(matches!(
+            error,
+            VersionPolicyError::MismatchedVersion { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_changelog_missing_required_sections() {
+        // Has the title and verification evidence, but omits the mandated sections beyond `Added`.
+        let input = "\
+# Changelog
+
+## 0.1.0 - 2026-05-22
+
+### Added
+
+- Initial release.
+
+Verification Evidence: target/release-evidence/
+";
+
+        let error =
+            Changelog::parse(input).expect_err("a changelog missing required sections must fail");
+
+        assert_eq!(error, ChangelogError::MissingSection("Changed".to_owned()));
     }
 }
