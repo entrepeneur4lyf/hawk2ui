@@ -281,7 +281,7 @@ export function mount(host) {
 }
 "#;
         let snapshot = host_snapshot_from_model(&synth_model());
-        let bootstrap = entry_mount_bootstrap_with_host(SCRIPT, &snapshot, "null")
+        let bootstrap = entry_mount_bootstrap_with_host(SCRIPT, &snapshot, &[], "null")
             .expect("the script declares mount");
 
         let mut backend =

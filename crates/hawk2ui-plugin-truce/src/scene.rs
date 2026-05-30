@@ -104,7 +104,8 @@ pub(crate) fn build_editor_frame(
     width: f32,
     height: f32,
 ) -> Result<EditorFrame, EditorSceneError> {
-    let Some(bootstrap) = entry_mount_bootstrap_with_host(compiled_source, snapshot, incoming_ui)
+    let Some(bootstrap) =
+        entry_mount_bootstrap_with_host(compiled_source, snapshot, &[], incoming_ui)
     else {
         return Err(EditorSceneError::new(
             "hawk2ui-truce.editor.no-mount",

@@ -245,6 +245,7 @@ pub struct HostSnapshot {
 pub fn entry_mount_bootstrap_with_host(
     source: &str,
     snapshot: &HostSnapshot,
+    events: &[FrameInput],
     incoming_ui: &str,
 ) -> Option<String> {
     let source = source.replacen("export function mount", "function mount", 1);
@@ -257,6 +258,10 @@ pub fn entry_mount_bootstrap_with_host(
     // rather than panicking (the crate forbids `unwrap`/`expect` in non-test).
     let snapshot = serde_json::to_string(snapshot)
         .unwrap_or_else(|_| String::from(r#"{"params":[],"meters":[]}"#));
+    // The per-frame input batch (Decision 0004 D1): the same injection-safe
+    // JSON-⊂-JS embedding as the snapshot. An empty batch is `[]` — an idle
+    // frame the entry sees as `host.events.length === 0` (D3).
+    let events = serde_json::to_string(events).unwrap_or_else(|_| String::from("[]"));
     // The host always feeds serde_json output (or "null"), so this is a valid,
     // injection-safe JS expression. An empty string degrades to `null`.
     let incoming_ui = if incoming_ui.trim().is_empty() {
@@ -282,9 +287,15 @@ function __hawk2ui_require_param(key) {{
     }}
 }}
 const __hawk2ui_edits = [];
+const __hawk2ui_events = {events};
 const __hawk2ui_ui_in = {incoming_ui};
 let __hawk2ui_ui_out = __hawk2ui_ui_in;
 const __hawk2ui_host = Object.freeze({{
+    // Per-frame input (Decision 0004 D1/D3): the events that arrived since the
+    // previous frame, drained and in arrival order; `[]` on an idle frame.
+    // `on` is the superseded no-op (D6) — a recompiled-per-frame engine cannot
+    // hold a listener across frames, so input rides this array instead.
+    events: Object.freeze(__hawk2ui_events.map(Object.freeze)),
     on(_name, _handler) {{}},
     setState(_value) {{}},
     params: Object.freeze(__hawk2ui_snapshot.params.map(Object.freeze)),
@@ -357,6 +368,45 @@ pub enum HostEdit {
     End {
         /// Stable parameter key.
         key: String,
+    },
+}
+
+/// One window input event projected into an editor entry's per-frame `host.events`
+/// array (Decision 0004 D2 — the public input API). The host drains the events
+/// that arrived since the previous frame, translates each from a `PluginHostEvent`
+/// (pointer/keyboard/focus only; resize/DPI/lifecycle are engine-handled, D7), and
+/// embeds them as a frozen array each invocation — input rides the source, like
+/// the read snapshot, so it adds no host-call capability.
+///
+/// The `kind` tag (not `type`, which is the view-node tag) discriminates the
+/// variants; coordinates are logical points sharing the layout geometry space
+/// (D4), so an author hit-tests `x`/`y` against node positions directly.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum FrameInput {
+    /// A pointer event. `button` is the single rich label the host emits (Fork
+    /// B → B1): `"move"`, `"<btn>-down"`/`"<btn>-up"` (btn ∈ left/right/middle),
+    /// `"scroll-up"`/`"scroll-down"`, `"enter"`/`"leave"`, and the drag-and-drop
+    /// labels `"drag-entered"`/`"drag-moved"`/`"drag-left"`/`"drag-dropped"`.
+    Pointer {
+        /// Logical x coordinate, top-left origin (D4).
+        x: f64,
+        /// Logical y coordinate, top-left origin (D4).
+        y: f64,
+        /// Rich button/action label (see variant docs).
+        button: String,
+    },
+    /// A keyboard event.
+    Key {
+        /// Physical or logical key label.
+        key: String,
+        /// Whether the key is pressed (`true`) or released (`false`).
+        pressed: bool,
+    },
+    /// An editor focus change.
+    Focus {
+        /// Whether the editor gained (`true`) or lost (`false`) focus.
+        focused: bool,
     },
 }
 
@@ -1517,8 +1567,8 @@ export function mount(host) {
     };
 }
 "#;
-        let bootstrap =
-            entry_mount_bootstrap_with_host(source, &snapshot, "null").expect("mount is wrapped");
+        let bootstrap = entry_mount_bootstrap_with_host(source, &snapshot, &[], "null")
+            .expect("mount is wrapped");
         let mut backend =
             ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
         let execution = backend
@@ -1542,6 +1592,7 @@ export function mount(host) {
         let bootstrap = entry_mount_bootstrap_with_host(
             r#"export function mount(host) { return host.param("nope"); }"#,
             &snapshot,
+            &[],
             "null",
         )
         .expect("mount is wrapped");
@@ -1556,6 +1607,14 @@ export function mount(host) {
     }
 
     fn run_entry(source: &str, incoming_ui: &str) -> EntryEnvelope {
+        run_entry_with_events(source, &[], incoming_ui)
+    }
+
+    fn run_entry_with_events(
+        source: &str,
+        events: &[FrameInput],
+        incoming_ui: &str,
+    ) -> EntryEnvelope {
         let snapshot = HostSnapshot {
             params: vec![HostParam {
                 key: "cutoff".into(),
@@ -1568,8 +1627,8 @@ export function mount(host) {
             }],
             meters: Vec::new(),
         };
-        let bootstrap =
-            entry_mount_bootstrap_with_host(source, &snapshot, incoming_ui).expect("mount wrapped");
+        let bootstrap = entry_mount_bootstrap_with_host(source, &snapshot, events, incoming_ui)
+            .expect("mount wrapped");
         let mut backend =
             ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
         let execution = backend
@@ -1579,6 +1638,85 @@ export function mount(host) {
             panic!("the entry must return a serialized envelope");
         };
         parse_entry_envelope(json).expect("the entry returns a valid envelope")
+    }
+
+    #[test]
+    fn projects_input_events_into_the_entry_host() {
+        // The locked host.events shape (Decision 0004 D2): kind-tagged pointer /
+        // key / focus events, in arrival order (D3), with a fractional logical
+        // coordinate preserved through the JSON-⊂-JS embed.
+        let envelope = run_entry_with_events(
+            r#"
+export function mount(host) {
+    const parts = host.events.map(function (e) {
+        if (e.kind === "pointer") return "P:" + e.x + ":" + e.y + ":" + e.button;
+        if (e.kind === "key") return "K:" + e.key + ":" + e.pressed;
+        if (e.kind === "focus") return "F:" + e.focused;
+        return "?";
+    });
+    return { id: "ev|" + host.events.length + "|" + parts.join("|"), type: "view" };
+}
+"#,
+            &[
+                FrameInput::Pointer {
+                    x: 12.5,
+                    y: 34.0,
+                    button: "left-down".into(),
+                },
+                FrameInput::Key {
+                    key: "a".into(),
+                    pressed: true,
+                },
+                FrameInput::Focus { focused: true },
+            ],
+            "null",
+        );
+        assert!(
+            envelope
+                .tree_json
+                .contains("ev|3|P:12.5:34:left-down|K:a:true|F:true"),
+            "{}",
+            envelope.tree_json
+        );
+    }
+
+    #[test]
+    fn an_idle_frame_sees_an_empty_events_array() {
+        // D3: a frame with no input gets `[]` — a real, iterable array of length 0.
+        let envelope = run_entry_with_events(
+            r#"
+export function mount(host) {
+    return { id: "idle|" + host.events.length + "|" + Array.isArray(host.events), type: "view" };
+}
+"#,
+            &[],
+            "null",
+        );
+        assert!(
+            envelope.tree_json.contains("idle|0|true"),
+            "{}",
+            envelope.tree_json
+        );
+    }
+
+    #[test]
+    fn host_on_remains_a_tolerated_no_op() {
+        // D6: `host.events` supersedes `host.on`, but `host.on` stays a no-op so
+        // existing authored entries (the `new` scaffold, examples) never throw.
+        let envelope = run_entry(
+            r#"
+export function mount(host) {
+    host.on("ready", function () {});
+    return { id: "on-ok", type: "view" };
+}
+"#,
+            "null",
+        );
+        assert!(
+            envelope.tree_json.contains("on-ok"),
+            "{}",
+            envelope.tree_json
+        );
     }
 
     #[test]
@@ -1672,6 +1810,7 @@ export function mount(host) {
         let bootstrap = entry_mount_bootstrap_with_host(
             r#"export function mount(host) { host.setParam("nope", 0.5); return { id: "root", type: "view" }; }"#,
             &snapshot,
+            &[],
             "null",
         )
         .expect("mount is wrapped");
