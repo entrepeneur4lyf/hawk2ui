@@ -814,10 +814,21 @@ impl Drop for GlProcAddressLoader {
 /// `WillClose` — delivered by Baseview on every close path (user close, host
 /// parent-drop, and programmatic `close`) with a live `Window` — not in `Drop`,
 /// which has no window and therefore cannot make the context current.
+/// A closure that produces the next scene each frame, for the live editor render
+/// loop: the truce editor builds one (capturing its render state and bridge) and
+/// the GPU handler calls it once per `on_frame`. `Send` so the handler remains
+/// `Send` for Baseview's `WindowHandler`.
+#[cfg(target_os = "linux")]
+pub type EditorSceneProducer = Box<dyn FnMut() -> RuntimeSceneFrame + Send>;
+
 #[cfg(target_os = "linux")]
 pub struct BaseviewGlSkiaFrameHandler {
     backend: SkiaRendererBackend,
     context: Option<DirectContext>,
+    /// When set, called once per frame to produce the live scene; otherwise the
+    /// fixed `scene` is presented every frame (the construction-time / no-bridge
+    /// path).
+    scene_producer: Option<EditorSceneProducer>,
     scene: RuntimeSceneFrame,
     dpi_scale: f32,
     event_translator: BaseviewEventTranslator,
@@ -850,6 +861,7 @@ impl BaseviewGlSkiaFrameHandler {
         let mut handler = Self {
             backend: SkiaRendererBackend::new(),
             context: None,
+            scene_producer: None,
             scene,
             dpi_scale: 1.0,
             event_translator: BaseviewEventTranslator::new(metrics),
@@ -870,6 +882,15 @@ impl BaseviewGlSkiaFrameHandler {
     #[must_use]
     pub fn with_event_sink(mut self, event_sink: Arc<Mutex<Vec<PluginHostEvent>>>) -> Self {
         self.event_sink = event_sink;
+        self
+    }
+
+    /// Installs the per-frame scene producer for the live editor render loop. With
+    /// it set, [`Self::on_frame`] calls the producer once per frame to refresh the
+    /// presented scene; `None` leaves the handler presenting its fixed `scene`.
+    #[must_use]
+    pub fn with_scene_producer(mut self, scene_producer: Option<EditorSceneProducer>) -> Self {
+        self.scene_producer = scene_producer;
         self
     }
 
@@ -1077,6 +1098,13 @@ impl WindowHandler for BaseviewGlSkiaFrameHandler {
             // Close so the editor lifecycle (and the smoke) can observe it and end.
             window.close();
             return;
+        }
+        // Live render loop: refresh the scene from the producer (the editor's
+        // per-frame bridge-read → entry → replay cycle) before presenting. The
+        // producer degrades internally (keeps the last good scene on failure), so
+        // `on_frame` never sees an error here.
+        if let Some(producer) = self.scene_producer.as_mut() {
+            self.scene = producer();
         }
         let metrics = self.event_translator.metrics();
         match self.render_gpu_frame(window) {
@@ -1493,6 +1521,7 @@ impl BaseviewPluginAdapter {
     pub fn open_gpu_editor_window(
         &self,
         scene: RuntimeSceneFrame,
+        scene_producer: Option<EditorSceneProducer>,
         presented_frames: Arc<AtomicU64>,
         last_error: Arc<Mutex<Option<BaseviewHostError>>>,
         event_sink: Arc<Mutex<Vec<PluginHostEvent>>>,
@@ -1503,6 +1532,7 @@ impl BaseviewPluginAdapter {
         let handle = self.open_parented_window_with_options(options, move |window| {
             BaseviewGlSkiaFrameHandler::new(window, scene, metrics, presented_frames, last_error)
                 .with_event_sink(event_sink)
+                .with_scene_producer(scene_producer)
         })?;
         Ok(BaseviewEditorWindowHandle { handle })
     }

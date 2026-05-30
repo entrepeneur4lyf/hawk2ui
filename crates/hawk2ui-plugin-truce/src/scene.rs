@@ -71,15 +71,12 @@ impl std::error::Error for EditorSceneError {}
 pub(crate) struct EditorFrame {
     /// The renderable scene built from the entry's view tree.
     pub(crate) scene: RuntimeSceneFrame,
-    /// The ordered parameter edits the entry emitted this invocation. Read by the
-    /// live render cycle, which the editor wires into its frame loop in 0009.4b;
-    /// the construction path drops it, so it reads as dead until then.
-    #[allow(dead_code)]
+    /// The ordered parameter edits the entry emitted this invocation. The live
+    /// render cycle replays them onto the bridge; the construction path drops
+    /// them (no bridge yet).
     pub(crate) edits: Vec<HostEdit>,
-    /// The entry's outgoing UI-state blob as a JSON string, to re-embed next
-    /// invocation. Read by the live render cycle (wired in 0009.4b); dead until
-    /// then on the construction path.
-    #[allow(dead_code)]
+    /// The entry's outgoing UI-state blob as a JSON string, re-embedded into the
+    /// next invocation by the live render cycle; the construction path drops it.
     pub(crate) ui_json: String,
 }
 

@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hawk2ui_host::{PluginEditorConfig, PluginParentHandle, SurfaceMetrics};
-use hawk2ui_plugin_truce::{Hawk2uiTruceEditor, HostSnapshot};
+use hawk2ui_plugin_truce::{EditRouting, Hawk2uiTruceEditor, HostSnapshot};
 use truce::prelude::{FloatParam, Params};
 use truce_core::editor::{Editor, RawWindowHandle, for_test_params};
 use x11rb::{
@@ -48,11 +48,16 @@ fn truce_editor_opens_real_x11_window_and_presents_when_smoke_enabled() {
     }
 
     let parent = X11ParentWindow::open().expect("x11 parent window opens");
+    // A valid entry yields an editor with a live render state, so `open` installs
+    // the per-frame scene producer: this smoke drives the live cycle in a real
+    // window, not a static scene. Empty snapshot/routing — ENTRY_SOURCE reads no
+    // params — so each cycle rebuilds the same scene.
     let mut editor = Hawk2uiTruceEditor::try_from_entry_script(
         editor_config(),
         ENTRY_SOURCE,
         "src/editor.js",
         &HostSnapshot::default(),
+        &EditRouting::default(),
     )
     .expect("editor builds a scene from the entry script");
 

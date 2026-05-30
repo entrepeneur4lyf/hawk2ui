@@ -2,17 +2,11 @@
 //! edits, persist its UI state, produce the next scene.
 //!
 //! [`EditorRenderState::render`] is the per-frame step the editor's render loop
-//! drives (task 0009.4). It is **pure** with respect to windowing — it takes the
-//! bridge and carries its own state, returning the new scene — so it is tested
-//! directly against a fake bridge in the fast gate, independent of how it is
-//! driven. Wiring it into the Baseview frame/event cadence (the part that needs a
-//! live window) is the remaining half of 0009.4.
-//!
-//! The cycle's items are exercised by this module's own tests but not yet called
-//! from non-test code — the editor wires [`EditorRenderState::render`] into the
-//! frame loop in 0009.4b. Until then `dead_code` is allowed here; 0009.4b removes
-//! the allowance once the editor drives the cycle.
-#![allow(dead_code)]
+//! drives. It is **pure** with respect to windowing — it takes the bridge and
+//! carries its own state, returning the new scene — so it is tested directly
+//! against a fake bridge in the fast gate, independent of how it is driven. The
+//! editor's [`crate::editor::Hawk2uiTruceEditor`] installs it as the Baseview GPU
+//! handler's per-frame scene producer on `open` (task 0009.4b).
 
 use std::collections::HashSet;
 
@@ -99,7 +93,10 @@ pub(crate) struct RenderOutcome {
     /// The scene to present this frame.
     pub(crate) scene: RuntimeSceneFrame,
     /// Non-fatal anomalies from replaying the entry's edits (unknown key, double
-    /// begin, …); empty on a clean cycle.
+    /// begin, …); empty on a clean cycle. The live producer drops these for now
+    /// (a future enhancement could surface them to the host); they are asserted
+    /// in this module's tests.
+    #[allow(dead_code)]
     pub(crate) diagnostics: Vec<EditReplayDiagnostic>,
 }
 

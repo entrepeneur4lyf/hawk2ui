@@ -20,9 +20,10 @@ use hawk2ui_host_baseview::{
     BaseviewEditorWindowHandle, BaseviewHostError, BaseviewParentFixture, BaseviewPluginAdapter,
 };
 use hawk2ui_runtime::RuntimeSceneFrame;
-use hawk2ui_script::HostSnapshot;
+use hawk2ui_script::{EditRouting, HostSnapshot};
 use truce_core::editor::{Editor, EditorBridge, PluginContext, RawWindowHandle};
 
+use crate::render::EditorRenderState;
 use crate::scene::{EditorSceneError, build_editor_scene, build_error_scene};
 
 /// Stable parent-fixture identifier for the truce editor surface.
@@ -105,6 +106,12 @@ pub struct Hawk2uiTruceEditor {
     config: PluginEditorConfig,
     size: (u32, u32),
     scene: Option<RuntimeSceneFrame>,
+    /// The live render state (entry source + snapshot template + write routing +
+    /// threaded UI/gesture state) the per-frame producer drives. `Some` for a
+    /// script-built editor, `None` for a hand-built scene or a failed
+    /// construction (those present `scene` statically). Consumed into the scene
+    /// producer at [`Editor::open`].
+    render_state: Option<EditorRenderState>,
     adapter: Option<BaseviewPluginAdapter>,
     window: Option<BaseviewEditorWindowHandle>,
     /// INVARIANT (Decision 0003 D4 / Lock 3): the editor holds the host **bridge
@@ -137,6 +144,7 @@ impl Hawk2uiTruceEditor {
             config,
             size,
             scene: Some(scene),
+            render_state: None,
             adapter: None,
             window: None,
             bridge: None,
@@ -157,25 +165,40 @@ impl Hawk2uiTruceEditor {
     /// Use [`Self::try_from_entry_script`] when the caller wants to inspect or
     /// handle the build error itself.
     ///
-    /// `snapshot` is projected into the script's `host` (parameters and meters,
-    /// read by string key); pass an empty [`HostSnapshot`] for a paramless
-    /// editor. It carries the model's declared defaults today — re-projecting it
-    /// from the live truce `EditorBridge` is task 0009.4.
+    /// `snapshot` is the construction-time read projection (the model's declared
+    /// defaults; pass an empty [`HostSnapshot`] for a paramless editor) and
+    /// `routing` maps parameter keys to truce ids for write-back. Both are
+    /// retained as the editor's [`EditorRenderState`], so once [`Editor::open`]
+    /// captures the live bridge the per-frame producer re-projects from it and
+    /// replays edits — the initial scene shown before the first frame is the
+    /// snapshot's defaults.
     #[must_use]
     pub fn from_entry_script(
         config: PluginEditorConfig,
         compiled_source: &str,
         source_path: &str,
         snapshot: &HostSnapshot,
+        routing: &EditRouting,
     ) -> Self {
         let (width, height) = scene_dimensions(&config);
         match build_editor_scene(compiled_source, source_path, snapshot, width, height) {
-            Ok(scene) => Self::new(config, scene),
+            Ok(scene) => {
+                let mut editor = Self::new(config, scene);
+                editor.render_state = Some(EditorRenderState::new(
+                    compiled_source.to_string(),
+                    source_path.to_string(),
+                    snapshot.clone(),
+                    routing.clone(),
+                    width,
+                    height,
+                ));
+                editor
+            }
             Err(error) => {
                 // The script failed; still present something diagnosable. If even
                 // the error panel cannot build (unreachable in practice), degrade
                 // to no scene — `open` then records and presents nothing rather
-                // than panicking.
+                // than panicking. No render state, so the error scene is static.
                 let fallback = build_error_scene(&error.to_string(), width, height).ok();
                 Self::errored(config, fallback, &error)
             }
@@ -187,10 +210,11 @@ impl Hawk2uiTruceEditor {
     ///
     /// The script's `mount` function is executed (see [`build_editor_scene`])
     /// and its returned node tree becomes the initial [`RuntimeSceneFrame`] the
-    /// editor renders, sized to the plugin editor's logical dimensions.
-    /// `snapshot` is projected into the script's `host` (parameters and meters,
-    /// read by string key), carrying the model's declared defaults; re-projecting
-    /// it from the live [`Editor::open`] bridge is task 0009.4.
+    /// editor renders, sized to the plugin editor's logical dimensions. As in
+    /// [`Self::from_entry_script`], `snapshot` (the default read projection) and
+    /// `routing` (key → truce id for write-back) are retained as the editor's
+    /// [`EditorRenderState`], which the per-frame producer drives once
+    /// [`Editor::open`] captures the live bridge.
     ///
     /// Prefer [`Self::from_entry_script`] at the truce `editor()` boundary, which
     /// cannot propagate a `Result`; reach for this when the caller wants the
@@ -205,10 +229,20 @@ impl Hawk2uiTruceEditor {
         compiled_source: &str,
         source_path: &str,
         snapshot: &HostSnapshot,
+        routing: &EditRouting,
     ) -> Result<Self, EditorSceneError> {
         let (width, height) = scene_dimensions(&config);
         let scene = build_editor_scene(compiled_source, source_path, snapshot, width, height)?;
-        Ok(Self::new(config, scene))
+        let mut editor = Self::new(config, scene);
+        editor.render_state = Some(EditorRenderState::new(
+            compiled_source.to_string(),
+            source_path.to_string(),
+            snapshot.clone(),
+            routing.clone(),
+            width,
+            height,
+        ));
+        Ok(editor)
     }
 
     /// Builds an editor already in an error state: it presents `scene` (a
@@ -224,6 +258,7 @@ impl Hawk2uiTruceEditor {
             config,
             size,
             scene,
+            render_state: None,
             adapter: None,
             window: None,
             bridge: None,
@@ -276,11 +311,16 @@ impl Hawk2uiTruceEditor {
             ));
             return;
         };
+        // The live render producer (the per-frame bridge-read → entry → replay
+        // cycle); `None` for a hand-built or failed-construction editor, which
+        // then presents the fixed `scene`.
+        let scene_producer = self.build_scene_producer(scene.clone());
         // The frame handler records into its own clones of these; the editor
         // observes progress through `presented_frame_count` / `has_error`.
         let events = Arc::new(Mutex::new(Vec::new()));
         match adapter.open_gpu_editor_window(
             scene,
+            scene_producer,
             Arc::clone(&self.presented_frames),
             Arc::clone(&self.last_error),
             events,
@@ -288,6 +328,42 @@ impl Hawk2uiTruceEditor {
             Ok(window) => self.window = Some(window),
             Err(error) => self.record_error(error),
         }
+    }
+
+    /// Builds the per-frame scene producer the GPU frame handler calls each
+    /// frame: one [`EditorRenderState::render`] against the captured bridge.
+    ///
+    /// The closure **degrades** rather than propagating — on a failed cycle (an
+    /// author bug mid-session) it keeps the last good scene and records the error
+    /// into the shared `last_error` (observable via [`Self::has_error`]), never
+    /// panicking into the host's UI thread (Decision 0003 D5). It is `Send`
+    /// (it owns the render state, an `Arc<dyn EditorBridge>`, the `last_error`
+    /// handle, and the last good scene) so the frame handler stays `Send`.
+    ///
+    /// Returns `None` — so the handler presents the fixed `scene` — when there is
+    /// no render state (a hand-built scene or a failed construction) or no bridge
+    /// was captured (which `open` always captures before calling this).
+    #[cfg(target_os = "linux")]
+    fn build_scene_producer(
+        &mut self,
+        initial: RuntimeSceneFrame,
+    ) -> Option<Box<dyn FnMut() -> RuntimeSceneFrame + Send>> {
+        let mut state = self.render_state.take()?;
+        let bridge = self.bridge.clone()?;
+        let last_error = Arc::clone(&self.last_error);
+        let mut last_good = initial;
+        Some(Box::new(move || match state.render(bridge.as_ref()) {
+            Ok(outcome) => {
+                last_good = outcome.scene.clone();
+                outcome.scene
+            }
+            Err(error) => {
+                if let Ok(mut guard) = last_error.lock() {
+                    *guard = Some(BaseviewHostError::new(error.rule(), error.message()));
+                }
+                last_good.clone()
+            }
+        }))
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -428,6 +504,7 @@ mod tests {
             "const broken = 1;",
             "src/editor.js",
             &HostSnapshot::default(),
+            &EditRouting::default(),
         );
         assert!(
             editor.scene().is_some(),
@@ -446,9 +523,41 @@ mod tests {
             "export function mount(host) { return { id: \"root\", type: \"view\" }; }",
             "src/editor.js",
             &HostSnapshot::default(),
+            &EditRouting::default(),
         );
         assert!(editor.scene().is_some());
         assert!(!editor.has_error());
+    }
+
+    #[test]
+    fn only_a_script_built_editor_retains_a_live_render_state() {
+        // A valid script wires the live render state, so `open` installs the
+        // per-frame producer (the live loop). This is the 0009.4b lifecycle hook,
+        // checked without a window.
+        let live = Hawk2uiTruceEditor::from_entry_script(
+            test_config(),
+            "export function mount(host) { return { id: \"root\", type: \"view\" }; }",
+            "src/editor.js",
+            &HostSnapshot::default(),
+            &EditRouting::default(),
+        );
+        assert!(
+            live.render_state.is_some(),
+            "a valid script must wire the live render state"
+        );
+        // A hand-built scene has no entry source, so no live cycle.
+        let handbuilt = Hawk2uiTruceEditor::new(test_config(), test_scene());
+        assert!(handbuilt.render_state.is_none());
+        // A broken script errors with no render state — its error scene is static.
+        let broken = Hawk2uiTruceEditor::from_entry_script(
+            test_config(),
+            "const broken = 1;",
+            "src/editor.js",
+            &HostSnapshot::default(),
+            &EditRouting::default(),
+        );
+        assert!(broken.render_state.is_none());
+        assert!(broken.has_error());
     }
 
     #[test]
@@ -458,6 +567,7 @@ mod tests {
             "const broken = 1;",
             "src/editor.js",
             &HostSnapshot::default(),
+            &EditRouting::default(),
         );
         // `Hawk2uiTruceEditor` is not `Debug` (it holds an `Arc<dyn EditorBridge>`),
         // so destructure rather than `expect_err`.
