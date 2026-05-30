@@ -150,12 +150,16 @@ pub enum HostParamValue {
 }
 
 /// One parameter projected into an editor entry script, addressed by its stable
-/// string key (the numeric truce id is host-side routing metadata, not part of
-/// the author-facing surface).
+/// string key. The numeric truce `id` is carried too (Decision 0003 D2/D1) as
+/// the host-side routing detail that maps a write back to the bridge, but
+/// authors address parameters by `key`, never by id.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HostParam {
     /// Stable string key the author addresses the parameter by.
     pub key: String,
+    /// truce `ParamId` u32, verbatim — the wire detail the host maps a write
+    /// (`host.setParam(key, …)`) back onto the bridge with. Authors use `key`.
+    pub id: u32,
     /// Value kind, which drives the JS type of `value`.
     pub kind: HostParamKind,
     /// Current value, typed by `kind`.
@@ -174,6 +178,9 @@ pub struct HostParam {
 pub struct HostMeter {
     /// Stable string key the author addresses the meter by.
     pub key: String,
+    /// truce meter `ParamId` u32 (`METER_ID_BASE + declaration_index`), carried
+    /// so JS never computes it (Decision 0003 Lock 2). Meters are read-only.
+    pub id: u32,
     /// Current level in `0.0..=1.0`.
     pub value: f32,
 }
@@ -1222,6 +1229,7 @@ mod tests {
             params: vec![
                 HostParam {
                     key: "cutoff".into(),
+                    id: 3,
                     kind: HostParamKind::Float,
                     value: HostParamValue::Float(1200.0),
                     normalized: 0.42,
@@ -1230,6 +1238,7 @@ mod tests {
                 },
                 HostParam {
                     key: "bypass".into(),
+                    id: 0,
                     kind: HostParamKind::Bool,
                     value: HostParamValue::Bool(true),
                     normalized: 1.0,
@@ -1239,6 +1248,7 @@ mod tests {
             ],
             meters: vec![HostMeter {
                 key: "out".into(),
+                id: 1 << 24,
                 value: 0.5,
             }],
         };
@@ -1248,7 +1258,7 @@ export function mount(host) {
     return {
         id: "root",
         type: "text",
-        text: c.kind + "|" + c.value + "|" + c.text + "|" + c.normalized
+        text: c.id + "|" + c.kind + "|" + c.value + "|" + c.text + "|" + c.normalized
             + "|" + host.param("bypass").value + "|" + host.meter("out")
             + "|" + host.params.length + "|" + host.meters.length
     };
@@ -1264,10 +1274,11 @@ export function mount(host) {
         let StructuredValue::String(json) = execution.value() else {
             panic!("mount must return a serialized node tree");
         };
-        // float kind / plain value 1200 / formatted text / normalized; bypass
-        // reads as a JS boolean; the meter as its level; two params, one meter.
+        // id 3 (truce ParamId, projected per Decision 0003 D2); float kind;
+        // plain value 1200; formatted text; normalized; bypass reads as a JS
+        // boolean; the meter as its level; two params, one meter.
         assert!(
-            json.contains("float|1200|1.20 kHz|0.42|true|0.5|2|1"),
+            json.contains("3|float|1200|1.20 kHz|0.42|true|0.5|2|1"),
             "{json}"
         );
     }

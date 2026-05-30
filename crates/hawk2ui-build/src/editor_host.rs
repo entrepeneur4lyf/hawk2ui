@@ -20,7 +20,7 @@
 //! Meters therefore project at their floor (`0.0`) here, since the model carries
 //! no persisted meter level.
 
-use hawk2ui_plugin::{ParameterModel, ParameterRecord, ParameterValue};
+use hawk2ui_plugin::{METER_ID_BASE, ParameterModel, ParameterRecord, ParameterValue};
 use hawk2ui_script::{HostMeter, HostParam, HostParamKind, HostParamValue, HostSnapshot};
 
 /// Projects a [`ParameterModel`] into the [`HostSnapshot`] an editor entry
@@ -34,19 +34,29 @@ use hawk2ui_script::{HostMeter, HostParam, HostParamKind, HostParamValue, HostSn
 /// an empty display string) rather than unwrapping.
 #[must_use]
 pub fn host_snapshot_from_model(model: &ParameterModel) -> HostSnapshot {
+    // `resolved_param_ids` returns the truce `ParamId` u32 per parameter in
+    // declaration order (pinned ids honored, unpinned filled lowest-free) — the
+    // same ids the codegen emits, so the projection routes writes to the exact
+    // discriminant the DSP uses (Decision 0003 Lock 1).
+    let param_ids = model.resolved_param_ids();
     HostSnapshot {
         params: model
             .parameters
             .iter()
-            .map(host_param_from_record)
+            .zip(param_ids)
+            .map(|(record, id)| host_param_from_record(record, id))
             .collect(),
         // Meters carry no persisted level; they project at their floor until the
-        // live bridge feeds real values (task 0009.4).
+        // live bridge feeds real values (task 0009.4). truce auto-assigns meter
+        // ids as `METER_ID_BASE + declaration_index` (Decision 0003 Lock 2), so
+        // the projection mirrors that order.
         meters: model
             .meters
             .iter()
-            .map(|meter| HostMeter {
+            .enumerate()
+            .map(|(index, meter)| HostMeter {
                 key: meter.id.clone(),
+                id: METER_ID_BASE.saturating_add(u32::try_from(index).unwrap_or(u32::MAX)),
                 value: 0.0,
             })
             .collect(),
@@ -55,8 +65,9 @@ pub fn host_snapshot_from_model(model: &ParameterModel) -> HostSnapshot {
 
 /// Projects one parameter record into its [`HostParam`], carrying the kind so
 /// the value reaches editor JS as its true scalar (a `bool` as a boolean, an
-/// enum as its variant index) rather than flattened to a float.
-fn host_param_from_record(record: &ParameterRecord) -> HostParam {
+/// enum as its variant index) rather than flattened to a float. `id` is the
+/// parameter's resolved truce `ParamId` (the write-routing wire detail).
+fn host_param_from_record(record: &ParameterRecord, id: u32) -> HostParam {
     let (kind, value) = match &record.default_value {
         ParameterValue::Float(value) => (HostParamKind::Float, HostParamValue::Float(*value)),
         ParameterValue::Int(value) => (HostParamKind::Int, HostParamValue::Int(*value)),
@@ -65,6 +76,7 @@ fn host_param_from_record(record: &ParameterRecord) -> HostParam {
     };
     HostParam {
         key: record.id.clone(),
+        id,
         kind,
         value,
         normalized: default_normalized(record).clamp(0.0, 1.0),
@@ -99,7 +111,7 @@ fn default_normalized(record: &ParameterRecord) -> f64 {
 #[cfg(test)]
 mod tests {
     use hawk2ui_plugin::{
-        EnumVariant, MeterRecord, ParameterModel, ParameterRange, ParameterRecord,
+        EnumVariant, METER_ID_BASE, MeterRecord, ParameterModel, ParameterRange, ParameterRecord,
     };
     use hawk2ui_script::{
         HostCallPolicy, HostParamKind, HostParamValue, ScriptBackend, ScriptModule,
@@ -143,6 +155,7 @@ mod tests {
 
         let cutoff = &snapshot.params[0];
         assert_eq!(cutoff.key, "cutoff");
+        assert_eq!(cutoff.id, 0, "unpinned ids fill in declaration order");
         assert_eq!(cutoff.kind, HostParamKind::Float);
         assert_eq!(cutoff.value, HostParamValue::Float(1200.0));
         assert_eq!(cutoff.text, "1200 kHz");
@@ -150,10 +163,12 @@ mod tests {
         assert!(cutoff.variants.is_empty());
 
         let voices = &snapshot.params[1];
+        assert_eq!(voices.id, 1);
         assert_eq!(voices.kind, HostParamKind::Int);
         assert_eq!(voices.value, HostParamValue::Int(4));
 
         let bypass = &snapshot.params[2];
+        assert_eq!(bypass.id, 2);
         assert_eq!(bypass.kind, HostParamKind::Bool);
         assert_eq!(bypass.value, HostParamValue::Bool(true));
         assert!(
@@ -166,6 +181,7 @@ mod tests {
     fn projects_an_enum_default_on_the_last_variant_at_normalized_one() {
         let snapshot = host_snapshot_from_model(&synth_model());
         let mode = &snapshot.params[3];
+        assert_eq!(mode.id, 3);
         assert_eq!(mode.kind, HostParamKind::Enum);
         assert_eq!(mode.value, HostParamValue::Enum(2));
         assert_eq!(mode.text, "Highpass");
@@ -182,6 +198,25 @@ mod tests {
         assert_eq!(snapshot.meters.len(), 1);
         assert_eq!(snapshot.meters[0].key, "out");
         assert!((f64::from(snapshot.meters[0].value)).abs() < 1e-9);
+    }
+
+    /// Meter ids must be `METER_ID_BASE + declaration_index` — the truce
+    /// auto-assignment the codegen relies on (Decision 0003 Lock 2). This holds
+    /// only because the projection iterates meters in codegen order; assert it on
+    /// a two-meter model so a future reorder can't silently de-sync the projected
+    /// id from the real `ParamId`.
+    #[test]
+    fn projects_meter_ids_at_the_meter_base_offset() {
+        let model = ParameterModel::new([ParameterRecord::boolean("bypass", "Bypass", false)])
+            .with_meters([
+                MeterRecord::new("in", "Input"),
+                MeterRecord::new("out", "Output"),
+            ]);
+        let snapshot = host_snapshot_from_model(&model);
+        assert_eq!(snapshot.meters[0].key, "in");
+        assert_eq!(snapshot.meters[0].id, METER_ID_BASE);
+        assert_eq!(snapshot.meters[1].key, "out");
+        assert_eq!(snapshot.meters[1].id, METER_ID_BASE + 1);
     }
 
     /// Round-trips the projection through the real bootstrap the editor uses:

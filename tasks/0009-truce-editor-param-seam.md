@@ -35,6 +35,13 @@ Split into two units verified **independently** — the script-side JS surface (
 - [x] Verify: `cargo test -p hawk2ui-build editor_host` (kind-typed projection · enum-on-last-variant→normalized 1.0 · meters at floor · **round-trip through the real bootstrap** so the mapping ↔ JS-surface halves meet, not just pass in isolation) · `cargo test -p hawk2ui-plugin-truce projects_the_host_snapshot` (projection reaches the built scene).
 - [x] Review check: satisfied — gated `check-fast` + clippy pedantic clean. The construction-time `&HostSnapshot` arg is expected to migrate to `open()` when 0009.4 moves scene-build there.
 
+#### 0009.1c Snapshot `id` correction — ✅ DONE
+
+- [x] **Honest correction:** 0009.1a/b shipped the projected snapshot **missing the `id` field**, which Decision 0003 D2 (line 68 `"id": 3`), D1 (line 55 "carries `{key, id}`"), and Lock 2 (meters carry their `METER_ID_BASE + index` u32) all require. The omission was caught during 0009.2 design, before any write-back consumer shipped — the snapshot was incomplete vs the signed-off read shape, not wrong in what it did project.
+- [x] Deliverable: `HostParam.id` and `HostMeter.id` (`u32`) added; `host_snapshot_from_model` populates params from `resolved_param_ids()` (truce `ParamId`, Lock 1) and meters as `METER_ID_BASE + declaration_index` (Lock 2). The id projects into JS (`host.param(key).id`) and is the host-side key→u32 routing 0009.2 write-back consumes.
+- [x] Verify: `cargo test -p hawk2ui-build editor_host` (param ids 0/1/2/3 in declaration order; meter ids at `METER_ID_BASE + index` on a 2-meter model — silent-drift guard) · `cargo test -p hawk2ui-script projects_params_and_meters_into_the_entry_host` (asserts `id` reaches JS).
+- [x] Review check: satisfied — completes the contract read shape; gated green.
+
 ### 0009.2 Write-Back (return-carried edit list, gesture-bracketed, host-threaded state)
 
 - [ ] Deliverable: entry function returns `{ tree, edits, ui }`; host validates each edit (key exists, op order sane), maps key → u32, and replays `begin_edit`/`set_param`/`end_edit` on the host/UI thread; edits ride the return JSON (no new `HostCallPolicy` capability); `setParam` carries normalized `[0,1]`, `setParamPlain` is host-normalized via the param range, `automate` one-shot maps to begin+set+end; gesture/UI state threaded via the host-persisted `ui` blob re-embedded each invocation (not held in JS); cross-frame gestures (begin on one invocation, end on a later one) replay as one bracketed gesture; **no meter setter exists**.

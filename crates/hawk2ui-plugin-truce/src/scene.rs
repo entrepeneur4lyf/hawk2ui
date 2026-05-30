@@ -289,6 +289,7 @@ export function mount(host) {
         let snapshot = HostSnapshot {
             params: vec![HostParam {
                 key: "title".into(),
+                id: 0,
                 kind: HostParamKind::Bool,
                 value: HostParamValue::Bool(true),
                 normalized: 1.0,
