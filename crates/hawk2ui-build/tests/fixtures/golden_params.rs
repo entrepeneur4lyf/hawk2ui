@@ -12,4 +12,6 @@ pub struct SpikeParams {
     pub voices: IntParam,
     #[param(id = 3, name = "Bypass", default = 0)]
     pub bypass: BoolParam,
+    #[meter]
+    pub output_level: MeterSlot,
 }

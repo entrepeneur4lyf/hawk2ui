@@ -20,7 +20,7 @@ pub use format::{
     PluginFormatTarget,
 };
 pub use parameter::{
-    GeneratedParameterMetadata, ParameterDistribution, ParameterFlags, ParameterGroup,
+    GeneratedParameterMetadata, MeterRecord, ParameterDistribution, ParameterFlags, ParameterGroup,
     ParameterModel, ParameterRange, ParameterRecord, ParameterSmoothing, ParameterValidationError,
     ParameterValue,
 };

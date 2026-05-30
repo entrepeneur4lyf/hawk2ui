@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use hawk2ui_build::emit_truce_params_struct;
-use hawk2ui_plugin::{ParameterModel, ParameterRange, ParameterRecord};
+use hawk2ui_plugin::{MeterRecord, ParameterModel, ParameterRange, ParameterRecord};
 use truce::params::{ParamRange, ParamUnit, ParamValueKind, Params};
 use truce_core::editor::for_test_params;
 
@@ -28,8 +28,8 @@ mod golden {
     include!("fixtures/golden_params.rs");
 }
 
-/// The model the golden fixture was generated from: a float, a ranged float
-/// with a unit, an integer, and a boolean — one of every emitted kind.
+/// The model the golden fixture was generated from: one of every emitted kind
+/// (float, ranged float with a unit, integer, boolean) plus a meter.
 fn spike_model() -> ParameterModel {
     ParameterModel::new([
         ParameterRecord::numeric("osc.mix", "Osc Mix", "", ParameterRange::new(0.0, 1.0, 0.4)),
@@ -42,6 +42,7 @@ fn spike_model() -> ParameterModel {
         ParameterRecord::integer("voices", "Voices", "", ParameterRange::new(1.0, 8.0, 4.0)),
         ParameterRecord::boolean("bypass", "Bypass", false),
     ])
+    .with_meters([MeterRecord::new("output.level", "Output Level")])
 }
 
 fn approx(actual: f64, expected: f64) -> bool {
@@ -99,6 +100,16 @@ fn generated_params_expose_truce_infos() {
         infos[3].range
     );
     assert!(approx(infos[3].default_plain, 0.0));
+
+    // The meter lives in the same struct but outside param_infos; truce assigns
+    // it an id in the reserved high meter space (METER_ID_BASE = 1 << 24).
+    let meter_ids = params.meter_ids();
+    assert_eq!(meter_ids.len(), 1, "expected the one emitted meter");
+    assert!(
+        meter_ids[0] >= (1_u32 << 24),
+        "meter id {} should sit in the reserved meter space",
+        meter_ids[0]
+    );
 }
 
 #[test]

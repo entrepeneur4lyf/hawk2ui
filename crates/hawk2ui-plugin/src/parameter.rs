@@ -441,11 +441,37 @@ impl ParameterValidationError {
     }
 }
 
+/// Plugin meter (read-only level output) record.
+///
+/// Meters carry no host-writable value or range; the editor reads the current
+/// level (`0.0..=1.0`) by id through the host bridge. truce assigns meter ids
+/// automatically in a reserved id space, in declaration order.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MeterRecord {
+    /// Stable string identifier.
+    pub id: String,
+    /// Display name.
+    pub display_name: String,
+}
+
+impl MeterRecord {
+    /// Creates a meter record.
+    #[must_use]
+    pub fn new(id: impl Into<String>, display_name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            display_name: display_name.into(),
+        }
+    }
+}
+
 /// Parameter model.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ParameterModel {
     /// Parameters in stable order.
     pub parameters: Vec<ParameterRecord>,
+    /// Read-only meters in stable order.
+    pub meters: Vec<MeterRecord>,
     /// Top-level groups.
     pub groups: Vec<ParameterGroup>,
 }
@@ -456,8 +482,16 @@ impl ParameterModel {
     pub fn new(parameters: impl IntoIterator<Item = ParameterRecord>) -> Self {
         Self {
             parameters: parameters.into_iter().collect(),
+            meters: Vec::new(),
             groups: Vec::new(),
         }
+    }
+
+    /// Sets the read-only meters.
+    #[must_use]
+    pub fn with_meters(mut self, meters: impl IntoIterator<Item = MeterRecord>) -> Self {
+        self.meters = meters.into_iter().collect();
+        self
     }
 
     /// Adds a top-level group.

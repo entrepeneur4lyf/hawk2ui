@@ -22,7 +22,9 @@
 
 use std::fmt::Write as _;
 
-use hawk2ui_plugin::{ParameterDistribution, ParameterModel, ParameterRecord, ParameterValue};
+use hawk2ui_plugin::{
+    MeterRecord, ParameterDistribution, ParameterModel, ParameterRecord, ParameterValue,
+};
 
 /// Emits a truce `#[derive(Params)]` struct definition from `model`.
 ///
@@ -46,6 +48,9 @@ pub fn emit_truce_params_struct(struct_name: &str, model: &ParameterModel) -> St
         emit_param_field(&mut out, next_id, parameter);
         next_id = next_id.saturating_add(1);
     }
+    for meter in &model.meters {
+        emit_meter_field(&mut out, meter);
+    }
 
     out.push_str("}\n");
     out
@@ -57,6 +62,15 @@ fn emit_param_field(out: &mut String, id: u32, parameter: &ParameterRecord) {
     let (field_type, attrs) = field_spec(id, parameter);
     let _ = writeln!(out, "    #[param({attrs})]");
     let _ = writeln!(out, "    pub {field}: {field_type},");
+}
+
+/// Emits a single `#[meter]` field. truce auto-assigns meter ids in a reserved
+/// id space in declaration order, so no explicit id is emitted; the editor side
+/// addresses meters by that same declaration order.
+fn emit_meter_field(out: &mut String, meter: &MeterRecord) {
+    let field = field_ident(&meter.id);
+    let _ = writeln!(out, "    #[meter]");
+    let _ = writeln!(out, "    pub {field}: MeterSlot,");
 }
 
 /// Returns the truce field type and the `#[param(...)]` attribute body for a
