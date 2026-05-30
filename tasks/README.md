@@ -14,6 +14,8 @@ These task lists are execution tracking documents. Specs remain the requirements
 - `tasks/0006-smoke-release-readiness.md`
 - `tasks/0007-framework-integrations.md`
 - `tasks/0008-native-backends-and-adapters.md`
+- `tasks/0009-truce-editor-param-seam.md`
+- `tasks/0010-parameter-id-stability.md`
 
 ## Execution Rule
 
