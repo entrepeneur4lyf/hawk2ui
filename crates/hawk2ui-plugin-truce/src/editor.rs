@@ -15,6 +15,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(target_os = "linux")]
+use hawk2ui_host::PluginHostEvent;
 use hawk2ui_host::{HostPlatformHandle, PluginEditorConfig};
 use hawk2ui_host_baseview::{
     BaseviewEditorWindowHandle, BaseviewHostError, BaseviewParentFixture, BaseviewPluginAdapter,
@@ -23,6 +25,8 @@ use hawk2ui_runtime::RuntimeSceneFrame;
 use hawk2ui_script::{EditRouting, HostSnapshot};
 use truce_core::editor::{Editor, EditorBridge, PluginContext, RawWindowHandle};
 
+#[cfg(target_os = "linux")]
+use crate::input::frame_inputs_from_host_events;
 use crate::render::EditorRenderState;
 use crate::scene::{EditorSceneError, build_editor_scene, build_error_scene};
 
@@ -311,13 +315,17 @@ impl Hawk2uiTruceEditor {
             ));
             return;
         };
-        // The live render producer (the per-frame bridge-read → entry → replay
-        // cycle); `None` for a hand-built or failed-construction editor, which
-        // then presents the fixed `scene`.
-        let scene_producer = self.build_scene_producer(scene.clone());
-        // The frame handler records into its own clones of these; the editor
-        // observes progress through `presented_frame_count` / `has_error`.
+        // The shared input sink: the GPU frame handler records translated native
+        // events into it each `on_event`, and the scene producer drains it each
+        // frame to feed `host.events` (Decision 0004 U3). Created before the
+        // producer so both hold a clone of the same sink; the editor still
+        // observes progress through `presented_frame_count` / `has_error`, never
+        // through this sink.
         let events = Arc::new(Mutex::new(Vec::new()));
+        // The live render producer (the per-frame drain → bridge-read → entry →
+        // replay cycle); `None` for a hand-built or failed-construction editor,
+        // which then presents the fixed `scene`.
+        let scene_producer = self.build_scene_producer(scene.clone(), Arc::clone(&events));
         match adapter.open_gpu_editor_window(
             scene,
             scene_producer,
@@ -331,14 +339,17 @@ impl Hawk2uiTruceEditor {
     }
 
     /// Builds the per-frame scene producer the GPU frame handler calls each
-    /// frame: one [`EditorRenderState::render`] against the captured bridge.
+    /// frame: drain the shared `event_sink`, translate the author-facing native
+    /// events into `host.events` (Decision 0004 D1), then one
+    /// [`EditorRenderState::render`] against the captured bridge.
     ///
     /// The closure **degrades** rather than propagating — on a failed cycle (an
     /// author bug mid-session) it keeps the last good scene and records the error
     /// into the shared `last_error` (observable via [`Self::has_error`]), never
     /// panicking into the host's UI thread (Decision 0003 D5). It is `Send`
     /// (it owns the render state, an `Arc<dyn EditorBridge>`, the `last_error`
-    /// handle, and the last good scene) so the frame handler stays `Send`.
+    /// handle, the event sink, and the last good scene) so the frame handler
+    /// stays `Send`.
     ///
     /// Returns `None` — so the handler presents the fixed `scene` — when there is
     /// no render state (a hand-built scene or a failed construction) or no bridge
@@ -352,24 +363,34 @@ impl Hawk2uiTruceEditor {
     fn build_scene_producer(
         &self,
         initial: RuntimeSceneFrame,
+        event_sink: Arc<Mutex<Vec<PluginHostEvent>>>,
     ) -> Option<Box<dyn FnMut() -> RuntimeSceneFrame + Send>> {
         let mut state = self.render_state.as_ref()?.clone();
         let bridge = self.bridge.clone()?;
         let last_error = Arc::clone(&self.last_error);
         let mut last_good = initial;
-        // No window input is threaded yet: U3 drains the baseview event sink here
-        // and translates it into the per-frame `events`. Until then the loop runs
-        // with an empty input batch (live reads + replay still drive each frame).
-        Some(Box::new(move || match state.render(bridge.as_ref(), &[]) {
-            Ok(outcome) => {
-                last_good = outcome.scene.clone();
-                outcome.scene
-            }
-            Err(error) => {
-                if let Ok(mut guard) = last_error.lock() {
-                    *guard = Some(BaseviewHostError::new(error.rule(), error.message()));
+        Some(Box::new(move || {
+            // Drain the events the handler recorded since the last frame and
+            // translate the author-facing subset into `host.events` (Decision
+            // 0004 D1/D7). `on_event` and this drain both run on Baseview's GUI
+            // thread, so the lock is uncontended; a poisoned lock degrades to an
+            // empty batch rather than panicking into the host.
+            let drained = match event_sink.lock() {
+                Ok(mut sink) => std::mem::take(&mut *sink),
+                Err(_) => Vec::new(),
+            };
+            let inputs = frame_inputs_from_host_events(&drained);
+            match state.render(bridge.as_ref(), &inputs) {
+                Ok(outcome) => {
+                    last_good = outcome.scene.clone();
+                    outcome.scene
                 }
-                last_good.clone()
+                Err(error) => {
+                    if let Ok(mut guard) = last_error.lock() {
+                        *guard = Some(BaseviewHostError::new(error.rule(), error.message()));
+                    }
+                    last_good.clone()
+                }
             }
         }))
     }
@@ -585,12 +606,149 @@ mod tests {
         );
         assert!(editor.render_state.is_some());
         assert!(
-            editor.build_scene_producer(test_scene()).is_none(),
+            editor
+                .build_scene_producer(test_scene(), Arc::new(Mutex::new(Vec::new())))
+                .is_none(),
             "no captured bridge yet → no producer"
         );
         assert!(
             editor.render_state.is_some(),
             "the render state must survive so a reopen rebuilds a live loop"
+        );
+    }
+
+    /// `(op, id, value)` gesture calls recorded by [`RecordingBridge`].
+    #[cfg(target_os = "linux")]
+    type EditWrites = Arc<Mutex<Vec<(&'static str, u32, f64)>>>;
+
+    /// A bridge that records the gesture calls the replay drives, so a test can
+    /// assert a native pointer event reached the entry and crossed back.
+    #[cfg(target_os = "linux")]
+    struct RecordingBridge {
+        writes: EditWrites,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl EditorBridge for RecordingBridge {
+        fn begin_edit(&self, id: u32) {
+            self.writes.lock().expect("writes").push(("begin", id, 0.0));
+        }
+        fn set_param(&self, id: u32, normalized: f64) {
+            self.writes
+                .lock()
+                .expect("writes")
+                .push(("set", id, normalized));
+        }
+        fn end_edit(&self, id: u32) {
+            self.writes.lock().expect("writes").push(("end", id, 0.0));
+        }
+        fn request_resize(&self, _w: u32, _h: u32) -> bool {
+            false
+        }
+        fn get_param(&self, _id: u32) -> f64 {
+            0.0
+        }
+        fn get_param_plain(&self, _id: u32) -> f64 {
+            0.0
+        }
+        fn format_param(&self, _id: u32) -> String {
+            String::new()
+        }
+        fn get_meter(&self, _id: u32) -> f32 {
+            0.0
+        }
+        fn get_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn set_state(&self, _data: Vec<u8>) {}
+        fn transport(&self) -> Option<truce_core::TransportInfo> {
+            None
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_scene_producer_drains_input_and_drives_an_edit() {
+        use hawk2ui_host::{PluginHostEvent, PointerInput};
+        use hawk2ui_script::{HostParam, HostParamKind, HostParamValue, ParamRoute};
+
+        // An entry that emits a gesture only on a pointer press (the motivating
+        // case). The snapshot/routing carry `cutoff` so the write verbs resolve.
+        const PRESS_SCRIPT: &str = r#"
+export function mount(host) {
+    for (const ev of host.events) {
+        if (ev.kind === "pointer" && ev.button === "left-down") {
+            host.beginEdit("cutoff");
+            host.setParam("cutoff", 0.75);
+            host.endEdit("cutoff");
+        }
+    }
+    return { id: "root", type: "view" };
+}
+"#;
+        let snapshot = HostSnapshot {
+            params: vec![HostParam {
+                key: "cutoff".into(),
+                id: 3,
+                kind: HostParamKind::Float,
+                value: HostParamValue::Float(0.0),
+                normalized: 0.0,
+                text: String::new(),
+                variants: Vec::new(),
+            }],
+            meters: Vec::new(),
+        };
+        let routing = EditRouting::new(vec![ParamRoute {
+            key: "cutoff".into(),
+            id: 3,
+            kind: HostParamKind::Float,
+            min: 0.0,
+            max: 2000.0,
+            variant_count: 0,
+        }]);
+
+        let mut editor = Hawk2uiTruceEditor::from_entry_script(
+            test_config(),
+            PRESS_SCRIPT,
+            "src/editor.js",
+            &snapshot,
+            &routing,
+        );
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        // Capture a recording bridge directly: `open` would need a real window,
+        // but the producer only needs `render_state` + a captured `bridge`, so
+        // this exercises the full U3 glue (sink drain -> translate -> render ->
+        // replay -> bridge) deterministically, no window.
+        editor.bridge = Some(Arc::new(RecordingBridge {
+            writes: Arc::clone(&writes),
+        }));
+
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let mut producer = editor
+            .build_scene_producer(test_scene(), Arc::clone(&sink))
+            .expect("a script-built editor with a captured bridge yields a producer");
+
+        // Idle frame: empty sink -> no edit.
+        let _ = producer();
+        assert!(
+            writes.lock().expect("writes").is_empty(),
+            "an idle frame drives no edit"
+        );
+
+        // A native pointer press lands in the sink between frames; the next frame
+        // drains it, projects it into host.events, and the entry's gesture replays.
+        sink.lock()
+            .expect("sink")
+            .push(PluginHostEvent::PointerRouted(PointerInput::new(
+                10.0,
+                10.0,
+                "left-down",
+            )));
+        let _ = producer();
+        assert_eq!(
+            *writes.lock().expect("writes"),
+            vec![("begin", 3, 0.0), ("set", 3, 0.75), ("end", 3, 0.0)],
+            "a native pointer press must drive the gesture onto the bridge"
         );
     }
 

@@ -34,6 +34,10 @@ pub use hawk2ui_script::{
 };
 
 pub mod editor;
+/// Native-event → `host.events` translation; only the Linux windowing path drives
+/// the live input loop, so the module (and its sole consumer) are Linux-gated.
+#[cfg(target_os = "linux")]
+mod input;
 mod render;
 mod replay;
 mod scene;
