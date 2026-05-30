@@ -19,17 +19,12 @@ use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
     WinitDesktopReload, WinitDesktopReloadKind, WinitDesktopRuntime, WinitDesktopRuntimeConfig,
 };
-use hawk2ui_layout::{BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue};
 use hawk2ui_plugin::{BundleOutput, FormatMetadata};
 use hawk2ui_plugin_adapters::{
     PackageAdapterSet, PackageFormat, PackageMaterializationError, PackageRequest,
     VerificationStatus,
 };
-use hawk2ui_render::Color;
-use hawk2ui_runtime::{
-    RuntimeSceneError, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
-    RuntimeVisual,
-};
+use hawk2ui_runtime::{EntryNode, RuntimeSceneError, RuntimeViewTree};
 use hawk2ui_schema::schema_catalog_json;
 use hawk2ui_script::{HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy};
 
@@ -67,16 +62,16 @@ impl BuildProfile {
 
 #[derive(Clone, Debug, PartialEq)]
 struct DesktopEntryAppModel {
-    root: DesktopEntryNode,
+    root: EntryNode,
 }
 
 impl DesktopEntryAppModel {
     fn manifest_fallback(visible_title: impl Into<String>) -> Self {
         let root_id = "root".to_string();
         Self {
-            root: DesktopEntryNode::view(
+            root: EntryNode::view(
                 root_id.clone(),
-                vec![DesktopEntryNode::text(
+                vec![EntryNode::text(
                     format!("{root_id}-title"),
                     visible_title.into(),
                 )],
@@ -85,135 +80,7 @@ impl DesktopEntryAppModel {
     }
 
     fn from_mount_json(value: &str) -> Result<Self, String> {
-        let value: serde_json::Value = serde_json::from_str(value)
-            .map_err(|error| format!("native mount result is not valid JSON: {error}"))?;
-        let root = DesktopEntryNode::from_json(&value)?;
-        validate_desktop_entry_tree_ids(&root)?;
-        Ok(Self { root })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DesktopEntryNodeKind {
-    View,
-    Text,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct DesktopEntryNode {
-    id: String,
-    kind: DesktopEntryNodeKind,
-    text: Option<String>,
-    props: DesktopEntryNodeProps,
-    children: Vec<Self>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-struct DesktopEntryNodeProps {
-    background_color: Option<Color>,
-    text_color: Option<Color>,
-    font_size: Option<f32>,
-    width: Option<f32>,
-    height: Option<f32>,
-    padding: Option<f32>,
-    gap: Option<f32>,
-}
-
-impl DesktopEntryNode {
-    fn view(id: impl Into<String>, children: Vec<Self>) -> Self {
-        Self {
-            id: id.into(),
-            kind: DesktopEntryNodeKind::View,
-            text: None,
-            props: DesktopEntryNodeProps::default(),
-            children,
-        }
-    }
-
-    fn text(id: impl Into<String>, text: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            kind: DesktopEntryNodeKind::Text,
-            text: Some(text.into()),
-            props: DesktopEntryNodeProps::default(),
-            children: Vec::new(),
-        }
-    }
-
-    fn with_props(mut self, props: DesktopEntryNodeProps) -> Self {
-        self.props = props;
-        self
-    }
-
-    fn from_json(value: &serde_json::Value) -> Result<Self, String> {
-        let id = non_empty_json_string(value, "id")?;
-        let props = DesktopEntryNodeProps::from_json(value.get("props"))?;
-        let raw_kind = value
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_else(|| {
-                if value.get("text").is_some() {
-                    "text"
-                } else {
-                    "view"
-                }
-            });
-        match raw_kind {
-            "view" => {
-                let children = json_children(value)?
-                    .iter()
-                    .map(Self::from_json)
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Self::view(id, children).with_props(props))
-            }
-            "text" => {
-                let text = non_empty_json_string(value, "text")?;
-                if value.get("children").is_some() {
-                    return Err(format!("text node '{id}' must not declare children"));
-                }
-                Ok(Self::text(id, text).with_props(props))
-            }
-            _ => Err(format!("node '{id}' uses unsupported type '{raw_kind}'")),
-        }
-    }
-}
-
-impl DesktopEntryNodeProps {
-    fn from_json(value: Option<&serde_json::Value>) -> Result<Self, String> {
-        let Some(value) = value else {
-            return Ok(Self::default());
-        };
-        let serde_json::Value::Object(props) = value else {
-            return Err("field 'props' must be an object".to_string());
-        };
-        let mut result = Self::default();
-        for (name, value) in props {
-            match name.as_str() {
-                "backgroundColor" => {
-                    result.background_color = Some(json_color_prop(value, name)?);
-                }
-                "color" => {
-                    result.text_color = Some(json_color_prop(value, name)?);
-                }
-                "fontSize" => {
-                    result.font_size = Some(json_positive_number_prop(value, name)?);
-                }
-                "width" => {
-                    result.width = Some(json_positive_number_prop(value, name)?);
-                }
-                "height" => {
-                    result.height = Some(json_positive_number_prop(value, name)?);
-                }
-                "padding" => {
-                    result.padding = Some(json_non_negative_number_prop(value, name)?);
-                }
-                "gap" => {
-                    result.gap = Some(json_non_negative_number_prop(value, name)?);
-                }
-                _ => return Err(format!("unsupported native node prop '{name}'")),
-            }
-        }
-        Ok(result)
+        EntryNode::from_tree_json(value).map(|root| Self { root })
     }
 }
 
@@ -1400,90 +1267,10 @@ fn runtime_tree_from_manifest(
 ) -> Result<RuntimeViewTree, Box<CliDiagnostic>> {
     let width = runtime_dimension_to_f32(width)?;
     let height = runtime_dimension_to_f32(height)?;
-    let content_width = (width - 48.0).max(1.0);
-
-    let root_id = RuntimeViewId::new(app_model.root.id.clone());
-    let root = runtime_node_from_desktop_entry(&app_model.root, width, height, true);
-    append_desktop_entry_children(
-        RuntimeViewTree::new(root),
-        &root_id,
-        &app_model.root.children,
-        content_width,
-    )
-    .map_err(|error| runtime_scene_diagnostic(&error))
-}
-
-fn append_desktop_entry_children(
-    mut tree: RuntimeViewTree,
-    parent_id: &RuntimeViewId,
-    children: &[DesktopEntryNode],
-    content_width: f32,
-) -> Result<RuntimeViewTree, RuntimeSceneError> {
-    for child in children {
-        let child_id = RuntimeViewId::new(child.id.clone());
-        let child_height = desktop_entry_node_height(child);
-        let child_node = runtime_node_from_desktop_entry(child, content_width, child_height, false);
-        tree = tree.with_child(parent_id, child_node)?;
-        tree = append_desktop_entry_children(tree, &child_id, &child.children, content_width)?;
-    }
-    Ok(tree)
-}
-
-fn runtime_node_from_desktop_entry(
-    node: &DesktopEntryNode,
-    width: f32,
-    height: f32,
-    is_root: bool,
-) -> RuntimeViewNode {
-    let node_width = node.props.width.unwrap_or(width);
-    let node_height = node.props.height.unwrap_or(height);
-    let layout_style = match node.kind {
-        DesktopEntryNodeKind::View => LayoutStyle::flex_container(FlexDirection::Column)
-            .with_size(LayoutSizing::fixed(node_width, node_height))
-            .with_padding(BoxEdges::all(LayoutValue::px(
-                node.props
-                    .padding
-                    .unwrap_or(if is_root { 24.0 } else { 0.0 }),
-            )))
-            .with_gap(LayoutValue::px(node.props.gap.unwrap_or(12.0))),
-        DesktopEntryNodeKind::Text => LayoutStyle::flex_container(FlexDirection::Row)
-            .with_size(LayoutSizing::fixed(node_width, node_height)),
-    };
-    let visual = match node.kind {
-        DesktopEntryNodeKind::View => RuntimeVisual::Fill(if is_root {
-            node.props
-                .background_color
-                .unwrap_or(Color::rgba(11, 12, 18, 255))
-        } else {
-            node.props
-                .background_color
-                .unwrap_or(Color::rgba(20, 22, 31, 255))
-        }),
-        DesktopEntryNodeKind::Text => RuntimeVisual::Text(RuntimeTextVisual::new(
-            node.text.clone().unwrap_or_default(),
-            node.props.font_size.unwrap_or(20.0),
-            node.props
-                .text_color
-                .unwrap_or(Color::rgba(241, 245, 249, 255)),
-        )),
-    };
-    RuntimeViewNode::new(RuntimeViewId::new(node.id.clone()), layout_style, visual)
-}
-
-fn desktop_entry_node_height(node: &DesktopEntryNode) -> f32 {
-    if let Some(height) = node.props.height {
-        return height;
-    }
-    match node.kind {
-        DesktopEntryNodeKind::Text => 32.0,
-        DesktopEntryNodeKind::View => {
-            let children_height: f32 = node.children.iter().map(desktop_entry_node_height).sum();
-            let gap_count =
-                u16::try_from(node.children.len().saturating_sub(1)).unwrap_or(u16::MAX);
-            let gaps = f32::from(gap_count) * node.props.gap.unwrap_or(12.0);
-            (children_height + gaps).max(32.0)
-        }
-    }
+    app_model
+        .root
+        .to_view_tree(width, height)
+        .map_err(|error| runtime_scene_diagnostic(&error))
 }
 
 fn entry_script_app_model(
@@ -1589,105 +1376,6 @@ fn invalid_entry_tree_diagnostic(
         CliDiagnostic::error("runtime.desktop.invalid-entry-tree", message.into())
             .file(script.source_path.clone()),
     )
-}
-
-fn json_color_prop(value: &serde_json::Value, name: &str) -> Result<Color, String> {
-    let value = value
-        .as_str()
-        .ok_or_else(|| format!("prop '{name}' must be a CSS hex color string"))?;
-    parse_hex_color(value)
-        .ok_or_else(|| format!("prop '{name}' must use #RRGGBB or #RRGGBBAA hex color syntax"))
-}
-
-fn parse_hex_color(value: &str) -> Option<Color> {
-    let hex = value.strip_prefix('#')?;
-    let (r, g, b, a) = match hex.len() {
-        6 => (
-            u8::from_str_radix(&hex[0..2], 16).ok()?,
-            u8::from_str_radix(&hex[2..4], 16).ok()?,
-            u8::from_str_radix(&hex[4..6], 16).ok()?,
-            255,
-        ),
-        8 => (
-            u8::from_str_radix(&hex[0..2], 16).ok()?,
-            u8::from_str_radix(&hex[2..4], 16).ok()?,
-            u8::from_str_radix(&hex[4..6], 16).ok()?,
-            u8::from_str_radix(&hex[6..8], 16).ok()?,
-        ),
-        _ => return None,
-    };
-    Some(Color::rgba(r, g, b, a))
-}
-
-fn json_positive_number_prop(value: &serde_json::Value, name: &str) -> Result<f32, String> {
-    let number = json_number_prop(value, name)?;
-    if number <= 0.0 {
-        return Err(format!("prop '{name}' must be greater than zero"));
-    }
-    Ok(number)
-}
-
-fn json_non_negative_number_prop(value: &serde_json::Value, name: &str) -> Result<f32, String> {
-    let number = json_number_prop(value, name)?;
-    if number < 0.0 {
-        return Err(format!("prop '{name}' must not be negative"));
-    }
-    Ok(number)
-}
-
-fn json_number_prop(value: &serde_json::Value, name: &str) -> Result<f32, String> {
-    let serde_json::Value::Number(number) = value else {
-        return Err(format!("prop '{name}' must be a number"));
-    };
-    let Some(value) = number.as_f64() else {
-        return Err(format!("prop '{name}' cannot be represented as a number"));
-    };
-    #[allow(clippy::cast_possible_truncation)]
-    let parsed = value as f32;
-    if !parsed.is_finite() {
-        return Err(format!("prop '{name}' must be finite"));
-    }
-    Ok(parsed)
-}
-
-fn non_empty_json_string(value: &serde_json::Value, key: &str) -> Result<String, String> {
-    let value = value
-        .get(key)
-        .ok_or_else(|| format!("node is missing required '{key}' field"))?
-        .as_str()
-        .ok_or_else(|| format!("field '{key}' must be a string"))?
-        .trim();
-    if value.is_empty() {
-        Err(format!("field '{key}' must not be empty"))
-    } else {
-        Ok(value.to_string())
-    }
-}
-
-fn json_children(value: &serde_json::Value) -> Result<&[serde_json::Value], String> {
-    match value.get("children") {
-        Some(serde_json::Value::Array(children)) => Ok(children.as_slice()),
-        Some(_) => Err("field 'children' must be an array".to_string()),
-        None => Ok(&[]),
-    }
-}
-
-fn validate_desktop_entry_tree_ids(root: &DesktopEntryNode) -> Result<(), String> {
-    let mut ids = BTreeSet::new();
-    collect_desktop_entry_ids(root, &mut ids)
-}
-
-fn collect_desktop_entry_ids<'a>(
-    node: &'a DesktopEntryNode,
-    ids: &mut BTreeSet<&'a str>,
-) -> Result<(), String> {
-    if !ids.insert(node.id.as_str()) {
-        return Err(format!("duplicate native app node id '{}'", node.id));
-    }
-    for child in &node.children {
-        collect_desktop_entry_ids(child, ids)?;
-    }
-    Ok(())
 }
 
 fn runtime_dimension_to_f32(value: f64) -> Result<f32, Box<CliDiagnostic>> {
@@ -1916,6 +1604,7 @@ mod tests {
         ArtifactHash, BuildPipeline, CompiledScriptRecord, SealedArtifact, VerificationReport,
     };
     use hawk2ui_layout::Viewport;
+    use hawk2ui_render::Color;
     use hawk2ui_runtime::RuntimeSceneBridge;
 
     fn float_eq(left: f32, right: f32) -> bool {

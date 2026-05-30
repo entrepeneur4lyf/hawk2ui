@@ -5,6 +5,7 @@
 //! sequencing are supplied by the host, not performed in this crate.
 
 pub mod bindings;
+pub mod entry_tree;
 pub mod events;
 pub mod lifecycle;
 pub mod persistence;
@@ -18,6 +19,7 @@ pub use bindings::{
     BindingExecution, BindingLifecycleAvailability, BindingSchema, HostBindingCall,
     HostBindingError, HostBindingRecord, HostBindingRegistry,
 };
+pub use entry_tree::{EntryNode, EntryNodeKind, EntryNodeProps};
 pub use events::{
     RuntimeEvent, RuntimeEventDelivery, RuntimeEventDispatcher, RuntimeEventError,
     RuntimeEventKind, RuntimeEventPayload, RuntimeEventPropagation,
