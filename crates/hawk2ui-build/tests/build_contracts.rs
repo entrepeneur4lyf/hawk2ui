@@ -1484,6 +1484,104 @@ path = "assets/logo.svg"
 }
 
 #[test]
+fn build_workspace_builds_a_plugin_with_enum_parameter_and_meter() {
+    // The emitter unit/golden tests and the parse-level validator tests cover
+    // enum parameters and meters in isolation, but nothing drove them through a
+    // *real* `BuildWorkspace::load().build()`. Close that gap: a plugin manifest
+    // carrying a `kind = "enum"` parameter (with variants) and a `[[meters]]`
+    // output must validate, compile, and seal end to end, and the parameter
+    // model recovered from the sealed manifest must preserve both the
+    // indexed-choice variants and the meter — not merely build without error.
+    let root = temp_build_workspace("plugin-enum-meter");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.plugin-enum-meter"
+name = "Plugin Enum Meter"
+version = "0.1.0"
+
+[source]
+entry = "src/editor.ts"
+
+[capabilities]
+keys = ["plugin-editor", "sealed-artifacts"]
+
+[[targets]]
+kind = "plugin"
+name = "clap-vst3"
+
+[plugin]
+id = "com.hawk2ui.plugin-enum-meter"
+name = "Plugin Enum Meter"
+
+[editor]
+width = 640
+height = 360
+
+[[parameters]]
+id = "osc.mix"
+name = "Osc Mix"
+default = 0.4
+
+[[parameters]]
+id = "osc.shape"
+name = "Osc Shape"
+kind = "enum"
+default = 1.0
+
+[[parameters.variants]]
+id = "sine"
+name = "Sine"
+
+[[parameters.variants]]
+id = "saw"
+name = "Saw"
+
+[[parameters.variants]]
+id = "square-pulse"
+name = "Square / Pulse"
+
+[[meters]]
+id = "output.level"
+name = "Output Level"
+"#,
+    );
+    write_file(
+        &root.join("src/editor.ts"),
+        "export const editor: string = 'synth';",
+    );
+
+    let output = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect("a plugin workspace with an enum parameter and a meter should build");
+
+    assert_eq!(output.manifest.identity.id, "com.hawk2ui.plugin-enum-meter");
+    assert!(output.pipeline.ensure_release_ready().is_ok());
+    assert!(output.verification.is_release_ready());
+
+    // Recover the parameter model from the sealed manifest and confirm the enum
+    // and the meter survived the full build path intact.
+    let model = output.manifest.parameter_model();
+    model
+        .validate()
+        .expect("the parameter model from the sealed manifest is valid");
+    assert_eq!(model.parameters.len(), 2);
+
+    let shape = &model.parameters[1];
+    assert_eq!(shape.id, "osc.shape");
+    // The enum default is carried as the 0-based variant index.
+    assert_eq!(shape.default_value, ParameterValue::Choice(1));
+    assert_eq!(shape.variants.len(), 3);
+    assert_eq!(shape.variants[2].id, "square-pulse");
+    assert_eq!(shape.variants[2].display_name, "Square / Pulse");
+
+    assert_eq!(model.meters.len(), 1);
+    assert_eq!(model.meters[0].id, "output.level");
+    assert_eq!(model.meters[0].display_name, "Output Level");
+}
+
+#[test]
 fn build_workspace_rejects_invalid_typescript_before_artifact_materialization() {
     let root = temp_build_workspace("invalid-typescript");
     write_file(
