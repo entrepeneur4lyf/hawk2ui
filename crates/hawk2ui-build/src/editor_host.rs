@@ -239,8 +239,8 @@ export function mount(host) {
 }
 "#;
         let snapshot = host_snapshot_from_model(&synth_model());
-        let bootstrap =
-            entry_mount_bootstrap_with_host(SCRIPT, &snapshot).expect("the script declares mount");
+        let bootstrap = entry_mount_bootstrap_with_host(SCRIPT, &snapshot, "null")
+            .expect("the script declares mount");
 
         let mut backend =
             ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
@@ -248,13 +248,15 @@ export function mount(host) {
             .execute_module(ScriptModule::javascript("src/editor.js", &bootstrap))
             .expect("the bootstrapped editor script executes");
 
-        let StructuredValue::String(tree_json) = execution.value() else {
-            panic!("mount must return a serialized node tree");
+        // The output is the `{ tree, edits, ui }` envelope; the projected text
+        // lives in `tree`, so substring asserts hold without parsing it apart.
+        let StructuredValue::String(envelope_json) = execution.value() else {
+            panic!("the entry must return a serialized envelope");
         };
         // cutoff projects its host-formatted text (value plus unit)...
-        assert!(tree_json.contains("1200 kHz"), "{tree_json}");
+        assert!(envelope_json.contains("1200 kHz"), "{envelope_json}");
         // ...and the enum reads back typed: display text, variant index, and a
         // last-variant `normalized` of exactly 1, with all three variants.
-        assert!(tree_json.contains("Highpass:2:1:3"), "{tree_json}");
+        assert!(envelope_json.contains("Highpass:2:1:3"), "{envelope_json}");
     }
 }

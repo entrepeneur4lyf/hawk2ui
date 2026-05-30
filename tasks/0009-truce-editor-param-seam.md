@@ -44,9 +44,20 @@ Split into two units verified **independently** — the script-side JS surface (
 
 ### 0009.2 Write-Back (return-carried edit list, gesture-bracketed, host-threaded state)
 
-- [ ] Deliverable: entry function returns `{ tree, edits, ui }`; host validates each edit (key exists, op order sane), maps key → u32, and replays `begin_edit`/`set_param`/`end_edit` on the host/UI thread; edits ride the return JSON (no new `HostCallPolicy` capability); `setParam` carries normalized `[0,1]`, `setParamPlain` is host-normalized via the param range, `automate` one-shot maps to begin+set+end; gesture/UI state threaded via the host-persisted `ui` blob re-embedded each invocation (not held in JS); cross-frame gestures (begin on one invocation, end on a later one) replay as one bracketed gesture; **no meter setter exists**.
-- [ ] Dependencies: `0009.1`.
-- [ ] Verify: `cargo test -p hawk2ui-plugin-truce write_back gesture` (bracket ordering, cross-frame gesture via threaded state, plain↔normalized round-trip, meter-write rejected at API, no capability added).
+Split into the script-side protocol surface (0009.2a) and the host-side replay (0009.2b). Built outward from the **locked wire shape** (`execution.value()` = `JSON.stringify({tree, edits, ui})`, Decision 0003 D3): the shape and the parse are stable, the author-facing verb API is additive on top.
+
+#### 0009.2a Script-side write surface + envelope + parse — ✅ DONE
+
+- [x] Deliverable (all in `hawk2ui-script`): `entry_mount_bootstrap_with_host` gains write verbs `host.beginEdit/endEdit/setParam/setParamPlain/automate` that record an **ordered** edit list (each validates the key against the snapshot — a write to an unknown or meter key throws, so meters stay structurally unwritable at the JS layer too), and threads UI state — `incoming_ui` exposed as `host.ui`, `host.setUi(value)` sets the outgoing blob (defaulting to incoming when untouched), kept distinct from truce's plugin `set_state`. The entry returns the C2b tree; the bootstrap assembles `JSON.stringify({tree: mount(host), edits, ui})`. New types `HostEdit` (`begin`/`set`/`setPlain`/`automate`/`end`), `EntryEnvelope`, `EnvelopeError`, and `parse_entry_envelope` (parse lives with the emitter, so `hawk2ui-plugin-truce` needs no JSON dep — `build_editor_scene` now consumes the envelope's `tree_json`). **Reading note (faithful, not a deviation):** D3 shows `{tree,edits,ui}` "returned by mount"; since the verbs are also contracted (D1/D3) and re-returning the edits would be redundant, the only non-contradictory reading is *verbs record → mount returns the tree → bootstrap assembles the envelope*.
+- [x] Dependencies: `0009.1` (a/b/c), Decision 0003 *Accepted*.
+- [x] Verify: `cargo test -p hawk2ui-script` (ordered edit list across all five verbs; UI threads in→out and defaults when untouched; unknown write key throws; `parse_entry_envelope` splits/defaults/rejects) · `cargo test -p hawk2ui-build editor_host` (round-trip still green through the envelope). No new `HostCallPolicy` capability — `deny_all` holds.
+- [x] Review check: satisfied — wire shape matches the contract; verbs validate; ui ≠ set_state; gated `check-fast` + clippy pedantic green.
+
+#### 0009.2b Host-side replay + range routing + cross-frame gestures — ⏳ NEXT
+
+- [ ] Deliverable: `hawk2ui-build` emits a range-carrying `EditRouting` (key → {id, kind, min, max, variant_count}) from the model; `hawk2ui-plugin-truce` gains a pure `replay_edits(bridge, edits, routing, &mut open_gestures)` that maps key → u32, normalizes `setPlain` via the range (host-normalizes, Decision 0003 D3 line 110), replays `begin_edit`/`set_param`/`end_edit`/`automate` on the bridge, and tracks open gestures **across invocations** (a begin on one frame, end on a later one, replays as one bracket). A bare `set` with no begin/end is valid (not auto-bracketed); double-begin / unmatched-end / unknown key are skip-and-record, never panic. Tested with a **recording bridge** (truce's `for_test_params` bridge is all no-ops), no window needed.
+- [ ] Dependencies: `0009.2a`.
+- [ ] Verify: `cargo test -p hawk2ui-plugin-truce` (replay order, cross-frame gesture via the open-gesture set, plain→normalized via routing, meter-write impossible, double-begin/unmatched-end skipped) · `cargo test -p hawk2ui-build` (routing from model).
 - [ ] Review check: As you are delivering this product yourself, are you satisfied with the implementation or should there be revisions to ensure production ready stability? If revision is needed, take corrective action before continuing so the task meets the standard of production ready stability.
 
 ### 0009.3 Non-Advancing-Read Invariant Enforcement

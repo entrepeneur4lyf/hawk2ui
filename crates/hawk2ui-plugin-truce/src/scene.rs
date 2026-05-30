@@ -21,7 +21,7 @@ use hawk2ui_layout::Viewport;
 use hawk2ui_runtime::{EntryNode, RuntimeSceneBridge, RuntimeSceneFrame};
 use hawk2ui_script::{
     HostCallPolicy, HostSnapshot, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy,
-    entry_mount_bootstrap_with_host,
+    entry_mount_bootstrap_with_host, parse_entry_envelope,
 };
 
 /// Error building an editor scene from a compiled entry script.
@@ -87,7 +87,9 @@ pub(crate) fn build_editor_scene(
     width: f32,
     height: f32,
 ) -> Result<RuntimeSceneFrame, EditorSceneError> {
-    let Some(bootstrap) = entry_mount_bootstrap_with_host(compiled_source, snapshot) else {
+    // The construction-time scene has no prior UI state to thread (`"null"`); the
+    // live per-frame invocation threads the persisted `ui` blob (task 0009.4).
+    let Some(bootstrap) = entry_mount_bootstrap_with_host(compiled_source, snapshot, "null") else {
         return Err(EditorSceneError::new(
             "hawk2ui-truce.editor.no-mount",
             "editor entry script declares no `mount` function to build a scene from",
@@ -112,14 +114,24 @@ pub(crate) fn build_editor_scene(
             )
         })?;
 
-    let StructuredValue::String(tree_json) = execution.value() else {
+    let StructuredValue::String(envelope_json) = execution.value() else {
         return Err(EditorSceneError::new(
             "hawk2ui-truce.editor.invalid-entry-tree",
             "editor `mount` must return a serializable view or text node tree",
         ));
     };
 
-    let root = EntryNode::from_tree_json(tree_json).map_err(|message| {
+    // The entry returns the locked `{ tree, edits, ui }` envelope; the scene only
+    // needs the tree. The `edits` are dropped here because the construction path
+    // has no bridge to replay them onto and no input to have produced them; the
+    // live render loop (task 0009.4) replays edits and persists `ui`.
+    let envelope = parse_entry_envelope(envelope_json).map_err(|error| {
+        EditorSceneError::new(
+            "hawk2ui-truce.editor.invalid-entry-tree",
+            error.message().to_string(),
+        )
+    })?;
+    let root = EntryNode::from_tree_json(&envelope.tree_json).map_err(|message| {
         EditorSceneError::new("hawk2ui-truce.editor.invalid-entry-tree", message)
     })?;
     let tree = root.to_view_tree(width, height).map_err(|error| {

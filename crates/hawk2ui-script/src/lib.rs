@@ -15,7 +15,7 @@ use oxc_parser::Parser;
 use oxc_semantic::SemanticBuilder;
 use oxc_span::SourceType;
 use oxc_transformer::{HelperLoaderMode, TransformOptions, Transformer};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-script";
@@ -196,26 +196,57 @@ pub struct HostSnapshot {
     pub meters: Vec<HostMeter>,
 }
 
-/// Wraps a compiled entry module like [`entry_mount_bootstrap`], but projects a
-/// `host` carrying a frozen `snapshot` of parameters and meters that the script
-/// reads by string key:
+/// Wraps a compiled entry module like [`entry_mount_bootstrap`], projecting a
+/// `host` that carries a frozen `snapshot` of parameters and meters the script
+/// reads by string key, accepts parameter edits, and threads an opaque UI-state
+/// blob across invocations (Decision 0003, the C3 protocol).
+///
+/// Reads (pure data — embedded as a JSON literal, no host call, `deny_all`
+/// preserved):
 ///
 /// ```ignore
 /// host.param("cutoff").value      // typed by kind (number / boolean / index)
 /// host.param("cutoff").normalized // 0..1
 /// host.param("cutoff").text       // host-formatted display string
+/// host.param("cutoff").id         // truce ParamId u32 (wire detail; use the key)
 /// host.params                     // all params, declaration order
 /// host.meter("out")               // a level, 0..1
 /// host.meters                     // all meters
 /// ```
 ///
-/// `host.param`/`host.meter` throw on an unknown key (a typo surfaces at once
-/// rather than silently reading `undefined`). The snapshot is embedded as a
-/// JSON literal — a pure data projection, so no host-call capability is needed
-/// and the script still runs under `deny_all`. Returns `None` when the source
-/// declares no `mount` function.
+/// Writes — imperative verbs that record an **ordered** edit list the host
+/// replays onto truce's bridge (`begin_edit`/`set_param`/`end_edit`) on the UI
+/// thread. Edits ride the return JSON, so no host-call capability is added:
+///
+/// ```ignore
+/// host.beginEdit("cutoff")             // {op:"begin"}
+/// host.setParam("cutoff", 0.55)        // {op:"set", normalized}
+/// host.setParamPlain("cutoff", 1200)   // {op:"setPlain", plain} — host normalizes via the range
+/// host.endEdit("cutoff")               // {op:"end"}
+/// host.automate("bypass", 1.0)         // {op:"automate"} — one-shot begin+set+end
+/// ```
+///
+/// UI/gesture state is threaded, not held in JS (the execution model is
+/// stateless): `incoming_ui` (a JSON value, `"null"` if none) is exposed as
+/// `host.ui`; `host.setUi(value)` sets the outgoing blob, which defaults to the
+/// incoming one when untouched. The host persists it and re-embeds it next
+/// invocation. This is **not** truce's `set_state` (the plugin's custom state) —
+/// it is the editor's own gesture/drag bookkeeping.
+///
+/// The entry returns the C2b view tree; this bootstrap wraps it into the locked
+/// wire shape `{ tree, edits, ui }`, `JSON.stringify`d as `execution.value()`.
+/// Parse it with [`parse_entry_envelope`]. Reads and writes both throw on an
+/// unknown key. Returns `None` when the source declares no `mount` function.
+///
+/// `incoming_ui` must be a valid JSON value; the host produces it by
+/// re-serializing the prior invocation's [`EntryEnvelope::ui_json`] (`serde_json`
+/// output, so injection-safe). An empty string is treated as `null`.
 #[must_use]
-pub fn entry_mount_bootstrap_with_host(source: &str, snapshot: &HostSnapshot) -> Option<String> {
+pub fn entry_mount_bootstrap_with_host(
+    source: &str,
+    snapshot: &HostSnapshot,
+    incoming_ui: &str,
+) -> Option<String> {
     let source = source.replacen("export function mount", "function mount", 1);
     if !source.contains("function mount") {
         return None;
@@ -226,6 +257,13 @@ pub fn entry_mount_bootstrap_with_host(source: &str, snapshot: &HostSnapshot) ->
     // rather than panicking (the crate forbids `unwrap`/`expect` in non-test).
     let snapshot = serde_json::to_string(snapshot)
         .unwrap_or_else(|_| String::from(r#"{"params":[],"meters":[]}"#));
+    // The host always feeds serde_json output (or "null"), so this is a valid,
+    // injection-safe JS expression. An empty string degrades to `null`.
+    let incoming_ui = if incoming_ui.trim().is_empty() {
+        "null"
+    } else {
+        incoming_ui
+    };
     Some(format!(
         r#"{source}
 
@@ -238,6 +276,14 @@ const __hawk2ui_meters_by_key = {{}};
 for (const __meter of __hawk2ui_snapshot.meters) {{
     __hawk2ui_meters_by_key[__meter.key] = __meter.value;
 }}
+function __hawk2ui_require_param(key) {{
+    if (__hawk2ui_params_by_key[key] === undefined) {{
+        throw new Error("hawk2ui: unknown parameter '" + key + "'");
+    }}
+}}
+const __hawk2ui_edits = [];
+const __hawk2ui_ui_in = {incoming_ui};
+let __hawk2ui_ui_out = __hawk2ui_ui_in;
 const __hawk2ui_host = Object.freeze({{
     on(_name, _handler) {{}},
     setState(_value) {{}},
@@ -256,12 +302,136 @@ const __hawk2ui_host = Object.freeze({{
             throw new Error("hawk2ui: unknown meter '" + key + "'");
         }}
         return __level;
-    }}
+    }},
+    ui: Object.freeze(__hawk2ui_ui_in),
+    setUi(value) {{ __hawk2ui_ui_out = value; }},
+    beginEdit(key) {{ __hawk2ui_require_param(key); __hawk2ui_edits.push({{ op: "begin", key: key }}); }},
+    endEdit(key) {{ __hawk2ui_require_param(key); __hawk2ui_edits.push({{ op: "end", key: key }}); }},
+    setParam(key, normalized) {{ __hawk2ui_require_param(key); __hawk2ui_edits.push({{ op: "set", key: key, normalized: normalized }}); }},
+    setParamPlain(key, plain) {{ __hawk2ui_require_param(key); __hawk2ui_edits.push({{ op: "setPlain", key: key, plain: plain }}); }},
+    automate(key, normalized) {{ __hawk2ui_require_param(key); __hawk2ui_edits.push({{ op: "automate", key: key, normalized: normalized }}); }}
 }});
 
-JSON.stringify(mount(__hawk2ui_host));
+const __hawk2ui_tree = mount(__hawk2ui_host);
+JSON.stringify({{ tree: __hawk2ui_tree, edits: __hawk2ui_edits, ui: __hawk2ui_ui_out }});
 "#
     ))
+}
+
+/// One parameter edit recorded by an editor entry script's write verbs
+/// (`host.beginEdit`/`setParam`/`setParamPlain`/`endEdit`/`automate`), parsed
+/// from the return envelope's `edits` array. The host validates each, maps `key`
+/// → truce `ParamId`, and replays the gesture onto the bridge; meters have no
+/// edit variant (read-only, Decision 0003 Lock 2).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase")]
+pub enum HostEdit {
+    /// Start an automation gesture (`begin_edit`).
+    Begin {
+        /// Stable parameter key.
+        key: String,
+    },
+    /// Set the parameter to a normalized `0.0..=1.0` value (`set_param`).
+    Set {
+        /// Stable parameter key.
+        key: String,
+        /// Normalized value, `0.0..=1.0`.
+        normalized: f64,
+    },
+    /// Set the parameter to a plain (natural-unit) value; the host normalizes it
+    /// via the parameter's range before `set_param` (Decision 0003 D3).
+    SetPlain {
+        /// Stable parameter key.
+        key: String,
+        /// Plain (denormalized) value.
+        plain: f64,
+    },
+    /// One-shot edit: `begin_edit` + `set_param` + `end_edit` (`automate`).
+    Automate {
+        /// Stable parameter key.
+        key: String,
+        /// Normalized value, `0.0..=1.0`.
+        normalized: f64,
+    },
+    /// End the automation gesture (`end_edit`).
+    End {
+        /// Stable parameter key.
+        key: String,
+    },
+}
+
+/// The parsed `{ tree, edits, ui }` envelope an editor entry returns (see
+/// [`entry_mount_bootstrap_with_host`] and [`parse_entry_envelope`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EntryEnvelope {
+    /// The view tree as a JSON string, ready for `EntryNode::from_tree_json`.
+    pub tree_json: String,
+    /// The ordered parameter edits the script emitted this invocation.
+    pub edits: Vec<HostEdit>,
+    /// The author's outgoing UI-state blob as a JSON string; the host persists
+    /// it and re-embeds it as `incoming_ui` next invocation.
+    pub ui_json: String,
+}
+
+/// Error parsing an editor entry's return envelope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EnvelopeError {
+    message: String,
+}
+
+impl EnvelopeError {
+    /// The human-readable parse failure.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for EnvelopeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid editor entry envelope: {}", self.message)
+    }
+}
+
+impl std::error::Error for EnvelopeError {}
+
+/// Parses an editor entry's `execution.value()` string into its [`EntryEnvelope`]
+/// (the locked `{ tree, edits, ui }` wire shape).
+///
+/// `tree` is required (the entry must return a view tree); `edits` and `ui`
+/// default to empty / `null` when absent, so a read-only entry that calls no
+/// write verb parses cleanly. The `tree` and `ui` sub-values are re-serialized to
+/// strings so callers downstream (e.g. `hawk2ui-plugin-truce`'s scene build, the
+/// host's UI-state persistence) need no JSON dependency of their own.
+///
+/// # Errors
+///
+/// Returns an [`EnvelopeError`] when `value` is not the expected envelope object
+/// (malformed JSON, a missing `tree`, or an unrecognized edit op).
+pub fn parse_entry_envelope(value: &str) -> Result<EntryEnvelope, EnvelopeError> {
+    #[derive(Deserialize)]
+    struct RawEnvelope {
+        tree: serde_json::Value,
+        #[serde(default)]
+        edits: Vec<HostEdit>,
+        #[serde(default)]
+        ui: serde_json::Value,
+    }
+
+    let raw: RawEnvelope = serde_json::from_str(value).map_err(|error| EnvelopeError {
+        message: error.to_string(),
+    })?;
+    let tree_json = serde_json::to_string(&raw.tree).map_err(|error| EnvelopeError {
+        message: error.to_string(),
+    })?;
+    let ui_json = serde_json::to_string(&raw.ui).map_err(|error| EnvelopeError {
+        message: error.to_string(),
+    })?;
+    Ok(EntryEnvelope {
+        tree_json,
+        edits: raw.edits,
+        ui_json,
+    })
 }
 
 /// Structured script value.
@@ -1265,7 +1435,7 @@ export function mount(host) {
 }
 "#;
         let bootstrap =
-            entry_mount_bootstrap_with_host(source, &snapshot).expect("mount is wrapped");
+            entry_mount_bootstrap_with_host(source, &snapshot, "null").expect("mount is wrapped");
         let mut backend =
             ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
         let execution = backend
@@ -1289,6 +1459,7 @@ export function mount(host) {
         let bootstrap = entry_mount_bootstrap_with_host(
             r#"export function mount(host) { return host.param("nope"); }"#,
             &snapshot,
+            "null",
         )
         .expect("mount is wrapped");
         let mut backend =
@@ -1298,6 +1469,169 @@ export function mount(host) {
                 .execute_module(ScriptModule::javascript("editor.js", bootstrap.as_str()))
                 .is_err(),
             "reading an unknown parameter key must throw"
+        );
+    }
+
+    fn run_entry(source: &str, incoming_ui: &str) -> EntryEnvelope {
+        let snapshot = HostSnapshot {
+            params: vec![HostParam {
+                key: "cutoff".into(),
+                id: 3,
+                kind: HostParamKind::Float,
+                value: HostParamValue::Float(1200.0),
+                normalized: 0.42,
+                text: "1.20 kHz".into(),
+                variants: Vec::new(),
+            }],
+            meters: Vec::new(),
+        };
+        let bootstrap =
+            entry_mount_bootstrap_with_host(source, &snapshot, incoming_ui).expect("mount wrapped");
+        let mut backend =
+            ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+        let execution = backend
+            .execute_module(ScriptModule::javascript("editor.js", bootstrap.as_str()))
+            .expect("the projected entry script executes");
+        let StructuredValue::String(json) = execution.value() else {
+            panic!("the entry must return a serialized envelope");
+        };
+        parse_entry_envelope(json).expect("the entry returns a valid envelope")
+    }
+
+    #[test]
+    fn write_verbs_record_an_ordered_edit_list() {
+        let envelope = run_entry(
+            r#"
+export function mount(host) {
+    host.beginEdit("cutoff");
+    host.setParam("cutoff", 0.55);
+    host.setParamPlain("cutoff", 1200);
+    host.endEdit("cutoff");
+    host.automate("cutoff", 1.0);
+    return { id: "root", type: "view" };
+}
+"#,
+            "null",
+        );
+        assert_eq!(
+            envelope.edits,
+            vec![
+                HostEdit::Begin {
+                    key: "cutoff".into()
+                },
+                HostEdit::Set {
+                    key: "cutoff".into(),
+                    normalized: 0.55,
+                },
+                HostEdit::SetPlain {
+                    key: "cutoff".into(),
+                    plain: 1200.0,
+                },
+                HostEdit::End {
+                    key: "cutoff".into()
+                },
+                HostEdit::Automate {
+                    key: "cutoff".into(),
+                    normalized: 1.0,
+                },
+            ]
+        );
+        assert!(
+            envelope.tree_json.contains("\"root\""),
+            "{}",
+            envelope.tree_json
+        );
+    }
+
+    #[test]
+    fn ui_state_threads_in_and_out() {
+        // The incoming blob carries a drag and a frame counter; the script reads
+        // them and writes the carried-forward, advanced blob via setUi.
+        let envelope = run_entry(
+            r#"
+export function mount(host) {
+    const dragging = host.ui && host.ui.dragging ? host.ui.dragging : "none";
+    const frames = (host.ui ? host.ui.frames : 0) + 1;
+    host.setUi({ dragging: dragging, frames: frames });
+    return { id: "root", type: "view" };
+}
+"#,
+            r#"{"dragging":"cutoff","frames":2}"#,
+        );
+        assert!(
+            envelope.ui_json.contains("\"dragging\":\"cutoff\""),
+            "the drag must thread forward: {}",
+            envelope.ui_json
+        );
+        assert!(
+            envelope.ui_json.contains("\"frames\":3"),
+            "the frame counter must advance across the threaded blob: {}",
+            envelope.ui_json
+        );
+    }
+
+    #[test]
+    fn untouched_ui_defaults_to_the_incoming_blob() {
+        let envelope = run_entry(
+            r#"export function mount(host) { return { id: "root", type: "view" }; }"#,
+            r#"{"dragging":"cutoff"}"#,
+        );
+        assert!(
+            envelope.ui_json.contains("\"dragging\":\"cutoff\""),
+            "an entry that never calls setUi must persist the incoming ui: {}",
+            envelope.ui_json
+        );
+    }
+
+    #[test]
+    fn an_unknown_write_key_throws() {
+        let snapshot = HostSnapshot::default();
+        let bootstrap = entry_mount_bootstrap_with_host(
+            r#"export function mount(host) { host.setParam("nope", 0.5); return { id: "root", type: "view" }; }"#,
+            &snapshot,
+            "null",
+        )
+        .expect("mount is wrapped");
+        let mut backend =
+            ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+        assert!(
+            backend
+                .execute_module(ScriptModule::javascript("editor.js", bootstrap.as_str()))
+                .is_err(),
+            "writing an unknown parameter key must throw"
+        );
+    }
+
+    #[test]
+    fn parse_entry_envelope_splits_tree_edits_and_ui() {
+        let envelope = parse_entry_envelope(
+            r#"{"tree":{"id":"root","type":"view"},"edits":[{"op":"set","key":"gain","normalized":0.25}],"ui":{"dragging":"gain"}}"#,
+        )
+        .expect("a well-formed envelope parses");
+        assert!(envelope.tree_json.contains("\"root\""));
+        assert_eq!(
+            envelope.edits,
+            vec![HostEdit::Set {
+                key: "gain".into(),
+                normalized: 0.25,
+            }]
+        );
+        assert!(envelope.ui_json.contains("\"dragging\":\"gain\""));
+    }
+
+    #[test]
+    fn parse_entry_envelope_defaults_absent_edits_and_ui() {
+        let envelope = parse_entry_envelope(r#"{"tree":{"id":"root","type":"view"}}"#)
+            .expect("tree-only envelope parses");
+        assert!(envelope.edits.is_empty());
+        assert_eq!(envelope.ui_json, "null");
+    }
+
+    #[test]
+    fn parse_entry_envelope_rejects_a_non_envelope() {
+        assert!(
+            parse_entry_envelope("42").is_err(),
+            "a bare number is not an envelope"
         );
     }
 }
