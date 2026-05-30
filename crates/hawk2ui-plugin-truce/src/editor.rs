@@ -107,6 +107,16 @@ pub struct Hawk2uiTruceEditor {
     scene: Option<RuntimeSceneFrame>,
     adapter: Option<BaseviewPluginAdapter>,
     window: Option<BaseviewEditorWindowHandle>,
+    /// INVARIANT (Decision 0003 D4 / Lock 3): the editor holds the host **bridge
+    /// only** — never truce's typed parameter store. The bridge's parameter reads
+    /// (`get_param` / `get_param_plain`) are the non-advancing "host→GUI sync"
+    /// path; the typed store would instead expose a `FloatParam` whose advancing
+    /// `read()` (a smoother step meant for `process()`) could perturb the audio
+    /// thread from a GUI repaint. Reading only through the bridge makes that
+    /// advancing read **unreachable**. Rust cannot assert "this struct has no
+    /// such field" at compile time, so a source-pattern conformance gate enforces
+    /// it: `hawk2ui-conformance/tests/source_hygiene.rs`,
+    /// `truce_editor_crate_never_captures_a_param_store`.
     bridge: Option<Arc<dyn EditorBridge>>,
     presented_frames: Arc<AtomicU64>,
     last_error: Arc<Mutex<Option<BaseviewHostError>>>,

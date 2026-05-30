@@ -54,6 +54,15 @@ fn collect_workspace_production_sources(root: &Path) -> Vec<PathBuf> {
     files
 }
 
+fn collect_crate_production_sources(root: &Path, crate_name: &str) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let src_dir = root.join("crates").join(crate_name).join("src");
+    if src_dir.is_dir() {
+        collect_rust_sources(&src_dir, &mut files);
+    }
+    files
+}
+
 fn production_source(source: &str) -> String {
     let mut output = String::with_capacity(source.len());
     let mut cursor = 0;
@@ -126,6 +135,46 @@ fn production_source_does_not_use_panic_style_fallible_assumptions() {
             );
         }
     }
+}
+
+#[test]
+fn truce_editor_crate_never_captures_a_param_store() {
+    // Decision 0003 D4 (Lock 3): the truce editor reads parameters ONLY through
+    // the non-advancing `EditorBridge`, never by capturing truce's typed param
+    // store — a captured store exposes a `FloatParam` whose advancing `read()`
+    // could perturb the audio thread from a GUI repaint. Rust can't assert "this
+    // struct lacks a field of type X", so this is a source-pattern gate, the same
+    // enforcement class as the panic-style check above and the `unsafe_code`
+    // boundary. The two patterns reach the store: capturing it (the param
+    // accessor call) or storing it (the trait-object field).
+    let root = workspace_root();
+    let sources = collect_crate_production_sources(&root, "hawk2ui-plugin-truce");
+    assert!(
+        !sources.is_empty(),
+        "hawk2ui-plugin-truce/src must contain production sources to scan"
+    );
+    for source_path in sources {
+        let source = read_source(&source_path);
+        let production_source = production_source(&source);
+        for forbidden in [".params()", "dyn Params"] {
+            assert!(
+                !production_source.contains(forbidden),
+                "`{}` must not contain `{forbidden}`: the truce editor must read parameters only through the non-advancing EditorBridge, never a captured truce param store (Decision 0003 D4)",
+                source_path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn the_param_store_gate_detects_a_capture_outside_test_modules() {
+    // Guard against a vacuous gate: a capture in production source is caught,
+    // while the same capture inside a stripped test module is not.
+    assert!(production_source("let store = context.params();").contains(".params()"));
+    assert!(
+        !production_source("\n#[cfg(test)]\nmod tests {\n    let _ = context.params();\n}\n")
+            .contains(".params()")
+    );
 }
 
 #[test]

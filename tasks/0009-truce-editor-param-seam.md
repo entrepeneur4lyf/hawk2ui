@@ -60,12 +60,12 @@ Split into the script-side protocol surface (0009.2a) and the host-side replay (
 - [x] Verify: `cargo test -p hawk2ui-plugin-truce` (9 replay tests via a **recording bridge** — truce's `for_test_params` bridge no-ops writes, so it can't witness one: in-order bracket, bare set, clamp, plain→normalized, automate one-shot, cross-frame bracket, double-begin/unmatched-end/unknown-key skip+record) · `cargo test -p hawk2ui-script` (`normalize_plain` by kind, routing lookup) · `cargo test -p hawk2ui-build` (`edit_routing_from_model` id/kind/range + meter-miss).
 - [x] Review check: satisfied — pure replay, never panics, host-normalizes per the contract, meters structurally unwritable; gated `check-fast` + clippy pedantic green.
 
-### 0009.3 Non-Advancing-Read Invariant Enforcement
+### 0009.3 Non-Advancing-Read Invariant Enforcement — ✅ DONE
 
-- [ ] Deliverable: comment at the `Hawk2uiTruceEditor::bridge` field stating the "read only through the bridge; never capture `context.params()`" invariant and its audio-thread reason; a source-pattern conformance gate (xtask, same enforcement class as `source_hygiene`) asserting `crates/hawk2ui-plugin-truce/src/` stores no truce param-store type (`Arc<dyn Params>` / `PluginContext` field / captured `context.params()`); the gate fails CI if the invariant is broken.
-- [ ] Dependencies: `0009.1`.
-- [ ] Verify: `cargo run -p xtask -- check-fast` includes the new gate · a deliberately-violating fixture fails it.
-- [ ] Review check: As you are delivering this product yourself, are you satisfied with the implementation or should there be revisions to ensure production ready stability? If revision is needed, take corrective action before continuing so the task meets the standard of production ready stability.
+- [x] Deliverable: an INVARIANT comment at the `Hawk2uiTruceEditor::bridge` field stating "bridge only, never the typed param store" and its audio-thread reason (a captured store exposes a `FloatParam` whose advancing `read()` could perturb the audio thread from a GUI repaint; reading only through the bridge makes that read **unreachable**). Enforcement is a **conformance test** (not xtask — `source_hygiene` is itself a conformance test, so this joins it in `crates/hawk2ui-conformance/tests/source_hygiene.rs`, the same enforcement class): `truce_editor_crate_never_captures_a_param_store` scans `crates/hawk2ui-plugin-truce/src/` (test modules stripped, so the gated smoke and future src tests may still construct params) for the two patterns that reach the store — `.params()` (the capture call; the context's `params` field is private, so this is the *only* way to it) and `dyn Params` (the store trait-object field). The field comment is phrased to avoid those literals so it does not trip its own gate.
+- [x] Dependencies: `0009.1`.
+- [x] Verify: `cargo test -p hawk2ui-conformance param_store` (the invariant holds for the real crate today + a positive-control test proving the gate detects a capture in production source and strips a test-module one — non-vacuous) · runs inside `check-fast`.
+- [x] Review check: satisfied — sound reachability argument (no `FloatParam` without `.params()`); gated `check-fast` + clippy pedantic green.
 
 ### 0009.4 Projection Cadence / Render Loop
 
