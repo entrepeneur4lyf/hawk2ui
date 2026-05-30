@@ -157,7 +157,12 @@ fn field_spec(struct_name: &str, id: u32, parameter: &ParameterRecord) -> (Strin
 /// Manifest ids are `[a-z0-9._-]`; the separators map to `_`. A leading digit
 /// (never produced by the current manifest validator, but cheap to guard) is
 /// prefixed so the result is always a legal identifier.
-fn field_ident(id: &str) -> String {
+///
+/// Crate-visible so the manifest validator can reject two distinct param/meter
+/// ids that derive the same struct field identifier (which would emit a
+/// `#[derive(Params)]` struct with duplicate fields that fails to compile)
+/// before codegen ever runs.
+pub(crate) fn field_ident(id: &str) -> String {
     let mut ident: String = id
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })

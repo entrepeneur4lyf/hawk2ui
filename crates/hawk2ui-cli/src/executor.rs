@@ -904,6 +904,18 @@ fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {
                 "enum parameter variant id collides with another (same generated identifier): {variant}"
             ),
         ),
+        ManifestError::CollidingFieldIdentifier(id) => CliDiagnostic::error(
+            "manifest.field-collision",
+            format!(
+                "parameter/meter id derives the same generated struct field as another (parameter/meter id namespace): {id}"
+            ),
+        ),
+        ManifestError::CollidingEnumType(parameter) => CliDiagnostic::error(
+            "manifest.parameter.enum.type-collision",
+            format!(
+                "enum parameter id derives the same generated ParamEnum type as another: {parameter}"
+            ),
+        ),
         ManifestError::SchemaValidation { path, message } => CliDiagnostic::error(
             "manifest.schema.invalid",
             format!(

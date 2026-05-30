@@ -719,6 +719,104 @@ name = "Saw"
 }
 
 #[test]
+fn manifest_validation_rejects_colliding_field_identifiers() {
+    // Two *distinct* ids that derive the same Rust field identifier — a
+    // parameter `level.db` and a meter `level-db`, both mapping to `level_db` —
+    // would emit a `Params` struct with two fields of one name. Params and
+    // meters share the field namespace, so the collision must be rejected even
+    // though the raw ids differ (the raw-id uniqueness check passes).
+    let manifest = r#"
+[identity]
+id = "com.hawk2ui.field-collision"
+name = "Field Collision"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.field-collision"
+name = "Field Collision"
+
+[[parameters]]
+id = "level.db"
+name = "Level"
+min = -60.0
+max = 0.0
+default = 0.0
+unit = "dB"
+
+[[meters]]
+id = "level-db"
+name = "Level Meter"
+"#;
+
+    assert_eq!(
+        HawkManifest::parse(manifest)
+            .expect_err("ids deriving the same struct field must fail validation"),
+        ManifestError::CollidingFieldIdentifier("level-db".into())
+    );
+}
+
+#[test]
+fn manifest_validation_rejects_colliding_enum_type_identifiers() {
+    // Two enum parameters whose ids derive the same generated `ParamEnum` type.
+    // `pascal_ident` collapses separators while `field_ident` keeps their
+    // count, so `osc.shape` and `osc..shape` collide on the type (both
+    // `...OscShape`) without colliding on the field (`osc_shape` vs
+    // `osc__shape`). The field-ident guard cannot see this collision, so the
+    // enum-only type guard must — and the ids are deliberately chosen so the
+    // field guard does not fire first and pass the test for the wrong reason.
+    let manifest = r#"
+[identity]
+id = "com.hawk2ui.enum-type-collision"
+name = "Enum Type Collision"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.enum-type-collision"
+name = "Enum Type Collision"
+
+[[parameters]]
+id = "osc.shape"
+name = "Osc Shape"
+kind = "enum"
+default = 0.0
+
+[[parameters.variants]]
+id = "sine"
+name = "Sine"
+
+[[parameters.variants]]
+id = "saw"
+name = "Saw"
+
+[[parameters]]
+id = "osc..shape"
+name = "Osc Shape Two"
+kind = "enum"
+default = 0.0
+
+[[parameters.variants]]
+id = "sine"
+name = "Sine"
+
+[[parameters.variants]]
+id = "saw"
+name = "Saw"
+"#;
+
+    assert_eq!(
+        HawkManifest::parse(manifest)
+            .expect_err("enum ids deriving the same ParamEnum type must fail validation"),
+        ManifestError::CollidingEnumType("osc..shape".into())
+    );
+}
+
+#[test]
 fn sealed_artifact_hashes_manifest_snapshot_stably() {
     let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
     let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest);

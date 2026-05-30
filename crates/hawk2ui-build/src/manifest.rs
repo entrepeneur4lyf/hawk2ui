@@ -6,7 +6,7 @@ use hawk2ui_plugin::{EnumVariant, MeterRecord, ParameterModel, ParameterRange, P
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::param_codegen::pascal_ident;
+use crate::param_codegen::{field_ident, pascal_ident};
 
 /// Supported package target class.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -376,6 +376,15 @@ impl HawkManifest {
         // the generated `Params` struct and keys in the one editor address
         // space, so a collision would emit a struct that does not compile.
         let mut plugin_ids = BTreeSet::new();
+        // Params and meters share the one generated `Params` struct, so their
+        // *derived* `field_ident`s must also be unique: `a.b` and `a_b` are
+        // distinct ids that map to the same field and would emit a struct that
+        // does not compile. Enum params additionally generate a `ParamEnum`
+        // *type* keyed by `pascal_ident`, which collapses separators where
+        // `field_ident` keeps their count — so `a.b`/`a..b` collide on the type
+        // without colliding on the field, an enum-only check.
+        let mut field_idents = BTreeSet::new();
+        let mut enum_type_idents = BTreeSet::new();
         for parameter in &self.parameters {
             require_non_empty("parameter.id", &parameter.id)?;
             require_non_empty("parameter.name", &parameter.name)?;
@@ -387,6 +396,16 @@ impl HawkManifest {
             if !plugin_ids.insert(parameter.id.clone()) {
                 return Err(ManifestError::DuplicateParameter(parameter.id.clone()));
             }
+            if !field_idents.insert(field_ident(&parameter.id)) {
+                return Err(ManifestError::CollidingFieldIdentifier(
+                    parameter.id.clone(),
+                ));
+            }
+            if parameter.kind == PluginParameterKind::Enum
+                && !enum_type_idents.insert(pascal_ident(&parameter.id))
+            {
+                return Err(ManifestError::CollidingEnumType(parameter.id.clone()));
+            }
         }
         for meter in &self.meters {
             require_non_empty("meter.id", &meter.id)?;
@@ -396,6 +415,9 @@ impl HawkManifest {
             }
             if !plugin_ids.insert(meter.id.clone()) {
                 return Err(ManifestError::DuplicateMeter(meter.id.clone()));
+            }
+            if !field_idents.insert(field_ident(&meter.id)) {
+                return Err(ManifestError::CollidingFieldIdentifier(meter.id.clone()));
             }
         }
 
@@ -604,6 +626,13 @@ pub enum ManifestError {
     InvalidEnumVariant(String),
     /// Two enum variants share an id or derive the same Rust identifier.
     CollidingEnumVariant(String),
+    /// Two distinct parameter/meter ids derive the same generated struct field
+    /// identifier (the shared `Params` struct cannot have two fields of one
+    /// name).
+    CollidingFieldIdentifier(String),
+    /// Two distinct enum parameter ids derive the same generated `ParamEnum`
+    /// type name (the module cannot define one type twice).
+    CollidingEnumType(String),
     /// Manifest failed generated JSON Schema validation.
     SchemaValidation {
         /// JSON pointer to the invalid manifest value.
