@@ -13,16 +13,14 @@ use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits, AssetRecord};
 use hawk2ui_build::{
     ArtifactSchemaVersion, ArtifactSignaturePolicy, AssetCompilationError, BuildDiagnostic,
     BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput, CompiledScriptRecord, HawkManifest,
-    ManifestError, PackageTarget, SealedArtifact, SealedArtifactError,
+    ManifestError, PackageTarget, SealedArtifact, SealedArtifactError, emit_truce_params_struct,
 };
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
     WinitDesktopReload, WinitDesktopReloadKind, WinitDesktopRuntime, WinitDesktopRuntimeConfig,
 };
 use hawk2ui_layout::{BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue};
-use hawk2ui_plugin::{
-    BundleOutput, FormatMetadata, ParameterModel, ParameterRange, ParameterRecord,
-};
+use hawk2ui_plugin::{BundleOutput, FormatMetadata};
 use hawk2ui_plugin_adapters::{
     PackageAdapterSet, PackageFormat, PackageMaterializationError, PackageRequest,
     VerificationStatus,
@@ -302,6 +300,7 @@ impl WorkspaceCommandRunner {
             CliCommand::RunDesktop => self.run_desktop(),
             CliCommand::PackagePlugin => self.package_plugin(),
             CliCommand::ExportSchemas => Self::export_schemas(),
+            CliCommand::ExportParams => self.export_params(),
             CliCommand::Diagnostics => self.diagnostics(),
             CliCommand::Explain => self.explain(),
         }
@@ -724,12 +723,9 @@ impl WorkspaceCommandRunner {
             );
         }
 
-        let parameters = match parameter_model(&manifest) {
-            Ok(parameters) => parameters,
-            Err(diagnostics) => {
-                return CommandExecution::failure(CliExitCode::Validation, diagnostics);
-            }
-        };
+        // The manifest is already validated, so its parameter model is valid by
+        // construction (kinds, ranges, units, and defaults all checked at parse).
+        let parameters = manifest.parameter_model();
         let metadata = FormatMetadata::new(&plugin.id, &plugin.name, "Hawk2UI")
             .version(&manifest.identity.version);
         let output = BundleOutput::new(
@@ -860,6 +856,52 @@ impl WorkspaceCommandRunner {
         }
     }
 
+    /// Emits the truce `#[derive(Params)]` source generated from the project's
+    /// manifest parameters to stdout. This is the build-time codegen seam the
+    /// plugin packaging path will compile into the DSP crate; here it is exposed
+    /// for inspection, mirroring `export-schemas`.
+    fn export_params(&self) -> CommandExecution {
+        // Parse the manifest directly rather than building the whole workspace:
+        // previewing parameter codegen should not require the app's sources to
+        // compile first.
+        let manifest_path = self.manifest_path();
+        let source = match fs::read_to_string(&manifest_path) {
+            Ok(source) => source,
+            Err(error) => {
+                return CommandExecution::failure(
+                    CliExitCode::Validation,
+                    vec![
+                        CliDiagnostic::error(
+                            "manifest.read-failed",
+                            format!("could not read manifest: {error}"),
+                        )
+                        .file(manifest_path.display().to_string()),
+                    ],
+                );
+            }
+        };
+        let manifest = match HawkManifest::parse(&source) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                return CommandExecution::failure(
+                    CliExitCode::Validation,
+                    vec![manifest_error_diagnostic(error)],
+                );
+            }
+        };
+        let model = manifest.parameter_model();
+        if model.parameters.is_empty() {
+            return CommandExecution::failure(
+                CliExitCode::Validation,
+                vec![CliDiagnostic::error(
+                    "params.export.empty",
+                    "no parameters declared; truce requires at least one parameter to derive Params",
+                )],
+            );
+        }
+        CommandExecution::success(emit_truce_params_struct("PluginParams", &model))
+    }
+
     fn validated_manifest(&self) -> Result<HawkManifest, CommandExecution> {
         self.build_workspace().map(|output| output.manifest)
     }
@@ -934,40 +976,6 @@ fn read_artifact_container_bytes(path: &Path) -> Result<Vec<u8>, CommandExecutio
         ));
     }
     fs::read(path).map_err(|error| io_failure("artifact.container.read-failed", path, &error))
-}
-
-fn parameter_model(manifest: &HawkManifest) -> Result<ParameterModel, Vec<CliDiagnostic>> {
-    let mut diagnostics = Vec::new();
-    let mut parameters = Vec::new();
-    for parameter in &manifest.parameters {
-        match ParameterRange::try_new(0.0, 1.0, parameter.default) {
-            Ok(range) => {
-                parameters.push(ParameterRecord::numeric(
-                    &parameter.id,
-                    &parameter.name,
-                    "",
-                    range,
-                ));
-            }
-            Err(error) => diagnostics.push(CliDiagnostic::error(
-                error.code,
-                format!("parameter {} is invalid: {}", parameter.id, error.message),
-            )),
-        }
-    }
-    let model = ParameterModel::new(parameters);
-    if let Err(errors) = model.validate() {
-        diagnostics.extend(
-            errors
-                .into_iter()
-                .map(|error| CliDiagnostic::error(error.code, error.message)),
-        );
-    }
-    if diagnostics.is_empty() {
-        Ok(model)
-    } else {
-        Err(diagnostics)
-    }
 }
 
 fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {

@@ -21,6 +21,7 @@ fn cli_commands_help_lists_required_workflows() {
         "run-desktop",
         "package-plugin",
         "export-schemas",
+        "export-params",
         "diagnostics",
         "explain",
     ] {
@@ -45,6 +46,10 @@ fn cli_commands_parse_known_commands_and_reject_invalid_command() {
     assert_eq!(
         catalog.parse(["hawk2ui", "export-schemas"]).unwrap(),
         CliCommand::ExportSchemas
+    );
+    assert_eq!(
+        catalog.parse(["hawk2ui", "export-params"]).unwrap(),
+        CliCommand::ExportParams
     );
     assert_eq!(
         catalog
@@ -209,6 +214,47 @@ fn workspace_export_schemas_writes_central_schema_catalog() {
     assert!(ids.contains("hawk2ui.raw-manifest"));
     assert!(ids.contains("hawk2ui.capability-table"));
     assert!(ids.contains("hawk2ui.package-verification-report"));
+}
+
+#[test]
+fn workspace_export_params_emits_truce_param_source() {
+    let root = temp_cli_workspace("export-params");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.export-params"
+name = "Export Params"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.export-params"
+name = "Export Params"
+
+[[parameters]]
+id = "filter.cutoff"
+name = "Cutoff"
+min = 20.0
+max = 20000.0
+default = 1000.0
+unit = "Hz"
+"#,
+    );
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::ExportParams);
+
+    assert_eq!(execution.exit_code, CliExitCode::Success);
+    assert!(execution.stdout.contains("#[derive(Params)]"));
+    assert!(execution.stdout.contains("pub struct PluginParams"));
+    assert!(
+        execution.stdout.contains("range = \"linear(20, 20000)\""),
+        "manifest range should flow into the emitted source: {}",
+        execution.stdout
+    );
+    assert!(execution.stdout.contains("unit = \"Hz\""));
 }
 
 use hawk2ui_cli::{CliDiagnostic, DiagnosticSeverity, SourceSpan};

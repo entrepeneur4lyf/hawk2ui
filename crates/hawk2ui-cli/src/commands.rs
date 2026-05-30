@@ -30,6 +30,8 @@ pub enum CliCommand {
     PackagePlugin,
     /// Export the central generated JSON Schema catalog.
     ExportSchemas,
+    /// Emit the generated truce parameter source for the project's manifest.
+    ExportParams,
     /// Render diagnostics.
     Diagnostics,
     /// Explain the current project and available workflows.
@@ -49,6 +51,7 @@ impl CliCommand {
             "run-desktop" => Some(Self::RunDesktop),
             "package-plugin" => Some(Self::PackagePlugin),
             "export-schemas" => Some(Self::ExportSchemas),
+            "export-params" => Some(Self::ExportParams),
             "diagnostics" => Some(Self::Diagnostics),
             "explain" => Some(Self::Explain),
             _ => None,
@@ -137,6 +140,7 @@ impl CommandCatalog {
             "  run-desktop      Run a desktop native surface",
             "  package-plugin   Materialize CLAP, VST3, AU, and standalone package layouts",
             "  export-schemas   Export the central generated JSON Schema catalog",
+            "  export-params    Emit truce parameter source generated from the manifest",
             "  diagnostics      Render structured diagnostics",
             "  explain          Explain project targets, capabilities, and next commands",
         ]
