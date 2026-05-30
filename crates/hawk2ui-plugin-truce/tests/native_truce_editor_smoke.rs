@@ -49,7 +49,7 @@ fn truce_editor_opens_real_x11_window_and_presents_when_smoke_enabled() {
 
     let parent = X11ParentWindow::open().expect("x11 parent window opens");
     let mut editor =
-        Hawk2uiTruceEditor::from_entry_script(editor_config(), ENTRY_SOURCE, "src/editor.js")
+        Hawk2uiTruceEditor::try_from_entry_script(editor_config(), ENTRY_SOURCE, "src/editor.js")
             .expect("editor builds a scene from the entry script");
 
     let params: Arc<dyn truce_params::Params> = Arc::new(TestParams::default());

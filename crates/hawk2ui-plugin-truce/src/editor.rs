@@ -22,7 +22,7 @@ use hawk2ui_host_baseview::{
 use hawk2ui_runtime::RuntimeSceneFrame;
 use truce_core::editor::{Editor, EditorBridge, PluginContext, RawWindowHandle};
 
-use crate::scene::{EditorSceneError, build_editor_scene};
+use crate::scene::{EditorSceneError, build_editor_scene, build_error_scene};
 
 /// Stable parent-fixture identifier for the truce editor surface.
 const EDITOR_FIXTURE_ID: &str = "hawk2ui-truce-editor";
@@ -82,16 +82,28 @@ fn logical_size(config: &PluginEditorConfig) -> (u32, u32) {
     }
 }
 
+/// Editor scene dimensions in points: the logical size widened to `f32` for the
+/// scene viewport.
+fn scene_dimensions(config: &PluginEditorConfig) -> (f32, f32) {
+    let (width, height) = logical_size(config);
+    // Editor logical dimensions are small point values; widening them to f32
+    // cannot lose meaningful precision.
+    #[allow(clippy::cast_precision_loss)]
+    {
+        (width as f32, height as f32)
+    }
+}
+
 /// A `Hawk2UI`-rendered editor surface for a truce plugin.
 ///
 /// Implements truce's [`Editor`] seam, drawing the `Hawk2UI` runtime scene into
 /// a Baseview child window parented to the DAW-provided window. Construct one
-/// with [`Hawk2uiTruceEditor::new`] and return it from a truce
+/// with [`Hawk2uiTruceEditor::from_entry_script`] and return it from a truce
 /// `PluginLogic::editor()` implementation.
 pub struct Hawk2uiTruceEditor {
     config: PluginEditorConfig,
     size: (u32, u32),
-    scene: RuntimeSceneFrame,
+    scene: Option<RuntimeSceneFrame>,
     adapter: Option<BaseviewPluginAdapter>,
     window: Option<BaseviewEditorWindowHandle>,
     bridge: Option<Arc<dyn EditorBridge>>,
@@ -113,7 +125,7 @@ impl Hawk2uiTruceEditor {
         Self {
             config,
             size,
-            scene,
+            scene: Some(scene),
             adapter: None,
             window: None,
             bridge: None,
@@ -122,8 +134,39 @@ impl Hawk2uiTruceEditor {
         }
     }
 
+    /// Creates an editor that renders the plugin's compiled entry script,
+    /// falling back to a visible error panel if the script cannot build a scene.
+    ///
+    /// This is the production entry point. Truce's `PluginLogic::editor()`
+    /// returns a `Box<dyn Editor>` and so cannot propagate a failure, and a
+    /// plugin editor embedded in a DAW must never crash or blank the host. So
+    /// this constructor is **infallible**: a broken author script yields an
+    /// editor that presents a legible error scene and records the error
+    /// (observable through [`Self::has_error`]) instead of failing construction.
+    /// Use [`Self::try_from_entry_script`] when the caller wants to inspect or
+    /// handle the build error itself.
+    #[must_use]
+    pub fn from_entry_script(
+        config: PluginEditorConfig,
+        compiled_source: &str,
+        source_path: &str,
+    ) -> Self {
+        let (width, height) = scene_dimensions(&config);
+        match build_editor_scene(compiled_source, source_path, width, height) {
+            Ok(scene) => Self::new(config, scene),
+            Err(error) => {
+                // The script failed; still present something diagnosable. If even
+                // the error panel cannot build (unreachable in practice), degrade
+                // to no scene — `open` then records and presents nothing rather
+                // than panicking.
+                let fallback = build_error_scene(&error.to_string(), width, height).ok();
+                Self::errored(config, fallback, &error)
+            }
+        }
+    }
+
     /// Creates an editor whose scene is built by running the plugin's compiled
-    /// entry script.
+    /// entry script, returning the build error to the caller.
     ///
     /// The script's `mount` function is executed (see [`build_editor_scene`])
     /// and its returned node tree becomes the initial [`RuntimeSceneFrame`] the
@@ -131,27 +174,53 @@ impl Hawk2uiTruceEditor {
     /// bindings are projected into the script yet — the bridge captured on
     /// [`Editor::open`] is unused until parameter and meter projection lands.
     ///
+    /// Prefer [`Self::from_entry_script`] at the truce `editor()` boundary, which
+    /// cannot propagate a `Result`; reach for this when the caller wants the
+    /// error (tooling, tests, a custom fallback policy).
+    ///
     /// # Errors
     ///
     /// Returns an [`EditorSceneError`] when the entry script cannot be executed
     /// or its result cannot be converted into a renderable scene.
-    pub fn from_entry_script(
+    pub fn try_from_entry_script(
         config: PluginEditorConfig,
         compiled_source: &str,
         source_path: &str,
     ) -> Result<Self, EditorSceneError> {
-        let (width, height) = logical_size(&config);
-        // Editor logical dimensions are small point values; widening them to
-        // f32 for the scene viewport cannot lose meaningful precision.
-        #[allow(clippy::cast_precision_loss)]
-        let scene = build_editor_scene(compiled_source, source_path, width as f32, height as f32)?;
+        let (width, height) = scene_dimensions(&config);
+        let scene = build_editor_scene(compiled_source, source_path, width, height)?;
         Ok(Self::new(config, scene))
     }
 
-    /// The runtime scene this editor renders.
+    /// Builds an editor already in an error state: it presents `scene` (a
+    /// fallback error panel, or nothing if even that could not build) and
+    /// reports `error` through [`Self::has_error`].
+    fn errored(
+        config: PluginEditorConfig,
+        scene: Option<RuntimeSceneFrame>,
+        error: &EditorSceneError,
+    ) -> Self {
+        let size = logical_size(&config);
+        Self {
+            config,
+            size,
+            scene,
+            adapter: None,
+            window: None,
+            bridge: None,
+            presented_frames: Arc::new(AtomicU64::new(0)),
+            last_error: Arc::new(Mutex::new(Some(BaseviewHostError::new(
+                error.rule(),
+                error.message(),
+            )))),
+        }
+    }
+
+    /// The runtime scene this editor renders, or `None` when scene construction
+    /// failed catastrophically and the editor has nothing to present.
     #[must_use]
-    pub const fn scene(&self) -> &RuntimeSceneFrame {
-        &self.scene
+    pub fn scene(&self) -> Option<&RuntimeSceneFrame> {
+        self.scene.as_ref()
     }
 
     /// The host bridge captured on [`Editor::open`], or `None` before open.
@@ -166,7 +235,8 @@ impl Hawk2uiTruceEditor {
         self.presented_frames.load(Ordering::SeqCst)
     }
 
-    /// Whether the editor's frame handler has recorded a presentation error.
+    /// Whether the editor has recorded an error — either during scene
+    /// construction (a failed entry script) or during presentation.
     #[must_use]
     pub fn has_error(&self) -> bool {
         self.last_error.lock().is_ok_and(|guard| guard.is_some())
@@ -180,11 +250,18 @@ impl Hawk2uiTruceEditor {
 
     #[cfg(target_os = "linux")]
     fn open_window(&mut self, adapter: &BaseviewPluginAdapter) {
+        let Some(scene) = self.scene.clone() else {
+            self.record_error(BaseviewHostError::new(
+                "hawk2ui-truce.present.no-scene",
+                "editor has no renderable scene to present; scene construction failed",
+            ));
+            return;
+        };
         // The frame handler records into its own clones of these; the editor
         // observes progress through `presented_frame_count` / `has_error`.
         let events = Arc::new(Mutex::new(Vec::new()));
         match adapter.open_gpu_editor_window(
-            self.scene.clone(),
+            scene,
             Arc::clone(&self.presented_frames),
             Arc::clone(&self.last_error),
             events,
@@ -319,6 +396,53 @@ mod tests {
         assert_eq!(editor.presented_frame_count(), 0);
         assert!(!editor.has_error());
         assert!(editor.bridge().is_none());
+    }
+
+    #[test]
+    fn from_entry_script_falls_back_to_a_visible_error_panel_on_a_broken_script() {
+        // truce's `editor()` cannot propagate a Result, so the production
+        // constructor is infallible: a broken author script must still yield an
+        // editor that presents a (legible error) scene and records the error —
+        // never a failed construction that the caller cannot handle.
+        let editor = Hawk2uiTruceEditor::from_entry_script(
+            test_config(),
+            "const broken = 1;",
+            "src/editor.js",
+        );
+        assert!(
+            editor.scene().is_some(),
+            "a fallback error scene must be present"
+        );
+        assert!(
+            editor.has_error(),
+            "the construction failure must be recorded"
+        );
+    }
+
+    #[test]
+    fn from_entry_script_renders_a_valid_script_without_error() {
+        let editor = Hawk2uiTruceEditor::from_entry_script(
+            test_config(),
+            "export function mount(host) { return { id: \"root\", type: \"view\" }; }",
+            "src/editor.js",
+        );
+        assert!(editor.scene().is_some());
+        assert!(!editor.has_error());
+    }
+
+    #[test]
+    fn try_from_entry_script_surfaces_the_build_error() {
+        let result = Hawk2uiTruceEditor::try_from_entry_script(
+            test_config(),
+            "const broken = 1;",
+            "src/editor.js",
+        );
+        // `Hawk2uiTruceEditor` is not `Debug` (it holds an `Arc<dyn EditorBridge>`),
+        // so destructure rather than `expect_err`.
+        let Err(error) = result else {
+            panic!("a script without a mount function must fail");
+        };
+        assert_eq!(error.rule(), "hawk2ui-truce.editor.no-mount");
     }
 
     #[test]

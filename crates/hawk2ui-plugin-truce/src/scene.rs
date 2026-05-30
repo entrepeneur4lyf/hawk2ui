@@ -131,6 +131,46 @@ pub(crate) fn build_editor_scene(
         })
 }
 
+/// Builds a legible fallback scene that displays `message`.
+///
+/// Used when the author's entry script cannot produce a scene, so a plugin
+/// editor embedded in a DAW can still present something diagnosable instead of
+/// a blank or missing surface. The panel uses the default container/text
+/// styling (a dark fill with light text), so it needs no colors of its own.
+///
+/// # Errors
+///
+/// Returns an [`EditorSceneError`] only if this trivial panel itself cannot be
+/// laid out — unreachable in practice, but surfaced rather than panicked so the
+/// caller can decide how to degrade further.
+pub(crate) fn build_error_scene(
+    message: &str,
+    width: f32,
+    height: f32,
+) -> Result<RuntimeSceneFrame, EditorSceneError> {
+    let root = EntryNode::view(
+        "hawk2ui-editor-error",
+        vec![EntryNode::text(
+            "hawk2ui-editor-error-message",
+            format!("Editor failed to build: {message}"),
+        )],
+    );
+    let tree = root.to_view_tree(width, height).map_err(|error| {
+        EditorSceneError::new(
+            "hawk2ui-truce.editor.error-scene-failed",
+            format!("{error:?}"),
+        )
+    })?;
+    RuntimeSceneBridge::new(Viewport::new(width, height))
+        .build(&tree)
+        .map_err(|error| {
+            EditorSceneError::new(
+                "hawk2ui-truce.editor.error-scene-failed",
+                format!("{error:?}"),
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use hawk2ui_runtime::RuntimeViewId;
@@ -214,5 +254,21 @@ export function mount(host) {
         assert!(rendered.contains(error.rule()), "{rendered}");
         assert!(rendered.contains(error.message()), "{rendered}");
         let _: &dyn std::error::Error = &error;
+    }
+
+    #[test]
+    fn builds_a_legible_error_scene() {
+        let frame = build_error_scene("the entry script threw", 320.0, 180.0)
+            .expect("the fallback error scene builds");
+        assert!(
+            !frame.draw_commands().is_empty(),
+            "an error scene must emit draw commands so the failure is visible"
+        );
+        assert!(
+            frame
+                .geometry_for(&RuntimeViewId::new("hawk2ui-editor-error-message"))
+                .is_some(),
+            "the error message node must have resolved geometry"
+        );
     }
 }
