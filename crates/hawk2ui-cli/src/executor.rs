@@ -875,6 +875,18 @@ fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {
             "manifest.parameter.duplicate",
             format!("duplicate parameter declaration: {parameter}"),
         ),
+        ManifestError::DuplicateParameterId { id, param_id } => CliDiagnostic::error(
+            "manifest.parameter.param-id-duplicate",
+            format!(
+                "parameter {id} pins numeric id {param_id}, which another parameter already pins"
+            ),
+        ),
+        ManifestError::ReservedParameterId { id, param_id } => CliDiagnostic::error(
+            "manifest.parameter.param-id-reserved",
+            format!(
+                "parameter {id} pins numeric id {param_id}, which is in truce's reserved meter range (>= 2^24)"
+            ),
+        ),
         ManifestError::DuplicateMeter(meter) => CliDiagnostic::error(
             "manifest.meter.duplicate",
             format!("duplicate meter declaration (parameter/meter id namespace): {meter}"),

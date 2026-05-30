@@ -440,6 +440,97 @@ fn manifest_exposes_a_parameter_model_for_codegen() {
     assert_eq!(cutoff.default_value, ParameterValue::Float(1000.0));
 }
 
+#[test]
+// Each manifest fixture is colocated with the assertion that consumes it, which
+// reads better here than hoisting three large raw strings to the top of the fn.
+#[allow(clippy::items_after_statements)]
+fn manifest_rejects_a_reserved_or_duplicate_pinned_param_id() {
+    // A pinned numeric id at or above truce's reserved meter range (2^24) is
+    // rejected at parse time (exit code 10) with a precise diagnostic, rather
+    // than surfacing as a downstream Rust compile error in generated truce
+    // source.
+    const RESERVED: &str = r#"
+[identity]
+id = "com.hawk2ui.pinned"
+name = "Pinned"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.pinned"
+name = "Pinned"
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+param_id = 16777216
+default = 0.5
+"#;
+    let error = HawkManifest::parse(RESERVED).expect_err("a reserved pinned id must be rejected");
+    assert!(
+        matches!(error, hawk2ui_build::ManifestError::ReservedParameterId { param_id, .. } if param_id == 1 << 24),
+        "expected ReservedParameterId, got {error:?}"
+    );
+
+    // Two parameters pinning the same id alias their saved automation/state.
+    const DUPLICATE: &str = r#"
+[identity]
+id = "com.hawk2ui.pinned"
+name = "Pinned"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.pinned"
+name = "Pinned"
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+param_id = 3
+default = 0.5
+
+[[parameters]]
+id = "mix"
+name = "Mix"
+param_id = 3
+default = 0.5
+"#;
+    let error = HawkManifest::parse(DUPLICATE).expect_err("duplicate pinned ids must be rejected");
+    assert!(
+        matches!(error, hawk2ui_build::ManifestError::DuplicateParameterId { param_id, .. } if param_id == 3),
+        "expected DuplicateParameterId, got {error:?}"
+    );
+
+    // A unique pinned id below the ceiling parses and survives as the resolved
+    // truce ParamId.
+    const PINNED_OK: &str = r#"
+[identity]
+id = "com.hawk2ui.pinned"
+name = "Pinned"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.pinned"
+name = "Pinned"
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+param_id = 5
+default = 0.5
+"#;
+    let manifest = HawkManifest::parse(PINNED_OK).expect("a valid pinned id parses");
+    assert_eq!(manifest.parameter_model().resolved_param_ids(), vec![5]);
+}
+
 const KINDED_PARAMS_MANIFEST: &str = r#"
 [identity]
 id = "com.hawk2ui.kinded"

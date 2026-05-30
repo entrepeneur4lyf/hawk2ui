@@ -20,9 +20,9 @@ pub use format::{
     PluginFormatTarget,
 };
 pub use parameter::{
-    EnumVariant, GeneratedParameterMetadata, MeterRecord, ParameterDistribution, ParameterFlags,
-    ParameterGroup, ParameterModel, ParameterRange, ParameterRecord, ParameterSmoothing,
-    ParameterValidationError, ParameterValue,
+    EnumVariant, GeneratedParameterMetadata, METER_ID_BASE, MeterRecord, ParameterDistribution,
+    ParameterFlags, ParameterGroup, ParameterModel, ParameterRange, ParameterRecord,
+    ParameterSmoothing, ParameterValidationError, ParameterValue,
 };
 pub use realtime::{
     FrameDropPolicy, MAX_CHANNEL_ID_LEN, MAX_VISUAL_SAMPLES, RealtimeChannelKind,

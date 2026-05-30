@@ -31,11 +31,12 @@ use hawk2ui_plugin::{
 ///
 /// The returned source is self-contained — it carries its own `use` import —
 /// and is intended to be written to a generated module in the author's plugin
-/// crate, which depends on the `truce` umbrella crate. Parameters are emitted
-/// in declaration order with explicit, declaration-order `id`s so the editor
-/// side can address each parameter by the same `u32` through the
-/// `EditorBridge`, rather than relying on truce's auto-assignment happening to
-/// match.
+/// crate, which depends on the `truce` umbrella crate. Each parameter is emitted
+/// with its resolved truce `ParamId` — a pinned `param_id`, or the positional
+/// fallback from [`ParameterModel::resolved_param_ids`] — as an explicit
+/// `#[param(id = N)]`, so the editor side addresses each parameter by the same
+/// stable `u32` through the `EditorBridge` and reordering the manifest never
+/// renumbers a pinned parameter.
 #[must_use]
 pub fn emit_truce_params_struct(struct_name: &str, model: &ParameterModel) -> String {
     let mut out = String::new();
@@ -53,10 +54,11 @@ pub fn emit_truce_params_struct(struct_name: &str, model: &ParameterModel) -> St
     out.push_str("#[derive(Params)]\n");
     let _ = writeln!(out, "pub struct {struct_name} {{");
 
-    let mut next_id: u32 = 0;
-    for parameter in &model.parameters {
-        emit_param_field(&mut out, struct_name, next_id, parameter);
-        next_id = next_id.saturating_add(1);
+    // Each parameter's id is its resolved truce `ParamId` (pinned, or positional
+    // fallback), so reordering the manifest never renumbers a pinned parameter.
+    let param_ids = model.resolved_param_ids();
+    for (parameter, &id) in model.parameters.iter().zip(&param_ids) {
+        emit_param_field(&mut out, struct_name, id, parameter);
     }
     for meter in &model.meters {
         emit_meter_field(&mut out, meter);

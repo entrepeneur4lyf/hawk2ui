@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use hawk2ui_plugin::{EnumVariant, MeterRecord, ParameterModel, ParameterRange, ParameterRecord};
+use hawk2ui_plugin::{
+    EnumVariant, METER_ID_BASE, MeterRecord, ParameterModel, ParameterRange, ParameterRecord,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -165,6 +167,14 @@ pub enum PluginParameterKind {
 pub struct PluginParameter {
     /// Parameter ID.
     pub id: String,
+    /// Stable numeric automation id (truce `ParamId`).
+    ///
+    /// Omit to let the build assign and pin it on first build. Once assigned it
+    /// must never change: host automation, presets, and saved state persist this
+    /// number. Must be unique across parameters and below truce's reserved meter
+    /// range (`< 2^24`).
+    #[serde(default)]
+    pub param_id: Option<u32>,
     /// Display name.
     pub name: String,
     /// Value kind: `float` (default), `int`, `bool`, or `enum`.
@@ -308,7 +318,7 @@ impl HawkManifest {
     pub fn parameter_model(&self) -> ParameterModel {
         ParameterModel::new(self.parameters.iter().map(|parameter| {
             let range = ParameterRange::new(parameter.min, parameter.max, parameter.default);
-            match parameter.kind {
+            let record = match parameter.kind {
                 PluginParameterKind::Float => ParameterRecord::numeric(
                     parameter.id.clone(),
                     parameter.name.clone(),
@@ -338,6 +348,13 @@ impl HawkManifest {
                         .iter()
                         .map(|variant| EnumVariant::new(variant.id.clone(), variant.name.clone())),
                 ),
+            };
+            // Carry the author-pinned numeric id through to the record; an
+            // unpinned parameter (`None`) is resolved positionally later by
+            // `ParameterModel::resolved_param_ids`.
+            match parameter.param_id {
+                Some(param_id) => record.param_id(param_id),
+                None => record,
             }
         }))
         .with_meters(
@@ -385,6 +402,7 @@ impl HawkManifest {
         // without colliding on the field, an enum-only check.
         let mut field_idents = BTreeSet::new();
         let mut enum_type_idents = BTreeSet::new();
+        let mut param_ids = BTreeSet::new();
         for parameter in &self.parameters {
             require_non_empty("parameter.id", &parameter.id)?;
             require_non_empty("parameter.name", &parameter.name)?;
@@ -405,6 +423,23 @@ impl HawkManifest {
                 && !enum_type_idents.insert(pascal_ident(&parameter.id))
             {
                 return Err(ManifestError::CollidingEnumType(parameter.id.clone()));
+            }
+            // A pinned numeric id must be unique and below truce's reserved
+            // meter range. Caught here (exit code 10) for a clear diagnostic
+            // rather than as a downstream Rust compile error in generated code.
+            if let Some(param_id) = parameter.param_id {
+                if param_id >= METER_ID_BASE {
+                    return Err(ManifestError::ReservedParameterId {
+                        id: parameter.id.clone(),
+                        param_id,
+                    });
+                }
+                if !param_ids.insert(param_id) {
+                    return Err(ManifestError::DuplicateParameterId {
+                        id: parameter.id.clone(),
+                        param_id,
+                    });
+                }
             }
         }
         for meter in &self.meters {
@@ -611,6 +646,20 @@ pub enum ManifestError {
     DuplicatePreset(String),
     /// Duplicate parameter ID.
     DuplicateParameter(String),
+    /// A parameter pins a numeric id already pinned by another parameter.
+    DuplicateParameterId {
+        /// Stable string id of the parameter whose pinned numeric id collides.
+        id: String,
+        /// The duplicated pinned numeric id.
+        param_id: u32,
+    },
+    /// A parameter pins a numeric id in truce's reserved meter range (>= 2^24).
+    ReservedParameterId {
+        /// Stable string id of the offending parameter.
+        id: String,
+        /// The out-of-range pinned numeric id.
+        param_id: u32,
+    },
     /// Duplicate meter ID (within the shared parameter/meter id namespace).
     DuplicateMeter(String),
     /// Invalid capability key.

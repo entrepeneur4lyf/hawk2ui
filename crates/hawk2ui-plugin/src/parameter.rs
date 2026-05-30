@@ -190,11 +190,30 @@ pub struct GeneratedParameterMetadata {
     pub steps: Option<u32>,
 }
 
+/// Exclusive upper bound for a parameter's truce `ParamId`: truce reserves ids
+/// at or above `2^24` for meters (its `METER_ID_BASE`), so a parameter id must
+/// be strictly below it. Duplicated here rather than imported because this crate
+/// is deliberately truce-free; see
+/// `reference/truce-0.49.14/crates/truce-derive/src/lib.rs` ("Auto-assign meter
+/// IDs").
+pub const METER_ID_BASE: u32 = 1 << 24;
+
 /// Plugin parameter record.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ParameterRecord {
     /// Stable string identifier.
     pub id: String,
+    /// Stable numeric automation id (truce `ParamId`).
+    ///
+    /// `Some(n)` pins this parameter to id `n` for the life of the plugin: host
+    /// automation lanes, presets, and saved state persist this number, so it
+    /// must never change across releases once assigned. `None` leaves it
+    /// unpinned, and `resolved_param_ids` assigns the lowest free id in
+    /// declaration order (the build writes the result back to the manifest so it
+    /// pins from first build). `#[serde(default)]` keeps records written before
+    /// explicit ids deserializing unchanged.
+    #[serde(default)]
+    pub param_id: Option<u32>,
     /// Display name.
     pub display_name: String,
     /// Unit label.
@@ -233,6 +252,7 @@ impl ParameterRecord {
     ) -> Self {
         Self {
             id: id.into(),
+            param_id: None,
             display_name: display_name.into(),
             unit: unit.into(),
             range: Some(range),
@@ -261,6 +281,7 @@ impl ParameterRecord {
     ) -> Self {
         Self {
             id: id.into(),
+            param_id: None,
             display_name: display_name.into(),
             unit: unit.into(),
             range: Some(range),
@@ -283,6 +304,7 @@ impl ParameterRecord {
     ) -> Self {
         Self {
             id: id.into(),
+            param_id: None,
             display_name: display_name.into(),
             unit: String::new(),
             range: None,
@@ -312,6 +334,7 @@ impl ParameterRecord {
         let variants: Vec<EnumVariant> = variants.into_iter().collect();
         Self {
             id: id.into(),
+            param_id: None,
             display_name: display_name.into(),
             unit: String::new(),
             range: None,
@@ -357,6 +380,15 @@ impl ParameterRecord {
     #[must_use]
     pub fn group(mut self, group_id: impl Into<String>) -> Self {
         self.group_id = Some(group_id.into());
+        self
+    }
+
+    /// Pins the stable numeric automation id (truce `ParamId`). See the
+    /// `param_id` field; leave unset to let `ParameterModel::resolved_param_ids`
+    /// assign it in declaration order.
+    #[must_use]
+    pub const fn param_id(mut self, param_id: u32) -> Self {
+        self.param_id = Some(param_id);
         self
     }
 
@@ -638,6 +670,34 @@ impl ParameterModel {
                 ));
             }
         }
+        // Pinned numeric ids (truce `ParamId`s) must be unique and below the
+        // reserved meter range: host automation and saved state persist this
+        // number, so a collision silently aliases two parameters across saves,
+        // and an id at or above `METER_ID_BASE` overlaps truce's meter space.
+        let mut seen_param_ids = std::collections::BTreeSet::new();
+        for parameter in &self.parameters {
+            let Some(param_id) = parameter.param_id else {
+                continue;
+            };
+            if param_id >= METER_ID_BASE {
+                errors.push(ParameterValidationError::new(
+                    "parameter.param-id.reserved",
+                    format!(
+                        "parameter {} pins id {param_id}, which is in truce's reserved meter range (>= {METER_ID_BASE})",
+                        parameter.id
+                    ),
+                ));
+            }
+            if !seen_param_ids.insert(param_id) {
+                errors.push(ParameterValidationError::new(
+                    "parameter.param-id.duplicate",
+                    format!(
+                        "parameter {} pins id {param_id}, which another parameter already pins",
+                        parameter.id
+                    ),
+                ));
+            }
+        }
         if errors.is_empty() {
             Ok(())
         } else {
@@ -649,6 +709,33 @@ impl ParameterModel {
     #[must_use]
     pub fn group_path(&self, id: &str) -> Option<&ParameterGroup> {
         self.groups.iter().find_map(|group| group.find(id))
+    }
+
+    /// Resolves the concrete truce `ParamId` u32 for each parameter, in order.
+    ///
+    /// A pinned `param_id` is honored verbatim; an unpinned parameter takes the
+    /// lowest u32 not claimed by any pinned id, scanning upward — mirroring
+    /// truce's own derive id assignment. With no pinned ids this yields
+    /// `0, 1, 2, …` in declaration order (identical to the prior positional
+    /// scheme, so an unpinned manifest still emits byte-identical truce source).
+    #[must_use]
+    pub fn resolved_param_ids(&self) -> Vec<u32> {
+        let pinned: std::collections::BTreeSet<u32> =
+            self.parameters.iter().filter_map(|p| p.param_id).collect();
+        let mut next_auto: u32 = 0;
+        let mut ids = Vec::with_capacity(self.parameters.len());
+        for parameter in &self.parameters {
+            if let Some(id) = parameter.param_id {
+                ids.push(id);
+            } else {
+                while pinned.contains(&next_auto) {
+                    next_auto = next_auto.saturating_add(1);
+                }
+                ids.push(next_auto);
+                next_auto = next_auto.saturating_add(1);
+            }
+        }
+        ids
     }
 }
 

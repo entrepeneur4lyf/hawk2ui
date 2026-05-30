@@ -164,3 +164,39 @@ fn generated_params_read_back_through_the_bridge_by_id() {
     assert!(approx(bridge.get_param(4), 0.5));
     assert_eq!(bridge.format_param(4), "Saw");
 }
+
+#[test]
+fn emitter_pins_ids_stably_across_parameter_reorder() {
+    // The brick tasks/0010 straightens: two models
+    // pinning the same ids but listing the parameters in different orders must
+    // emit the same `id = N` for each parameter. A pinned id is a stable
+    // contract, never a function of declaration order.
+    let in_order = ParameterModel::new([
+        ParameterRecord::boolean("a", "A", false).param_id(0),
+        ParameterRecord::boolean("b", "B", false).param_id(1),
+        ParameterRecord::boolean("c", "C", false).param_id(2),
+    ]);
+    let reordered = ParameterModel::new([
+        ParameterRecord::boolean("c", "C", false).param_id(2),
+        ParameterRecord::boolean("a", "A", false).param_id(0),
+        ParameterRecord::boolean("b", "B", false).param_id(1),
+    ]);
+    for emitted in [
+        emit_truce_params_struct("P", &in_order),
+        emit_truce_params_struct("P", &reordered),
+    ] {
+        assert!(emitted.contains("id = 0, name = \"A\""), "{emitted}");
+        assert!(emitted.contains("id = 1, name = \"B\""), "{emitted}");
+        assert!(emitted.contains("id = 2, name = \"C\""), "{emitted}");
+    }
+
+    // An all-unpinned model keeps the positional 0,1,2,… scheme, so existing
+    // manifests emit byte-identically.
+    let unpinned = ParameterModel::new([
+        ParameterRecord::boolean("a", "A", false),
+        ParameterRecord::boolean("b", "B", false),
+    ]);
+    let emitted = emit_truce_params_struct("P", &unpinned);
+    assert!(emitted.contains("id = 0, name = \"A\""), "{emitted}");
+    assert!(emitted.contains("id = 1, name = \"B\""), "{emitted}");
+}

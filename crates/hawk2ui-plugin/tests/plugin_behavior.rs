@@ -222,6 +222,62 @@ fn parameter_model_rejects_duplicate_parameter_ids() {
 }
 
 #[test]
+fn parameter_model_resolves_pinned_and_positional_param_ids() {
+    // A pinned id is honored verbatim; an unpinned parameter takes the lowest
+    // u32 not claimed by a pinned id, in declaration order. An all-unpinned
+    // model keeps the 0,1,2,… positional scheme, so existing manifests are
+    // unaffected.
+    let all_positional = ParameterModel::new([
+        ParameterRecord::boolean("a", "A", false),
+        ParameterRecord::boolean("b", "B", false),
+        ParameterRecord::boolean("c", "C", false),
+    ]);
+    assert_eq!(all_positional.resolved_param_ids(), vec![0, 1, 2]);
+
+    // `b` is pinned to 0, so `a` and `c` fill the next-lowest free ids (1, 2)
+    // around it without renumbering `b`.
+    let mixed = ParameterModel::new([
+        ParameterRecord::boolean("a", "A", false),
+        ParameterRecord::boolean("b", "B", false).param_id(0),
+        ParameterRecord::boolean("c", "C", false),
+    ]);
+    assert_eq!(mixed.resolved_param_ids(), vec![1, 0, 2]);
+}
+
+#[test]
+fn parameter_model_rejects_duplicate_and_reserved_param_ids() {
+    // Two parameters pinning the same numeric id would alias their saved
+    // automation/state across releases.
+    let duplicate = ParameterModel::new([
+        ParameterRecord::boolean("a", "A", false).param_id(7),
+        ParameterRecord::boolean("b", "B", false).param_id(7),
+    ]);
+    let errors = duplicate
+        .validate()
+        .expect_err("duplicate pinned ids must fail validation");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.code == "parameter.param-id.duplicate"),
+        "expected parameter.param-id.duplicate, got {errors:?}"
+    );
+
+    // A pinned id in truce's reserved meter range (>= 2^24) collides with the
+    // meter id space.
+    let reserved =
+        ParameterModel::new([ParameterRecord::boolean("a", "A", false).param_id(1 << 24)]);
+    let errors = reserved
+        .validate()
+        .expect_err("a reserved pinned id must fail validation");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.code == "parameter.param-id.reserved"),
+        "expected parameter.param-id.reserved, got {errors:?}"
+    );
+}
+
+#[test]
 fn parameter_model_converts_normalized_values_and_display_text() {
     let parameter =
         ParameterRecord::numeric("gain", "Gain", "dB", ParameterRange::new(-60.0, 12.0, 0.0))
