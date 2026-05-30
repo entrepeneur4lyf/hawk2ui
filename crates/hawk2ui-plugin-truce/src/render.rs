@@ -107,6 +107,12 @@ pub(crate) struct RenderOutcome {
 /// [`Self::render`] each cadence tick; bundling the state here (rather than
 /// threading a dozen arguments) is also what the editor composes when the live
 /// loop is wired in 0009.4b.
+///
+/// `Clone` matters for reopen: the editor **clones** this into each `open`'s
+/// producer rather than moving it out, so a host that closes and reopens the
+/// same editor instance still gets a live loop (the clone resets the threaded UI
+/// and gesture state, which is correct for a fresh open).
+#[derive(Clone)]
 pub(crate) struct EditorRenderState {
     compiled_source: String,
     source_path: String,

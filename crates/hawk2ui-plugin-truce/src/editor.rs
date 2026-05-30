@@ -343,12 +343,17 @@ impl Hawk2uiTruceEditor {
     /// Returns `None` — so the handler presents the fixed `scene` — when there is
     /// no render state (a hand-built scene or a failed construction) or no bridge
     /// was captured (which `open` always captures before calling this).
+    ///
+    /// The render state is **cloned**, not moved out, so a host that closes and
+    /// reopens the same editor instance (truce's `open`/`close` take `&mut self`)
+    /// still gets a live loop — each open's clone starts with fresh UI/gesture
+    /// state, which is the correct reset for a reopen.
     #[cfg(target_os = "linux")]
     fn build_scene_producer(
-        &mut self,
+        &self,
         initial: RuntimeSceneFrame,
     ) -> Option<Box<dyn FnMut() -> RuntimeSceneFrame + Send>> {
-        let mut state = self.render_state.take()?;
+        let mut state = self.render_state.as_ref()?.clone();
         let bridge = self.bridge.clone()?;
         let last_error = Arc::clone(&self.last_error);
         let mut last_good = initial;
@@ -558,6 +563,32 @@ mod tests {
         );
         assert!(broken.render_state.is_none());
         assert!(broken.has_error());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_scene_producer_clones_and_preserves_the_render_state() {
+        // Reopen safety: truce's `open`/`close` take `&mut self`, so a host may
+        // close and reopen the same editor. The producer must **clone** (not move
+        // out) the render state, or the second open would fall back to the static
+        // construction-time scene with no live loop. With no captured bridge there
+        // is no producer, but the state must survive the call regardless.
+        let editor = Hawk2uiTruceEditor::from_entry_script(
+            test_config(),
+            "export function mount(host) { return { id: \"root\", type: \"view\" }; }",
+            "src/editor.js",
+            &HostSnapshot::default(),
+            &EditRouting::default(),
+        );
+        assert!(editor.render_state.is_some());
+        assert!(
+            editor.build_scene_producer(test_scene()).is_none(),
+            "no captured bridge yet → no producer"
+        );
+        assert!(
+            editor.render_state.is_some(),
+            "the render state must survive so a reopen rebuilds a live loop"
+        );
     }
 
     #[test]

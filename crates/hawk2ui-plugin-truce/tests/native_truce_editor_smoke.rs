@@ -64,7 +64,7 @@ fn truce_editor_opens_real_x11_window_and_presents_when_smoke_enabled() {
     let params: Arc<dyn truce_params::Params> = Arc::new(TestParams::default());
     editor.open(
         RawWindowHandle::X11(u64::from(parent.window)),
-        for_test_params(params),
+        for_test_params(Arc::clone(&params)),
     );
 
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -78,13 +78,36 @@ fn truce_editor_opens_real_x11_window_and_presents_when_smoke_enabled() {
         !editor.has_error(),
         "truce editor recorded a presentation error during open"
     );
+    let first_frames = editor.presented_frame_count();
     assert!(
-        editor.presented_frame_count() >= 1,
+        first_frames >= 1,
         "expected the truce editor to present at least one frame"
     );
     assert!(
         editor.bridge().is_some(),
         "open should capture the host editor bridge"
+    );
+
+    // Reopen the same instance — truce's `open`/`close` take `&mut self`, so a
+    // host can close and reopen the editor. It must rebuild a live render loop
+    // and present new frames, not silently fall back to a dead static scene; this
+    // guards the render-state-clone (not -take) reopen fix.
+    editor.open(
+        RawWindowHandle::X11(u64::from(parent.window)),
+        for_test_params(Arc::clone(&params)),
+    );
+    let reopen_deadline = Instant::now() + Duration::from_secs(3);
+    while editor.presented_frame_count() <= first_frames
+        && !editor.has_error()
+        && Instant::now() < reopen_deadline
+    {
+        thread::sleep(Duration::from_millis(10));
+    }
+    editor.close();
+    assert!(!editor.has_error(), "reopen must present cleanly");
+    assert!(
+        editor.presented_frame_count() > first_frames,
+        "reopen must present new frames, proving the live loop survives a reopen"
     );
 }
 
