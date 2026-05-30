@@ -1,0 +1,31 @@
+[package]
+name = "hawk2ui-plugin-truce-spike"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Feasibility spike: a real truce plugin whose editor() returns the Hawk2UI truce editor, proving the truce::plugin! + PluginLogic + Hawk2uiTruceEditor composition before the production artifact->editor wiring is designed."
+
+[lib]
+name = "hawk2ui_plugin_truce_spike"
+path = "src/lib.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[dependencies]
+# The umbrella crate supplies the `truce::plugin!` export macro, the
+# `PluginLogic` trait, and `#[derive(Params)]`. `default-features = false`
+# keeps the per-format SDK wrappers out: this spike proves the *editor*
+# composition, not format packaging, so it links no CLAP/VST3/AU SDK.
+truce = { version = "0.49.14", default-features = false }
+truce-core = "0.49.14"
+hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
+hawk2ui-plugin-truce = { version = "0.1.0", path = "../hawk2ui-plugin-truce" }

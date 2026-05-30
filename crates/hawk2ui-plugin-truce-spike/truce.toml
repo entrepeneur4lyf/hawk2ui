@@ -1,0 +1,22 @@
+# truce plugin configuration for the Hawk2UI truce-composition spike.
+#
+# Placed crate-local (not at the workspace root) on purpose: this is a
+# multi-plugin framework workspace, so a root truce.toml claiming the whole
+# workspace is one plugin would be wrong. truce's `plugin!` macro finds this by
+# walking ancestors from the crate dir. This crate-local placement is also the
+# production pattern — each codegen'd plugin crate carries its own truce.toml
+# generated from the manifest's vendor/plugin metadata.
+[vendor]
+name = "Hawk2UI"
+id = "com.hawk2ui"
+url = "https://hawk2ui.com"
+au_manufacturer = "Hwk2"
+
+[[plugin]]
+name = "Hawk2UI Truce Spike"
+bundle_id = "truce-spike"
+crate = "hawk2ui-plugin-truce-spike"
+category = "effect"
+fourcc = "H2sp"
+au3_subtype = "H2s3"
+au_tag = "Effects"
