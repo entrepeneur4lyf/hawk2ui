@@ -51,6 +51,14 @@ impl EditorSceneError {
     }
 }
 
+impl std::fmt::Display for EditorSceneError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.rule, self.message)
+    }
+}
+
+impl std::error::Error for EditorSceneError {}
+
 /// Builds a renderable editor scene by running a compiled entry script's
 /// `mount` function and converting its serialized node tree into a
 /// [`RuntimeSceneFrame`] sized to `width` x `height` points.
@@ -80,11 +88,13 @@ pub(crate) fn build_editor_scene(
     };
 
     let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+    // The sealed artifact carries `compiled_source` already transpiled to
+    // JavaScript (hawk2ui-build's `compiled_script` runs every entry through
+    // `ScriptBackend::compile_module_source`), so run it as JavaScript. Inferring
+    // the kind from `source_path` would re-run the TypeScript transform on
+    // already-compiled output whenever the author's entry was a `.ts`/`.tsx` file.
     let execution = backend
-        .execute_module(ScriptModule::for_source_path(
-            source_path,
-            bootstrap.as_str(),
-        ))
+        .execute_module(ScriptModule::javascript(source_path, bootstrap.as_str()))
         .map_err(|error| {
             EditorSceneError::new(
                 "hawk2ui-truce.editor.entry-script-failed",
@@ -184,5 +194,25 @@ export function mount(host) {
         )
         .expect_err("a non-object mount result must fail");
         assert_eq!(error.rule(), "hawk2ui-truce.editor.invalid-entry-tree");
+    }
+
+    #[test]
+    fn builds_from_a_compiled_entry_with_a_typescript_source_path() {
+        // `compiled_source` from a sealed artifact is always transpiled JS, even
+        // when the author wrote TypeScript, so a `.ts` source path must not
+        // trigger a second transform — the payload runs as JavaScript and builds.
+        let frame = build_editor_scene(ENTRY_WITH_TEXT, "src/editor.ts", 320.0, 180.0)
+            .expect("a compiled entry with a .ts source path builds as JavaScript");
+        assert!(!frame.draw_commands().is_empty());
+    }
+
+    #[test]
+    fn error_display_carries_rule_and_message_and_is_a_std_error() {
+        let error = build_editor_scene("const value = 1;", "src/editor.js", 320.0, 180.0)
+            .expect_err("a missing mount function fails");
+        let rendered = error.to_string();
+        assert!(rendered.contains(error.rule()), "{rendered}");
+        assert!(rendered.contains(error.message()), "{rendered}");
+        let _: &dyn std::error::Error = &error;
     }
 }
