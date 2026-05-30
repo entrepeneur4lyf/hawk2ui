@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hawk2ui_host::{PluginEditorConfig, PluginParentHandle, SurfaceMetrics};
-use hawk2ui_plugin_truce::Hawk2uiTruceEditor;
+use hawk2ui_plugin_truce::{Hawk2uiTruceEditor, HostSnapshot};
 use truce::prelude::{FloatParam, Params};
 use truce_core::editor::{Editor, RawWindowHandle, for_test_params};
 use x11rb::{
@@ -48,9 +48,13 @@ fn truce_editor_opens_real_x11_window_and_presents_when_smoke_enabled() {
     }
 
     let parent = X11ParentWindow::open().expect("x11 parent window opens");
-    let mut editor =
-        Hawk2uiTruceEditor::try_from_entry_script(editor_config(), ENTRY_SOURCE, "src/editor.js")
-            .expect("editor builds a scene from the entry script");
+    let mut editor = Hawk2uiTruceEditor::try_from_entry_script(
+        editor_config(),
+        ENTRY_SOURCE,
+        "src/editor.js",
+        &HostSnapshot::default(),
+    )
+    .expect("editor builds a scene from the entry script");
 
     let params: Arc<dyn truce_params::Params> = Arc::new(TestParams::default());
     editor.open(

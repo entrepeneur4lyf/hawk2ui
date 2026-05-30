@@ -3,22 +3,25 @@
 //! A plugin editor's UI is JS-driven: the author's entry script returns a node
 //! tree, not a baked scene. [`build_editor_scene`] runs that script's `mount`
 //! function through `hawk2ui-script`'s boa-backed [`ScriptBackend`] and converts
-//! the serialized node tree into a renderable [`RuntimeSceneFrame`], reusing the
-//! same [`entry_mount_bootstrap`] convention and [`EntryNode`] conversion the
-//! desktop host (driven by the CLI) uses — so both surfaces share one
-//! script→scene path rather than each reinventing it.
+//! the serialized node tree into a renderable [`RuntimeSceneFrame`], using the
+//! [`entry_mount_bootstrap_with_host`] convention and [`EntryNode`] conversion —
+//! the host-projecting sibling of the no-op `entry_mount_bootstrap` the desktop
+//! host (driven by the CLI) uses, since a plugin editor reads parameters and
+//! meters that a desktop app has none of.
 //!
 //! This module only *calls* the script engine and performs pure data
-//! transformation: there is no windowing and no host-binding projection (the
-//! injected `__hawk2ui_host` is the no-op stub from `entry_mount_bootstrap`).
-//! Parameter and meter projection into editor JS is a later step. Being pure,
-//! the builder is unit-tested directly in the fast gate.
+//! transformation: there is no windowing. The injected `__hawk2ui_host` carries
+//! the [`HostSnapshot`] the caller passes (parameters and meters projected from
+//! the plugin's parameter model — see `hawk2ui-build`'s `host_snapshot_from_model`).
+//! The snapshot here is the model's declared defaults; re-projecting it from the
+//! live truce `EditorBridge` is a later step (task 0009.4). Being pure, the
+//! builder is unit-tested directly in the fast gate.
 
 use hawk2ui_layout::Viewport;
 use hawk2ui_runtime::{EntryNode, RuntimeSceneBridge, RuntimeSceneFrame};
 use hawk2ui_script::{
-    HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy,
-    entry_mount_bootstrap,
+    HostCallPolicy, HostSnapshot, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy,
+    entry_mount_bootstrap_with_host,
 };
 
 /// Error building an editor scene from a compiled entry script.
@@ -63,11 +66,14 @@ impl std::error::Error for EditorSceneError {}
 /// `mount` function and converting its serialized node tree into a
 /// [`RuntimeSceneFrame`] sized to `width` x `height` points.
 ///
-/// The script runs under [`HostCallPolicy::deny_all`] with deterministic timers
-/// and the no-op `__hawk2ui_host` stub from [`entry_mount_bootstrap`], so no
-/// host bindings are projected into editor JS. The bridge captured on
-/// [`Editor::open`](truce_core::editor::Editor::open) is intentionally unused
-/// here — parameter and meter projection is a later step.
+/// The script runs under [`HostCallPolicy::deny_all`] with deterministic timers.
+/// `snapshot` is projected into the `__hawk2ui_host` the script reads — a frozen,
+/// pure-data view of the plugin's parameters and meters (`host.param(key)`,
+/// `host.meter(key)`); the projection embeds it as a JSON literal, so no host
+/// call is made and `deny_all` is preserved. `snapshot` is the model's declared
+/// defaults today; re-projecting it from the truce `EditorBridge` captured on
+/// [`Editor::open`](truce_core::editor::Editor::open) is task 0009.4. Pass an
+/// empty [`HostSnapshot`] for a paramless editor.
 ///
 /// # Errors
 ///
@@ -77,10 +83,11 @@ impl std::error::Error for EditorSceneError {}
 pub(crate) fn build_editor_scene(
     compiled_source: &str,
     source_path: &str,
+    snapshot: &HostSnapshot,
     width: f32,
     height: f32,
 ) -> Result<RuntimeSceneFrame, EditorSceneError> {
-    let Some(bootstrap) = entry_mount_bootstrap(compiled_source) else {
+    let Some(bootstrap) = entry_mount_bootstrap_with_host(compiled_source, snapshot) else {
         return Err(EditorSceneError::new(
             "hawk2ui-truce.editor.no-mount",
             "editor entry script declares no `mount` function to build a scene from",
@@ -196,8 +203,14 @@ export function mount(host) {
 
     #[test]
     fn builds_a_scene_from_an_entry_script_with_a_text_node() {
-        let frame = build_editor_scene(ENTRY_WITH_TEXT, "src/editor.js", 320.0, 180.0)
-            .expect("entry script builds an editor scene");
+        let frame = build_editor_scene(
+            ENTRY_WITH_TEXT,
+            "src/editor.js",
+            &HostSnapshot::default(),
+            320.0,
+            180.0,
+        )
+        .expect("entry script builds an editor scene");
         assert!(
             !frame.draw_commands().is_empty(),
             "a built scene must emit draw commands"
@@ -216,8 +229,14 @@ export function mount(host) {
 
     #[test]
     fn reports_a_missing_mount_function() {
-        let error = build_editor_scene("const value = 1;", "src/editor.js", 320.0, 180.0)
-            .expect_err("a script without a mount function must fail");
+        let error = build_editor_scene(
+            "const value = 1;",
+            "src/editor.js",
+            &HostSnapshot::default(),
+            320.0,
+            180.0,
+        )
+        .expect_err("a script without a mount function must fail");
         assert_eq!(error.rule(), "hawk2ui-truce.editor.no-mount");
     }
 
@@ -229,6 +248,7 @@ export function mount(host) {
         let error = build_editor_scene(
             "export function mount(host) { return 42; }",
             "src/editor.js",
+            &HostSnapshot::default(),
             320.0,
             180.0,
         )
@@ -241,15 +261,62 @@ export function mount(host) {
         // `compiled_source` from a sealed artifact is always transpiled JS, even
         // when the author wrote TypeScript, so a `.ts` source path must not
         // trigger a second transform — the payload runs as JavaScript and builds.
-        let frame = build_editor_scene(ENTRY_WITH_TEXT, "src/editor.ts", 320.0, 180.0)
-            .expect("a compiled entry with a .ts source path builds as JavaScript");
+        let frame = build_editor_scene(
+            ENTRY_WITH_TEXT,
+            "src/editor.ts",
+            &HostSnapshot::default(),
+            320.0,
+            180.0,
+        )
+        .expect("a compiled entry with a .ts source path builds as JavaScript");
         assert!(!frame.draw_commands().is_empty());
     }
 
     #[test]
+    fn projects_the_host_snapshot_into_the_entry_script() {
+        use hawk2ui_script::{HostParam, HostParamKind, HostParamValue};
+
+        // The script reads the projected param's text and uses it as the node
+        // id, so the projection is observable through the scene's public geometry
+        // API.
+        const SCRIPT: &str = r#"
+export function mount(host) {
+    return { id: host.param("title").text, type: "view" };
+}
+"#;
+        // Hand-built snapshot (this crate has no parameter model — the
+        // model→snapshot mapping lives in hawk2ui-build).
+        let snapshot = HostSnapshot {
+            params: vec![HostParam {
+                key: "title".into(),
+                kind: HostParamKind::Bool,
+                value: HostParamValue::Bool(true),
+                normalized: 1.0,
+                text: "projected-title".into(),
+                variants: Vec::new(),
+            }],
+            meters: Vec::new(),
+        };
+        let frame = build_editor_scene(SCRIPT, "src/editor.js", &snapshot, 320.0, 180.0)
+            .expect("the entry script builds a scene from the projected snapshot");
+        assert!(
+            frame
+                .geometry_for(&RuntimeViewId::new("projected-title"))
+                .is_some(),
+            "the projected param text must reach the scene as the node id"
+        );
+    }
+
+    #[test]
     fn error_display_carries_rule_and_message_and_is_a_std_error() {
-        let error = build_editor_scene("const value = 1;", "src/editor.js", 320.0, 180.0)
-            .expect_err("a missing mount function fails");
+        let error = build_editor_scene(
+            "const value = 1;",
+            "src/editor.js",
+            &HostSnapshot::default(),
+            320.0,
+            180.0,
+        )
+        .expect_err("a missing mount function fails");
         let rendered = error.to_string();
         assert!(rendered.contains(error.rule()), "{rendered}");
         assert!(rendered.contains(error.message()), "{rendered}");

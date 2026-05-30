@@ -20,10 +20,20 @@ Track implementation of the editor-JS parameter/meter seam on truce: read projec
 
 ### 0009.1 Read Projection (params + meters → typed snapshot)
 
-- [ ] Deliverable: host reads the bridge (`get_param` / `get_param_plain` / `format_param` / `get_meter`) for every model entry and serializes the typed snapshot of Decision 0003 §D2 as a frozen JSON literal embedded into the regenerated `entry_mount_bootstrap` `__hawk2ui_host` object (no host-call capability; `deny_all` preserved); string-keyed JS accessors `host.params`/`host.param(key)` and `host.meters`/`host.meter(key)` (two separate read channels); `value` typed by kind (float→number, int→integer, bool→boolean, enum→variant index), never flattened to f64; reads only through `EditorBridge` (non-advancing by contract).
-- [ ] Dependencies: `tasks/0010` complete, Decision 0003 *Accepted*.
-- [ ] Verify: `cargo test -p hawk2ui-plugin-truce projection` (kind-typed values, params/meters separation, int-not-3.0, deny_all still holds).
-- [ ] Review check: As you are delivering this product yourself, are you satisfied with the implementation or should there be revisions to ensure production ready stability? If revision is needed, take corrective action before continuing so the task meets the standard of production ready stability.
+Split into two units verified **independently** — the script-side JS surface (0009.1a) and the editor/model wiring (0009.1b). **Both project the parameter model's declared _defaults_, not live host state.** Reading the live truce `EditorBridge` (`get_param`/`get_param_plain`/`format_param`/`get_meter`) and re-projecting is task 0009.4: the bridge only exists at `Editor::open`, while C2b builds the scene at construction, so defaults-first is the honest staging, not a shortcut.
+
+#### 0009.1a Script-side host projection — ✅ DONE (`cbd24dad`)
+
+- [x] Deliverable: `entry_mount_bootstrap_with_host(source, &HostSnapshot)` regenerates the entry bootstrap with a `__hawk2ui_host` carrying a frozen JSON-literal snapshot (no host-call capability; `deny_all` preserved). String-keyed accessors `host.params`/`host.param(key)` + `host.meters`/`host.meter(key)` — two separate read channels; `host.meter(key)` returns a bare level (meters get no view). `value` typed by kind (float→number, int→integer, bool→boolean, enum→variant index), never flattened to f64. Unknown key throws. Types `HostSnapshot`/`HostParam`/`HostMeter`/`HostParamKind`/`HostParamValue` live in `hawk2ui-script`.
+- [x] Verify: `cargo test -p hawk2ui-script projects_params_and_meters_into_the_entry_host` · `… an_unknown_param_or_meter_key_throws`.
+- [x] Review check: satisfied — pure data projection, deny_all-preserving; gated green.
+
+#### 0009.1b Editor + model→snapshot wiring — ✅ DONE
+
+- [x] Deliverable: `host_snapshot_from_model(&ParameterModel) -> HostSnapshot` in `hawk2ui-build` (the one crate with both `ParameterModel` and `HostSnapshot`; `hawk2ui-plugin-truce` stays decoupled, knowing only the projected type) maps each parameter's _default_ to its typed `HostParam` (kind/value/normalized/text/variants) and meters to their floor `0.0`. Enum-default normalized is computed as `index/(count-1)` — the `Choice` case `ParameterRecord::normalize` rejects, so a last-variant default reads back `1.0` rather than a swallowed `0.0`. `build_editor_scene` and `Hawk2uiTruceEditor::{from_entry_script,try_from_entry_script}` thread a `&HostSnapshot` into `entry_mount_bootstrap_with_host`; the projection set is re-exported from `hawk2ui-plugin-truce`.
+- [x] Dependencies: `0009.1a`, `tasks/0010` complete, Decision 0003 *Accepted*.
+- [x] Verify: `cargo test -p hawk2ui-build editor_host` (kind-typed projection · enum-on-last-variant→normalized 1.0 · meters at floor · **round-trip through the real bootstrap** so the mapping ↔ JS-surface halves meet, not just pass in isolation) · `cargo test -p hawk2ui-plugin-truce projects_the_host_snapshot` (projection reaches the built scene).
+- [x] Review check: satisfied — gated `check-fast` + clippy pedantic clean. The construction-time `&HostSnapshot` arg is expected to migrate to `open()` when 0009.4 moves scene-build there.
 
 ### 0009.2 Write-Back (return-carried edit list, gesture-bracketed, host-threaded state)
 

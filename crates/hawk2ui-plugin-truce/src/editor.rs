@@ -20,6 +20,7 @@ use hawk2ui_host_baseview::{
     BaseviewEditorWindowHandle, BaseviewHostError, BaseviewParentFixture, BaseviewPluginAdapter,
 };
 use hawk2ui_runtime::RuntimeSceneFrame;
+use hawk2ui_script::HostSnapshot;
 use truce_core::editor::{Editor, EditorBridge, PluginContext, RawWindowHandle};
 
 use crate::scene::{EditorSceneError, build_editor_scene, build_error_scene};
@@ -145,14 +146,20 @@ impl Hawk2uiTruceEditor {
     /// (observable through [`Self::has_error`]) instead of failing construction.
     /// Use [`Self::try_from_entry_script`] when the caller wants to inspect or
     /// handle the build error itself.
+    ///
+    /// `snapshot` is projected into the script's `host` (parameters and meters,
+    /// read by string key); pass an empty [`HostSnapshot`] for a paramless
+    /// editor. It carries the model's declared defaults today — re-projecting it
+    /// from the live truce `EditorBridge` is task 0009.4.
     #[must_use]
     pub fn from_entry_script(
         config: PluginEditorConfig,
         compiled_source: &str,
         source_path: &str,
+        snapshot: &HostSnapshot,
     ) -> Self {
         let (width, height) = scene_dimensions(&config);
-        match build_editor_scene(compiled_source, source_path, width, height) {
+        match build_editor_scene(compiled_source, source_path, snapshot, width, height) {
             Ok(scene) => Self::new(config, scene),
             Err(error) => {
                 // The script failed; still present something diagnosable. If even
@@ -170,9 +177,10 @@ impl Hawk2uiTruceEditor {
     ///
     /// The script's `mount` function is executed (see [`build_editor_scene`])
     /// and its returned node tree becomes the initial [`RuntimeSceneFrame`] the
-    /// editor renders, sized to the plugin editor's logical dimensions. No host
-    /// bindings are projected into the script yet — the bridge captured on
-    /// [`Editor::open`] is unused until parameter and meter projection lands.
+    /// editor renders, sized to the plugin editor's logical dimensions.
+    /// `snapshot` is projected into the script's `host` (parameters and meters,
+    /// read by string key), carrying the model's declared defaults; re-projecting
+    /// it from the live [`Editor::open`] bridge is task 0009.4.
     ///
     /// Prefer [`Self::from_entry_script`] at the truce `editor()` boundary, which
     /// cannot propagate a `Result`; reach for this when the caller wants the
@@ -186,9 +194,10 @@ impl Hawk2uiTruceEditor {
         config: PluginEditorConfig,
         compiled_source: &str,
         source_path: &str,
+        snapshot: &HostSnapshot,
     ) -> Result<Self, EditorSceneError> {
         let (width, height) = scene_dimensions(&config);
-        let scene = build_editor_scene(compiled_source, source_path, width, height)?;
+        let scene = build_editor_scene(compiled_source, source_path, snapshot, width, height)?;
         Ok(Self::new(config, scene))
     }
 
@@ -408,6 +417,7 @@ mod tests {
             test_config(),
             "const broken = 1;",
             "src/editor.js",
+            &HostSnapshot::default(),
         );
         assert!(
             editor.scene().is_some(),
@@ -425,6 +435,7 @@ mod tests {
             test_config(),
             "export function mount(host) { return { id: \"root\", type: \"view\" }; }",
             "src/editor.js",
+            &HostSnapshot::default(),
         );
         assert!(editor.scene().is_some());
         assert!(!editor.has_error());
@@ -436,6 +447,7 @@ mod tests {
             test_config(),
             "const broken = 1;",
             "src/editor.js",
+            &HostSnapshot::default(),
         );
         // `Hawk2uiTruceEditor` is not `Debug` (it holds an `Arc<dyn EditorBridge>`),
         // so destructure rather than `expect_err`.
