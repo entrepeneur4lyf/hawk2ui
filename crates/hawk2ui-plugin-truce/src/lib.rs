@@ -34,6 +34,7 @@ pub use hawk2ui_script::{
 };
 
 pub mod editor;
+mod render;
 mod replay;
 mod scene;
 

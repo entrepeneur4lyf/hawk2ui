@@ -20,8 +20,8 @@
 use hawk2ui_layout::Viewport;
 use hawk2ui_runtime::{EntryNode, RuntimeSceneBridge, RuntimeSceneFrame};
 use hawk2ui_script::{
-    HostCallPolicy, HostSnapshot, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy,
-    entry_mount_bootstrap_with_host, parse_entry_envelope,
+    HostCallPolicy, HostEdit, HostSnapshot, ScriptBackend, ScriptModule, StructuredValue,
+    TimerPolicy, entry_mount_bootstrap_with_host, parse_entry_envelope,
 };
 
 /// Error building an editor scene from a compiled entry script.
@@ -62,34 +62,53 @@ impl std::fmt::Display for EditorSceneError {
 
 impl std::error::Error for EditorSceneError {}
 
-/// Builds a renderable editor scene by running a compiled entry script's
-/// `mount` function and converting its serialized node tree into a
-/// [`RuntimeSceneFrame`] sized to `width` x `height` points.
+/// A single built editor frame: the renderable scene the entry produced, plus
+/// the ordered parameter [`HostEdit`]s it emitted and the UI-state blob it
+/// returned (the locked `{ tree, edits, ui }` envelope, split apart). The
+/// construction path ([`build_editor_scene`]) keeps only the scene; the live
+/// render cycle (task 0009.4) replays the edits onto the bridge and persists
+/// `ui_json` to thread back into the next invocation.
+pub(crate) struct EditorFrame {
+    /// The renderable scene built from the entry's view tree.
+    pub(crate) scene: RuntimeSceneFrame,
+    /// The ordered parameter edits the entry emitted this invocation. Read by the
+    /// live render cycle, which the editor wires into its frame loop in 0009.4b;
+    /// the construction path drops it, so it reads as dead until then.
+    #[allow(dead_code)]
+    pub(crate) edits: Vec<HostEdit>,
+    /// The entry's outgoing UI-state blob as a JSON string, to re-embed next
+    /// invocation. Read by the live render cycle (wired in 0009.4b); dead until
+    /// then on the construction path.
+    #[allow(dead_code)]
+    pub(crate) ui_json: String,
+}
+
+/// Runs a compiled entry script's `mount` once and returns the built
+/// [`EditorFrame`] — the scene plus the entry's emitted edits and outgoing UI
+/// state.
 ///
 /// The script runs under [`HostCallPolicy::deny_all`] with deterministic timers.
-/// `snapshot` is projected into the `__hawk2ui_host` the script reads — a frozen,
-/// pure-data view of the plugin's parameters and meters (`host.param(key)`,
-/// `host.meter(key)`); the projection embeds it as a JSON literal, so no host
-/// call is made and `deny_all` is preserved. `snapshot` is the model's declared
-/// defaults today; re-projecting it from the truce `EditorBridge` captured on
-/// [`Editor::open`](truce_core::editor::Editor::open) is task 0009.4. Pass an
-/// empty [`HostSnapshot`] for a paramless editor.
+/// `snapshot` is projected into the `__hawk2ui_host` the script reads (a frozen,
+/// pure-data view of parameters and meters, embedded as a JSON literal — no host
+/// call, `deny_all` preserved), and `incoming_ui` threads the prior invocation's
+/// UI blob (`"null"` for the first frame). The scene is sized to `width` x
+/// `height` points.
 ///
 /// # Errors
 ///
 /// Returns an [`EditorSceneError`] when the script declares no `mount` function,
 /// fails to execute, returns a non-string result, or yields a node tree that
 /// cannot be parsed or converted into a renderable scene.
-pub(crate) fn build_editor_scene(
+pub(crate) fn build_editor_frame(
     compiled_source: &str,
     source_path: &str,
     snapshot: &HostSnapshot,
+    incoming_ui: &str,
     width: f32,
     height: f32,
-) -> Result<RuntimeSceneFrame, EditorSceneError> {
-    // The construction-time scene has no prior UI state to thread (`"null"`); the
-    // live per-frame invocation threads the persisted `ui` blob (task 0009.4).
-    let Some(bootstrap) = entry_mount_bootstrap_with_host(compiled_source, snapshot, "null") else {
+) -> Result<EditorFrame, EditorSceneError> {
+    let Some(bootstrap) = entry_mount_bootstrap_with_host(compiled_source, snapshot, incoming_ui)
+    else {
         return Err(EditorSceneError::new(
             "hawk2ui-truce.editor.no-mount",
             "editor entry script declares no `mount` function to build a scene from",
@@ -121,10 +140,6 @@ pub(crate) fn build_editor_scene(
         ));
     };
 
-    // The entry returns the locked `{ tree, edits, ui }` envelope; the scene only
-    // needs the tree. The `edits` are dropped here because the construction path
-    // has no bridge to replay them onto and no input to have produced them; the
-    // live render loop (task 0009.4) replays edits and persists `ui`.
     let envelope = parse_entry_envelope(envelope_json).map_err(|error| {
         EditorSceneError::new(
             "hawk2ui-truce.editor.invalid-entry-tree",
@@ -140,14 +155,50 @@ pub(crate) fn build_editor_scene(
             format!("{error:?}"),
         )
     })?;
-    RuntimeSceneBridge::new(Viewport::new(width, height))
+    let scene = RuntimeSceneBridge::new(Viewport::new(width, height))
         .build(&tree)
         .map_err(|error| {
             EditorSceneError::new(
                 "hawk2ui-truce.editor.scene-build-failed",
                 format!("{error:?}"),
             )
-        })
+        })?;
+    Ok(EditorFrame {
+        scene,
+        edits: envelope.edits,
+        ui_json: envelope.ui_json,
+    })
+}
+
+/// Builds a renderable editor scene from a compiled entry script, sized to
+/// `width` x `height` points — the construction-time path.
+///
+/// A thin wrapper over [`build_editor_frame`] that keeps only the scene: the
+/// construction path has no prior UI state to thread (so it passes `"null"`) and
+/// no bridge yet to replay the entry's edits onto (so they are dropped). The live
+/// per-frame cycle (task 0009.4) uses [`build_editor_frame`] directly to also
+/// replay edits and persist the UI blob. Pass an empty [`HostSnapshot`] for a
+/// paramless editor.
+///
+/// # Errors
+///
+/// Propagates the [`EditorSceneError`] from [`build_editor_frame`].
+pub(crate) fn build_editor_scene(
+    compiled_source: &str,
+    source_path: &str,
+    snapshot: &HostSnapshot,
+    width: f32,
+    height: f32,
+) -> Result<RuntimeSceneFrame, EditorSceneError> {
+    build_editor_frame(
+        compiled_source,
+        source_path,
+        snapshot,
+        "null",
+        width,
+        height,
+    )
+    .map(|frame| frame.scene)
 }
 
 /// Builds a legible fallback scene that displays `message`.
