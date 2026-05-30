@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use hawk2ui_build::emit_truce_params_struct;
-use hawk2ui_plugin::{MeterRecord, ParameterModel, ParameterRange, ParameterRecord};
+use hawk2ui_plugin::{EnumVariant, MeterRecord, ParameterModel, ParameterRange, ParameterRecord};
 use truce::params::{ParamRange, ParamUnit, ParamValueKind, Params};
 use truce_core::editor::for_test_params;
 
@@ -29,7 +29,8 @@ mod golden {
 }
 
 /// The model the golden fixture was generated from: one of every emitted kind
-/// (float, ranged float with a unit, integer, boolean) plus a meter.
+/// (float, ranged float with a unit, integer, boolean, indexed-choice enum)
+/// plus a meter.
 fn spike_model() -> ParameterModel {
     ParameterModel::new([
         ParameterRecord::numeric("osc.mix", "Osc Mix", "", ParameterRange::new(0.0, 1.0, 0.4)),
@@ -41,6 +42,16 @@ fn spike_model() -> ParameterModel {
         ),
         ParameterRecord::integer("voices", "Voices", "", ParameterRange::new(1.0, 8.0, 4.0)),
         ParameterRecord::boolean("bypass", "Bypass", false),
+        ParameterRecord::enumerated(
+            "osc.shape",
+            "Osc Shape",
+            1,
+            [
+                EnumVariant::new("sine", "Sine"),
+                EnumVariant::new("saw", "Saw"),
+                EnumVariant::new("square-pulse", "Square / Pulse"),
+            ],
+        ),
     ])
     .with_meters([MeterRecord::new("output.level", "Output Level")])
 }
@@ -63,7 +74,7 @@ fn emitter_reproduces_compiled_golden() {
 fn generated_params_expose_truce_infos() {
     let params = golden::SpikeParams::default();
     let infos = params.param_infos();
-    assert_eq!(infos.len(), 4, "expected the four emitted parameters");
+    assert_eq!(infos.len(), 5, "expected the five emitted parameters");
 
     assert_eq!(infos[0].id, 0);
     assert_eq!(infos[0].name, "Osc Mix");
@@ -101,6 +112,18 @@ fn generated_params_expose_truce_infos() {
     );
     assert!(approx(infos[3].default_plain, 0.0));
 
+    // osc.shape is an EnumParam over the generated ParamEnum; truce derives the
+    // Enum{count} range from the type and the default is the variant index.
+    assert_eq!(infos[4].id, 4);
+    assert_eq!(infos[4].name, "Osc Shape");
+    assert_eq!(infos[4].kind, ParamValueKind::Enum);
+    assert!(
+        matches!(infos[4].range, ParamRange::Enum { count } if count == 3),
+        "osc.shape range was {:?}",
+        infos[4].range
+    );
+    assert!(approx(infos[4].default_plain, 1.0));
+
     // The meter lives in the same struct but outside param_infos; truce assigns
     // it an id in the reserved high meter space (METER_ID_BASE = 1 << 24).
     let meter_ids = params.meter_ids();
@@ -133,4 +156,9 @@ fn generated_params_read_back_through_the_bridge_by_id() {
 
     // bypass: boolean, default false.
     assert!(approx(bridge.get_param_plain(3), 0.0));
+
+    // osc.shape: enum, default index 1 → "Saw"; the plain value is the index,
+    // and truce formats an enum param by its current variant's name.
+    assert!(approx(bridge.get_param_plain(4), 1.0));
+    assert_eq!(bridge.format_param(4), "Saw");
 }

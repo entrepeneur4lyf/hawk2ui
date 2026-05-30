@@ -15,6 +15,31 @@ pub enum ParameterValue {
     Int(i64),
 }
 
+/// A named variant of an indexed-choice (enum) parameter.
+///
+/// `id` is a stable identifier from which the codegen derives the Rust variant
+/// identifier; `display_name` is what the host shows (and what truce's
+/// `ParamEnum::name` returns). Variants are addressed by their 0-based
+/// declaration index, the value carried by [`ParameterValue::Choice`].
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EnumVariant {
+    /// Stable string identifier.
+    pub id: String,
+    /// Display name.
+    pub display_name: String,
+}
+
+impl EnumVariant {
+    /// Creates an enum variant.
+    #[must_use]
+    pub fn new(id: impl Into<String>, display_name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            display_name: display_name.into(),
+        }
+    }
+}
+
 /// Parameter numeric range.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ParameterRange {
@@ -188,6 +213,13 @@ pub struct ParameterRecord {
     pub flags: ParameterFlags,
     /// Optional group identifier.
     pub group_id: Option<String>,
+    /// Named variants for an indexed-choice (enum) parameter.
+    ///
+    /// Non-empty exactly when `default_value` is [`ParameterValue::Choice`];
+    /// empty for every other kind. `#[serde(default)]` keeps records written
+    /// before enum support deserializing unchanged.
+    #[serde(default)]
+    pub variants: Vec<EnumVariant>,
 }
 
 impl ParameterRecord {
@@ -210,6 +242,7 @@ impl ParameterRecord {
             smoothing: None,
             flags: ParameterFlags::default(),
             group_id: None,
+            variants: Vec::new(),
         }
     }
 
@@ -237,6 +270,7 @@ impl ParameterRecord {
             smoothing: None,
             flags: ParameterFlags::default(),
             group_id: None,
+            variants: Vec::new(),
         }
     }
 
@@ -258,6 +292,36 @@ impl ParameterRecord {
             smoothing: None,
             flags: ParameterFlags::default(),
             group_id: None,
+            variants: Vec::new(),
+        }
+    }
+
+    /// Creates an indexed-choice (enum) parameter with named variants.
+    ///
+    /// `default_index` selects the initial variant. The caller (the manifest
+    /// validator, or a test) is responsible for non-empty `variants` with
+    /// unique stable ids and `default_index < variants.len()`;
+    /// [`ParameterModel::validate`] re-checks these invariants.
+    #[must_use]
+    pub fn enumerated(
+        id: impl Into<String>,
+        display_name: impl Into<String>,
+        default_index: u32,
+        variants: impl IntoIterator<Item = EnumVariant>,
+    ) -> Self {
+        let variants: Vec<EnumVariant> = variants.into_iter().collect();
+        Self {
+            id: id.into(),
+            display_name: display_name.into(),
+            unit: String::new(),
+            range: None,
+            default_value: ParameterValue::Choice(default_index),
+            distribution: ParameterDistribution::Linear,
+            steps: u32::try_from(variants.len()).ok(),
+            smoothing: None,
+            flags: ParameterFlags::default(),
+            group_id: None,
+            variants,
         }
     }
 
@@ -358,7 +422,10 @@ impl ParameterRecord {
             ParameterValue::Int(value) if self.unit.is_empty() => Ok(value.to_string()),
             ParameterValue::Int(value) => Ok(format!("{value} {}", self.unit)),
             ParameterValue::Bool(value) => Ok(value.to_string()),
-            ParameterValue::Choice(value) => Ok(value.to_string()),
+            ParameterValue::Choice(value) => Ok(usize::try_from(*value)
+                .ok()
+                .and_then(|index| self.variants.get(index))
+                .map_or_else(|| value.to_string(), |variant| variant.display_name.clone())),
         }
     }
 
@@ -551,6 +618,9 @@ impl ParameterModel {
                     format!("parameter {} has zero discrete steps", parameter.id),
                 ));
             }
+            // Enum integrity (variants present iff `Choice`, default in range,
+            // ids non-empty/stable/unique) — extracted to keep this loop legible.
+            validate_enum_variants(parameter, &mut errors);
         }
         // Parameter ids must be unique: host automation and `parameter_state` (a `BTreeMap` keyed
         // by id) collapse duplicates, silently aliasing one parameter's value onto another. The
@@ -579,6 +649,62 @@ impl ParameterModel {
     #[must_use]
     pub fn group_path(&self, id: &str) -> Option<&ParameterGroup> {
         self.groups.iter().find_map(|group| group.find(id))
+    }
+}
+
+/// Validates the enum-variant invariants for one parameter: variants are
+/// present exactly for a [`ParameterValue::Choice`] value, the default index is
+/// in range, and variant ids are non-empty, stable, and unique. The codegen
+/// derives a Rust enum and variant identifiers from these, so a broken set
+/// would emit source that does not compile or panics at construction.
+fn validate_enum_variants(parameter: &ParameterRecord, errors: &mut Vec<ParameterValidationError>) {
+    let ParameterValue::Choice(index) = parameter.default_value else {
+        if !parameter.variants.is_empty() {
+            errors.push(ParameterValidationError::new(
+                "parameter.variants.unexpected",
+                format!(
+                    "parameter {} declares variants but is not an enum",
+                    parameter.id
+                ),
+            ));
+        }
+        return;
+    };
+    let count = parameter.variants.len();
+    if count == 0 {
+        errors.push(ParameterValidationError::new(
+            "parameter.enum.no-variants",
+            format!("enum parameter {} declares no variants", parameter.id),
+        ));
+    } else if usize::try_from(index).is_ok_and(|i| i >= count) {
+        errors.push(ParameterValidationError::new(
+            "parameter.enum.default-out-of-range",
+            format!(
+                "enum parameter {} default index {index} is outside its {count} variant(s)",
+                parameter.id
+            ),
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for variant in &parameter.variants {
+        if !is_stable_id(&variant.id) {
+            errors.push(ParameterValidationError::new(
+                "parameter.enum.variant-id-invalid",
+                format!(
+                    "enum parameter {} variant id is invalid: {}",
+                    parameter.id, variant.id
+                ),
+            ));
+        }
+        if !seen.insert(variant.id.clone()) {
+            errors.push(ParameterValidationError::new(
+                "parameter.enum.variant-id-duplicate",
+                format!(
+                    "enum parameter {} variant id is not unique: {}",
+                    parameter.id, variant.id
+                ),
+            ));
+        }
     }
 }
 
