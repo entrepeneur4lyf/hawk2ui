@@ -2,9 +2,11 @@
 
 use std::collections::BTreeSet;
 
-use hawk2ui_plugin::{MeterRecord, ParameterModel, ParameterRange, ParameterRecord};
+use hawk2ui_plugin::{EnumVariant, MeterRecord, ParameterModel, ParameterRange, ParameterRecord};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::param_codegen::pascal_ident;
 
 /// Supported package target class.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -154,6 +156,8 @@ pub enum PluginParameterKind {
     Int,
     /// Boolean on/off parameter.
     Bool,
+    /// Indexed-choice parameter with named variants.
+    Enum,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -163,7 +167,7 @@ pub struct PluginParameter {
     pub id: String,
     /// Display name.
     pub name: String,
-    /// Value kind: `float` (default), `int`, or `bool`.
+    /// Value kind: `float` (default), `int`, `bool`, or `enum`.
     #[serde(default)]
     pub kind: PluginParameterKind,
     /// Minimum plain value.
@@ -172,11 +176,25 @@ pub struct PluginParameter {
     /// Maximum plain value.
     #[serde(default = "unit_interval_max")]
     pub max: f64,
-    /// Default plain value, inside `[min, max]`.
+    /// Default plain value. For numeric kinds it is a plain value inside
+    /// `[min, max]`; for an `enum` it is the 0-based index into `variants`.
     pub default: f64,
     /// Host-display unit label, or empty when unitless.
     #[serde(default)]
     pub unit: String,
+    /// Named variants for an `enum` parameter; empty for every other kind.
+    #[serde(default)]
+    pub variants: Vec<PluginEnumVariant>,
+}
+
+/// A named variant of an `enum` parameter.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginEnumVariant {
+    /// Variant ID (the codegen derives the Rust variant identifier from it).
+    pub id: String,
+    /// Display name.
+    pub name: String,
 }
 
 /// Plugin meter metadata.
@@ -309,6 +327,17 @@ impl HawkManifest {
                     parameter.name.clone(),
                     parameter.default >= 0.5,
                 ),
+                // Validation guarantees an in-range integer default and a
+                // non-empty, unique variant set.
+                PluginParameterKind::Enum => ParameterRecord::enumerated(
+                    parameter.id.clone(),
+                    parameter.name.clone(),
+                    enum_default_index(parameter.default),
+                    parameter
+                        .variants
+                        .iter()
+                        .map(|variant| EnumVariant::new(variant.id.clone(), variant.name.clone())),
+                ),
             }
         }))
         .with_meters(
@@ -354,6 +383,7 @@ impl HawkManifest {
                 return Err(ManifestError::InvalidPluginParameter(parameter.id.clone()));
             }
             validate_parameter_kind(parameter)?;
+            validate_enum_variants(parameter)?;
             if !plugin_ids.insert(parameter.id.clone()) {
                 return Err(ManifestError::DuplicateParameter(parameter.id.clone()));
             }
@@ -459,6 +489,53 @@ fn validate_parameter_kind(parameter: &PluginParameter) -> Result<(), ManifestEr
                 return Err(reject());
             }
         }
+        PluginParameterKind::Enum => {
+            // An enum carries no unit, needs at least two variants, and its
+            // default is a 0-based index into them. (Per-variant id/name/
+            // uniqueness is checked in `validate`, which can derive the Rust
+            // identifiers and report each offending variant precisely.)
+            if !parameter.unit.is_empty()
+                || parameter.variants.len() < 2
+                || !is_valid_enum_default(parameter.default, parameter.variants.len())
+            {
+                return Err(reject());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates the variant set of a parameter: variants belong only to the `Enum`
+/// kind, and each enum variant has a non-empty name and an id that yields a
+/// unique, non-empty Rust identifier under the codegen's `pascal_ident`.
+///
+/// Checking the *derived* identifier (not the raw id) is the load-bearing guard:
+/// two distinct ids that collapse to the same identifier — e.g. `low-pass` and
+/// `low_pass` both `LowPass` — or an exact duplicate would emit a
+/// `#[derive(ParamEnum)]` enum with duplicate variants that fails to compile.
+/// Rejecting here surfaces a clear diagnostic instead of a rustc error from
+/// generated source. (Derived-identifier uniqueness across top-level
+/// parameter/meter field names is a separate, pre-existing gap, tracked apart
+/// from enum support.)
+fn validate_enum_variants(parameter: &PluginParameter) -> Result<(), ManifestError> {
+    if parameter.kind != PluginParameterKind::Enum {
+        return if parameter.variants.is_empty() {
+            Ok(())
+        } else {
+            Err(ManifestError::InvalidPluginParameter(parameter.id.clone()))
+        };
+    }
+    let mut derived_idents = BTreeSet::new();
+    for variant in &parameter.variants {
+        require_non_empty("variant.id", &variant.id)?;
+        require_non_empty("variant.name", &variant.name)?;
+        let ident = pascal_ident(&variant.id);
+        if !is_stable_id(&variant.id) || ident.is_empty() {
+            return Err(ManifestError::InvalidEnumVariant(variant.id.clone()));
+        }
+        if !derived_idents.insert(ident) {
+            return Err(ManifestError::CollidingEnumVariant(variant.id.clone()));
+        }
     }
     Ok(())
 }
@@ -476,6 +553,23 @@ fn is_finite_range(min: f64, max: f64, default: f64) -> bool {
 /// Whether a value has no fractional part (an exact integer).
 fn is_integer_valued(value: f64) -> bool {
     value.fract() == 0.0
+}
+
+/// Converts a validated enum default (a non-negative integer-valued plain value)
+/// to a 0-based variant index. A stray fractional or negative value saturates to
+/// `0` rather than panicking; `validate` rejects such values up front.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn enum_default_index(default: f64) -> u32 {
+    default.max(0.0) as u32
+}
+
+/// Whether `default` is a valid 0-based variant index for an enum with `count`
+/// variants: a non-negative integer strictly less than `count`.
+#[allow(clippy::cast_possible_truncation)]
+fn is_valid_enum_default(default: f64, count: usize) -> bool {
+    is_integer_valued(default)
+        && default >= 0.0
+        && usize::try_from(default as i64).is_ok_and(|index| index < count)
 }
 
 /// Manifest validation error.
@@ -505,6 +599,11 @@ pub enum ManifestError {
     InvalidPluginParameter(String),
     /// Invalid plugin meter metadata.
     InvalidPluginMeter(String),
+    /// Invalid enum parameter variant (id is empty, not a stable identifier, or
+    /// derives an empty Rust identifier).
+    InvalidEnumVariant(String),
+    /// Two enum variants share an id or derive the same Rust identifier.
+    CollidingEnumVariant(String),
     /// Manifest failed generated JSON Schema validation.
     SchemaValidation {
         /// JSON pointer to the invalid manifest value.

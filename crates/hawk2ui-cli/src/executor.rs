@@ -1024,6 +1024,16 @@ fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {
             "manifest.meter.invalid",
             format!("invalid plugin meter declaration: {meter}"),
         ),
+        ManifestError::InvalidEnumVariant(variant) => CliDiagnostic::error(
+            "manifest.parameter.enum.variant-invalid",
+            format!("invalid enum parameter variant: {variant}"),
+        ),
+        ManifestError::CollidingEnumVariant(variant) => CliDiagnostic::error(
+            "manifest.parameter.enum.variant-collision",
+            format!(
+                "enum parameter variant id collides with another (same generated identifier): {variant}"
+            ),
+        ),
         ManifestError::SchemaValidation { path, message } => CliDiagnostic::error(
             "manifest.schema.invalid",
             format!(

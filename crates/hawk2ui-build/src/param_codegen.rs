@@ -179,7 +179,12 @@ fn enum_type_name(struct_name: &str, parameter_id: &str) -> String {
 /// Derives a `PascalCase` Rust identifier from a stable id by upper-casing the
 /// first letter of each `[a-z0-9._-]`-separated segment. A leading digit is
 /// prefixed with `_` so the result is always a legal identifier.
-fn pascal_ident(id: &str) -> String {
+///
+/// Crate-visible so the manifest validator can reject two distinct variant ids
+/// that derive the same enum-variant identifier (which would emit a
+/// `#[derive(ParamEnum)]` enum with duplicate variants that fails to compile)
+/// before codegen ever runs.
+pub(crate) fn pascal_ident(id: &str) -> String {
     let mut ident = String::new();
     for segment in id.split(|ch: char| !ch.is_ascii_alphanumeric()) {
         let mut chars = segment.chars();

@@ -269,6 +269,66 @@ name = "Output Level"
     );
 }
 
+#[test]
+fn workspace_export_params_emits_enum_param_source() {
+    let root = temp_cli_workspace("export-params-enum");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.export-enum"
+name = "Export Enum"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.export-enum"
+name = "Export Enum"
+
+[[parameters]]
+id = "osc.shape"
+name = "Osc Shape"
+kind = "enum"
+default = 1.0
+
+[[parameters.variants]]
+id = "sine"
+name = "Sine"
+
+[[parameters.variants]]
+id = "square-pulse"
+name = "Square / Pulse"
+"#,
+    );
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::ExportParams);
+
+    assert_eq!(execution.exit_code, CliExitCode::Success);
+    // The choice parameter emits a generated `#[derive(ParamEnum)]` type
+    // (named after the struct) and an `EnumParam<...>` field referencing it.
+    assert!(
+        execution.stdout.contains("#[derive(ParamEnum)]")
+            && execution.stdout.contains("pub enum PluginParamsOscShape {"),
+        "enum type should be generated: {}",
+        execution.stdout
+    );
+    assert!(
+        execution.stdout.contains("#[name = \"Square / Pulse\"]")
+            && execution.stdout.contains("SquarePulse,"),
+        "variant display name should be emitted: {}",
+        execution.stdout
+    );
+    assert!(
+        execution
+            .stdout
+            .contains("pub osc_shape: EnumParam<PluginParamsOscShape>,"),
+        "enum field should reference the generated type: {}",
+        execution.stdout
+    );
+}
+
 use hawk2ui_cli::{CliDiagnostic, DiagnosticSeverity, SourceSpan};
 
 #[test]

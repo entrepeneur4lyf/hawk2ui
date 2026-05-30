@@ -599,6 +599,125 @@ name = "Output Level"
     );
 }
 
+const ENUM_PARAMS_MANIFEST: &str = r#"
+[identity]
+id = "com.hawk2ui.enum"
+name = "Enum"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.enum"
+name = "Enum"
+
+[[parameters]]
+id = "osc.shape"
+name = "Osc Shape"
+kind = "enum"
+default = 1.0
+
+[[parameters.variants]]
+id = "sine"
+name = "Sine"
+
+[[parameters.variants]]
+id = "saw"
+name = "Saw"
+
+[[parameters.variants]]
+id = "square-pulse"
+name = "Square / Pulse"
+"#;
+
+#[test]
+fn manifest_parameter_model_covers_enum_kind() {
+    let manifest = HawkManifest::parse(ENUM_PARAMS_MANIFEST).expect("enum manifest parses");
+    let model = manifest.parameter_model();
+    model
+        .validate()
+        .expect("the generated parameter model is valid");
+    assert_eq!(model.parameters.len(), 1);
+
+    let shape = &model.parameters[0];
+    assert_eq!(shape.id, "osc.shape");
+    // The enum default is the 0-based variant index, carried as a Choice value.
+    assert_eq!(shape.default_value, ParameterValue::Choice(1));
+    assert_eq!(shape.variants.len(), 3);
+    assert_eq!(shape.variants[0].id, "sine");
+    assert_eq!(shape.variants[2].id, "square-pulse");
+    assert_eq!(shape.variants[2].display_name, "Square / Pulse");
+}
+
+#[test]
+fn manifest_validation_rejects_invalid_plugin_enums() {
+    let single = r#"
+[identity]
+id = "com.hawk2ui.bad-enum"
+name = "Bad Enum"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.bad-enum"
+name = "Bad Enum"
+
+[[parameters]]
+id = "osc.shape"
+name = "Osc Shape"
+kind = "enum"
+default = 1.0
+
+[[parameters.variants]]
+id = "sine"
+name = "Sine"
+
+[[parameters.variants]]
+id = "saw"
+name = "Saw"
+"#;
+    // A default index beyond the variant range would panic at truce
+    // `EnumParam` construction, so the manifest is the compile-time gate.
+    let default_out_of_range = single.replace("default = 1.0", "default = 5.0");
+    // A fractional enum default is not a variant index.
+    let fractional_default = single.replace("default = 1.0", "default = 0.5");
+    // An enum needs at least two variants to be meaningful.
+    let one_variant = single.replace(
+        "\n\n[[parameters.variants]]\nid = \"saw\"\nname = \"Saw\"",
+        "",
+    );
+    // Variant ids must form a valid Rust identifier.
+    let invalid_variant = single.replace("id = \"saw\"", "id = \"Bad Variant\"");
+    // Two ids that derive the same identifier (`sine`, `sine-` -> `Sine`) collide.
+    let colliding_variant = single.replace("id = \"saw\"", "id = \"sine-\"");
+
+    assert_eq!(
+        HawkManifest::parse(&default_out_of_range)
+            .expect_err("enum default beyond the variant range must fail"),
+        ManifestError::InvalidPluginParameter("osc.shape".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&fractional_default).expect_err("fractional enum default must fail"),
+        ManifestError::InvalidPluginParameter("osc.shape".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&one_variant).expect_err("a single-variant enum must fail"),
+        ManifestError::InvalidPluginParameter("osc.shape".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&invalid_variant).expect_err("a non-identifier variant id must fail"),
+        ManifestError::InvalidEnumVariant("Bad Variant".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&colliding_variant)
+            .expect_err("variant ids deriving the same identifier must fail"),
+        ManifestError::CollidingEnumVariant("sine-".into())
+    );
+}
+
 #[test]
 fn sealed_artifact_hashes_manifest_snapshot_stably() {
     let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
