@@ -1,7 +1,9 @@
 #![cfg(target_os = "linux")]
-//! Gated native smoke: drives [`Hawk2uiTruceEditor::open`] against a real X11
-//! parent and asserts the editor presents at least one frame and captures the
-//! host bridge. Mirrors `hawk2ui-host-baseview`'s `native_parented_smoke`; set
+//! Gated native smoke: builds the editor scene from a compiled entry script
+//! (the `from_entry_script` path — boa runs the script's `mount`), drives
+//! [`Hawk2uiTruceEditor::open`] against a real X11 parent, and asserts the
+//! editor presents at least one frame and captures the host bridge. Mirrors
+//! `hawk2ui-host-baseview`'s `native_parented_smoke`; set
 //! `HAWK2UI_NATIVE_BASEVIEW_SMOKE=1` (with a live X server) to actually run it.
 
 use std::sync::Arc;
@@ -9,13 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hawk2ui_host::{PluginEditorConfig, PluginParentHandle, SurfaceMetrics};
-use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_plugin_truce::Hawk2uiTruceEditor;
-use hawk2ui_render::Color;
-use hawk2ui_runtime::{
-    RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
-    RuntimeVisual,
-};
 use truce::prelude::{FloatParam, Params};
 use truce_core::editor::{Editor, RawWindowHandle, for_test_params};
 use x11rb::{
@@ -52,7 +48,9 @@ fn truce_editor_opens_real_x11_window_and_presents_when_smoke_enabled() {
     }
 
     let parent = X11ParentWindow::open().expect("x11 parent window opens");
-    let mut editor = Hawk2uiTruceEditor::new(editor_config(), editor_scene());
+    let mut editor =
+        Hawk2uiTruceEditor::from_entry_script(editor_config(), ENTRY_SOURCE, "src/editor.js")
+            .expect("editor builds a scene from the entry script");
 
     let params: Arc<dyn truce_params::Params> = Arc::new(TestParams::default());
     editor.open(
@@ -89,17 +87,21 @@ fn editor_config() -> PluginEditorConfig {
     )
 }
 
-fn editor_scene() -> RuntimeSceneFrame {
-    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
-        RuntimeViewId::new("native-truce-editor-root"),
-        LayoutStyle::flex_container(FlexDirection::Column)
-            .with_size(LayoutSizing::fixed(320.0, 180.0)),
-        RuntimeVisual::Fill(Color::rgba(32, 96, 180, 255)),
-    ));
-    RuntimeSceneBridge::new(Viewport::new(320.0, 180.0))
-        .build(&tree)
-        .expect("native truce editor smoke scene builds")
+/// Entry script whose `mount` returns the editor's root view — a blue fill with
+/// a title — driven through the real `from_entry_script` → boa → scene path so
+/// the smoke renders a from-script scene rather than a hand-built one.
+const ENTRY_SOURCE: &str = r##"
+export function mount(host) {
+    return {
+        id: "native-truce-editor-root",
+        type: "view",
+        props: { backgroundColor: "#2060b4" },
+        children: [
+            { id: "native-truce-editor-title", type: "text", text: "Hawk2UI plugin editor" }
+        ]
+    };
 }
+"##;
 
 struct X11ParentWindow {
     connection: RustConnection,

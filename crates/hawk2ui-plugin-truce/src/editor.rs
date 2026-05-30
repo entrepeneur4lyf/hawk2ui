@@ -22,6 +22,8 @@ use hawk2ui_host_baseview::{
 use hawk2ui_runtime::RuntimeSceneFrame;
 use truce_core::editor::{Editor, EditorBridge, PluginContext, RawWindowHandle};
 
+use crate::scene::{EditorSceneError, build_editor_scene};
+
 /// Stable parent-fixture identifier for the truce editor surface.
 const EDITOR_FIXTURE_ID: &str = "hawk2ui-truce-editor";
 
@@ -98,10 +100,15 @@ pub struct Hawk2uiTruceEditor {
 }
 
 impl Hawk2uiTruceEditor {
-    /// Creates an editor that renders `scene` for the plugin described by
-    /// `config`.
+    /// Creates an editor that renders a pre-built `scene` for the plugin
+    /// described by `config`.
+    ///
+    /// Crate-internal: the public entry point is [`Self::from_entry_script`],
+    /// which builds the scene from the author's compiled entry script. This
+    /// lower-level constructor is retained for the in-crate tests that supply a
+    /// hand-built scene.
     #[must_use]
-    pub fn new(config: PluginEditorConfig, scene: RuntimeSceneFrame) -> Self {
+    pub(crate) fn new(config: PluginEditorConfig, scene: RuntimeSceneFrame) -> Self {
         let size = logical_size(&config);
         Self {
             config,
@@ -113,6 +120,32 @@ impl Hawk2uiTruceEditor {
             presented_frames: Arc::new(AtomicU64::new(0)),
             last_error: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Creates an editor whose scene is built by running the plugin's compiled
+    /// entry script.
+    ///
+    /// The script's `mount` function is executed (see [`build_editor_scene`])
+    /// and its returned node tree becomes the initial [`RuntimeSceneFrame`] the
+    /// editor renders, sized to the plugin editor's logical dimensions. No host
+    /// bindings are projected into the script yet — the bridge captured on
+    /// [`Editor::open`] is unused until parameter and meter projection lands.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EditorSceneError`] when the entry script cannot be executed
+    /// or its result cannot be converted into a renderable scene.
+    pub fn from_entry_script(
+        config: PluginEditorConfig,
+        compiled_source: &str,
+        source_path: &str,
+    ) -> Result<Self, EditorSceneError> {
+        let (width, height) = logical_size(&config);
+        // Editor logical dimensions are small point values; widening them to
+        // f32 for the scene viewport cannot lose meaningful precision.
+        #[allow(clippy::cast_precision_loss)]
+        let scene = build_editor_scene(compiled_source, source_path, width as f32, height as f32)?;
+        Ok(Self::new(config, scene))
     }
 
     /// The runtime scene this editor renders.

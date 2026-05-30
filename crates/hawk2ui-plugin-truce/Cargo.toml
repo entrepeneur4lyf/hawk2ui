@@ -25,10 +25,13 @@ truce-core = "0.49.14"
 truce-params = "0.49.14"
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-host-baseview = { version = "0.1.0", path = "../hawk2ui-host-baseview" }
+hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
+# Drives the author's compiled entry script (boa) to build the editor scene.
+# This crate only *calls* the script engine; `unsafe_code = "forbid"` stays.
+hawk2ui-script = { version = "0.1.0", path = "../hawk2ui-script" }
 
 [dev-dependencies]
-hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
 
 # Test-only: the sealed `Params` trait can only be produced by `#[derive(Params)]`,

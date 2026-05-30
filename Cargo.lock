@@ -24,7 +24,7 @@ version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5351dcebb14b579ccab05f288596b2ae097005be7ee50a7c3d4ca9d0d5a66f6a"
 dependencies = [
- "uuid",
+ "uuid 1.23.1",
 ]
 
 [[package]]
@@ -181,6 +181,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "raw-window-handle 0.5.2",
+ "uuid 0.8.2",
  "windows 0.61.3",
  "windows-core 0.61.2",
  "windows-sys 0.61.2",
@@ -1608,6 +1609,7 @@ dependencies = [
  "ed25519-dalek",
  "hawk2ui-api",
  "hawk2ui-assets",
+ "hawk2ui-plugin",
  "hawk2ui-script",
  "hawk2ui-style",
  "image",
@@ -1617,6 +1619,8 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "toml 0.8.23",
+ "truce",
+ "truce-core",
 ]
 
 [[package]]
@@ -1755,8 +1759,10 @@ dependencies = [
  "hawk2ui-render-skia",
  "hawk2ui-runtime",
  "keyboard-types",
+ "libc",
  "raw-window-handle 0.5.2",
  "serde_json",
+ "skia-safe",
  "x11rb",
 ]
 
@@ -1845,6 +1851,7 @@ dependencies = [
  "hawk2ui-layout",
  "hawk2ui-render",
  "hawk2ui-runtime",
+ "hawk2ui-script",
  "truce",
  "truce-core",
  "truce-params",
@@ -2836,6 +2843,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
+ "objc2-open-gl",
  "objc2-quartz-core 0.3.2",
 ]
 
@@ -2996,6 +3004,15 @@ dependencies = [
  "block2 0.5.1",
  "objc2 0.5.2",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-open-gl"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ecc7fd7519a189d9ba9ed9de51af81e41d096aea1d08cca59fd9d8c65d8f585"
+dependencies = [
+ "objc2 0.6.4",
 ]
 
 [[package]]
@@ -5237,6 +5254,15 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
+
+[[package]]
+name = "uuid"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
+dependencies = [
+ "getrandom 0.2.17",
+]
 
 [[package]]
 name = "uuid"
