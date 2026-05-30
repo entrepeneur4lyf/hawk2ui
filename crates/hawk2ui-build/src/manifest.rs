@@ -7,6 +7,7 @@ use hawk2ui_plugin::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use toml_edit::DocumentMut;
 
 use crate::param_codegen::{field_ident, pascal_ident};
 
@@ -705,4 +706,72 @@ fn validate_manifest_schema(input: &str) -> Result<(), ManifestError> {
             path: error.instance_path().as_str().to_string(),
             message: error.to_string(),
         })
+}
+
+/// Outcome of [`pin_param_ids`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PinParamIds {
+    /// One or more parameters were assigned a numeric id; carries the rewritten
+    /// manifest text (comments and formatting preserved) and the assignments.
+    Pinned {
+        /// The rewritten `manifest.hawk.toml` contents.
+        source: String,
+        /// Each newly pinned `(parameter string id, assigned numeric id)`, in
+        /// declaration order.
+        assigned: Vec<(String, u32)>,
+    },
+    /// Every parameter already had a pinned id; nothing changed.
+    Unchanged,
+}
+
+/// Assigns a stable numeric `param_id` to every `[[parameter]]` that lacks one,
+/// preserving the manifest's comments and formatting.
+///
+/// Unpinned parameters take the ids [`ParameterModel::resolved_param_ids`]
+/// computes (lowest-free in declaration order, avoiding any author-pinned id),
+/// so the result is exactly what the codegen would emit — only now it is written
+/// into the manifest, pinning it against future reorders. Idempotent: a manifest
+/// whose parameters are all pinned returns [`PinParamIds::Unchanged`].
+///
+/// # Errors
+///
+/// Returns [`ManifestError`] when `source` is not a valid Hawk manifest — it is
+/// parsed and validated before any rewrite, so an invalid manifest is never
+/// mutated.
+pub fn pin_param_ids(source: &str) -> Result<PinParamIds, ManifestError> {
+    let manifest = HawkManifest::parse(source)?;
+    let resolved = manifest.parameter_model().resolved_param_ids();
+
+    let mut document = source
+        .parse::<DocumentMut>()
+        .map_err(|error| ManifestError::Parse(error.to_string()))?;
+    let Some(parameters) = document
+        .get_mut("parameters")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    else {
+        return Ok(PinParamIds::Unchanged);
+    };
+
+    let mut assigned = Vec::new();
+    for (index, table) in parameters.iter_mut().enumerate() {
+        if table.contains_key("param_id") {
+            continue;
+        }
+        let (Some(&param_id), Some(parameter)) =
+            (resolved.get(index), manifest.parameters.get(index))
+        else {
+            continue;
+        };
+        table.insert("param_id", toml_edit::value(i64::from(param_id)));
+        assigned.push((parameter.id.clone(), param_id));
+    }
+
+    if assigned.is_empty() {
+        Ok(PinParamIds::Unchanged)
+    } else {
+        Ok(PinParamIds::Pinned {
+            source: document.to_string(),
+            assigned,
+        })
+    }
 }

@@ -13,7 +13,8 @@ use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits, AssetRecord};
 use hawk2ui_build::{
     ArtifactSchemaVersion, ArtifactSignaturePolicy, AssetCompilationError, BuildDiagnostic,
     BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput, CompiledScriptRecord, HawkManifest,
-    ManifestError, PackageTarget, SealedArtifact, SealedArtifactError, emit_truce_params_struct,
+    ManifestError, PackageTarget, PinParamIds, SealedArtifact, SealedArtifactError,
+    emit_truce_params_struct, pin_param_ids,
 };
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
@@ -171,6 +172,7 @@ impl WorkspaceCommandRunner {
             CliCommand::PackagePlugin => self.package_plugin(),
             CliCommand::ExportSchemas => Self::export_schemas(),
             CliCommand::ExportParams => self.export_params(),
+            CliCommand::PinIds => self.pin_ids(),
             CliCommand::Diagnostics => self.diagnostics(),
             CliCommand::Explain => self.explain(),
         }
@@ -202,10 +204,21 @@ impl WorkspaceCommandRunner {
 
     fn validate(&self) -> CommandExecution {
         match self.build_workspace() {
-            Ok(output) => CommandExecution::success(format!(
-                "validated manifest {}\n",
-                output.manifest.identity.id
-            )),
+            Ok(output) => {
+                let stdout = format!("validated manifest {}\n", output.manifest.identity.id);
+                let warnings = unpinned_param_id_warnings(&output.manifest, &self.manifest_path());
+                if warnings.is_empty() {
+                    CommandExecution::success(stdout)
+                } else {
+                    let stderr = render_diagnostics(&warnings);
+                    CommandExecution {
+                        exit_code: CliExitCode::Success,
+                        stdout,
+                        stderr,
+                        diagnostics: warnings,
+                    }
+                }
+            }
             Err(execution) => execution,
         }
     }
@@ -772,6 +785,33 @@ impl WorkspaceCommandRunner {
         CommandExecution::success(emit_truce_params_struct("PluginParams", &model))
     }
 
+    fn pin_ids(&self) -> CommandExecution {
+        let manifest_path = self.manifest_path();
+        let source = match fs::read_to_string(&manifest_path) {
+            Ok(source) => source,
+            Err(error) => return io_failure("manifest.read-failed", &manifest_path, &error),
+        };
+        match pin_param_ids(&source) {
+            Ok(PinParamIds::Unchanged) => CommandExecution::success(
+                "all parameters already have a pinned param_id; manifest unchanged\n",
+            ),
+            Ok(PinParamIds::Pinned { source, assigned }) => {
+                if let Err(error) = fs::write(&manifest_path, source) {
+                    return io_failure("manifest.write-failed", &manifest_path, &error);
+                }
+                let mut message = format!("pinned {} parameter id(s):\n", assigned.len());
+                for (id, param_id) in &assigned {
+                    let _ = writeln!(message, "  {id} = {param_id}");
+                }
+                CommandExecution::success(message)
+            }
+            Err(error) => CommandExecution::failure(
+                CliExitCode::Validation,
+                vec![manifest_error_diagnostic(error)],
+            ),
+        }
+    }
+
     fn validated_manifest(&self) -> Result<HawkManifest, CommandExecution> {
         self.build_workspace().map(|output| output.manifest)
     }
@@ -1082,6 +1122,103 @@ fn render_diagnostics(diagnostics: &[CliDiagnostic]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
         + "\n"
+}
+
+/// Builds a non-fatal warning when any manifest parameter has no pinned
+/// `param_id`. An unpinned id is positional, so reordering the manifest
+/// renumbers it and breaks saved automation, presets, and state — `hawk2ui
+/// pin-ids` fixes it. Returns an empty vec when every parameter is pinned.
+fn unpinned_param_id_warnings(manifest: &HawkManifest, manifest_path: &Path) -> Vec<CliDiagnostic> {
+    let unpinned: Vec<&str> = manifest
+        .parameters
+        .iter()
+        .filter(|parameter| parameter.param_id.is_none())
+        .map(|parameter| parameter.id.as_str())
+        .collect();
+    if unpinned.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        CliDiagnostic::warning(
+            "manifest.parameter.param-id-unpinned",
+            format!(
+                "{} parameter(s) have no pinned param_id ({}); reordering the manifest will renumber them and break saved automation, presets, and state",
+                unpinned.len(),
+                unpinned.join(", ")
+            ),
+        )
+        .file(manifest_path.display().to_string())
+        .suggested_fix("run `hawk2ui pin-ids` to pin them"),
+    ]
+}
+
+#[cfg(test)]
+mod param_id_warning_tests {
+    use super::*;
+
+    #[test]
+    fn validate_warning_names_only_unpinned_parameters() {
+        const UNPINNED: &str = r#"
+[identity]
+id = "com.hawk2ui.warn"
+name = "Warn"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.warn"
+name = "Warn"
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+default = 0.5
+
+[[parameters]]
+id = "mix"
+name = "Mix"
+param_id = 1
+default = 0.5
+"#;
+        const ALL_PINNED: &str = r#"
+[identity]
+id = "com.hawk2ui.warn"
+name = "Warn"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.warn"
+name = "Warn"
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+param_id = 0
+default = 0.5
+"#;
+
+        let manifest = HawkManifest::parse(UNPINNED).expect("manifest parses");
+        let warnings = unpinned_param_id_warnings(&manifest, Path::new("manifest.hawk.toml"));
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].rule, "manifest.parameter.param-id-unpinned");
+        assert!(
+            warnings[0].message.contains("gain"),
+            "{}",
+            warnings[0].message
+        );
+        assert!(
+            !warnings[0].message.contains("mix"),
+            "a pinned parameter must not be warned about"
+        );
+
+        let pinned = HawkManifest::parse(ALL_PINNED).expect("pinned manifest parses");
+        assert!(unpinned_param_id_warnings(&pinned, Path::new("m")).is_empty());
+    }
 }
 
 fn bundle_name(identity_id: &str) -> String {
@@ -1446,11 +1583,13 @@ height = 540
 [[parameters]]
 id = "gain"
 name = "Gain"
+param_id = 0
 default = 0.5
 
 [[parameters]]
 id = "mix"
 name = "Mix"
+param_id = 1
 default = 0.75
 
 [[assets]]

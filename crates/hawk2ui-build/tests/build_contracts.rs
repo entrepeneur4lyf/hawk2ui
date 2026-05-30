@@ -531,6 +531,52 @@ default = 0.5
     assert_eq!(manifest.parameter_model().resolved_param_ids(), vec![5]);
 }
 
+#[test]
+fn pin_param_ids_assigns_unpinned_preserves_comments_and_is_idempotent() {
+    const SRC: &str = r#"
+# Synth manifest
+[identity]
+id = "com.hawk2ui.pin"
+name = "Pin"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.pin"
+name = "Pin"
+
+[[parameters]]
+id = "gain"   # output gain
+name = "Gain"
+default = 0.5
+
+[[parameters]]
+id = "mix"
+name = "Mix"
+param_id = 5
+default = 0.5
+"#;
+    let hawk2ui_build::PinParamIds::Pinned { source, assigned } =
+        hawk2ui_build::pin_param_ids(SRC).expect("valid manifest pins")
+    else {
+        panic!("expected a rewrite for the unpinned parameter");
+    };
+    // `gain` was unpinned and takes the lowest free id avoiding the pinned 5.
+    assert_eq!(assigned, vec![("gain".to_string(), 0)]);
+    // The rewrite preserves the author's comments and the already-pinned id.
+    assert!(source.contains("param_id = 0"), "{source}");
+    assert!(source.contains("# Synth manifest"), "{source}");
+    assert!(source.contains("# output gain"), "{source}");
+    assert!(source.contains("param_id = 5"), "{source}");
+    // Re-pinning the rewritten manifest is a no-op.
+    assert!(matches!(
+        hawk2ui_build::pin_param_ids(&source).expect("rewritten manifest re-pins"),
+        hawk2ui_build::PinParamIds::Unchanged
+    ));
+}
+
 const KINDED_PARAMS_MANIFEST: &str = r#"
 [identity]
 id = "com.hawk2ui.kinded"

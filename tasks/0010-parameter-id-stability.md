@@ -15,7 +15,7 @@ This is a **separate list on purpose**: it is a codegen/manifest change in `hawk
 Pin parameter ids **explicitly** (Decision 0003, "Prerequisite gate"):
 
 - Rejected: append-only manifest validation — invisible discipline that detonates the day someone alphabetizes the manifest without knowing they re-pointed every saved project.
-- Chosen: an explicit author-owned numeric id per parameter that flows into `#[param(id = N)]` (truce's own nested-struct escape hatch), softened by auto-assign-and-write-back on first build so ids pin from then on.
+- Chosen: an explicit author-owned numeric id per parameter that flows into `#[param(id = N)]` (truce's own nested-struct escape hatch), softened by an explicit `hawk2ui pin-ids` command (opt-in, format-preserving write-back) plus a `validate`-time warning on unpinned ids — **no silent build-time mutation** of the author's manifest (cleaner for CI/git), and the `new` scaffold ships pinned ids.
 - Scope: params only (persistence-critical); meters are ephemeral, no saved-state dependency.
 
 ## Sources
@@ -26,17 +26,19 @@ Pin parameter ids **explicitly** (Decision 0003, "Prerequisite gate"):
 
 ## Tasks
 
-### 0010.1 Explicit, Stable Parameter IDs
+### 0010.1 Explicit, Stable Parameter IDs — ✅ DONE (`ce4bc580`)
 
-- [ ] Pre-edit: run `gitnexus_impact({target: "ParameterRecord"})` and `…("parameter_model")` before editing — `ParameterModel`/`ParameterRecord` are widely consumed; report blast radius and warn on HIGH/CRITICAL (per `CLAUDE.md`).
-- [ ] Deliverable: optional explicit numeric `id` per `[[parameter]]` in `manifest.hawk.toml`, carried through `ParameterRecord`/`ParameterModel` and emitted verbatim as `#[param(id = N)]` (replacing the positional `next_id` loop); manifest validation that ids are unique and `< 2²⁴` (`METER_ID_BASE`); a reorder-stability test that permutes manifest parameter order and asserts every emitted u32 is unchanged.
-- [ ] Dependencies: none (this is the first brick).
-- [ ] Verify: `cargo test -p hawk2ui-build param_codegen` · `cargo test -p hawk2ui-plugin parameter_model` · new reorder-stability test green.
-- [ ] Review check: As you are delivering this product yourself, are you satisfied with the implementation or should there be revisions to ensure production ready stability? If revision is needed, take corrective action before continuing so the task meets the standard of production ready stability.
+- [x] Pre-edit: ran `gitnexus_impact` on `ParameterRecord`/`parameter_model` — gitnexus was stale (mis-resolved + line drift); fell back to tilth (production consumers: CLI `package_plugin`/`export_params`; rest tests). Risk LOW–MEDIUM, additive.
+- [x] Deliverable: optional explicit numeric `param_id` per `[[parameter]]` in `manifest.hawk.toml`, carried through `ParameterRecord`/`ParameterModel` and emitted verbatim as `#[param(id = N)]` (the positional `next_id` loop is replaced by `ParameterModel::resolved_param_ids`); manifest validation rejects ids that are duplicate or `>= 2²⁴` (`METER_ID_BASE`); a reorder-stability test permutes parameter order and asserts every emitted u32 is unchanged.
+- [x] Dependencies: none (this is the first brick).
+- [x] Verify: `cargo test -p hawk2ui-build param_codegen` · `cargo test -p hawk2ui-plugin parameter_model` · reorder-stability test green.
+- [x] Review check: satisfied — backward-compatible (un-pinned manifests emit byte-identical source); gated `check-fast` + clippy pedantic clean.
 
-### 0010.2 Auto-Assign and Write-Back on First Build
+### 0010.2 Explicit `pin-ids` Command + `validate` Warning — ✅ DONE
 
-- [ ] Deliverable: on build, any parameter lacking an explicit `id` is assigned the next free id and the id is **written back into `manifest.hawk.toml`** (preserving formatting/comments as far as the TOML writer allows), so subsequent builds are pinned; a diagnostic notes which ids were assigned; idempotent on re-run (no churn once pinned).
-- [ ] Dependencies: `0010.1`.
-- [ ] Verify: `cargo test -p hawk2ui-build` (write-back assigns gaps, is idempotent, never renumbers an already-pinned id) · `cargo test -p hawk2ui-cli` build path round-trip.
-- [ ] Review check: As you are delivering this product yourself, are you satisfied with the implementation or should there be revisions to ensure production ready stability? If revision is needed, take corrective action before continuing so the task meets the standard of production ready stability.
+Revised from "auto-write-back on build" (owner call, 2026-05-30): a build silently mutating a source file dirties git trees and surprises CI, so write-back is an **opt-in command**, not a build side effect.
+
+- [x] Deliverable: `hawk2ui pin-ids` reads the manifest, assigns the resolved id to every unpinned `[[parameter]]`, and writes it back **preserving comments/formatting** (`toml_edit`); idempotent (no-op once all pinned); prints the assignments. `validate` emits a **non-fatal warning** naming any unpinned parameter (suggesting `hawk2ui pin-ids`), exit code unchanged. The `new` scaffold ships pinned ids so a fresh project is warning-free.
+- [x] Dependencies: `0010.1`.
+- [x] Verify: `cargo test -p hawk2ui-build pin_param_ids` (assign + comment-preservation + idempotency) · `cargo test -p hawk2ui-cli` (pin-ids command round-trip + idempotency; validate warning names only unpinned params).
+- [x] Review check: satisfied — explicit command + warning is cleaner than silent build mutation; gated `check-fast` + clippy pedantic + `cargo deny` green.

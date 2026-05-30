@@ -22,6 +22,7 @@ fn cli_commands_help_lists_required_workflows() {
         "package-plugin",
         "export-schemas",
         "export-params",
+        "pin-ids",
         "diagnostics",
         "explain",
     ] {
@@ -50,6 +51,10 @@ fn cli_commands_parse_known_commands_and_reject_invalid_command() {
     assert_eq!(
         catalog.parse(["hawk2ui", "export-params"]).unwrap(),
         CliCommand::ExportParams
+    );
+    assert_eq!(
+        catalog.parse(["hawk2ui", "pin-ids"]).unwrap(),
+        CliCommand::PinIds
     );
     assert_eq!(
         catalog
@@ -331,6 +336,49 @@ pub struct PluginParams {
 }
 "#;
     assert_eq!(execution.stdout, expected);
+}
+
+#[test]
+fn workspace_pin_ids_writes_unpinned_ids_and_is_idempotent() {
+    let root = temp_cli_workspace("pin-ids");
+    let manifest_path = root.join("manifest.hawk.toml");
+    write_file(
+        &manifest_path,
+        r#"
+[identity]
+id = "com.hawk2ui.pin"
+name = "Pin"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.pin"
+name = "Pin"
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+default = 0.5
+"#,
+    );
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::PinIds);
+    assert_eq!(execution.exit_code, CliExitCode::Success);
+    assert!(
+        execution.stdout.contains("gain = 0"),
+        "{}",
+        execution.stdout
+    );
+
+    let rewritten = fs::read_to_string(&manifest_path).expect("manifest is readable");
+    assert!(rewritten.contains("param_id = 0"), "{rewritten}");
+
+    // Running again is a no-op: every parameter id is already pinned.
+    let again = WorkspaceCommandRunner::new(&root).execute(CliCommand::PinIds);
+    assert_eq!(again.exit_code, CliExitCode::Success);
+    assert!(again.stdout.contains("already"), "{}", again.stdout);
 }
 
 use hawk2ui_cli::{CliDiagnostic, DiagnosticSeverity, SourceSpan};

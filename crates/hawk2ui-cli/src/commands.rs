@@ -32,6 +32,8 @@ pub enum CliCommand {
     ExportSchemas,
     /// Emit the generated truce parameter source for the project's manifest.
     ExportParams,
+    /// Pin a stable numeric id to every unpinned manifest parameter.
+    PinIds,
     /// Render diagnostics.
     Diagnostics,
     /// Explain the current project and available workflows.
@@ -52,6 +54,7 @@ impl CliCommand {
             "package-plugin" => Some(Self::PackagePlugin),
             "export-schemas" => Some(Self::ExportSchemas),
             "export-params" => Some(Self::ExportParams),
+            "pin-ids" => Some(Self::PinIds),
             "diagnostics" => Some(Self::Diagnostics),
             "explain" => Some(Self::Explain),
             _ => None,
@@ -141,6 +144,7 @@ impl CommandCatalog {
             "  package-plugin   Materialize CLAP, VST3, AU, and standalone package layouts",
             "  export-schemas   Export the central generated JSON Schema catalog",
             "  export-params    Emit truce parameter source generated from the manifest",
+            "  pin-ids          Pin a stable numeric id to every unpinned manifest parameter",
             "  diagnostics      Render structured diagnostics",
             "  explain          Explain project targets, capabilities, and next commands",
         ]

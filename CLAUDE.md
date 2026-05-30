@@ -83,7 +83,7 @@ Lint posture is strict and gating: clippy `all` + `pedantic` are `warn` workspac
 ## The CLI (`hawk2ui-cli`)
 
 The end-user authoring tool. Subcommands (exit codes: `0` ok, `2` usage, `10` validation, `11` verification, `12` runtime):
-`new`, `run`, `dev`, `validate`, `build-dev`, `build-release`, `verify-artifact`, `run-desktop`, `package-plugin` (CLAP/VST3/AU/standalone), `export-schemas`, `diagnostics`, `explain`.
+`new`, `run`, `dev`, `validate`, `build-dev`, `build-release`, `verify-artifact`, `run-desktop`, `package-plugin` (CLAP/VST3/AU/standalone), `export-schemas`, `export-params`, `pin-ids`, `diagnostics`, `explain`.
 
 `hawk2ui dev` is a native hot-reload loop (`crates/hawk2ui-cli/src/dev_loop.rs`): a `notify`-backed watcher classifies each changed file (manifest / style / asset / script / runtime-tree) into the narrowest reload action — style patch, asset-cache invalidation, runtime-tree patch, script rebuild, or full rebuild. A manifest change always forces a full rebuild.
 

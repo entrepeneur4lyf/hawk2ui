@@ -22,7 +22,7 @@ pub use assets::{
     AssetKind, AssetPackageMetadata, AssetSanitizationStatus, AssetSource, AssetSourceIndex,
 };
 pub use diagnostic::{BuildDiagnostic, BuildDiagnosticSeverity, DiagnosticLocation, SourceSpan};
-pub use manifest::{HawkManifest, ManifestError, PackageTarget};
+pub use manifest::{HawkManifest, ManifestError, PackageTarget, PinParamIds, pin_param_ids};
 pub use param_codegen::emit_truce_params_struct;
 pub use pipeline::{BuildPhase, BuildPhaseDiagnostic, BuildPipeline, BuildPipelineError};
 pub use report::{PackageTargetRecord, VerificationReport};
