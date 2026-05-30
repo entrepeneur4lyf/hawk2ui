@@ -357,7 +357,10 @@ impl Hawk2uiTruceEditor {
         let bridge = self.bridge.clone()?;
         let last_error = Arc::clone(&self.last_error);
         let mut last_good = initial;
-        Some(Box::new(move || match state.render(bridge.as_ref()) {
+        // No window input is threaded yet: U3 drains the baseview event sink here
+        // and translates it into the per-frame `events`. Until then the loop runs
+        // with an empty input batch (live reads + replay still drive each frame).
+        Some(Box::new(move || match state.render(bridge.as_ref(), &[]) {
             Ok(outcome) => {
                 last_good = outcome.scene.clone();
                 outcome.scene

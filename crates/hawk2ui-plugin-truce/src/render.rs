@@ -8,11 +8,11 @@
 //! editor's [`crate::editor::Hawk2uiTruceEditor`] installs it as the Baseview GPU
 //! handler's per-frame scene producer on `open` (task 0009.4b).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use hawk2ui_runtime::RuntimeSceneFrame;
 use hawk2ui_script::{
-    EditRouting, HostMeter, HostParam, HostParamKind, HostParamValue, HostSnapshot,
+    EditRouting, FrameInput, HostMeter, HostParam, HostParamKind, HostParamValue, HostSnapshot,
 };
 use truce_core::editor::EditorBridge;
 
@@ -120,6 +120,10 @@ pub(crate) struct EditorRenderState {
     routing: EditRouting,
     ui_json: String,
     open_gestures: HashSet<u32>,
+    /// The last normalized value replayed to the bridge per id this open, for the
+    /// bare-set suppression that guards the host against per-frame storms
+    /// (Decision 0004 D8). Resets with the clone on each `open`.
+    last_pushed: HashMap<u32, f64>,
     width: f32,
     height: f32,
 }
@@ -142,6 +146,7 @@ impl EditorRenderState {
             routing,
             ui_json: String::from("null"),
             open_gestures: HashSet::new(),
+            last_pushed: HashMap::new(),
             width,
             height,
         }
@@ -151,9 +156,12 @@ impl EditorRenderState {
     ///
     /// 1. refresh the snapshot from the live `bridge` (current parameter / meter
     ///    values),
-    /// 2. run the entry with that snapshot and the persisted UI blob,
+    /// 2. run the entry with that snapshot, the per-frame input `events`, and the
+    ///    persisted UI blob — the author reads `host.events` and emits edits in
+    ///    response (Decision 0004 D1),
     /// 3. replay the entry's edits onto the `bridge` (begin/set/end gestures,
-    ///    tracked across cycles in `self.open_gestures`),
+    ///    tracked across cycles in `self.open_gestures`; a bare set that re-pushes
+    ///    the last value is suppressed via `self.last_pushed`, D8),
     /// 4. persist the entry's outgoing UI blob for the next cycle,
     /// 5. return the new scene and any replay diagnostics.
     ///
@@ -169,18 +177,25 @@ impl EditorRenderState {
     pub(crate) fn render(
         &mut self,
         bridge: &dyn EditorBridge,
+        events: &[FrameInput],
     ) -> Result<RenderOutcome, EditorSceneError> {
         let snapshot = refresh_snapshot_from_bridge(&self.template, bridge);
         let frame = build_editor_frame(
             &self.compiled_source,
             &self.source_path,
             &snapshot,
+            events,
             &self.ui_json,
             self.width,
             self.height,
         )?;
-        let diagnostics =
-            replay_edits(bridge, &frame.edits, &self.routing, &mut self.open_gestures);
+        let diagnostics = replay_edits(
+            bridge,
+            &frame.edits,
+            &self.routing,
+            &mut self.open_gestures,
+            &mut self.last_pushed,
+        );
         self.ui_json = frame.ui_json;
         Ok(RenderOutcome {
             scene: frame.scene,
@@ -199,8 +214,8 @@ mod tests {
     use truce_core::TransportInfo;
 
     use super::{
-        EditRouting, EditorBridge, EditorRenderState, HostMeter, HostParam, HostParamKind,
-        HostSnapshot, host_param_value, refresh_snapshot_from_bridge,
+        EditRouting, EditorBridge, EditorRenderState, FrameInput, HostMeter, HostParam,
+        HostParamKind, HostSnapshot, host_param_value, refresh_snapshot_from_bridge,
     };
 
     /// A bridge that returns canned reads (so a refresh sees "live" values) and
@@ -384,7 +399,7 @@ export function mount(host) {
         );
 
         let first = state
-            .render(&bridge)
+            .render(&bridge, &[])
             .expect("the first cycle builds a frame");
         // The refreshed live value (1200, from get_param_plain) reached the scene...
         assert!(
@@ -411,7 +426,7 @@ export function mount(host) {
         // A second cycle threads the persisted ui forward: the frame counter,
         // carried in the ui blob (not held in JS), advances 1 → 2.
         let second = state
-            .render(&bridge)
+            .render(&bridge, &[])
             .expect("the second cycle builds a frame");
         assert!(
             second
@@ -419,6 +434,71 @@ export function mount(host) {
                 .geometry_for(&RuntimeViewId::new("frame2"))
                 .is_some(),
             "the persisted ui must thread the frame counter across cycles"
+        );
+    }
+
+    // The motivating input -> edit path (Decision 0004): an entry emits an edit
+    // only in response to a pointer press. No events means no edit (idle frames
+    // stay silent); a left-down drives the gesture onto the bridge.
+    const PRESS_TO_EDIT_SCRIPT: &str = r#"
+export function mount(host) {
+    for (const ev of host.events) {
+        if (ev.kind === "pointer" && ev.button === "left-down") {
+            host.beginEdit("cutoff");
+            host.setParam("cutoff", 0.75);
+            host.endEdit("cutoff");
+        }
+    }
+    return { id: "root", type: "view" };
+}
+"#;
+
+    #[test]
+    fn input_drives_an_edit_and_an_idle_frame_does_not() {
+        let template = HostSnapshot {
+            params: vec![float_param("cutoff", 3)],
+            meters: Vec::new(),
+        };
+        let routing = EditRouting::new(vec![ParamRoute {
+            key: "cutoff".into(),
+            id: 3,
+            kind: HostParamKind::Float,
+            min: 0.0,
+            max: 2000.0,
+            variant_count: 0,
+        }]);
+        let bridge = FakeBridge::default();
+        let mut state = EditorRenderState::new(
+            PRESS_TO_EDIT_SCRIPT.into(),
+            "src/editor.js".into(),
+            template,
+            routing,
+            320.0,
+            180.0,
+        );
+
+        // An idle frame (no input) emits no edit — the entry's loop never runs.
+        state.render(&bridge, &[]).expect("idle frame builds");
+        assert!(
+            bridge.writes().is_empty(),
+            "an idle frame must not touch the bridge"
+        );
+
+        // A pointer press drives the gesture onto the bridge.
+        state
+            .render(
+                &bridge,
+                &[FrameInput::Pointer {
+                    x: 10.0,
+                    y: 10.0,
+                    button: "left-down".into(),
+                }],
+            )
+            .expect("press frame builds");
+        assert_eq!(
+            bridge.writes(),
+            vec![("begin", 3, 0.0), ("set", 3, 0.75), ("end", 3, 0.0)],
+            "a pointer press must drive the edit onto the bridge"
         );
     }
 }

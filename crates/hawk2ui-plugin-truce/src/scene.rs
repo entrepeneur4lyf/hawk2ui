@@ -20,8 +20,8 @@
 use hawk2ui_layout::Viewport;
 use hawk2ui_runtime::{EntryNode, RuntimeSceneBridge, RuntimeSceneFrame};
 use hawk2ui_script::{
-    HostCallPolicy, HostEdit, HostSnapshot, ScriptBackend, ScriptModule, StructuredValue,
-    TimerPolicy, entry_mount_bootstrap_with_host, parse_entry_envelope,
+    FrameInput, HostCallPolicy, HostEdit, HostSnapshot, ScriptBackend, ScriptModule,
+    StructuredValue, TimerPolicy, entry_mount_bootstrap_with_host, parse_entry_envelope,
 };
 
 /// Error building an editor scene from a compiled entry script.
@@ -100,12 +100,13 @@ pub(crate) fn build_editor_frame(
     compiled_source: &str,
     source_path: &str,
     snapshot: &HostSnapshot,
+    events: &[FrameInput],
     incoming_ui: &str,
     width: f32,
     height: f32,
 ) -> Result<EditorFrame, EditorSceneError> {
     let Some(bootstrap) =
-        entry_mount_bootstrap_with_host(compiled_source, snapshot, &[], incoming_ui)
+        entry_mount_bootstrap_with_host(compiled_source, snapshot, events, incoming_ui)
     else {
         return Err(EditorSceneError::new(
             "hawk2ui-truce.editor.no-mount",
@@ -192,6 +193,7 @@ pub(crate) fn build_editor_scene(
         compiled_source,
         source_path,
         snapshot,
+        &[],
         "null",
         width,
         height,

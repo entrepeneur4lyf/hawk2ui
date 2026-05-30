@@ -13,7 +13,7 @@
 //! Wiring it into the live per-frame invocation — re-projecting and re-running the
 //! entry on input, then replaying its edits — is task 0009.4.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use hawk2ui_script::{EditRouting, HostEdit};
 use truce_core::editor::EditorBridge;
@@ -43,13 +43,17 @@ impl EditReplayDiagnostic {
 /// Replays `edits` onto `bridge`, resolving each key through `routing` and
 /// tracking open automation gestures in `open_gestures` so a gesture begun on one
 /// invocation and ended on a later one replays as one bracket (the host threads
-/// the set across frames; Decision 0003 D3).
+/// the set across frames; Decision 0003 D3). `last_pushed` carries the last value
+/// replayed per id so a redundant per-frame set is suppressed (Decision 0004 D8).
 ///
 /// Gesture rules, all skip-and-record (never panic):
 /// - A `begin` for a key with no open gesture opens one; a second `begin` while
 ///   one is open is a double-begin — skipped, recorded.
 /// - A bare `set`/`setPlain` with no surrounding `begin`/`end` is **valid** (it is
 ///   not auto-bracketed — truce's begin/end only mark the host's touched lane).
+/// - A `set`/`setPlain` re-pushing the value already pushed for the id is
+///   **suppressed** (D8): the bridge is not called. A changed value, or any value
+///   after a gesture boundary (which clears the memory), passes.
 /// - `setPlain` is normalized to `0.0..=1.0` via the route before `set_param`.
 /// - `automate` is one-shot `begin`+`set`+`end`, unless a gesture is already open
 ///   for the key (then it sets within the open gesture and records the overlap).
@@ -63,6 +67,7 @@ pub fn replay_edits<S: std::hash::BuildHasher>(
     edits: &[HostEdit],
     routing: &EditRouting,
     open_gestures: &mut HashSet<u32, S>,
+    last_pushed: &mut HashMap<u32, f64, S>,
 ) -> Vec<EditReplayDiagnostic> {
     let mut diagnostics = Vec::new();
     for edit in edits {
@@ -79,6 +84,9 @@ pub fn replay_edits<S: std::hash::BuildHasher>(
             HostEdit::Begin { .. } => {
                 if open_gestures.insert(id) {
                     bridge.begin_edit(id);
+                    // A gesture boundary clears the suppression memory so the
+                    // gesture's first set always re-asserts its value (D8).
+                    last_pushed.remove(&id);
                 } else {
                     diagnostics.push(EditReplayDiagnostic::new(
                         "hawk2ui-truce.edit.double-begin",
@@ -87,30 +95,33 @@ pub fn replay_edits<S: std::hash::BuildHasher>(
                 }
             }
             HostEdit::Set { normalized, .. } => {
-                bridge.set_param(id, normalized.clamp(0.0, 1.0));
+                push_set(bridge, id, normalized.clamp(0.0, 1.0), last_pushed);
             }
             HostEdit::SetPlain { plain, .. } => {
-                bridge.set_param(id, route.normalize_plain(*plain));
+                push_set(bridge, id, route.normalize_plain(*plain), last_pushed);
             }
             HostEdit::Automate { normalized, .. } => {
                 let normalized = normalized.clamp(0.0, 1.0);
                 if open_gestures.contains(&id) {
                     // A one-shot landing inside an already-open gesture: set within
                     // it rather than nesting a second begin/end on the bridge.
-                    bridge.set_param(id, normalized);
+                    push_set(bridge, id, normalized, last_pushed);
                     diagnostics.push(EditReplayDiagnostic::new(
                         "hawk2ui-truce.edit.automate-during-gesture",
                         key,
                     ));
                 } else {
                     bridge.begin_edit(id);
-                    bridge.set_param(id, normalized);
+                    last_pushed.remove(&id);
+                    push_set(bridge, id, normalized, last_pushed);
                     bridge.end_edit(id);
+                    last_pushed.remove(&id);
                 }
             }
             HostEdit::End { .. } => {
                 if open_gestures.remove(&id) {
                     bridge.end_edit(id);
+                    last_pushed.remove(&id);
                 } else {
                     diagnostics.push(EditReplayDiagnostic::new(
                         "hawk2ui-truce.edit.unmatched-end",
@@ -134,6 +145,27 @@ fn edit_key(edit: &HostEdit) -> &str {
     }
 }
 
+/// Replays a `set_param`, suppressing a redundant re-push of the value already
+/// pushed for `id` (Decision 0004 D8). An entry that emits an unchanging
+/// `setParam` every frame would otherwise storm the host's automation lane at
+/// vsync; a changed value — or any value after a gesture boundary, which clears
+/// the memory — always reaches the bridge.
+fn push_set<S: std::hash::BuildHasher>(
+    bridge: &dyn EditorBridge,
+    id: u32,
+    normalized: f64,
+    last_pushed: &mut HashMap<u32, f64, S>,
+) {
+    if last_pushed
+        .get(&id)
+        .is_some_and(|last| (*last - normalized).abs() <= f64::EPSILON)
+    {
+        return;
+    }
+    bridge.set_param(id, normalized);
+    last_pushed.insert(id, normalized);
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -141,7 +173,9 @@ mod tests {
     use hawk2ui_script::{HostParamKind, ParamRoute};
     use truce_core::TransportInfo;
 
-    use super::{EditReplayDiagnostic, EditRouting, EditorBridge, HashSet, HostEdit, replay_edits};
+    use super::{
+        EditReplayDiagnostic, EditRouting, EditorBridge, HashMap, HashSet, HostEdit, replay_edits,
+    };
 
     /// One bridge call, recorded so a test can assert replay order and values.
     #[derive(Clone, Debug, PartialEq)]
@@ -247,11 +281,13 @@ mod tests {
     fn replays_a_gesture_bracket_in_order() {
         let bridge = RecordingBridge::new();
         let mut open = HashSet::new();
+        let mut last = HashMap::new();
         let diagnostics = replay_edits(
             &bridge,
             &[begin("cutoff"), set("cutoff", 0.55), end("cutoff")],
             &routing(),
             &mut open,
+            &mut last,
         );
         assert!(diagnostics.is_empty());
         assert_eq!(
@@ -265,7 +301,14 @@ mod tests {
     fn a_bare_set_replays_without_a_bracket() {
         let bridge = RecordingBridge::new();
         let mut open = HashSet::new();
-        let diagnostics = replay_edits(&bridge, &[set("cutoff", 0.3)], &routing(), &mut open);
+        let mut last = HashMap::new();
+        let diagnostics = replay_edits(
+            &bridge,
+            &[set("cutoff", 0.3)],
+            &routing(),
+            &mut open,
+            &mut last,
+        );
         assert!(
             diagnostics.is_empty(),
             "a bare set is valid, not auto-bracketed"
@@ -277,7 +320,14 @@ mod tests {
     fn set_param_clamps_out_of_range_normalized() {
         let bridge = RecordingBridge::new();
         let mut open = HashSet::new();
-        replay_edits(&bridge, &[set("cutoff", 1.5)], &routing(), &mut open);
+        let mut last = HashMap::new();
+        replay_edits(
+            &bridge,
+            &[set("cutoff", 1.5)],
+            &routing(),
+            &mut open,
+            &mut last,
+        );
         assert_eq!(bridge.recorded(), vec![Call::Set(0, 1.0)]);
     }
 
@@ -285,6 +335,7 @@ mod tests {
     fn set_plain_normalizes_via_the_route() {
         let bridge = RecordingBridge::new();
         let mut open = HashSet::new();
+        let mut last = HashMap::new();
         // cutoff range 0..100; plain 50 → normalized 0.5.
         replay_edits(
             &bridge,
@@ -294,6 +345,7 @@ mod tests {
             }],
             &routing(),
             &mut open,
+            &mut last,
         );
         assert_eq!(bridge.recorded(), vec![Call::Set(0, 0.5)]);
     }
@@ -302,6 +354,7 @@ mod tests {
     fn automate_replays_a_full_one_shot_bracket() {
         let bridge = RecordingBridge::new();
         let mut open = HashSet::new();
+        let mut last = HashMap::new();
         replay_edits(
             &bridge,
             &[HostEdit::Automate {
@@ -310,6 +363,7 @@ mod tests {
             }],
             &routing(),
             &mut open,
+            &mut last,
         );
         assert_eq!(
             bridge.recorded(),
@@ -322,6 +376,7 @@ mod tests {
     fn a_cross_frame_gesture_brackets_across_two_replays() {
         let bridge = RecordingBridge::new();
         let mut open = HashSet::new();
+        let mut last = HashMap::new();
         let routing = routing();
         // Frame 1: begin + set, gesture stays open.
         replay_edits(
@@ -329,6 +384,7 @@ mod tests {
             &[begin("cutoff"), set("cutoff", 0.2)],
             &routing,
             &mut open,
+            &mut last,
         );
         assert!(open.contains(&0), "the gesture spans frames");
         // Frame 2: another set, then end — the host replays the open gesture's close.
@@ -337,6 +393,7 @@ mod tests {
             &[set("cutoff", 0.8), end("cutoff")],
             &routing,
             &mut open,
+            &mut last,
         );
         assert!(diagnostics.is_empty());
         assert_eq!(
@@ -355,11 +412,13 @@ mod tests {
     fn a_double_begin_is_skipped_and_recorded() {
         let bridge = RecordingBridge::new();
         let mut open = HashSet::new();
+        let mut last = HashMap::new();
         let diagnostics = replay_edits(
             &bridge,
             &[begin("cutoff"), begin("cutoff")],
             &routing(),
             &mut open,
+            &mut last,
         );
         assert_eq!(
             bridge.recorded(),
@@ -379,7 +438,8 @@ mod tests {
     fn an_unmatched_end_is_skipped_and_recorded() {
         let bridge = RecordingBridge::new();
         let mut open = HashSet::new();
-        let diagnostics = replay_edits(&bridge, &[end("cutoff")], &routing(), &mut open);
+        let mut last = HashMap::new();
+        let diagnostics = replay_edits(&bridge, &[end("cutoff")], &routing(), &mut open, &mut last);
         assert!(bridge.recorded().is_empty(), "no end reaches the bridge");
         assert_eq!(
             diagnostics,
@@ -394,9 +454,16 @@ mod tests {
     fn an_unknown_or_meter_key_is_skipped_and_recorded() {
         let bridge = RecordingBridge::new();
         let mut open = HashSet::new();
+        let mut last = HashMap::new();
         // "out" is a meter — meters are not in the routing, so a write to one is
         // structurally impossible: it resolves to no route and is skipped.
-        let diagnostics = replay_edits(&bridge, &[set("out", 0.5)], &routing(), &mut open);
+        let diagnostics = replay_edits(
+            &bridge,
+            &[set("out", 0.5)],
+            &routing(),
+            &mut open,
+            &mut last,
+        );
         assert!(bridge.recorded().is_empty());
         assert_eq!(
             diagnostics,
@@ -404,6 +471,71 @@ mod tests {
                 rule: "hawk2ui-truce.edit.unknown-key".into(),
                 key: "out".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn suppresses_a_repeat_set_but_passes_changes_and_gesture_boundaries() {
+        // Decision 0004 D8: a continuous loop re-pushing the same value every
+        // frame must not storm the bridge, yet real moves and gesture re-asserts
+        // must always land.
+        let bridge = RecordingBridge::new();
+        let mut open = HashSet::new();
+        let mut last = HashMap::new();
+        let routing = routing();
+        // Three identical bare sets at vsync: only the first reaches the bridge.
+        replay_edits(
+            &bridge,
+            &[set("cutoff", 0.5)],
+            &routing,
+            &mut open,
+            &mut last,
+        );
+        replay_edits(
+            &bridge,
+            &[set("cutoff", 0.5)],
+            &routing,
+            &mut open,
+            &mut last,
+        );
+        replay_edits(
+            &bridge,
+            &[set("cutoff", 0.5)],
+            &routing,
+            &mut open,
+            &mut last,
+        );
+        assert_eq!(
+            bridge.recorded(),
+            vec![Call::Set(0, 0.5)],
+            "identical repeat sets are suppressed"
+        );
+        // A changed value passes; then a gesture re-asserting that same value
+        // passes too, because the gesture boundary clears the suppression memory.
+        replay_edits(
+            &bridge,
+            &[set("cutoff", 0.6)],
+            &routing,
+            &mut open,
+            &mut last,
+        );
+        replay_edits(
+            &bridge,
+            &[begin("cutoff"), set("cutoff", 0.6), end("cutoff")],
+            &routing,
+            &mut open,
+            &mut last,
+        );
+        assert_eq!(
+            bridge.recorded(),
+            vec![
+                Call::Set(0, 0.5),
+                Call::Set(0, 0.6),
+                Call::Begin(0),
+                Call::Set(0, 0.6),
+                Call::End(0),
+            ],
+            "a changed value and a post-boundary re-assert both reach the bridge"
         );
     }
 }
