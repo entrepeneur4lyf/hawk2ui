@@ -434,6 +434,89 @@ pub fn parse_entry_envelope(value: &str) -> Result<EntryEnvelope, EnvelopeError>
     })
 }
 
+/// Per-parameter write routing the host needs to replay an edit list onto the
+/// truce bridge: the `key` → `id` map plus the data to normalize a `setParamPlain`
+/// (the bridge offers only a normalized `set_param`, and Decision 0003 D3 puts the
+/// plain→normalized conversion on the host). Built from the parameter model by
+/// `hawk2ui-build`'s `edit_routing_from_model`; consumed by the editor's replay.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParamRoute {
+    /// Stable string key the author addresses the parameter by.
+    pub key: String,
+    /// truce `ParamId` u32 the edit is replayed onto.
+    pub id: u32,
+    /// Value kind, selecting how a plain value normalizes.
+    pub kind: HostParamKind,
+    /// Range minimum (float/int); unused for bool/enum.
+    pub min: f64,
+    /// Range maximum (float/int); unused for bool/enum.
+    pub max: f64,
+    /// Variant count for an enum (for the `index/(count - 1)` normalization);
+    /// `0` for every other kind.
+    pub variant_count: u32,
+}
+
+impl ParamRoute {
+    /// Normalizes a plain (natural-unit) value to `0.0..=1.0` for the bridge's
+    /// `set_param`, mirroring `ParameterRecord::normalize` (float/int by range,
+    /// bool by non-zero) plus the enum `index / (count - 1)` of the snapshot
+    /// projection. The host owns this conversion (Decision 0003 D3); the math is
+    /// duplicated here rather than imported because `hawk2ui-plugin-truce` stays
+    /// free of the parameter model.
+    #[must_use]
+    pub fn normalize_plain(&self, plain: f64) -> f64 {
+        let normalized = match self.kind {
+            HostParamKind::Bool => {
+                if plain.abs() > f64::EPSILON {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            HostParamKind::Enum => {
+                if self.variant_count > 1 {
+                    plain / f64::from(self.variant_count - 1)
+                } else {
+                    0.0
+                }
+            }
+            HostParamKind::Float | HostParamKind::Int => {
+                let span = self.max - self.min;
+                if span.abs() > f64::EPSILON {
+                    (plain - self.min) / span
+                } else {
+                    0.0
+                }
+            }
+        };
+        normalized.clamp(0.0, 1.0)
+    }
+}
+
+/// The host-side write routing for a plugin's parameters: a `key` → [`ParamRoute`]
+/// lookup the editor's edit replay resolves each edit through. Meters are absent
+/// (read-only, Decision 0003 Lock 2), so a write addressed to a meter key never
+/// resolves and is skipped.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EditRouting {
+    routes: Vec<ParamRoute>,
+}
+
+impl EditRouting {
+    /// Builds a routing from per-parameter routes, in declaration order.
+    #[must_use]
+    pub fn new(routes: Vec<ParamRoute>) -> Self {
+        Self { routes }
+    }
+
+    /// Resolves a parameter key to its route, or `None` for an unknown (or meter)
+    /// key. Linear over the parameter list, which is small.
+    #[must_use]
+    pub fn route(&self, key: &str) -> Option<&ParamRoute> {
+        self.routes.iter().find(|route| route.key == key)
+    }
+}
+
 /// Structured script value.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StructuredValue {
@@ -1633,5 +1716,68 @@ export function mount(host) {
             parse_entry_envelope("42").is_err(),
             "a bare number is not an envelope"
         );
+    }
+
+    #[test]
+    fn param_route_normalizes_plain_by_kind() {
+        let float = ParamRoute {
+            key: "cutoff".into(),
+            id: 0,
+            kind: HostParamKind::Float,
+            min: 20.0,
+            max: 20020.0,
+            variant_count: 0,
+        };
+        assert!(
+            (float.normalize_plain(10020.0) - 0.5).abs() < 1e-9,
+            "midpoint"
+        );
+        assert!((float.normalize_plain(20.0)).abs() < 1e-9, "min");
+        assert!(
+            (float.normalize_plain(40020.0) - 1.0).abs() < 1e-9,
+            "above max clamps to 1"
+        );
+
+        let boolean = ParamRoute {
+            key: "bypass".into(),
+            id: 1,
+            kind: HostParamKind::Bool,
+            min: 0.0,
+            max: 0.0,
+            variant_count: 0,
+        };
+        assert!((boolean.normalize_plain(1.0) - 1.0).abs() < 1e-9);
+        assert!((boolean.normalize_plain(0.0)).abs() < 1e-9);
+
+        let enumerated = ParamRoute {
+            key: "mode".into(),
+            id: 2,
+            kind: HostParamKind::Enum,
+            min: 0.0,
+            max: 0.0,
+            variant_count: 3,
+        };
+        assert!(
+            (enumerated.normalize_plain(0.0)).abs() < 1e-9,
+            "first variant"
+        );
+        assert!(
+            (enumerated.normalize_plain(2.0) - 1.0).abs() < 1e-9,
+            "last variant"
+        );
+    }
+
+    #[test]
+    fn edit_routing_resolves_by_key_and_misses_unknown() {
+        let routing = EditRouting::new(vec![ParamRoute {
+            key: "cutoff".into(),
+            id: 7,
+            kind: HostParamKind::Float,
+            min: 0.0,
+            max: 1.0,
+            variant_count: 0,
+        }]);
+        assert_eq!(routing.route("cutoff").map(|route| route.id), Some(7));
+        assert!(routing.route("nope").is_none());
     }
 }

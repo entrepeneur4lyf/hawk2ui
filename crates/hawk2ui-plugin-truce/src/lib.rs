@@ -21,17 +21,24 @@ pub use truce_core::editor::Editor as TruceEditor;
 /// editor on open.
 pub use truce_params::Params as TruceParams;
 
-/// The parameter/meter projection an editor's `mount(host)` reads. The editor
-/// constructors ([`Hawk2uiTruceEditor::from_entry_script`]) take a
-/// [`HostSnapshot`]; build one from a parameter model with `hawk2ui-build`'s
-/// `host_snapshot_from_model`, or by hand from these types. Re-exported so a
-/// caller can name the editor's full construction surface from this crate alone.
-pub use hawk2ui_script::{HostMeter, HostParam, HostParamKind, HostParamValue, HostSnapshot};
+/// The C3 editor protocol types from `hawk2ui-script`: the parameter/meter read
+/// projection an editor's `mount(host)` reads ([`HostSnapshot`] and friends), the
+/// ordered write edits it emits ([`HostEdit`]), and the host-side write
+/// [`EditRouting`]. Build the snapshot and routing from a parameter model with
+/// `hawk2ui-build`'s `host_snapshot_from_model` / `edit_routing_from_model`, or by
+/// hand from these types. Re-exported so a caller can name the editor's full
+/// construction and replay surface from this crate alone.
+pub use hawk2ui_script::{
+    EditRouting, HostEdit, HostMeter, HostParam, HostParamKind, HostParamValue, HostSnapshot,
+    ParamRoute,
+};
 
 pub mod editor;
+mod replay;
 mod scene;
 
 pub use editor::Hawk2uiTruceEditor;
+pub use replay::{EditReplayDiagnostic, replay_edits};
 pub use scene::EditorSceneError;
 
 /// The canonical Cargo package name for this crate.

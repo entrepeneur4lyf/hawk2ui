@@ -21,7 +21,9 @@
 //! no persisted meter level.
 
 use hawk2ui_plugin::{METER_ID_BASE, ParameterModel, ParameterRecord, ParameterValue};
-use hawk2ui_script::{HostMeter, HostParam, HostParamKind, HostParamValue, HostSnapshot};
+use hawk2ui_script::{
+    EditRouting, HostMeter, HostParam, HostParamKind, HostParamValue, HostSnapshot, ParamRoute,
+};
 
 /// Projects a [`ParameterModel`] into the [`HostSnapshot`] an editor entry
 /// script reads, sourcing every value from the model's declared defaults.
@@ -108,6 +110,46 @@ fn default_normalized(record: &ParameterRecord) -> f64 {
     record.normalize(&record.default_value).unwrap_or(0.0)
 }
 
+/// Projects a [`ParameterModel`] into the host-side [`EditRouting`] the editor's
+/// edit replay resolves writes through: each parameter's `key` → truce `ParamId`
+/// plus the kind/range data needed to normalize a `setParamPlain` (the host owns
+/// that conversion, Decision 0003 D3). Meters are excluded — they are read-only,
+/// so a write addressed to a meter key never resolves.
+#[must_use]
+pub fn edit_routing_from_model(model: &ParameterModel) -> EditRouting {
+    let param_ids = model.resolved_param_ids();
+    let routes = model
+        .parameters
+        .iter()
+        .zip(param_ids)
+        .map(|(record, id)| param_route_from_record(record, id))
+        .collect();
+    EditRouting::new(routes)
+}
+
+/// Builds one parameter's [`ParamRoute`]: its resolved `id`, kind, numeric range
+/// (`0.0..0.0` for the range-less bool/enum kinds, which normalize by kind), and
+/// enum variant count.
+fn param_route_from_record(record: &ParameterRecord, id: u32) -> ParamRoute {
+    let kind = match record.default_value {
+        ParameterValue::Float(_) => HostParamKind::Float,
+        ParameterValue::Int(_) => HostParamKind::Int,
+        ParameterValue::Bool(_) => HostParamKind::Bool,
+        ParameterValue::Choice(_) => HostParamKind::Enum,
+    };
+    let (min, max) = record
+        .range
+        .map_or((0.0, 0.0), |range| (range.min, range.max));
+    ParamRoute {
+        key: record.id.clone(),
+        id,
+        kind,
+        min,
+        max,
+        variant_count: u32::try_from(record.variants.len()).unwrap_or(u32::MAX),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use hawk2ui_plugin::{
@@ -118,7 +160,7 @@ mod tests {
         StructuredValue, TimerPolicy, entry_mount_bootstrap_with_host,
     };
 
-    use super::host_snapshot_from_model;
+    use super::{edit_routing_from_model, host_snapshot_from_model};
 
     /// A model exercising all four parameter kinds plus a meter. The enum
     /// default sits on the **last** variant — the case `ParameterRecord::normalize`
@@ -258,5 +300,30 @@ export function mount(host) {
         // ...and the enum reads back typed: display text, variant index, and a
         // last-variant `normalized` of exactly 1, with all three variants.
         assert!(envelope_json.contains("Highpass:2:1:3"), "{envelope_json}");
+    }
+
+    #[test]
+    fn edit_routing_carries_id_kind_and_range_per_parameter() {
+        let routing = edit_routing_from_model(&synth_model());
+
+        let cutoff = routing.route("cutoff").expect("cutoff routes");
+        assert_eq!(cutoff.id, 0);
+        assert_eq!(cutoff.kind, HostParamKind::Float);
+        assert!((cutoff.min - 20.0).abs() < 1e-9);
+        assert!((cutoff.max - 20000.0).abs() < 1e-9);
+        // setParamPlain normalizes via the range, host-side (Decision 0003 D3).
+        assert!((cutoff.normalize_plain(10010.0) - 0.5).abs() < 1e-9);
+
+        let mode = routing.route("mode").expect("mode routes");
+        assert_eq!(mode.id, 3);
+        assert_eq!(mode.kind, HostParamKind::Enum);
+        assert_eq!(mode.variant_count, 3);
+        assert!(
+            (mode.normalize_plain(2.0) - 1.0).abs() < 1e-9,
+            "the last variant index normalizes to 1.0"
+        );
+
+        // Meters are read-only: a meter key never resolves to a route.
+        assert!(routing.route("out").is_none());
     }
 }
