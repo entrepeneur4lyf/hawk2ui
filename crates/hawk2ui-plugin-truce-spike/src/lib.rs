@@ -136,16 +136,30 @@ mod tests {
         let _plugin: Plugin = <Plugin as truce_core::export::PluginExport>::create();
     }
 
-    /// The editor truce will hand to the host is the `Hawk2UI` editor, sized to the
-    /// declared surface and reconstructible across calls (truce recreates the
-    /// editor on each open).
+    /// The editor truce will hand the host is a clean, sized `Hawk2UI` editor.
+    ///
+    /// `size()` alone is a weak check: it returns the configured size whether the
+    /// scene built or `from_entry_script` fell back to an error scene. So this
+    /// builds the concrete editor `editor()` returns and asserts `!has_error()` —
+    /// proving the embedded entry source actually builds a real scene — then
+    /// confirms the same construction reached through the `PluginLogic::editor`
+    /// seam truce calls is a sized `Box<dyn Editor>`.
     #[test]
-    fn editor_is_the_sized_hawk2ui_editor() {
-        let plugin = SpikePlugin::new(Arc::new(SpikeParams::default()));
-        let editor = PluginLogic::editor(&plugin);
+    fn editor_builds_clean_and_sizes_through_the_trait() {
+        let editor = Hawk2uiTruceEditor::from_entry_script(
+            editor_config(),
+            ENTRY_SOURCE,
+            "src/editor.js",
+            &HostSnapshot::default(),
+            &EditRouting::default(),
+        );
+        assert!(
+            !editor.has_error(),
+            "embedded entry source must build a clean scene, not the error fallback"
+        );
         assert_eq!(editor.size(), (320, 180));
 
-        let again = PluginLogic::editor(&plugin);
-        assert_eq!(again.size(), (320, 180));
+        let boxed = PluginLogic::editor(&SpikePlugin::new(Arc::new(SpikeParams::default())));
+        assert_eq!(boxed.size(), (320, 180));
     }
 }
