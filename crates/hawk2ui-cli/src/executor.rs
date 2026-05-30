@@ -26,7 +26,10 @@ use hawk2ui_plugin_adapters::{
 };
 use hawk2ui_runtime::{EntryNode, RuntimeSceneError, RuntimeViewTree};
 use hawk2ui_schema::schema_catalog_json;
-use hawk2ui_script::{HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy};
+use hawk2ui_script::{
+    HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy,
+    entry_mount_bootstrap,
+};
 
 use crate::{
     CliCommand, CliDiagnostic, CliExitCode, DevChangeClassifier, DevLoop, DevPatchKind,
@@ -1294,12 +1297,15 @@ fn entry_script_app_model(
 fn entry_script_mount_app_model(
     script: &CompiledScriptRecord,
 ) -> Result<Option<DesktopEntryAppModel>, Box<CliDiagnostic>> {
-    let Some(source) = native_mount_bootstrap_source(script.compiled_source.as_str()) else {
+    let Some(source) = entry_mount_bootstrap(script.compiled_source.as_str()) else {
         return Ok(None);
     };
     let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
     let execution = backend
-        .execute_module(entry_script_module(script, source.as_str()))
+        .execute_module(ScriptModule::for_source_path(
+            &script.source_path,
+            source.as_str(),
+        ))
         .map_err(|error| {
             Box::new(CliDiagnostic::error(
                 "runtime.desktop.entry-script-failed",
@@ -1326,7 +1332,10 @@ fn entry_script_mount_app_model(
 fn entry_script_visible_title(script: &CompiledScriptRecord) -> Option<String> {
     let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
     let execution = backend
-        .execute_module(entry_script_module(script, script.compiled_source.as_str()))
+        .execute_module(ScriptModule::for_source_path(
+            &script.source_path,
+            script.compiled_source.as_str(),
+        ))
         .ok()?;
     match execution.value() {
         StructuredValue::String(value) if !value.trim().is_empty() => Some(value.clone()),
@@ -1335,37 +1344,6 @@ fn entry_script_visible_title(script: &CompiledScriptRecord) -> Option<String> {
         | StructuredValue::Number(_)
         | StructuredValue::String(_) => None,
     }
-}
-
-fn entry_script_module(script: &CompiledScriptRecord, source: &str) -> ScriptModule {
-    let extension = Path::new(&script.source_path)
-        .extension()
-        .and_then(|extension| extension.to_str());
-    if extension.is_some_and(|extension| {
-        extension.eq_ignore_ascii_case("ts") || extension.eq_ignore_ascii_case("tsx")
-    }) {
-        ScriptModule::typescript(&script.source_path, source)
-    } else {
-        ScriptModule::javascript(&script.source_path, source)
-    }
-}
-
-fn native_mount_bootstrap_source(source: &str) -> Option<String> {
-    let source = source.replacen("export function mount", "function mount", 1);
-    if !source.contains("function mount") {
-        return None;
-    }
-    Some(format!(
-        r"{source}
-
-const __hawk2ui_host = Object.freeze({{
-    on(_name, _handler) {{}},
-    setState(_value) {{}}
-}});
-
-JSON.stringify(mount(__hawk2ui_host));
-"
-    ))
 }
 
 fn invalid_entry_tree_diagnostic(

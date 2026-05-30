@@ -63,11 +63,58 @@ impl ScriptModule {
         }
     }
 
+    /// Creates a module whose kind is inferred from `source_path`'s extension:
+    /// `.ts`/`.tsx` produce a TypeScript module, everything else JavaScript. The
+    /// path doubles as the module id.
+    #[must_use]
+    pub fn for_source_path(source_path: &str, source: impl Into<String>) -> Self {
+        let is_typescript = std::path::Path::new(source_path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("ts") || extension.eq_ignore_ascii_case("tsx")
+            });
+        if is_typescript {
+            Self::typescript(source_path, source)
+        } else {
+            Self::javascript(source_path, source)
+        }
+    }
+
     /// Returns the module kind.
     #[must_use]
     pub const fn kind(&self) -> ScriptModuleKind {
         self.kind
     }
+}
+
+/// Wraps a compiled entry module so its exported `mount` function is invoked
+/// under a host object and its result is serialized to a JSON node-tree string
+/// — the convention an entry script's `mount(host)` follows. Returns `None` when
+/// the source declares no `mount` function (the caller then falls back, e.g. to
+/// a visible-title probe).
+///
+/// Both the desktop host and the plugin editor run the same entry script, so
+/// they share this convention rather than each reinventing it. The injected
+/// `__hawk2ui_host` is currently a no-op stub; it is the seam where host
+/// bindings (parameter reads, state) will be projected to editor JS.
+#[must_use]
+pub fn entry_mount_bootstrap(source: &str) -> Option<String> {
+    let source = source.replacen("export function mount", "function mount", 1);
+    if !source.contains("function mount") {
+        return None;
+    }
+    Some(format!(
+        r"{source}
+
+const __hawk2ui_host = Object.freeze({{
+    on(_name, _handler) {{}},
+    setState(_value) {{}}
+}});
+
+JSON.stringify(mount(__hawk2ui_host));
+"
+    ))
 }
 
 /// Structured script value.
@@ -999,5 +1046,33 @@ mod tests {
     #[test]
     fn exposes_crate_identity() {
         assert_eq!(crate_name(), "hawk2ui-script");
+    }
+
+    #[test]
+    fn entry_mount_bootstrap_wraps_a_mount_function() {
+        let bootstrap = entry_mount_bootstrap("export function mount(host) { return \"{}\"; }")
+            .expect("a mount function bootstraps");
+        // The export is rewritten to a local declaration and the host-invoked
+        // result is serialized to a JSON node tree.
+        assert!(bootstrap.contains("function mount(host)"));
+        assert!(!bootstrap.contains("export function mount"));
+        assert!(bootstrap.contains("JSON.stringify(mount(__hawk2ui_host));"));
+    }
+
+    #[test]
+    fn entry_mount_bootstrap_returns_none_without_a_mount_function() {
+        assert!(entry_mount_bootstrap("export function other() {}").is_none());
+    }
+
+    #[test]
+    fn module_kind_is_inferred_from_source_path() {
+        assert_eq!(
+            ScriptModule::for_source_path("src/main.ts", "").kind(),
+            ScriptModuleKind::TypeScript
+        );
+        assert_eq!(
+            ScriptModule::for_source_path("src/main.js", "").kind(),
+            ScriptModuleKind::JavaScript
+        );
     }
 }
