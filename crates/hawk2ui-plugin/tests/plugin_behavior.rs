@@ -163,8 +163,8 @@ fn editor_embedding_custom_editors_do_not_assume_top_level_window_ownership() {
 }
 
 use hawk2ui_plugin::{
-    ParameterDistribution, ParameterFlags, ParameterGroup, ParameterModel, ParameterRange,
-    ParameterRecord, ParameterSmoothing, ParameterValue,
+    EnumVariant, ParameterDistribution, ParameterFlags, ParameterGroup, ParameterModel,
+    ParameterRange, ParameterRecord, ParameterSmoothing, ParameterValue,
 };
 
 #[test]
@@ -239,6 +239,36 @@ fn parameter_model_converts_normalized_values_and_display_text() {
     );
     assert_eq!(parameter.display_value(&value).unwrap(), "-24 dB");
     assert!(parameter.flags.automatable);
+}
+
+#[test]
+fn enum_parameter_display_value_resolves_variant_names_and_falls_back() {
+    // An indexed-choice parameter renders each Choice index as the matching
+    // variant's display name (including names that are not valid idents). An
+    // index past the declared variants falls back to the raw number, so a stale
+    // host value can never panic or render blank.
+    let parameter = ParameterRecord::enumerated(
+        "osc.shape",
+        "Osc Shape",
+        1,
+        [
+            EnumVariant::new("sine", "Sine"),
+            EnumVariant::new("square-pulse", "Square / Pulse"),
+        ],
+    );
+
+    assert_eq!(
+        parameter.display_value(&ParameterValue::Choice(0)).unwrap(),
+        "Sine"
+    );
+    assert_eq!(
+        parameter.display_value(&ParameterValue::Choice(1)).unwrap(),
+        "Square / Pulse"
+    );
+    assert_eq!(
+        parameter.display_value(&ParameterValue::Choice(9)).unwrap(),
+        "9"
+    );
 }
 
 #[test]

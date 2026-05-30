@@ -158,7 +158,9 @@ fn generated_params_read_back_through_the_bridge_by_id() {
     assert!(approx(bridge.get_param_plain(3), 0.0));
 
     // osc.shape: enum, default index 1 → "Saw"; the plain value is the index,
-    // and truce formats an enum param by its current variant's name.
+    // and truce formats an enum param by its current variant's name. The
+    // normalized value is index / (count - 1) = 1 / (3 - 1) = 0.5.
     assert!(approx(bridge.get_param_plain(4), 1.0));
+    assert!(approx(bridge.get_param(4), 0.5));
     assert_eq!(bridge.format_param(4), "Saw");
 }
