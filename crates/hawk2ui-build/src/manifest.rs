@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use hawk2ui_plugin::{ParameterModel, ParameterRange, ParameterRecord};
+use hawk2ui_plugin::{MeterRecord, ParameterModel, ParameterRange, ParameterRecord};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +36,8 @@ pub struct HawkManifest {
     pub editor: Option<EditorMetadata>,
     /// Plugin parameters.
     pub parameters: Vec<PluginParameter>,
+    /// Plugin meters (read-only level outputs).
+    pub meters: Vec<PluginMeter>,
     /// Asset declarations.
     pub assets: Vec<AssetDeclaration>,
     /// Preset declarations.
@@ -55,6 +57,8 @@ struct RawManifest {
     editor: Option<EditorMetadata>,
     #[serde(default)]
     parameters: Vec<PluginParameter>,
+    #[serde(default)]
+    meters: Vec<PluginMeter>,
     #[serde(default)]
     assets: Vec<AssetDeclaration>,
     #[serde(default)]
@@ -175,6 +179,21 @@ pub struct PluginParameter {
     pub unit: String,
 }
 
+/// Plugin meter metadata.
+///
+/// A meter is a read-only level output (`0.0..=1.0`) the editor reads by id; it
+/// carries no host-writable value, range, or unit. Meter ids share the
+/// parameter id namespace because both become fields of the one generated
+/// `Params` struct and keys in the one editor address space.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginMeter {
+    /// Meter ID.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+}
+
 /// Asset declaration.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -218,6 +237,7 @@ impl HawkManifest {
             plugin: raw.plugin,
             editor: raw.editor,
             parameters: raw.parameters,
+            meters: raw.meters,
             assets: raw.assets,
             presets: raw.presets,
         };
@@ -260,11 +280,12 @@ impl HawkManifest {
     /// generation consumes.
     ///
     /// Each manifest parameter becomes a [`ParameterRecord`] of the matching
-    /// kind — numeric, integer, or boolean — over its plain `[min, max]` range.
-    /// Manifest validation already guarantees the range and default are
-    /// well-formed for the kind, so the returned model is valid by construction
-    /// and ready to drive the truce `Params` and editor-side TypeScript
-    /// emitters from this single source.
+    /// kind — numeric, integer, or boolean — over its plain `[min, max]` range,
+    /// and each manifest meter becomes a read-only [`MeterRecord`]. Manifest
+    /// validation already guarantees the ranges, defaults, and ids are
+    /// well-formed, so the returned model is valid by construction and ready to
+    /// drive the truce `Params` and editor-side TypeScript emitters from this
+    /// single source.
     #[must_use]
     pub fn parameter_model(&self) -> ParameterModel {
         ParameterModel::new(self.parameters.iter().map(|parameter| {
@@ -290,6 +311,11 @@ impl HawkManifest {
                 ),
             }
         }))
+        .with_meters(
+            self.meters
+                .iter()
+                .map(|meter| MeterRecord::new(meter.id.clone(), meter.name.clone())),
+        )
     }
 
     fn validate(&self) -> Result<(), ManifestError> {
@@ -312,12 +338,15 @@ impl HawkManifest {
             }
         }
 
-        if !self.parameters.is_empty() && self.plugin.is_none() {
+        if (!self.parameters.is_empty() || !self.meters.is_empty()) && self.plugin.is_none() {
             return Err(ManifestError::InvalidPluginMetadata(
-                "parameters require [plugin] metadata",
+                "parameters and meters require [plugin] metadata",
             ));
         }
-        let mut parameter_ids = BTreeSet::new();
+        // Parameters and meters share one id namespace: both become fields of
+        // the generated `Params` struct and keys in the one editor address
+        // space, so a collision would emit a struct that does not compile.
+        let mut plugin_ids = BTreeSet::new();
         for parameter in &self.parameters {
             require_non_empty("parameter.id", &parameter.id)?;
             require_non_empty("parameter.name", &parameter.name)?;
@@ -325,8 +354,18 @@ impl HawkManifest {
                 return Err(ManifestError::InvalidPluginParameter(parameter.id.clone()));
             }
             validate_parameter_kind(parameter)?;
-            if !parameter_ids.insert(parameter.id.clone()) {
+            if !plugin_ids.insert(parameter.id.clone()) {
                 return Err(ManifestError::DuplicateParameter(parameter.id.clone()));
+            }
+        }
+        for meter in &self.meters {
+            require_non_empty("meter.id", &meter.id)?;
+            require_non_empty("meter.name", &meter.name)?;
+            if !is_stable_id(&meter.id) {
+                return Err(ManifestError::InvalidPluginMeter(meter.id.clone()));
+            }
+            if !plugin_ids.insert(meter.id.clone()) {
+                return Err(ManifestError::DuplicateMeter(meter.id.clone()));
             }
         }
 
@@ -456,12 +495,16 @@ pub enum ManifestError {
     DuplicatePreset(String),
     /// Duplicate parameter ID.
     DuplicateParameter(String),
+    /// Duplicate meter ID (within the shared parameter/meter id namespace).
+    DuplicateMeter(String),
     /// Invalid capability key.
     InvalidCapability(String),
     /// Invalid plugin metadata.
     InvalidPluginMetadata(&'static str),
     /// Invalid plugin parameter metadata.
     InvalidPluginParameter(String),
+    /// Invalid plugin meter metadata.
+    InvalidPluginMeter(String),
     /// Manifest failed generated JSON Schema validation.
     SchemaValidation {
         /// JSON pointer to the invalid manifest value.

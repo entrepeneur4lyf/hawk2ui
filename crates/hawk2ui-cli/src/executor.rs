@@ -1005,6 +1005,10 @@ fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {
             "manifest.parameter.duplicate",
             format!("duplicate parameter declaration: {parameter}"),
         ),
+        ManifestError::DuplicateMeter(meter) => CliDiagnostic::error(
+            "manifest.meter.duplicate",
+            format!("duplicate meter declaration (parameter/meter id namespace): {meter}"),
+        ),
         ManifestError::InvalidCapability(capability) => CliDiagnostic::error(
             "manifest.capability.invalid",
             format!("invalid capability key: {capability}"),
@@ -1015,6 +1019,10 @@ fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {
         ManifestError::InvalidPluginParameter(parameter) => CliDiagnostic::error(
             "manifest.parameter.invalid",
             format!("invalid plugin parameter declaration: {parameter}"),
+        ),
+        ManifestError::InvalidPluginMeter(meter) => CliDiagnostic::error(
+            "manifest.meter.invalid",
+            format!("invalid plugin meter declaration: {meter}"),
         ),
         ManifestError::SchemaValidation { path, message } => CliDiagnostic::error(
             "manifest.schema.invalid",

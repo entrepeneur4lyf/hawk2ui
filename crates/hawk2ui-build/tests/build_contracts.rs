@@ -496,6 +496,109 @@ fn manifest_parameter_model_covers_float_int_and_bool_kinds() {
     );
 }
 
+const METERED_PLUGIN_MANIFEST: &str = r#"
+[identity]
+id = "com.hawk2ui.metered"
+name = "Metered"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.metered"
+name = "Metered"
+
+[[parameters]]
+id = "osc.mix"
+name = "Osc Mix"
+default = 0.4
+
+[[meters]]
+id = "output.level"
+name = "Output Level"
+
+[[meters]]
+id = "input.level"
+name = "Input Level"
+"#;
+
+#[test]
+fn manifest_exposes_meters_in_the_parameter_model() {
+    let manifest = HawkManifest::parse(METERED_PLUGIN_MANIFEST).expect("metered manifest parses");
+    let model = manifest.parameter_model();
+    model
+        .validate()
+        .expect("the generated parameter model is valid");
+
+    // Meters declared in the manifest reach the model in declaration order,
+    // alongside (not mixed into) the parameters, ready for the truce emitter to
+    // render each as a `#[meter]` field.
+    assert_eq!(model.parameters.len(), 1);
+    assert_eq!(
+        model.meters.len(),
+        2,
+        "both declared meters reach the model"
+    );
+    assert_eq!(model.meters[0].id, "output.level");
+    assert_eq!(model.meters[0].display_name, "Output Level");
+    assert_eq!(model.meters[1].id, "input.level");
+    assert_eq!(model.meters[1].display_name, "Input Level");
+}
+
+#[test]
+fn manifest_validation_rejects_invalid_plugin_meters() {
+    let single = r#"
+[identity]
+id = "com.hawk2ui.bad-meters"
+name = "Bad Meters"
+version = "0.1.0"
+
+[source]
+entry = "src/main.ts"
+
+[plugin]
+id = "com.hawk2ui.bad-meters"
+name = "Bad Meters"
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+default = 0.5
+
+[[meters]]
+id = "output.level"
+name = "Output Level"
+"#;
+    // A meter id may not collide with a parameter id — they share one namespace.
+    let collides_with_param = single.replace("id = \"output.level\"", "id = \"gain\"");
+    // Two meters cannot share an id either.
+    let duplicate_meter =
+        format!("{single}\n[[meters]]\nid = \"output.level\"\nname = \"Output Level Copy\"\n");
+    // Meter ids follow the same stable-id grammar as parameter ids.
+    let invalid_meter_id = single.replace("id = \"output.level\"", "id = \"Bad Meter\"");
+    // A meter needs a non-empty display name.
+    let empty_meter_name = single.replace("name = \"Output Level\"", "name = \"   \"");
+
+    assert_eq!(
+        HawkManifest::parse(&collides_with_param)
+            .expect_err("meter id colliding with a parameter id must fail"),
+        ManifestError::DuplicateMeter("gain".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&duplicate_meter).expect_err("duplicate meter id must fail"),
+        ManifestError::DuplicateMeter("output.level".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&invalid_meter_id).expect_err("invalid meter id must fail"),
+        ManifestError::InvalidPluginMeter("Bad Meter".into())
+    );
+    assert_eq!(
+        HawkManifest::parse(&empty_meter_name).expect_err("empty meter name must fail"),
+        ManifestError::MissingField("meter.name")
+    );
+}
+
 #[test]
 fn sealed_artifact_hashes_manifest_snapshot_stably() {
     let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");

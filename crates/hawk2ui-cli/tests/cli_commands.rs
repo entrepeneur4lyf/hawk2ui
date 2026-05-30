@@ -241,6 +241,10 @@ min = 20.0
 max = 20000.0
 default = 1000.0
 unit = "Hz"
+
+[[meters]]
+id = "output.level"
+name = "Output Level"
 "#,
     );
 
@@ -255,6 +259,14 @@ unit = "Hz"
         execution.stdout
     );
     assert!(execution.stdout.contains("unit = \"Hz\""));
+    // A manifest meter flows through the same model into a truce `#[meter]`
+    // field — the read-only level output the editor consumes.
+    assert!(
+        execution.stdout.contains("#[meter]")
+            && execution.stdout.contains("pub output_level: MeterSlot,"),
+        "manifest meter should flow into the emitted source: {}",
+        execution.stdout
+    );
 }
 
 use hawk2ui_cli::{CliDiagnostic, DiagnosticSeverity, SourceSpan};
