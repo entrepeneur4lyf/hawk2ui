@@ -15,6 +15,7 @@ use oxc_parser::Parser;
 use oxc_semantic::SemanticBuilder;
 use oxc_span::SourceType;
 use oxc_transformer::{HelperLoaderMode, TransformOptions, Transformer};
+use serde::Serialize;
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-script";
@@ -114,6 +115,145 @@ const __hawk2ui_host = Object.freeze({{
 
 JSON.stringify(mount(__hawk2ui_host));
 "
+    ))
+}
+
+/// The value kind of a projected parameter, mirrored to editor JS so an author
+/// sees a `bool` as a boolean, an `enum` as its variant index, an `int` as an
+/// integer — never every kind flattened to a float.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostParamKind {
+    /// Continuous floating-point parameter.
+    Float,
+    /// Discrete integer parameter.
+    Int,
+    /// Boolean parameter.
+    Bool,
+    /// Indexed-choice (enum) parameter.
+    Enum,
+}
+
+/// A projected parameter's current value, serialized to the JS scalar matching
+/// its kind (`Float`/`Int` → number, `Bool` → boolean, `Enum` → variant index).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum HostParamValue {
+    /// Plain floating-point value.
+    Float(f64),
+    /// Plain integer value.
+    Int(i64),
+    /// Boolean value.
+    Bool(bool),
+    /// Indexed-choice variant index.
+    Enum(u32),
+}
+
+/// One parameter projected into an editor entry script, addressed by its stable
+/// string key (the numeric truce id is host-side routing metadata, not part of
+/// the author-facing surface).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HostParam {
+    /// Stable string key the author addresses the parameter by.
+    pub key: String,
+    /// Value kind, which drives the JS type of `value`.
+    pub kind: HostParamKind,
+    /// Current value, typed by `kind`.
+    pub value: HostParamValue,
+    /// Normalized value in `0.0..=1.0`.
+    pub normalized: f64,
+    /// Host-formatted display text (value plus unit).
+    pub text: String,
+    /// Variant display names for an enum parameter; empty for every other kind.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<String>,
+}
+
+/// One read-only meter projected into an editor entry script.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HostMeter {
+    /// Stable string key the author addresses the meter by.
+    pub key: String,
+    /// Current level in `0.0..=1.0`.
+    pub value: f32,
+}
+
+/// The frozen snapshot of parameters and meters projected into an editor entry
+/// script's `mount(host)` call. Reads are pure data — no host call — so the
+/// script runs under the same `HostCallPolicy::deny_all` as the no-host path.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct HostSnapshot {
+    /// Projected parameters, in declaration order.
+    pub params: Vec<HostParam>,
+    /// Projected read-only meters, in declaration order.
+    pub meters: Vec<HostMeter>,
+}
+
+/// Wraps a compiled entry module like [`entry_mount_bootstrap`], but projects a
+/// `host` carrying a frozen `snapshot` of parameters and meters that the script
+/// reads by string key:
+///
+/// ```ignore
+/// host.param("cutoff").value      // typed by kind (number / boolean / index)
+/// host.param("cutoff").normalized // 0..1
+/// host.param("cutoff").text       // host-formatted display string
+/// host.params                     // all params, declaration order
+/// host.meter("out")               // a level, 0..1
+/// host.meters                     // all meters
+/// ```
+///
+/// `host.param`/`host.meter` throw on an unknown key (a typo surfaces at once
+/// rather than silently reading `undefined`). The snapshot is embedded as a
+/// JSON literal — a pure data projection, so no host-call capability is needed
+/// and the script still runs under `deny_all`. Returns `None` when the source
+/// declares no `mount` function.
+#[must_use]
+pub fn entry_mount_bootstrap_with_host(source: &str, snapshot: &HostSnapshot) -> Option<String> {
+    let source = source.replacen("export function mount", "function mount", 1);
+    if !source.contains("function mount") {
+        return None;
+    }
+    // serde_json produces a valid, injection-safe JS expression (JSON ⊂ JS),
+    // correctly escaping author-controlled keys and display text. A failure is
+    // unreachable for this plain data, but falls back to an empty snapshot
+    // rather than panicking (the crate forbids `unwrap`/`expect` in non-test).
+    let snapshot = serde_json::to_string(snapshot)
+        .unwrap_or_else(|_| String::from(r#"{"params":[],"meters":[]}"#));
+    Some(format!(
+        r#"{source}
+
+const __hawk2ui_snapshot = {snapshot};
+const __hawk2ui_params_by_key = {{}};
+for (const __param of __hawk2ui_snapshot.params) {{
+    __hawk2ui_params_by_key[__param.key] = Object.freeze(__param);
+}}
+const __hawk2ui_meters_by_key = {{}};
+for (const __meter of __hawk2ui_snapshot.meters) {{
+    __hawk2ui_meters_by_key[__meter.key] = __meter.value;
+}}
+const __hawk2ui_host = Object.freeze({{
+    on(_name, _handler) {{}},
+    setState(_value) {{}},
+    params: Object.freeze(__hawk2ui_snapshot.params.map(Object.freeze)),
+    param(key) {{
+        const __found = __hawk2ui_params_by_key[key];
+        if (__found === undefined) {{
+            throw new Error("hawk2ui: unknown parameter '" + key + "'");
+        }}
+        return __found;
+    }},
+    meters: Object.freeze(__hawk2ui_snapshot.meters.map(Object.freeze)),
+    meter(key) {{
+        const __level = __hawk2ui_meters_by_key[key];
+        if (__level === undefined) {{
+            throw new Error("hawk2ui: unknown meter '" + key + "'");
+        }}
+        return __level;
+    }}
+}});
+
+JSON.stringify(mount(__hawk2ui_host));
+"#
     ))
 }
 
@@ -1073,6 +1213,80 @@ mod tests {
         assert_eq!(
             ScriptModule::for_source_path("src/main.js", "").kind(),
             ScriptModuleKind::JavaScript
+        );
+    }
+
+    #[test]
+    fn projects_params_and_meters_into_the_entry_host() {
+        let snapshot = HostSnapshot {
+            params: vec![
+                HostParam {
+                    key: "cutoff".into(),
+                    kind: HostParamKind::Float,
+                    value: HostParamValue::Float(1200.0),
+                    normalized: 0.42,
+                    text: "1.20 kHz".into(),
+                    variants: Vec::new(),
+                },
+                HostParam {
+                    key: "bypass".into(),
+                    kind: HostParamKind::Bool,
+                    value: HostParamValue::Bool(true),
+                    normalized: 1.0,
+                    text: "On".into(),
+                    variants: Vec::new(),
+                },
+            ],
+            meters: vec![HostMeter {
+                key: "out".into(),
+                value: 0.5,
+            }],
+        };
+        let source = r#"
+export function mount(host) {
+    const c = host.param("cutoff");
+    return {
+        id: "root",
+        type: "text",
+        text: c.kind + "|" + c.value + "|" + c.text + "|" + c.normalized
+            + "|" + host.param("bypass").value + "|" + host.meter("out")
+            + "|" + host.params.length + "|" + host.meters.length
+    };
+}
+"#;
+        let bootstrap =
+            entry_mount_bootstrap_with_host(source, &snapshot).expect("mount is wrapped");
+        let mut backend =
+            ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+        let execution = backend
+            .execute_module(ScriptModule::javascript("editor.js", bootstrap.as_str()))
+            .expect("the projected entry script executes");
+        let StructuredValue::String(json) = execution.value() else {
+            panic!("mount must return a serialized node tree");
+        };
+        // float kind / plain value 1200 / formatted text / normalized; bypass
+        // reads as a JS boolean; the meter as its level; two params, one meter.
+        assert!(
+            json.contains("float|1200|1.20 kHz|0.42|true|0.5|2|1"),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_param_or_meter_key_throws() {
+        let snapshot = HostSnapshot::default();
+        let bootstrap = entry_mount_bootstrap_with_host(
+            r#"export function mount(host) { return host.param("nope"); }"#,
+            &snapshot,
+        )
+        .expect("mount is wrapped");
+        let mut backend =
+            ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+        assert!(
+            backend
+                .execute_module(ScriptModule::javascript("editor.js", bootstrap.as_str()))
+                .is_err(),
+            "reading an unknown parameter key must throw"
         );
     }
 }

@@ -25,3 +25,9 @@ oxc_parser = "0.133.0"
 oxc_semantic = "0.133.0"
 oxc_span = "0.133.0"
 oxc_transformer = "0.133.0"
+# Serializes the editor host snapshot (params/meters) into a JSON literal
+# embedded in the entry-script bootstrap — a valid, injection-safe JS expression
+# (author-controlled param names/text get executed as JS, so escaping must be
+# correct). Standard, already in the lock tree, deny-clean.
+serde = { workspace = true }
+serde_json = "1"
