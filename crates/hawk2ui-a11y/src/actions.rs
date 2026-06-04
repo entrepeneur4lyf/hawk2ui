@@ -154,11 +154,20 @@ impl A11yActionDispatcher {
                 let Some(node) = self.tree.find_mut(&event.node_id) else {
                     return Err(missing_target_error(&event.node_id));
                 };
-                node.value = Some(value.clone());
-                if let (Some(numeric), Ok(parsed)) =
-                    (node.numeric_value.as_mut(), value.parse::<f64>())
-                {
-                    numeric.value = clamp_numeric(parsed, numeric.min, numeric.max);
+                if let Some(numeric) = node.numeric_value.as_mut() {
+                    let (parsed, suffix) =
+                        parse_numeric_text(value).ok_or_else(|| A11yActionDispatchError {
+                            code: "a11y.action-invalid-value".into(),
+                            message: format!(
+                                "accessibility numeric value is invalid: {}",
+                                event.node_id
+                            ),
+                        })?;
+                    let adjusted = clamp_numeric(parsed, numeric.min, numeric.max);
+                    numeric.value = adjusted;
+                    node.value = Some(format_numeric_value(adjusted, suffix.as_deref()));
+                } else {
+                    node.value = Some(value.clone());
                 }
             }
             A11yAction::Custom(_) => {}
@@ -211,7 +220,7 @@ impl A11yActionDispatcher {
     }
 
     fn push_event(&mut self, event: A11yActionEvent) {
-        if self.events.len() == A11Y_ACTION_EVENT_HISTORY_LIMIT {
+        while self.events.len() >= A11Y_ACTION_EVENT_HISTORY_LIMIT {
             self.events.remove(0);
         }
         self.events.push(event);

@@ -9,6 +9,7 @@ The runtime API surface is the public contract between application code, host ad
 - `Surface`: desktop and embedded host surface metrics, input events, and repaint contracts.
 - `Artifact`: schema and artifact compatibility records used when loading sealed artifacts.
 - `Plugin`: plugin editor, parameter, state, preset, and realtime data contracts.
+- `Inventory`: public API inventory, module, audience, entry, and stability classification contracts.
 
 ## Diagnostic Records
 
@@ -18,6 +19,14 @@ The runtime API surface is the public contract between application code, host ad
 - `SourceSpan`: source location attached to a diagnostic.
 - `SuggestedFix`: machine-readable fix hint.
 - `RelatedContext`: extra context attached to a diagnostic.
+
+## Inventory Records
+
+- `ApiInventory`: deterministic public API inventory.
+- `ApiModule`: public root API module classification.
+- `ApiTypeAudience`: intended consumer group for an API entry.
+- `ApiTypeEntry`: single public API inventory entry.
+- `ApiTypeStatus`: stability status for an inventory entry.
 
 ## Runtime Records
 

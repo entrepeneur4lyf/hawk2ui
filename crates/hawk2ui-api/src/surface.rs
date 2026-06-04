@@ -18,7 +18,7 @@ pub enum SurfaceKind {
 }
 
 /// Logical and physical metrics for a host surface.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct SurfaceMetrics {
     /// Finite non-negative logical width in UI units.
     pub logical_width: f32,
@@ -30,6 +30,31 @@ pub struct SurfaceMetrics {
     pub physical_height: u32,
     /// Finite positive device scale factor.
     pub scale_factor: f32,
+}
+
+#[derive(Deserialize)]
+struct SurfaceMetricsWire {
+    logical_width: f32,
+    logical_height: f32,
+    physical_width: u32,
+    physical_height: u32,
+    scale_factor: f32,
+}
+
+impl<'de> Deserialize<'de> for SurfaceMetrics {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = SurfaceMetricsWire::deserialize(deserializer)?;
+        Ok(Self::new(
+            wire.logical_width,
+            wire.logical_height,
+            wire.physical_width,
+            wire.physical_height,
+            wire.scale_factor,
+        ))
+    }
 }
 
 impl SurfaceMetrics {
@@ -105,9 +130,19 @@ pub enum MouseButton {
 }
 
 /// Keyboard modifier state attached to key events.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct KeyModifiers(u8);
+
+impl<'de> Deserialize<'de> for KeyModifiers {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bits = u8::deserialize(deserializer)?;
+        Ok(Self::from_bits_truncate(bits))
+    }
+}
 
 impl KeyModifiers {
     const SHIFT: u8 = 0b0001;

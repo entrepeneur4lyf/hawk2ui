@@ -270,6 +270,28 @@ component CounterCard id=counter-card {
 }
 
 #[test]
+fn native_runtime_bridge_rejects_multi_component_source_artifacts() {
+    let source = "\
+component First id=first {
+  text title \"First\"
+}
+component Second id=second {
+  text title \"Second\"
+}
+";
+    let mut diagnostics = Vec::new();
+    let artifact = hawk2ui_authoring::compile_authoring_source(source, &mut diagnostics);
+
+    let error = NativeRuntimeBridge::new()
+        .bridge_authoring_artifact(&artifact)
+        .expect_err("multi-component source artifact must not silently drop components");
+
+    assert!(diagnostics.is_empty());
+    assert_eq!(artifact.components().len(), 2);
+    assert_eq!(error.rule(), "native-runtime.authoring.multiple-roots");
+}
+
+#[test]
 fn native_runtime_bridge_lowers_custom_surface_elements_to_runtime_visuals() {
     let element = NativeAuthoringElement::new("meter", ElementKind::CustomSurface)
         .with_prop("surface_category", PropValue::String("meter".to_string()))
@@ -425,6 +447,19 @@ fn native_runtime_bridge_rejects_invalid_layout_numbers_with_structured_error() 
 
     assert_eq!(error.rule(), "native-runtime.layout.invalid-number");
     assert!(error.message().contains("width"));
+}
+
+#[test]
+fn native_runtime_bridge_rejects_multibyte_hex_colors_without_panicking() {
+    let element = NativeAuthoringElement::new("bad-color", ElementKind::View)
+        .with_prop("background", PropValue::String("#€abc".into()));
+
+    let error = NativeRuntimeBridge::new()
+        .bridge_element(&element)
+        .expect_err("multibyte color input must fail as a structured diagnostic");
+
+    assert_eq!(error.rule(), "native-runtime.color.invalid");
+    assert!(error.message().contains("background"));
 }
 
 #[test]

@@ -54,7 +54,7 @@ impl AutomationGesture {
 }
 
 /// Public plugin parameter contract.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PluginParameterContract {
     /// Stable parameter identifier.
     pub id: ParameterId,
@@ -70,6 +70,27 @@ pub struct PluginParameterContract {
     pub normalized_min: f32,
     /// Maximum accepted finite normalized value.
     pub normalized_max: f32,
+}
+
+#[derive(Deserialize)]
+struct PluginParameterContractWire {
+    id: ParameterId,
+    name: String,
+    default_normalized: f32,
+    automatable: bool,
+    unit: Option<String>,
+    normalized_min: f32,
+    normalized_max: f32,
+}
+
+impl<'de> Deserialize<'de> for PluginParameterContract {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = PluginParameterContractWire::deserialize(deserializer)?;
+        Ok(Self::from_wire(wire))
+    }
 }
 
 impl PluginParameterContract {
@@ -119,6 +140,18 @@ impl PluginParameterContract {
         normalized.is_finite()
             && normalized >= self.normalized_min
             && normalized <= self.normalized_max
+    }
+
+    fn from_wire(wire: PluginParameterContractWire) -> Self {
+        let mut parameter = Self::new(
+            wire.id,
+            wire.name,
+            wire.default_normalized,
+            wire.automatable,
+        )
+        .with_normalized_range(wire.normalized_min, wire.normalized_max);
+        parameter.unit = wire.unit;
+        parameter
     }
 }
 

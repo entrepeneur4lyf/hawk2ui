@@ -356,6 +356,7 @@ fn manual_runtime_security_and_packaging_match_machine_readable_gates() {
         let module_name = match module {
             ApiModule::Artifact => "Artifact",
             ApiModule::Diagnostic => "Diagnostic",
+            ApiModule::Inventory => "Inventory",
             ApiModule::Plugin => "Plugin",
             ApiModule::Runtime => "Runtime",
             ApiModule::Surface => "Surface",

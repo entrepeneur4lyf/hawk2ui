@@ -13,6 +13,8 @@ pub enum ApiModule {
     Artifact,
     /// Diagnostic contracts.
     Diagnostic,
+    /// Public API inventory and stability classification contracts.
+    Inventory,
     /// Plugin-facing contracts.
     Plugin,
     /// Runtime and host binding contracts.
@@ -29,6 +31,9 @@ impl ApiModule {
             Self::Artifact => "Versioned artifact, hash, manifest, and target metadata contracts.",
             Self::Diagnostic => {
                 "Stable diagnostic, source span, related context, and fix contracts."
+            }
+            Self::Inventory => {
+                "Public API inventory, module, audience, entry, and stability classification contracts."
             }
             Self::Plugin => {
                 "Plugin parameter, automation, state, editor, preset, and realtime contracts."
@@ -133,10 +138,11 @@ impl ApiInventory {
     #[must_use]
     pub fn production_baseline() -> Self {
         use ApiModule::{
-            Artifact as ArtifactModule, Diagnostic as DiagnosticModule, Plugin as PluginModule,
-            Runtime as RuntimeModule, Surface as SurfaceModule,
+            Artifact as ArtifactModule, Diagnostic as DiagnosticModule,
+            Inventory as InventoryModule, Plugin as PluginModule, Runtime as RuntimeModule,
+            Surface as SurfaceModule,
         };
-        use ApiTypeAudience::{Author, Build, Plugin, Runtime};
+        use ApiTypeAudience::{Author, Build, Plugin, Runtime, Test};
         use ApiTypeStatus::Public;
 
         Self {
@@ -147,6 +153,11 @@ impl ApiInventory {
                 ApiTypeEntry::new(DiagnosticModule, "SourceSpan", Public, Author),
                 ApiTypeEntry::new(DiagnosticModule, "SuggestedFix", Public, Author),
                 ApiTypeEntry::new(DiagnosticModule, "RelatedContext", Public, Author),
+                ApiTypeEntry::new(InventoryModule, "ApiInventory", Public, Test),
+                ApiTypeEntry::new(InventoryModule, "ApiModule", Public, Test),
+                ApiTypeEntry::new(InventoryModule, "ApiTypeAudience", Public, Test),
+                ApiTypeEntry::new(InventoryModule, "ApiTypeEntry", Public, Test),
+                ApiTypeEntry::new(InventoryModule, "ApiTypeStatus", Public, Test),
                 ApiTypeEntry::new(ArtifactModule, "ArtifactId", Public, Build),
                 ApiTypeEntry::new(ArtifactModule, "ArtifactHash", Public, Build),
                 ApiTypeEntry::new(ArtifactModule, "ArtifactSchemaVersion", Public, Runtime),
@@ -196,10 +207,11 @@ impl ApiInventory {
 
     /// Returns public root modules in deterministic order.
     #[must_use]
-    pub const fn root_modules(&self) -> [ApiModule; 5] {
+    pub const fn root_modules(&self) -> [ApiModule; 6] {
         [
             ApiModule::Artifact,
             ApiModule::Diagnostic,
+            ApiModule::Inventory,
             ApiModule::Plugin,
             ApiModule::Runtime,
             ApiModule::Surface,

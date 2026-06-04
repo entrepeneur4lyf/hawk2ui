@@ -42,6 +42,26 @@ fn plugin_parameter_contract_sanitizes_invalid_normalized_values() {
 }
 
 #[test]
+fn plugin_parameter_contract_sanitizes_deserialized_normalized_values() {
+    let parameter: PluginParameterContract = serde_json::from_value(serde_json::json!({
+        "id": "gain",
+        "name": "Gain",
+        "default_normalized": 2.0,
+        "automatable": true,
+        "unit": "dB",
+        "normalized_min": 0.75,
+        "normalized_max": 0.25
+    }))
+    .expect("parameter contract deserializes through validation");
+
+    assert_eq!(parameter.id.as_str(), "gain");
+    assert_eq!(parameter.unit.as_deref(), Some("dB"));
+    assert!((parameter.default_normalized - 1.0).abs() < f32::EPSILON);
+    assert!((parameter.normalized_min - 0.0).abs() < f32::EPSILON);
+    assert!((parameter.normalized_max - 1.0).abs() < f32::EPSILON);
+}
+
+#[test]
 fn plugin_contract_downstream_code_uses_state_and_preset_records() {
     let state = PluginStateContract::new(PluginStateFormat::Json, "application/json")
         .with_entry("gain", "0.5")

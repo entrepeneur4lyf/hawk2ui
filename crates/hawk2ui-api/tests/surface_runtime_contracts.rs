@@ -33,6 +33,25 @@ fn surface_metrics_sanitize_non_finite_or_invalid_values() {
 }
 
 #[test]
+fn surface_metrics_and_modifiers_sanitize_deserialized_values() {
+    let metrics: SurfaceMetrics = serde_json::from_value(serde_json::json!({
+        "logical_width": -10.0,
+        "logical_height": 48.0,
+        "physical_width": 96,
+        "physical_height": 48,
+        "scale_factor": 0.0
+    }))
+    .expect("surface metrics deserialize through validation");
+    let modifiers: KeyModifiers =
+        serde_json::from_value(serde_json::json!(255)).expect("modifiers deserialize");
+
+    assert!((metrics.logical_width - 0.0).abs() < f32::EPSILON);
+    assert!((metrics.logical_height - 48.0).abs() < f32::EPSILON);
+    assert!((metrics.scale_factor - 1.0).abs() < f32::EPSILON);
+    assert_eq!(modifiers.bits(), 0b1111);
+}
+
+#[test]
 fn surface_runtime_contracts_downstream_code_uses_keyboard_and_lifecycle_contracts_from_root_exports()
  {
     let event = InputEvent::KeyPressed(KeyEvent::new(

@@ -45,14 +45,15 @@ impl NativeRuntimeBridge {
 
     /// Bridges a source-compiled authoring artifact into a runtime tree.
     ///
-    /// The line compiler emits component records. This adapter materializes the first compiled
+    /// The line compiler emits component records. This adapter materializes a single compiled
     /// component as a view root and lowers its default slot children, preserving events targeted at
-    /// the component root.
+    /// the component root. Multi-component source artifacts are rejected until the source dialect has
+    /// explicit routing or composition semantics.
     ///
     /// # Errors
     ///
     /// Returns [`NativeRuntimeBridgeError`] when the artifact has compiler diagnostics, has no
-    /// components, or contains invalid runtime records.
+    /// components, has multiple root components, or contains invalid runtime records.
     pub fn bridge_authoring_artifact(
         self,
         artifact: &AuthoringArtifact,
@@ -69,6 +70,12 @@ impl NativeRuntimeBridge {
                 "compiled authoring artifact contains no components",
             ));
         };
+        if artifact.components().len() > 1 {
+            return Err(NativeRuntimeBridgeError::new(
+                "native-runtime.authoring.multiple-roots",
+                "compiled authoring artifact contains multiple root components",
+            ));
+        }
 
         let mut root = NativeAuthoringElement::new(component.id().as_str(), ElementKind::View);
         for event in artifact
@@ -646,7 +653,7 @@ fn parse_hex_color(name: &str, value: &str) -> Result<Color, NativeRuntimeBridge
     let Some(hex) = value.strip_prefix('#') else {
         return Err(invalid_color(name));
     };
-    if hex.len() != 6 {
+    if hex.len() != 6 || !hex.as_bytes().iter().all(u8::is_ascii_hexdigit) {
         return Err(invalid_color(name));
     }
     let red = parse_hex_channel(name, &hex[0..2])?;

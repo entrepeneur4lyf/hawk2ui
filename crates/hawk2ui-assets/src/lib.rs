@@ -195,7 +195,7 @@ impl AssetRecord {
             AssetKind::Image => hawk2ui_render::CompiledAsset::image(
                 &self.id,
                 &self.source_path,
-                &self.hash,
+                &self.compiled_hash,
                 self.width.unwrap_or_default(),
                 self.height.unwrap_or_default(),
             )
@@ -203,15 +203,17 @@ impl AssetRecord {
             AssetKind::Vector => hawk2ui_render::CompiledAsset::vector(
                 &self.id,
                 &self.source_path,
-                &self.hash,
+                &self.compiled_hash,
                 self.width.unwrap_or_default(),
                 self.height.unwrap_or_default(),
             )
             .with_backend_requirement(hawk2ui_render::BackendRequirement::Vectors),
-            AssetKind::Font => {
-                hawk2ui_render::CompiledAsset::font(&self.id, &self.source_path, &self.hash)
-                    .with_backend_requirement(hawk2ui_render::BackendRequirement::Fonts)
-            }
+            AssetKind::Font => hawk2ui_render::CompiledAsset::font(
+                &self.id,
+                &self.source_path,
+                &self.compiled_hash,
+            )
+            .with_backend_requirement(hawk2ui_render::BackendRequirement::Fonts),
         };
         asset
             .with_sanitized(self.sanitized)
@@ -379,6 +381,7 @@ impl AssetBackend {
         let tree = usvg::Tree::from_data(bytes, &options).map_err(|_| {
             AssetBackendError::new("asset.vector.parse-failed", "SVG parsing failed")
         })?;
+        let vector_size = tree.size();
         let path_count = count_vector_paths(tree.root())?;
         let compiled_payload = normalize_svg_payload(&tree)?;
         validate_vector(&compiled_payload)?;
@@ -391,8 +394,8 @@ impl AssetBackend {
             compiled_hash: compiled_hash.as_str().to_string(),
             compiled_bytes,
             kind: AssetKind::Vector,
-            width: None,
-            height: None,
+            width: vector_dimension_to_u32(vector_size.width()),
+            height: vector_dimension_to_u32(vector_size.height()),
             vector_lowering: Some(VectorLowering { path_count }),
             sanitized: true,
             metadata_stripped: false,
@@ -688,6 +691,19 @@ fn verify_pixels_against_limits(
     } else {
         Ok(())
     }
+}
+
+fn vector_dimension_to_u32(value: f32) -> Option<u32> {
+    const MAX_U32_AS_F32: f32 = 4_294_967_040.0;
+    if !value.is_finite() || value <= 0.0 {
+        return None;
+    }
+    let rounded = value.ceil();
+    if rounded > MAX_U32_AS_F32 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Some(rounded as u32)
 }
 
 fn encode_lossless_webp(image: &image::DynamicImage) -> Result<Vec<u8>, AssetBackendError> {

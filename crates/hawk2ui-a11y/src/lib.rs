@@ -12,8 +12,8 @@ pub use actions::{
 };
 pub use component::{ComponentKind, ComponentSemantics, VisualStyleSemantics};
 pub use host::{
-    A11yHostExportSnapshot, A11yHostExporter, A11yHostSurfaceKind, AccessKitExport,
-    AccessKitExportError, LayoutGeometryUpdate,
+    A11Y_MAX_TREE_NODES, A11yHostExportSnapshot, A11yHostExporter, A11yHostSurfaceKind,
+    AccessKitExport, AccessKitExportError, LayoutGeometryUpdate,
 };
 pub use plugin::{A11yPluginDenial, A11yPluginGuard, A11yPluginOperation, A11yThreadContext};
 pub use tree::{

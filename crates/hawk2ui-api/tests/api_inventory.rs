@@ -51,6 +51,7 @@ fn api_inventory_exposes_only_documented_root_modules() {
         [
             ApiModule::Artifact,
             ApiModule::Diagnostic,
+            ApiModule::Inventory,
             ApiModule::Plugin,
             ApiModule::Runtime,
             ApiModule::Surface,
@@ -88,6 +89,29 @@ fn api_contract_inventory_includes_all_surface_runtime_and_plugin_contracts() {
         assert!(
             names.contains(&required),
             "public API inventory is missing {required}"
+        );
+    }
+}
+
+#[test]
+fn api_contract_inventory_includes_inventory_contracts() {
+    let inventory = ApiInventory::production_baseline();
+    let names = inventory
+        .types_for_module(ApiModule::Inventory)
+        .iter()
+        .map(|entry| entry.name())
+        .collect::<Vec<_>>();
+
+    for required in [
+        "ApiInventory",
+        "ApiModule",
+        "ApiTypeAudience",
+        "ApiTypeEntry",
+        "ApiTypeStatus",
+    ] {
+        assert!(
+            names.contains(&required),
+            "public API inventory is missing inventory contract {required}"
         );
     }
 }

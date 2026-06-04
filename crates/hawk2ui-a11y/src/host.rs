@@ -13,6 +13,9 @@ use crate::{
     CheckedState,
 };
 
+/// Maximum number of accessibility nodes accepted by a single host export.
+pub const A11Y_MAX_TREE_NODES: usize = 4096;
+
 /// Accessibility host surface kind.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum A11yHostSurfaceKind {
@@ -212,6 +215,12 @@ fn assign_accesskit_ids(
             return Err(AccessKitExportError::new(
                 "a11y.accesskit.duplicate-id",
                 format!("duplicate accessibility node identifier: {}", node.id),
+            ));
+        }
+        if node_ids.len() >= A11Y_MAX_TREE_NODES {
+            return Err(AccessKitExportError::new(
+                "a11y.accesskit.max-nodes",
+                format!("accessibility tree exceeds maximum node count of {A11Y_MAX_TREE_NODES}"),
             ));
         }
         let next = u64::try_from(node_ids.len())

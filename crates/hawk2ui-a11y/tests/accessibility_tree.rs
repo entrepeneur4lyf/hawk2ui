@@ -1,6 +1,7 @@
 use hawk2ui_a11y::{
-    A11Y_ACTION_EVENT_HISTORY_LIMIT, A11Y_MAX_TREE_DEPTH, A11yAction, A11yActionDispatcher,
-    A11yActionEvent, A11yBounds, A11yNode, A11yNumericValue, A11yRole, A11yTree, CheckedState,
+    A11Y_ACTION_EVENT_HISTORY_LIMIT, A11Y_MAX_TREE_DEPTH, A11Y_MAX_TREE_NODES, A11yAction,
+    A11yActionDispatcher, A11yActionEvent, A11yBounds, A11yNode, A11yNumericValue, A11yRole,
+    A11yTree, CheckedState,
 };
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 
@@ -148,6 +149,25 @@ fn actions_values_dispatch_focus_press_increment_decrement_set_value_and_custom(
 }
 
 #[test]
+fn action_dispatch_set_value_clamps_numeric_text_and_preserves_suffix() {
+    let tree = A11yTree::new(
+        A11yNode::new("gain", A11yRole::Slider)
+            .value("0.25 dB")
+            .numeric_value(A11yNumericValue::new(0.25).min(0.0).max(1.0).step(0.25))
+            .action(A11yAction::SetValue(String::new())),
+    );
+    let mut dispatcher = A11yActionDispatcher::new(tree);
+
+    dispatcher
+        .dispatch(A11yActionEvent::set_value("gain", "2 dB"))
+        .expect("set value parses numeric text with suffix");
+
+    let node = dispatcher.tree().find("gain").expect("gain node exists");
+    assert_eq!(node.value.as_deref(), Some("1 dB"));
+    assert!((node.numeric_value.unwrap().value - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
 fn action_dispatch_rejects_unsupported_disabled_and_invalid_numeric_actions() {
     let tree = A11yTree::new(
         A11yNode::new("root", A11yRole::Window)
@@ -190,6 +210,27 @@ fn action_dispatch_bounds_event_history() {
             .dispatch(A11yActionEvent::press("button"))
             .unwrap();
     }
+
+    assert_eq!(dispatcher.events().len(), A11Y_ACTION_EVENT_HISTORY_LIMIT);
+}
+
+#[test]
+fn action_dispatch_rebounds_deserialized_event_history_above_limit() {
+    let events = (0..(A11Y_ACTION_EVENT_HISTORY_LIMIT + 4))
+        .map(|_| A11yActionEvent::press("button"))
+        .collect::<Vec<_>>();
+    let value = serde_json::json!({
+        "tree": {
+            "root": A11yNode::new("button", A11yRole::Button).action(A11yAction::Press),
+        },
+        "events": events,
+    });
+    let mut dispatcher: A11yActionDispatcher =
+        serde_json::from_value(value).expect("dispatcher deserializes with over-cap history");
+
+    dispatcher
+        .dispatch(A11yActionEvent::press("button"))
+        .expect("valid event dispatches");
 
     assert_eq!(dispatcher.events().len(), A11Y_ACTION_EVENT_HISTORY_LIMIT);
 }
@@ -378,10 +419,21 @@ fn host_export_rejects_invalid_accesskit_ids_and_excessive_depth() {
     let too_deep = A11yHostExporter::desktop(A11yTree::new(root))
         .export_accesskit_update()
         .expect_err("excessively deep accessibility trees must fail");
+    let mut wide_root = A11yNode::new("wide-root", A11yRole::Window);
+    for index in 0..A11Y_MAX_TREE_NODES {
+        wide_root = wide_root.child(A11yNode::new(
+            format!("wide-child-{index}"),
+            A11yRole::Panel,
+        ));
+    }
+    let too_wide = A11yHostExporter::desktop(A11yTree::new(wide_root))
+        .export_accesskit_update()
+        .expect_err("excessively wide accessibility trees must fail");
 
     assert_eq!(empty_id.rule, "a11y.accesskit.invalid-id");
     assert_eq!(duplicate_id.rule, "a11y.accesskit.duplicate-id");
     assert_eq!(too_deep.rule, "a11y.accesskit.max-depth");
+    assert_eq!(too_wide.rule, "a11y.accesskit.max-nodes");
 }
 
 #[test]

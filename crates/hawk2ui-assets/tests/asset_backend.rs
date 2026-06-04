@@ -18,7 +18,16 @@ fn asset_backend_decodes_images_verifies_hashes_and_exports_render_records() {
     assert!(asset.metadata_stripped());
     assert_eq!(asset.hash(), expected_hash.as_str());
     assert_eq!(asset.cache_generation(), 1);
-    assert_eq!(asset.to_render_asset().id(), "hero");
+    let render_asset = asset.to_render_asset();
+    assert_eq!(render_asset.id(), "hero");
+    assert!(
+        render_asset.stable_key().contains(asset.compiled_hash()),
+        "render export should be keyed by sanitized compiled payload hash"
+    );
+    assert!(
+        !render_asset.stable_key().contains(asset.hash()),
+        "render export must not keep the raw source hash after sanitization"
+    );
 }
 
 #[test]
@@ -82,7 +91,13 @@ fn asset_backend_validates_and_lowers_vectors() {
 
     assert_eq!(vector.kind(), AssetKind::Vector);
     assert!(vector.sanitized());
+    assert_eq!(vector.width(), Some(10));
+    assert_eq!(vector.height(), Some(10));
     assert_eq!(vector.vector_lowering().unwrap().path_count(), 1);
+    vector
+        .to_render_asset()
+        .validate()
+        .expect("vector render export has valid dimensions");
     let lowered_svg =
         std::str::from_utf8(vector.compiled_bytes()).expect("lowered vector remains UTF-8 SVG");
     assert!(lowered_svg.starts_with("<svg"));
