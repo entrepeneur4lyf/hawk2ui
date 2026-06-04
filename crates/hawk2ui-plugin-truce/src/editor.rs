@@ -33,15 +33,6 @@ use crate::scene::{EditorSceneError, build_editor_scene, build_error_scene};
 /// Stable parent-fixture identifier for the truce editor surface.
 const EDITOR_FIXTURE_ID: &str = "hawk2ui-truce-editor";
 
-/// Placeholder X11 display handle.
-///
-/// Truce's [`RawWindowHandle::X11`] carries only the parent window id, whereas
-/// `Hawk2UI`'s [`HostPlatformHandle::LinuxX11`] also records a display handle.
-/// Baseview opens its own X11 connection from `$DISPLAY` and parents off the
-/// window id — for both the GLX context and X11 — so the recorded display is a
-/// non-zero placeholder rather than a live pointer.
-const X11_PLACEHOLDER_DISPLAY: u64 = 1;
-
 /// Converts a truce parent window handle into `Hawk2UI`'s host platform handle.
 ///
 /// Pure data repackaging: truce captures the native handle as a raw pointer
@@ -59,10 +50,7 @@ fn host_handle_from_truce(
 ) -> Result<HostPlatformHandle, BaseviewHostError> {
     match parent {
         RawWindowHandle::Win32(hwnd) => Ok(HostPlatformHandle::windows_hwnd(hwnd.addr() as u64)),
-        RawWindowHandle::X11(window) => Ok(HostPlatformHandle::linux_x11(
-            X11_PLACEHOLDER_DISPLAY,
-            window,
-        )),
+        RawWindowHandle::X11(window) => Ok(HostPlatformHandle::linux_x11_window(window)),
         RawWindowHandle::AppKit(_) => Err(BaseviewHostError::new(
             "hawk2ui-truce.parent.appkit-unsupported",
             "macOS AppKit parenting needs the owning NSWindow alongside the NSView that truce exposes; supported with the GPU presentation path",
@@ -492,13 +480,10 @@ mod tests {
     }
 
     #[test]
-    fn converts_x11_parent_handle_with_placeholder_display() {
+    fn converts_x11_parent_handle_without_faking_a_display_pointer() {
         let handle =
             host_handle_from_truce(RawWindowHandle::X11(0xABCD)).expect("x11 handle converts");
-        assert_eq!(
-            handle,
-            HostPlatformHandle::linux_x11(X11_PLACEHOLDER_DISPLAY, 0xABCD)
-        );
+        assert_eq!(handle, HostPlatformHandle::linux_x11_window(0xABCD));
     }
 
     #[test]

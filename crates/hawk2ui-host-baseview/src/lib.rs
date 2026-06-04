@@ -221,6 +221,7 @@ enum BaseviewNativeParentHandle {
     WindowsHwnd { hwnd: u64 },
     MacOsNsViewInWindow { ns_window: u64, ns_view: u64 },
     LinuxX11 { display: u64, window: u64 },
+    LinuxX11Window { window: u64 },
     LinuxXcb { connection: u64, window: u64 },
     LinuxXWayland { display: u64, window: u64 },
 }
@@ -274,6 +275,13 @@ impl BaseviewNativeParent {
                     BaseviewNativeParentBackend::X11,
                 )
             }
+            HostPlatformHandle::LinuxX11Window { window } => {
+                require_nonzero_handle(window)?;
+                (
+                    BaseviewNativeParentHandle::LinuxX11Window { window },
+                    BaseviewNativeParentBackend::X11,
+                )
+            }
             HostPlatformHandle::LinuxXcb { connection, window } => {
                 require_nonzero_handle(connection)?;
                 require_xcb_window(window)?;
@@ -306,6 +314,9 @@ impl BaseviewNativeParent {
             }
             BaseviewNativeParentHandle::LinuxX11 { display, window } => {
                 HostPlatformHandle::LinuxX11 { display, window }
+            }
+            BaseviewNativeParentHandle::LinuxX11Window { window } => {
+                HostPlatformHandle::LinuxX11Window { window }
             }
             BaseviewNativeParentHandle::LinuxXcb { connection, window } => {
                 HostPlatformHandle::LinuxXcb { connection, window }
@@ -370,6 +381,7 @@ unsafe impl HasRawWindowHandle for BaseviewNativeParent {
                 RawWindowHandle::AppKit(handle)
             }
             BaseviewNativeParentHandle::LinuxX11 { window, .. }
+            | BaseviewNativeParentHandle::LinuxX11Window { window }
             | BaseviewNativeParentHandle::LinuxXWayland { window, .. } => {
                 let mut handle = XlibWindowHandle::empty();
                 handle.window = window;
@@ -407,6 +419,9 @@ unsafe impl HasRawDisplayHandle for BaseviewNativeParent {
                 let mut handle = XlibDisplayHandle::empty();
                 handle.display = handle_to_ptr(display);
                 RawDisplayHandle::Xlib(handle)
+            }
+            BaseviewNativeParentHandle::LinuxX11Window { .. } => {
+                RawDisplayHandle::Xlib(XlibDisplayHandle::empty())
             }
             BaseviewNativeParentHandle::LinuxXcb { connection, .. } => {
                 let mut handle = XcbDisplayHandle::empty();
@@ -2533,6 +2548,7 @@ fn validate_baseview_parent(handle: HostPlatformHandle) -> Result<(), BaseviewHo
         | HostPlatformHandle::MacOsNsViewInWindow { .. }
         | HostPlatformHandle::MacOsNsWindow { .. }
         | HostPlatformHandle::LinuxX11 { .. }
+        | HostPlatformHandle::LinuxX11Window { .. }
         | HostPlatformHandle::LinuxXcb { .. }
         | HostPlatformHandle::LinuxXWayland { .. } => Ok(()),
     }

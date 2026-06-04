@@ -88,6 +88,15 @@ pub enum HostPlatformHandle {
         /// X11 window handle.
         window: u64,
     },
+    /// Linux X11 window without a borrowed display pointer.
+    ///
+    /// Some plugin hosts expose only the parent X11 window id. This variant
+    /// records that constrained but valid embedding contract explicitly instead
+    /// of forcing callers to invent a display pointer they do not own.
+    LinuxX11Window {
+        /// X11 window handle.
+        window: u64,
+    },
     /// Linux XCB connection and window.
     LinuxXcb {
         /// XCB connection handle.
@@ -141,6 +150,12 @@ impl HostPlatformHandle {
         Self::LinuxX11 { display, window }
     }
 
+    /// Creates a Linux X11 window-only handle record.
+    #[must_use]
+    pub const fn linux_x11_window(window: u64) -> Self {
+        Self::LinuxX11Window { window }
+    }
+
     /// Creates a Linux XCB handle record.
     #[must_use]
     pub const fn linux_xcb(connection: u64, window: u64) -> Self {
@@ -158,7 +173,7 @@ impl HostPlatformHandle {
     pub const fn linux_window_system(&self) -> Option<LinuxWindowSystem> {
         match self {
             Self::LinuxWayland { .. } => Some(LinuxWindowSystem::Wayland),
-            Self::LinuxX11 { .. } => Some(LinuxWindowSystem::X11),
+            Self::LinuxX11 { .. } | Self::LinuxX11Window { .. } => Some(LinuxWindowSystem::X11),
             Self::LinuxXcb { .. } => Some(LinuxWindowSystem::Xcb),
             Self::LinuxXWayland { .. } => Some(LinuxWindowSystem::XWayland),
             Self::WindowsHwnd { .. }

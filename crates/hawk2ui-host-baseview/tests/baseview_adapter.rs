@@ -77,6 +77,23 @@ fn baseview_native_parent_maps_x11_xcb_xwayland_and_windows_raw_handles() {
         RawWindowHandle::Xlib(window) if window.window == 200
     ));
 
+    let x11_window_only =
+        BaseviewNativeParent::try_from_handle(HostPlatformHandle::linux_x11_window(201))
+            .expect("x11 window-only parent is supported");
+    assert_eq!(
+        x11_window_only.handle(),
+        HostPlatformHandle::linux_x11_window(201)
+    );
+    assert_eq!(x11_window_only.backend(), BaseviewNativeParentBackend::X11);
+    assert!(matches!(
+        x11_window_only.raw_display_handle(),
+        RawDisplayHandle::Xlib(display) if display.display.is_null()
+    ));
+    assert!(matches!(
+        x11_window_only.raw_window_handle(),
+        RawWindowHandle::Xlib(window) if window.window == 201
+    ));
+
     let xcb = BaseviewNativeParent::try_from_handle(HostPlatformHandle::linux_xcb(300, 400))
         .expect("xcb parent is supported");
     assert_eq!(xcb.backend(), BaseviewNativeParentBackend::Xcb);
@@ -123,6 +140,7 @@ fn baseview_native_parent_requires_real_nonzero_supported_parent_handles() {
     let invalid_handles = [
         HostPlatformHandle::linux_x11(0, 200),
         HostPlatformHandle::linux_x11(100, 0),
+        HostPlatformHandle::linux_x11_window(0),
         HostPlatformHandle::linux_xcb(0, 200),
         HostPlatformHandle::linux_xcb(100, 0),
         HostPlatformHandle::linux_xcb(100, u64::from(u32::MAX) + 1),
