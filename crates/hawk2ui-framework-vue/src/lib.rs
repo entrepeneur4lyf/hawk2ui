@@ -351,6 +351,7 @@ fn render_raw_vue_source(
             format!("Vue event `{event}` is not part of the native event contract"),
         ));
     }
+    push_duplicate_child_key_diagnostics(&mut diagnostics, source);
     if source.contains("<Missing") {
         diagnostics.push(AuthoringDiagnostic::new(
             AuthoringDiagnosticSeverity::Error,
@@ -817,6 +818,16 @@ fn is_workspace_relative_asset_path(path: &str) -> bool {
         && !path.to_ascii_lowercase().contains("%2e")
 }
 
+fn push_duplicate_child_key_diagnostics(diagnostics: &mut Vec<AuthoringDiagnostic>, source: &str) {
+    for child_id in duplicate_static_hawk_text_ids(source) {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "vue.child-key.duplicate",
+            format!("Vue child key `{child_id}` is declared more than once"),
+        ));
+    }
+}
+
 fn keyed_children(source: &str) -> Vec<String> {
     let mut ids = if source.contains(":key=\"item.id\"") {
         declared_item_ids(source)
@@ -831,6 +842,27 @@ fn keyed_children(source: &str) -> Vec<String> {
 
 fn static_hawk_text_ids(source: &str) -> Vec<String> {
     let mut ids = Vec::new();
+    for id in static_hawk_text_ids_all(source) {
+        push_unique(&mut ids, id);
+    }
+    ids
+}
+
+fn duplicate_static_hawk_text_ids(source: &str) -> Vec<String> {
+    let mut seen = Vec::new();
+    let mut duplicates = Vec::new();
+    for id in static_hawk_text_ids_all(source) {
+        if seen.iter().any(|existing| existing == &id) {
+            push_unique(&mut duplicates, id);
+        } else {
+            seen.push(id);
+        }
+    }
+    duplicates
+}
+
+fn static_hawk_text_ids_all(source: &str) -> Vec<String> {
+    let mut ids = Vec::new();
     let mut rest = source;
     while let Some(index) = rest.find("<hawk-text") {
         let after = &rest[index..];
@@ -838,8 +870,9 @@ fn static_hawk_text_ids(source: &str) -> Vec<String> {
         if !segment.contains(":id=")
             && !segment.contains("v-bind:id=")
             && let Some(id) = extract_attribute(segment, "id")
+            && !id.is_empty()
         {
-            push_unique(&mut ids, id);
+            ids.push(id);
         }
         rest = &after["<hawk-text".len()..];
     }

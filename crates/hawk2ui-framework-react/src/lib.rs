@@ -260,6 +260,7 @@ impl ReactIntegration {
                 format!("React event `{event}` is not part of the native event contract"),
             ));
         }
+        push_duplicate_child_key_diagnostics(&mut diagnostics, &tree.source);
         if tree.source.contains("<Missing") {
             diagnostics.push(AuthoringDiagnostic::new(
                 AuthoringDiagnosticSeverity::Error,
@@ -802,6 +803,16 @@ fn unsupported_react_events(source: &str) -> Vec<String> {
         .collect()
 }
 
+fn push_duplicate_child_key_diagnostics(diagnostics: &mut Vec<AuthoringDiagnostic>, source: &str) {
+    for child_id in duplicate_static_hawk_text_ids(source) {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "react.child-key.duplicate",
+            format!("React child key `{child_id}` is declared more than once"),
+        ));
+    }
+}
+
 fn keyed_children(source: &str) -> Vec<String> {
     let mut ids = if source.contains("key={item.id}") {
         declared_item_ids(source)
@@ -816,12 +827,35 @@ fn keyed_children(source: &str) -> Vec<String> {
 
 fn static_hawk_text_ids(source: &str) -> Vec<String> {
     let mut ids = Vec::new();
+    for id in static_hawk_text_ids_all(source) {
+        push_unique(&mut ids, id);
+    }
+    ids
+}
+
+fn duplicate_static_hawk_text_ids(source: &str) -> Vec<String> {
+    let mut seen = Vec::new();
+    let mut duplicates = Vec::new();
+    for id in static_hawk_text_ids_all(source) {
+        if seen.iter().any(|existing| existing == &id) {
+            push_unique(&mut duplicates, id);
+        } else {
+            seen.push(id);
+        }
+    }
+    duplicates
+}
+
+fn static_hawk_text_ids_all(source: &str) -> Vec<String> {
+    let mut ids = Vec::new();
     let mut rest = source;
     while let Some(index) = rest.find("<hawk-text") {
         let after = &rest[index..];
         let segment = after.split('>').next().unwrap_or(after);
-        if let Some(id) = extract_attribute(segment, "id") {
-            push_unique(&mut ids, id);
+        if let Some(id) = extract_attribute(segment, "id")
+            && !id.is_empty()
+        {
+            ids.push(id);
         }
         rest = &after["<hawk-text".len()..];
     }

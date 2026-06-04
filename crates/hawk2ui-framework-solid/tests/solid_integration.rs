@@ -1,7 +1,7 @@
 use hawk2ui_authoring::{
     AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkNativeNode,
-    FrameworkNativeProgram, HandlerRef, NativeLifecycleEvent, NativeRef, PointerEventKind,
-    PropValue, StyleRef,
+    FrameworkNativeProgram, FrameworkReactiveBinding, HandlerRef, NativeLifecycleEvent, NativeRef,
+    PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
 use hawk2ui_layout::Viewport;
@@ -80,6 +80,14 @@ fn solid_renderer_accepts_explicit_native_compiler_boundary_without_source_scann
         artifact.lifecycle_handlers(),
         ["mounted:onMount", "unmounted:onCleanup"]
     );
+    assert_eq!(
+        artifact.fine_grained_updates(),
+        [
+            "signal:params",
+            "for-each:keyed:params",
+            "effect:meter-paint"
+        ]
+    );
     assert!(
         runtime
             .operation_keys()
@@ -111,6 +119,25 @@ fn solid_renderer_reports_author_source_diagnostics() {
         ]
     );
     assert_eq!(error.source_map().author_file(), "src/Broken.tsx");
+}
+
+#[test]
+fn solid_renderer_rejects_duplicate_static_child_keys() {
+    let source = SolidComponentSource::new(
+        "src/DuplicateKeys.tsx",
+        r#"<hawk-view id="root"><hawk-text id="title">A</hawk-text><hawk-text id="title">B</hawk-text></hawk-view>"#,
+    );
+
+    let error = SolidIntegration::new()
+        .render(source)
+        .expect_err("duplicate static child ids should fail");
+
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.rule.as_str() == "solid.child-key.duplicate")
+    );
 }
 
 #[test]
@@ -338,4 +365,7 @@ fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativ
                     .with_prop("font_size", PropValue::Number(18.0)),
             ),
     )
+    .with_reactive_binding(FrameworkReactiveBinding::signal("params"))
+    .with_reactive_binding(FrameworkReactiveBinding::keyed_for_each("params"))
+    .with_reactive_binding(FrameworkReactiveBinding::effect("meter-paint"))
 }

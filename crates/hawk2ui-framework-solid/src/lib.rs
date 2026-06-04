@@ -173,13 +173,10 @@ impl SolidRenderedArtifact {
         &self.lifecycle_handlers
     }
 
-    /// Returns a fixed Solid reactivity-capability descriptor
-    /// (`signal:items` / `for-each:keyed` / `effect:root-props`).
+    /// Returns Solid fine-grained reactivity descriptors.
     ///
-    /// These are **not** derived per component: the raw-source path emits this constant set, and
-    /// the `from_native_program` boundary cannot supply real signal/effect records either —
-    /// [`FrameworkNativeProgram`] carries no reactivity model. Deriving a genuine fine-grained
-    /// update set is gated on a Solid reactivity model the workspace has not yet defined.
+    /// Raw source fixtures emit the conservative fallback descriptor set. Native compiler-boundary
+    /// input derives this list from [`hawk2ui_authoring::FrameworkReactiveBinding`] records.
     #[must_use]
     pub fn fine_grained_updates(&self) -> &[String] {
         &self.fine_grained_updates
@@ -270,6 +267,7 @@ impl SolidIntegration {
                 format!("Solid event `{event}` is not part of the native event contract"),
             ));
         }
+        push_duplicate_child_key_diagnostics(&mut diagnostics, &component.source);
         if component.source.contains("<Missing") {
             diagnostics.push(AuthoringDiagnostic::new(
                 AuthoringDiagnosticSeverity::Error,
@@ -529,14 +527,18 @@ fn solid_artifact_from_native_program(
             .iter()
             .map(|(event, handler)| lifecycle_handler_label(*event, handler.as_str()))
             .collect(),
-        fine_grained_updates: vec![
-            "signal:items".into(),
-            "for-each:keyed".into(),
-            "effect:root-props".into(),
-        ],
+        fine_grained_updates: solid_fine_grained_updates(&native_program),
         native_program: Some(native_program),
         source_map,
     }
+}
+
+fn solid_fine_grained_updates(native_program: &FrameworkNativeProgram) -> Vec<String> {
+    native_program
+        .reactivity()
+        .iter()
+        .map(hawk2ui_authoring::FrameworkReactiveBinding::stable_key)
+        .collect()
 }
 
 fn framework_program_events(native_program: &FrameworkNativeProgram) -> Vec<EventBinding> {
@@ -623,6 +625,16 @@ fn unsupported_solid_events(source: &str) -> Vec<String> {
         .collect()
 }
 
+fn push_duplicate_child_key_diagnostics(diagnostics: &mut Vec<AuthoringDiagnostic>, source: &str) {
+    for child_id in duplicate_static_hawk_text_ids(source) {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "solid.child-key.duplicate",
+            format!("Solid child key `{child_id}` is declared more than once"),
+        ));
+    }
+}
+
 fn keyed_children(source: &str) -> Vec<String> {
     let mut ids = if source.contains("<For each={items()}") {
         declared_item_ids(source)
@@ -637,12 +649,35 @@ fn keyed_children(source: &str) -> Vec<String> {
 
 fn static_hawk_text_ids(source: &str) -> Vec<String> {
     let mut ids = Vec::new();
+    for id in static_hawk_text_ids_all(source) {
+        push_unique(&mut ids, id);
+    }
+    ids
+}
+
+fn duplicate_static_hawk_text_ids(source: &str) -> Vec<String> {
+    let mut seen = Vec::new();
+    let mut duplicates = Vec::new();
+    for id in static_hawk_text_ids_all(source) {
+        if seen.iter().any(|existing| existing == &id) {
+            push_unique(&mut duplicates, id);
+        } else {
+            seen.push(id);
+        }
+    }
+    duplicates
+}
+
+fn static_hawk_text_ids_all(source: &str) -> Vec<String> {
+    let mut ids = Vec::new();
     let mut rest = source;
     while let Some(index) = rest.find("<hawk-text") {
         let after = &rest[index..];
         let segment = after.split('>').next().unwrap_or(after);
-        if let Some(id) = extract_attribute(segment, "id") {
-            push_unique(&mut ids, id);
+        if let Some(id) = extract_attribute(segment, "id")
+            && !id.is_empty()
+        {
+            ids.push(id);
         }
         rest = &after["<hawk-text".len()..];
     }

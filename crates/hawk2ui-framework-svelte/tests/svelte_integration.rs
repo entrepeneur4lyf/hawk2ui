@@ -206,6 +206,25 @@ fn svelte_5_compile_reports_author_source_diagnostics() {
 }
 
 #[test]
+fn svelte_5_compile_rejects_duplicate_static_child_keys() {
+    let source = SvelteComponentSource::new(
+        "src/DuplicateKeys.svelte",
+        r#"<hawk-view id="root"><hawk-text id="title">A</hawk-text><hawk-text id="title">B</hawk-text></hawk-view>"#,
+    );
+
+    let error = SvelteIntegration::new()
+        .compile(source)
+        .expect_err("duplicate static child ids should fail");
+
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.rule.as_str() == "svelte.child-key.duplicate")
+    );
+}
+
+#[test]
 fn svelte_smoke_app_declares_public_package_entrypoint() {
     let package_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")

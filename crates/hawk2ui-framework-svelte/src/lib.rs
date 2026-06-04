@@ -363,13 +363,8 @@ fn compile_raw_svelte_source(
             format!("Svelte event `{event}` is not part of the native event contract"),
         ));
     }
-    if source.contains("<Broken") {
-        diagnostics.push(AuthoringDiagnostic::new(
-            AuthoringDiagnosticSeverity::Error,
-            "svelte.compile.unresolved-component",
-            "Svelte component could not be resolved",
-        ));
-    }
+    push_duplicate_child_key_diagnostics(&mut diagnostics, source);
+    push_unresolved_component_diagnostics(&mut diagnostics, source);
     if !diagnostics.is_empty() {
         return Err(SvelteCompileError {
             diagnostics,
@@ -848,6 +843,26 @@ fn is_workspace_relative_asset_path(path: &str) -> bool {
         && !path.to_ascii_lowercase().contains("%2e")
 }
 
+fn push_duplicate_child_key_diagnostics(diagnostics: &mut Vec<AuthoringDiagnostic>, source: &str) {
+    for child_id in duplicate_static_hawk_text_ids(source) {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "svelte.child-key.duplicate",
+            format!("Svelte child key `{child_id}` is declared more than once"),
+        ));
+    }
+}
+
+fn push_unresolved_component_diagnostics(diagnostics: &mut Vec<AuthoringDiagnostic>, source: &str) {
+    if source.contains("<Broken") {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "svelte.compile.unresolved-component",
+            "Svelte component could not be resolved",
+        ));
+    }
+}
+
 fn keyed_children(source: &str) -> Vec<String> {
     let mut ids = if source.contains("(item.id)") {
         declared_item_ids(source)
@@ -862,12 +877,35 @@ fn keyed_children(source: &str) -> Vec<String> {
 
 fn static_hawk_text_ids(source: &str) -> Vec<String> {
     let mut ids = Vec::new();
+    for id in static_hawk_text_ids_all(source) {
+        push_unique(&mut ids, id);
+    }
+    ids
+}
+
+fn duplicate_static_hawk_text_ids(source: &str) -> Vec<String> {
+    let mut seen = Vec::new();
+    let mut duplicates = Vec::new();
+    for id in static_hawk_text_ids_all(source) {
+        if seen.iter().any(|existing| existing == &id) {
+            push_unique(&mut duplicates, id);
+        } else {
+            seen.push(id);
+        }
+    }
+    duplicates
+}
+
+fn static_hawk_text_ids_all(source: &str) -> Vec<String> {
+    let mut ids = Vec::new();
     let mut rest = source;
     while let Some(index) = rest.find("<hawk-text") {
         let after = &rest[index..];
         let segment = after.split('>').next().unwrap_or(after);
-        if let Some(id) = extract_attribute(segment, "id") {
-            push_unique(&mut ids, id);
+        if let Some(id) = extract_attribute(segment, "id")
+            && !id.is_empty()
+        {
+            ids.push(id);
         }
         rest = &after["<hawk-text".len()..];
     }

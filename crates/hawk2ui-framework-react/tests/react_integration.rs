@@ -147,6 +147,25 @@ fn react_19_renderer_reports_author_source_diagnostics() {
 }
 
 #[test]
+fn react_19_renderer_rejects_duplicate_static_child_keys() {
+    let source = ReactElementTree::new(
+        "src/DuplicateKeys.tsx",
+        r#"<hawk-view id="root"><hawk-text id="title">A</hawk-text><hawk-text id="title">B</hawk-text></hawk-view>"#,
+    );
+
+    let error = ReactIntegration::new()
+        .render(source)
+        .expect_err("duplicate static child ids should fail");
+
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.rule.as_str() == "react.child-key.duplicate")
+    );
+}
+
+#[test]
 fn react_19_renderer_bridges_to_runtime_tree() {
     let source = ReactElementTree::new(
         "examples/frameworks/react-basic/src/App.tsx",

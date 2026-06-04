@@ -1,6 +1,6 @@
 //! Native renderer adapter contract for framework integrations.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hawk2ui_api::Diagnostic;
 
@@ -182,19 +182,36 @@ impl FrameworkNativeNode {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameworkNativeProgram {
     root: FrameworkNativeNode,
+    reactivity: Vec<FrameworkReactiveBinding>,
 }
 
 impl FrameworkNativeProgram {
     /// Creates a framework native program with one root node.
     #[must_use]
     pub const fn new(root: FrameworkNativeNode) -> Self {
-        Self { root }
+        Self {
+            root,
+            reactivity: Vec::new(),
+        }
     }
 
     /// Returns the root node.
     #[must_use]
     pub const fn root(&self) -> &FrameworkNativeNode {
         &self.root
+    }
+
+    /// Adds a framework reactivity binding declared by the compiler boundary.
+    #[must_use]
+    pub fn with_reactive_binding(mut self, binding: FrameworkReactiveBinding) -> Self {
+        self.reactivity.push(binding);
+        self
+    }
+
+    /// Returns declared reactivity bindings in compiler order.
+    #[must_use]
+    pub fn reactivity(&self) -> &[FrameworkReactiveBinding] {
+        &self.reactivity
     }
 
     /// Returns keyed direct children in compiler order.
@@ -242,6 +259,47 @@ impl FrameworkNativeProgram {
             0,
         )?);
         runtime.finish()
+    }
+}
+
+/// Reactive primitive declared by a framework compiler boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FrameworkReactiveBinding {
+    /// A named signal/source value.
+    Signal(String),
+    /// A keyed list rendered from a named source value.
+    KeyedForEach(String),
+    /// A named effect/update group.
+    Effect(String),
+}
+
+impl FrameworkReactiveBinding {
+    /// Creates a signal binding.
+    #[must_use]
+    pub fn signal(name: impl Into<String>) -> Self {
+        Self::Signal(name.into())
+    }
+
+    /// Creates a keyed list binding.
+    #[must_use]
+    pub fn keyed_for_each(source: impl Into<String>) -> Self {
+        Self::KeyedForEach(source.into())
+    }
+
+    /// Creates an effect binding.
+    #[must_use]
+    pub fn effect(name: impl Into<String>) -> Self {
+        Self::Effect(name.into())
+    }
+
+    /// Returns the stable reactivity key used by diagnostics and Solid integration output.
+    #[must_use]
+    pub fn stable_key(&self) -> String {
+        match self {
+            Self::Signal(name) => format!("signal:{name}"),
+            Self::KeyedForEach(source) => format!("for-each:keyed:{source}"),
+            Self::Effect(name) => format!("effect:{name}"),
+        }
     }
 }
 
@@ -424,6 +482,7 @@ impl From<CustomRendererError> for Diagnostic {
 pub struct CustomRendererProtocol {
     framework_label: String,
     live_nodes: BTreeSet<ElementId>,
+    keyed_children: BTreeMap<(ElementId, String), ElementId>,
     operations: Vec<CustomRendererOperation>,
     operation_keys: Vec<String>,
 }
@@ -435,6 +494,7 @@ impl CustomRendererProtocol {
         Self {
             framework_label: framework_label.into(),
             live_nodes: BTreeSet::new(),
+            keyed_children: BTreeMap::new(),
             operations: Vec::new(),
             operation_keys: Vec::new(),
         }
@@ -454,6 +514,15 @@ impl CustomRendererProtocol {
             }
             CustomRendererOperation::RemoveNode { id } => {
                 self.live_nodes.remove(id);
+                self.remove_child_bindings_for(id);
+            }
+            CustomRendererOperation::AppendChild {
+                parent,
+                child,
+                key: Some(key),
+            } => {
+                self.keyed_children
+                    .insert((parent.clone(), key.clone()), child.clone());
             }
             _ => {}
         }
@@ -513,12 +582,34 @@ impl CustomRendererProtocol {
                     Err(missing_node(parent))
                 } else if !self.live_nodes.contains(child) {
                     Err(missing_node(child))
+                } else if let CustomRendererOperation::AppendChild { key: Some(key), .. } =
+                    operation
+                {
+                    if let Some(existing_child) =
+                        self.keyed_children.get(&(parent.clone(), key.clone()))
+                    {
+                        Err(CustomRendererError::new(
+                            "custom-renderer.child-key.duplicate",
+                            format!(
+                                "custom renderer parent `{}` already has keyed child `{key}` bound to `{}`",
+                                parent.as_str(),
+                                existing_child.as_str()
+                            ),
+                        ))
+                    } else {
+                        Ok(())
+                    }
                 } else {
                     Ok(())
                 }
             }
             _ => Ok(()),
         }
+    }
+
+    fn remove_child_bindings_for(&mut self, id: &ElementId) {
+        self.keyed_children
+            .retain(|(parent, _), child| parent != id && child != id);
     }
 }
 

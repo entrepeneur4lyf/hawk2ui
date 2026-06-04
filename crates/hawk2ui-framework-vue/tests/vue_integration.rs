@@ -200,6 +200,25 @@ fn vue_35_renderer_reports_author_source_diagnostics() {
 }
 
 #[test]
+fn vue_35_renderer_rejects_duplicate_static_child_keys() {
+    let source = VueSingleFileComponent::new(
+        "src/DuplicateKeys.vue",
+        r#"<template><hawk-view id="root"><hawk-text id="title">A</hawk-text><hawk-text id="title">B</hawk-text></hawk-view></template>"#,
+    );
+
+    let error = VueIntegration::new()
+        .render(source)
+        .expect_err("duplicate static child ids should fail");
+
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.rule.as_str() == "vue.child-key.duplicate")
+    );
+}
+
+#[test]
 fn vue_35_renderer_bridges_to_runtime_tree() {
     let source = VueSingleFileComponent::new(
         "examples/frameworks/vue-basic/src/App.vue",

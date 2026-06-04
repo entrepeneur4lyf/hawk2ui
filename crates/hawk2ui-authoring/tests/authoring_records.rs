@@ -2,7 +2,8 @@ use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_authoring::{
     AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ChildList, ElementId, ElementKind,
     ElementNode, EventKind, EventPayloadField, FrameworkNativeNode, FrameworkNativeProgram,
-    HandlerRef, KeyedChild, NativeLifecycleEvent, NativeRef, PointerEventKind, PropValue, StyleRef,
+    FrameworkReactiveBinding, HandlerRef, KeyedChild, NativeLifecycleEvent, NativeRef,
+    PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_render::CustomSurfaceCategory;
 use hawk2ui_runtime::RuntimeVisual;
@@ -84,9 +85,20 @@ fn framework_native_program_records_explicit_compiler_boundary_without_source_sc
                     .with_prop("text", PropValue::String("Boundary Title".to_string()))
                     .with_key("title"),
             ),
-    );
+    )
+    .with_reactive_binding(FrameworkReactiveBinding::signal("items"))
+    .with_reactive_binding(FrameworkReactiveBinding::keyed_for_each("items"))
+    .with_reactive_binding(FrameworkReactiveBinding::effect("root-props"));
 
     assert_eq!(program.root().id().as_str(), "root");
+    assert_eq!(
+        program
+            .reactivity()
+            .iter()
+            .map(FrameworkReactiveBinding::stable_key)
+            .collect::<Vec<_>>(),
+        ["signal:items", "for-each:keyed:items", "effect:root-props"]
+    );
     assert_eq!(program.keyed_child_order(), ["title"]);
     assert_eq!(
         program.custom_renderer_operation_keys("svelte").unwrap(),
@@ -567,4 +579,36 @@ fn custom_renderer_protocol_rejects_duplicate_nodes_and_missing_children() {
         })
         .expect_err("missing child IDs must be rejected");
     assert_eq!(missing.rule(), "custom-renderer.node.missing");
+}
+
+#[test]
+fn custom_renderer_protocol_rejects_duplicate_keyed_siblings() {
+    let mut protocol = hawk2ui_authoring::CustomRendererProtocol::new("svelte");
+    let root = ElementId::new("root");
+    for id in ["root", "first", "second"] {
+        protocol
+            .apply(hawk2ui_authoring::CustomRendererOperation::CreateNode {
+                id: ElementId::new(id),
+                kind: ElementKind::View,
+            })
+            .expect("node create should be accepted");
+    }
+    protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::AppendChild {
+            parent: root.clone(),
+            child: ElementId::new("first"),
+            key: Some("slot".to_string()),
+        })
+        .expect("first keyed child should be accepted");
+
+    let duplicate = protocol
+        .apply(hawk2ui_authoring::CustomRendererOperation::AppendChild {
+            parent: root,
+            child: ElementId::new("second"),
+            key: Some("slot".to_string()),
+        })
+        .expect_err("duplicate keyed siblings must be rejected");
+
+    assert_eq!(duplicate.rule(), "custom-renderer.child-key.duplicate");
+    assert!(duplicate.message().contains("slot"));
 }
