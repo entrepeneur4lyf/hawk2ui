@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Production plugin and package adapters for Hawk2UI CLAP, VST3, AU, standalone, and desktop outputs."
+description = "Plugin package adapters for Hawk2UI CLAP scaffolds, VST3 factory metadata, bundle layouts, and sealed artifacts."
 
 [lib]
 name = "hawk2ui_plugin_adapters"

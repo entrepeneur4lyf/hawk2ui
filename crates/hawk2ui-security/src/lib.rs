@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
-//! Security policy, source validation, script sandbox, asset policy, and secret redaction for `Hawk2UI`.
+//! Security diagnostic evidence records and secret redaction helpers for `Hawk2UI`.
+//!
+//! The policy-shaped record types in this crate are evidence vocabulary: they label a decision that
+//! a concrete validator has already made. Enforcement lives in the owning subsystems such as
+//! `hawk2ui-build`, `hawk2ui-assets`, `hawk2ui-script`, and `hawk2ui-platform`.
 
 pub mod assets;
 pub mod diagnostic;

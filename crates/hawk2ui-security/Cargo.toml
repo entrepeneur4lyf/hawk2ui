@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Security policy, source validation, script sandbox, asset policy, and secret redaction for Hawk2UI."
+description = "Security diagnostic evidence records and secret redaction helpers for Hawk2UI."
 
 [lib]
 name = "hawk2ui_security"
@@ -18,3 +18,4 @@ workspace = true
 
 [dependencies]
 hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
+zeroize = "1.8"

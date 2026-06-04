@@ -11,7 +11,7 @@ pub use budgets::{
 };
 pub use harness::{
     BenchmarkArtifactSet, BenchmarkCase, BenchmarkError, BenchmarkKind, BenchmarkMeasurement,
-    BenchmarkReport, BenchmarkReportEntry, BenchmarkSuite,
+    BenchmarkReport, BenchmarkReportEntry, BenchmarkRunConfig, BenchmarkSuite,
 };
 pub use realtime::{
     RealtimeContext, RealtimeGuard, RealtimeGuardError, RealtimeLockPolicy, RealtimeOperation,
@@ -174,6 +174,114 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_suite_rejects_fixture_mismatch() {
+        let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+        let suite = BenchmarkSuite::new("render").with_case(
+            BenchmarkCase::new(
+                "frame-render",
+                "examples/desktop-basic",
+                BenchmarkKind::Rendering,
+            )
+            .with_measurement(BenchmarkMeasurement::new(1)),
+        );
+
+        let error = suite
+            .validate_against(&budgets)
+            .expect_err("fixture mismatch must fail");
+
+        assert_eq!(
+            error,
+            BenchmarkError::FixtureMismatch {
+                budget_name: "frame-render".to_owned(),
+                expected: "examples/style-gallery".to_owned(),
+                actual: "examples/desktop-basic".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn benchmark_suite_rejects_category_mismatch() {
+        let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+        let suite = BenchmarkSuite::new("render").with_case(
+            BenchmarkCase::new(
+                "frame-render",
+                "examples/style-gallery",
+                BenchmarkKind::Style,
+            )
+            .with_measurement(BenchmarkMeasurement::new(1)),
+        );
+
+        let error = suite
+            .validate_against(&budgets)
+            .expect_err("category mismatch must fail");
+
+        assert_eq!(
+            error,
+            BenchmarkError::CategoryMismatch {
+                budget_name: "frame-render".to_owned(),
+                expected: PerformanceCategory::Rendering,
+                actual: BenchmarkKind::Style,
+            }
+        );
+    }
+
+    #[test]
+    fn benchmark_suite_requires_release_gate_coverage() {
+        let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+        let partial = BenchmarkSuite::new("partial").with_case(
+            BenchmarkCase::new(
+                "cold-start",
+                "examples/desktop-basic",
+                BenchmarkKind::Startup,
+            )
+            .with_measurement(BenchmarkMeasurement::new(1)),
+        );
+
+        assert_eq!(
+            BenchmarkSuite::validate_release_gate_coverage(&budgets, [&partial]),
+            Err(BenchmarkError::MissingReleaseGateCase(
+                "artifact-load".to_owned()
+            ))
+        );
+
+        let mut complete = BenchmarkSuite::new("complete");
+        for budget in budgets.release_gates() {
+            complete = complete.with_case(
+                BenchmarkCase::new(
+                    budget.name.clone(),
+                    budget.fixture.clone(),
+                    kind_for_category(budget.category),
+                )
+                .with_measurement(BenchmarkMeasurement::new(budget.target)),
+            );
+        }
+        BenchmarkSuite::validate_release_gate_coverage(&budgets, [&complete])
+            .expect("complete release gate coverage passes");
+    }
+
+    #[test]
+    fn benchmark_run_config_parses_quick_and_iterations() {
+        let quick = BenchmarkRunConfig::from_args(["--quick"]);
+        let explicit = BenchmarkRunConfig::from_args(["--quick", "--iterations=7"]);
+
+        assert!(quick.quick());
+        assert_eq!(quick.iterations(), 1);
+        assert!(explicit.quick());
+        assert_eq!(explicit.iterations(), 7);
+    }
+
+    #[test]
+    fn benchmark_measurement_executes_observed_operation() {
+        let mut executed = false;
+        let measurement = BenchmarkMeasurement::measure_micros(|| {
+            executed = true;
+        });
+
+        assert!(executed);
+        let _ = measurement.observed;
+    }
+
+    #[test]
     fn benchmark_suite_writes_release_evidence_report() {
         let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
         let suite = BenchmarkSuite::new("production-matrix")
@@ -188,7 +296,7 @@ mod tests {
             .with_case(
                 BenchmarkCase::new(
                     "js-evaluate",
-                    "examples/framework-svelte",
+                    "examples/frameworks/svelte-basic",
                     BenchmarkKind::Script,
                 )
                 .with_measurement(BenchmarkMeasurement::new(25)),
@@ -208,6 +316,8 @@ mod tests {
                 .artifact_payload()
                 .contains("failure = \"budget-exceeded\"")
         );
+        toml::from_str::<toml::Value>(&report.artifact_payload())
+            .expect("benchmark evidence is valid TOML");
 
         let root =
             std::env::temp_dir().join(format!("hawk2ui-benchmark-evidence-{}", std::process::id()));
@@ -242,6 +352,16 @@ mod tests {
                 allowed: 2
             }
         );
+    }
+
+    #[test]
+    fn runtime_stability_fixture_runs_observed_iterations() {
+        let fixture = RuntimeStabilityFixture::run("event-dispatch", 5, |index| index % 2 == 0)
+            .with_allowed_failures(2);
+
+        assert_eq!(fixture.iterations, 5);
+        assert_eq!(fixture.failures, 2);
+        fixture.validate().expect("observed failures fit limit");
     }
 
     #[test]
@@ -285,5 +405,21 @@ mod tests {
         );
         assert!(RealtimeOperation::Allocation.is_denied_on_audio_thread());
         assert!(!RealtimeOperation::PreallocatedWrite.is_denied_on_audio_thread());
+    }
+
+    fn kind_for_category(category: PerformanceCategory) -> BenchmarkKind {
+        match category {
+            PerformanceCategory::Startup => BenchmarkKind::Startup,
+            PerformanceCategory::Layout => BenchmarkKind::Layout,
+            PerformanceCategory::Style => BenchmarkKind::Style,
+            PerformanceCategory::Rendering => BenchmarkKind::Rendering,
+            PerformanceCategory::Runtime => BenchmarkKind::Runtime,
+            PerformanceCategory::Script => BenchmarkKind::Script,
+            PerformanceCategory::Assets => BenchmarkKind::Assets,
+            PerformanceCategory::Memory => BenchmarkKind::Memory,
+            PerformanceCategory::Package => BenchmarkKind::Package,
+            PerformanceCategory::Host => BenchmarkKind::Host,
+            PerformanceCategory::Realtime => BenchmarkKind::Realtime,
+        }
     }
 }

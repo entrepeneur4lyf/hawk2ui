@@ -80,6 +80,7 @@ fn text_backend_wraps_truncates_and_scales_high_dpi_metrics() {
     assert!(high_dpi_layout.baseline_px() > wrapped_layout.baseline_px());
     assert!(truncated_layout.truncated());
     assert!(truncated_layout.display_text().ends_with('…'));
+    assert!(truncated_layout.width_px() <= 72.0);
     assert_eq!(
         truncated_layout.lines()[0].text(),
         truncated_layout.display_text()
@@ -103,10 +104,28 @@ fn text_backend_generates_stable_glyph_cache_invalidation_keys() {
     let dpi_key = backend
         .glyph_cache_key(&different_dpi)
         .expect("dpi cache key succeeds");
+    let wrapped_key = backend
+        .glyph_cache_key(&input.clone().with_line_break(LineBreakMode::Wrap {
+            max_width_px: 120.0,
+        }))
+        .expect("wrapped cache key succeeds");
+    let truncated_key = backend
+        .glyph_cache_key(&input.clone().with_truncation(TruncationMode::EndEllipsis {
+            max_width_px: 120.0,
+        }))
+        .expect("truncated cache key succeeds");
 
     assert!(key.stable_key().contains("font=Display"));
     assert!(key.stable_key().contains("dpi=2"));
+    assert!(wrapped_key.stable_key().contains("line-break=wrap:120"));
+    assert!(
+        truncated_key
+            .stable_key()
+            .contains("truncation=end-ellipsis:120")
+    );
     assert_ne!(key, dpi_key);
+    assert_ne!(key, wrapped_key);
+    assert_ne!(key, truncated_key);
 }
 
 #[test]
@@ -144,6 +163,15 @@ fn text_backend_rejects_invalid_layout_and_cache_inputs() {
         .glyph_cache_key(&TextLayoutInput::new("Amount", "Display", 18.0).with_dpi_scale(0.0))
         .expect_err("cache keys must reject invalid DPI scales");
     assert_eq!(error.diagnostic().rule(), "text.input.invalid-dpi");
+
+    let error = backend
+        .layout(&TextLayoutInput::new(
+            "x".repeat(256 * 1024 + 1),
+            "Display",
+            18.0,
+        ))
+        .expect_err("oversized text input must fail before shaping");
+    assert_eq!(error.diagnostic().rule(), "text.input.too-large");
 }
 
 #[test]

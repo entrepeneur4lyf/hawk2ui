@@ -1,24 +1,15 @@
-use std::hint::black_box;
+mod common;
 
-use hawk2ui_perf::{
-    BenchmarkCase, BenchmarkKind, BenchmarkMeasurement, BenchmarkSuite, PerformanceBudgets,
-};
-
-const BUDGETS: &str = include_str!("../../../performance/budgets.toml");
+use hawk2ui_perf::{BenchmarkCase, BenchmarkKind, BenchmarkSuite};
 
 fn main() {
-    let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+    let budgets = common::budgets();
+    let config = common::config();
+    let fixture = "examples/frameworks/svelte-basic";
     let suite = BenchmarkSuite::new("script").with_case(
-        BenchmarkCase::new(
-            "js-evaluate",
-            "examples/framework-svelte",
-            BenchmarkKind::Script,
-        )
-        .with_measurement(BenchmarkMeasurement::new(10)),
+        BenchmarkCase::new("js-evaluate", fixture, BenchmarkKind::Script)
+            .with_measurement(common::measure_read_tree_millis(fixture, config)),
     );
 
-    suite
-        .validate_against(&budgets)
-        .expect("script benchmarks must map to budgets");
-    black_box(suite.evaluate_against(&budgets).artifact_payload());
+    common::finish_suite(&suite, &budgets);
 }

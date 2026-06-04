@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [source]
 entry = "src/main.ts"
+style = "styles/main.hawk.css"
 
 [capabilities]
 keys = ["native-windowing", "sealed-artifacts"]

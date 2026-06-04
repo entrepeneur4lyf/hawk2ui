@@ -2,11 +2,12 @@
 //! `Vue` 3.5 and later integration for emitting `Hawk2UI` typed records.
 
 use hawk2ui_authoring::{
-    AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementId, ElementKind,
-    ElementNode, EventBinding, EventKind, EventPayloadField, FrameworkNativeProgram, HandlerRef,
-    LifecycleEventKind, NativeAuthoringElement, NativeAuthoringRuntime, NativeChild,
-    NativeLifecycleEvent, NativeRef, NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
-    NativeRuntimeBridgeError, PointerEventKind, PropValue, StyleRef,
+    AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, CustomRendererOperation,
+    CustomRendererProtocol, ElementId, ElementKind, ElementNode, EventBinding, EventKind,
+    EventPayloadField, FrameworkNativeProgram, HandlerRef, LifecycleEventKind,
+    NativeAuthoringElement, NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef,
+    NativeRuntimeBridge, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PointerEventKind,
+    PropValue, StyleRef,
 };
 use hawk2ui_runtime::RuntimeViewTree;
 use hawk2ui_style::{CompiledStyleSheet, TokenSet};
@@ -220,6 +221,15 @@ impl VueIntegration {
 
     /// Renders a Vue component into typed `Hawk2UI` records.
     ///
+    /// # Source grammar (raw-source path)
+    ///
+    /// When the component carries raw author source rather than
+    /// [`VueSingleFileComponent::from_native_program`] output, this method uses the intentionally
+    /// limited `Hawk2UI` authoring subset scanner. It is not a Vue SFC compiler: it recognizes a
+    /// single `hawk-view`/`hawk-text` tree shape, simple class/ref/asset attributes, and fixed
+    /// event-handler labels. High-fidelity Vue compilation should enter through
+    /// [`VueSingleFileComponent::from_native_program`].
+    ///
     /// # Errors
     ///
     /// Returns [`VueRenderError`] when the source violates the renderer contract.
@@ -230,91 +240,10 @@ impl VueIntegration {
         let source_map = VueSourceMap {
             author_file: component.author_file.clone(),
         };
-        if let Some(native_program) = component.native_program {
-            return vue_artifact_from_native_program(source_map, native_program);
+        match component.native_program {
+            Some(native_program) => vue_artifact_from_native_program(source_map, native_program),
+            None => render_raw_vue_source(source_map, &component.source),
         }
-        let mut diagnostics = Vec::new();
-        if let Some(asset) = extract_attribute(&component.source, "data-asset")
-            && (asset.contains("://") || asset.starts_with('/') || asset.contains(".."))
-        {
-            diagnostics.push(AuthoringDiagnostic::new(
-                AuthoringDiagnosticSeverity::Error,
-                "vue.asset.path-invalid",
-                "Vue asset references must use workspace-relative paths",
-            ));
-        }
-        for event in unsupported_vue_events(&component.source) {
-            diagnostics.push(AuthoringDiagnostic::new(
-                AuthoringDiagnosticSeverity::Error,
-                "vue.event.unsupported",
-                format!("Vue event `{event}` is not part of the native event contract"),
-            ));
-        }
-        if component.source.contains("<Missing") {
-            diagnostics.push(AuthoringDiagnostic::new(
-                AuthoringDiagnosticSeverity::Error,
-                "vue.renderer.unresolved-component",
-                "Vue renderer could not resolve component",
-            ));
-        }
-        if !diagnostics.is_empty() {
-            return Err(VueRenderError {
-                diagnostics,
-                source_map,
-            });
-        }
-
-        let root_id =
-            extract_attribute(&component.source, "id").unwrap_or_else(|| "root".to_string());
-        let mut events = Vec::new();
-        if component.source.contains("@pointerdown") {
-            events.push(
-                EventBinding::new(
-                    ElementId::new(root_id.clone()),
-                    EventKind::Pointer(PointerEventKind::Press),
-                    HandlerRef::new("handlePress"),
-                )
-                .with_payload(EventPayloadField::Position),
-            );
-        }
-        if component.source.contains("@mounted") {
-            events.push(EventBinding::new(
-                ElementId::new(root_id.clone()),
-                EventKind::Lifecycle(LifecycleEventKind::Mounted),
-                HandlerRef::new("onMounted"),
-            ));
-        }
-        if component.source.contains("@unmounted") {
-            events.push(EventBinding::new(
-                ElementId::new(root_id.clone()),
-                EventKind::Lifecycle(LifecycleEventKind::Unmounted),
-                HandlerRef::new("onUnmounted"),
-            ));
-        }
-
-        let keyed_children = keyed_children(&component.source);
-        let mut renderer_operations = Vec::with_capacity(keyed_children.len() + 2);
-        renderer_operations.push("create:root".to_string());
-        renderer_operations.extend(keyed_children.iter().map(|child| format!("insert:{child}")));
-        renderer_operations.push("patch-props:root".to_string());
-
-        Ok(VueRenderedArtifact {
-            root: ElementNode::new(ElementId::new(root_id), ElementKind::View),
-            keyed_children,
-            refs: extract_attribute(&component.source, "ref")
-                .into_iter()
-                .collect(),
-            style_refs: style_refs_from_attribute(&component.source, "class"),
-            asset_refs: extract_attribute(&component.source, "data-asset")
-                .into_iter()
-                .map(|path| AssetRef::new("vue.asset", path))
-                .collect(),
-            events,
-            lifecycle_handlers: vec!["mounted:onMounted".into(), "unmounted:onUnmounted".into()],
-            native_program: None,
-            source_map,
-            renderer_operations,
-        })
     }
 
     /// Renders a Vue component into a runtime-ready native bridge artifact.
@@ -392,6 +321,115 @@ impl VueIntegration {
             .map_err(|error| bridge_error(author_file.as_str(), &error))?;
         Ok(VueRuntimeArtifact { rendered, runtime })
     }
+}
+
+fn render_raw_vue_source(
+    source_map: VueSourceMap,
+    source: &str,
+) -> Result<VueRenderedArtifact, VueRenderError> {
+    let mut diagnostics = Vec::new();
+    if !contains_hawk_root(source) {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "vue.renderer.no-root",
+            "Vue source must declare a hawk-view or hawk-text root for the raw-source bridge",
+        ));
+    }
+    for asset in extract_attributes(source, "data-asset") {
+        if !is_workspace_relative_asset_path(&asset) {
+            diagnostics.push(AuthoringDiagnostic::new(
+                AuthoringDiagnosticSeverity::Error,
+                "vue.asset.path-invalid",
+                "Vue asset references must use workspace-relative paths",
+            ));
+        }
+    }
+    for event in unsupported_vue_events(source) {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "vue.event.unsupported",
+            format!("Vue event `{event}` is not part of the native event contract"),
+        ));
+    }
+    if source.contains("<Missing") {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "vue.renderer.unresolved-component",
+            "Vue renderer could not resolve component",
+        ));
+    }
+    if !diagnostics.is_empty() {
+        return Err(VueRenderError {
+            diagnostics,
+            source_map,
+        });
+    }
+
+    let root_id = extract_attribute(source, "id").unwrap_or_else(|| "root".to_string());
+    let mut events = Vec::new();
+    if source.contains("@pointerdown") {
+        events.push(
+            EventBinding::new(
+                ElementId::new(root_id.clone()),
+                EventKind::Pointer(PointerEventKind::Press),
+                HandlerRef::new("handlePress"),
+            )
+            .with_payload(EventPayloadField::Position),
+        );
+    }
+    if source.contains("@mounted") {
+        events.push(EventBinding::new(
+            ElementId::new(root_id.clone()),
+            EventKind::Lifecycle(LifecycleEventKind::Mounted),
+            HandlerRef::new("onMounted"),
+        ));
+    }
+    if source.contains("@unmounted") {
+        events.push(EventBinding::new(
+            ElementId::new(root_id.clone()),
+            EventKind::Lifecycle(LifecycleEventKind::Unmounted),
+            HandlerRef::new("onUnmounted"),
+        ));
+    }
+
+    let mut lifecycle_handlers = Vec::new();
+    if source.contains("@mounted") {
+        lifecycle_handlers.push("mounted:onMounted".to_string());
+    }
+    if source.contains("@unmounted") {
+        lifecycle_handlers.push("unmounted:onUnmounted".to_string());
+    }
+
+    let keyed_children = keyed_children(source);
+    let refs = extract_attributes(source, "ref");
+    let style_refs = style_refs_from_attribute(source, "class");
+    let asset_refs: Vec<_> = extract_attributes(source, "data-asset")
+        .into_iter()
+        .map(|path| AssetRef::new("vue.asset", path))
+        .collect();
+    let renderer_operations = vue_protocol_operations(VueProtocolInput {
+        author_file: source_map.author_file(),
+        source_text: source,
+        root_id: root_id.as_str(),
+        refs: &refs,
+        style_refs: &style_refs,
+        asset_refs: &asset_refs,
+        events: &events,
+        keyed_children: &keyed_children,
+    })?;
+
+    Ok(VueRenderedArtifact {
+        root: ElementNode::new(ElementId::new(root_id), ElementKind::View),
+        keyed_children,
+        refs,
+        style_refs,
+        asset_refs,
+        events,
+        lifecycle_handlers,
+        native_program: None,
+        source_map,
+        renderer_operations,
+    })
 }
 
 fn native_artifact_from_vue(
@@ -562,6 +600,147 @@ fn lifecycle_handler_label(event: NativeLifecycleEvent, handler: &str) -> String
     }
 }
 
+#[derive(Clone, Copy)]
+struct VueProtocolInput<'a> {
+    author_file: &'a str,
+    source_text: &'a str,
+    root_id: &'a str,
+    refs: &'a [String],
+    style_refs: &'a [StyleRef],
+    asset_refs: &'a [AssetRef],
+    events: &'a [EventBinding],
+    keyed_children: &'a [String],
+}
+
+fn vue_protocol_operations(input: VueProtocolInput<'_>) -> Result<Vec<String>, VueRenderError> {
+    let root_element_id = ElementId::new(input.root_id);
+    let mut protocol = CustomRendererProtocol::new("vue");
+    apply_vue_protocol_operation(
+        input.author_file,
+        &mut protocol,
+        CustomRendererOperation::CreateNode {
+            id: root_element_id.clone(),
+            kind: ElementKind::View,
+        },
+    )?;
+    for style_ref in input.style_refs {
+        apply_vue_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::SetStyleRef {
+                id: root_element_id.clone(),
+                style_ref: StyleRef::new(style_ref.name()),
+            },
+        )?;
+    }
+    for asset_ref in input.asset_refs {
+        apply_vue_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::SetAssetRef {
+                id: root_element_id.clone(),
+                asset_ref: AssetRef::new(asset_ref.name(), asset_ref.path()),
+            },
+        )?;
+    }
+    for reference in input.refs {
+        apply_vue_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::SetRef {
+                id: root_element_id.clone(),
+                reference: NativeRef::new(reference),
+            },
+        )?;
+    }
+    for event in input.events {
+        if !matches!(event.event(), EventKind::Lifecycle(_)) {
+            apply_vue_protocol_operation(
+                input.author_file,
+                &mut protocol,
+                CustomRendererOperation::BindEvent {
+                    binding: event.clone(),
+                },
+            )?;
+        }
+    }
+    apply_vue_lifecycle_protocol_operations(
+        input.author_file,
+        input.source_text,
+        input.root_id,
+        &mut protocol,
+    )?;
+    for child in input.keyed_children {
+        let child_id = ElementId::new(child);
+        apply_vue_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::CreateNode {
+                id: child_id.clone(),
+                kind: ElementKind::Text,
+            },
+        )?;
+        apply_vue_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::AppendChild {
+                parent: root_element_id.clone(),
+                child: child_id,
+                key: Some(child.clone()),
+            },
+        )?;
+    }
+    apply_vue_protocol_operation(
+        input.author_file,
+        &mut protocol,
+        CustomRendererOperation::Commit {
+            root: root_element_id,
+        },
+    )?;
+    Ok(protocol.operation_keys().to_vec())
+}
+
+fn apply_vue_lifecycle_protocol_operations(
+    author_file: &str,
+    source_text: &str,
+    root_id: &str,
+    protocol: &mut CustomRendererProtocol,
+) -> Result<(), VueRenderError> {
+    if source_text.contains("@mounted") {
+        apply_vue_protocol_operation(
+            author_file,
+            protocol,
+            CustomRendererOperation::BindLifecycle {
+                id: ElementId::new(root_id),
+                event: NativeLifecycleEvent::Mounted,
+                handler: HandlerRef::new("onMounted"),
+            },
+        )?;
+    }
+    if source_text.contains("@unmounted") {
+        apply_vue_protocol_operation(
+            author_file,
+            protocol,
+            CustomRendererOperation::BindLifecycle {
+                id: ElementId::new(root_id),
+                event: NativeLifecycleEvent::Unmounted,
+                handler: HandlerRef::new("onUnmounted"),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn apply_vue_protocol_operation(
+    author_file: &str,
+    protocol: &mut CustomRendererProtocol,
+    operation: CustomRendererOperation,
+) -> Result<(), VueRenderError> {
+    protocol
+        .apply(operation)
+        .map_err(|error| custom_renderer_error(author_file, &error))
+}
+
 fn custom_renderer_error(
     author_file: &str,
     error: &hawk2ui_authoring::CustomRendererError,
@@ -586,17 +765,35 @@ fn extract_attribute(source: &str, name: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+fn extract_attributes(source: &str, name: &str) -> Vec<String> {
+    let pattern = format!("{name}=\"");
+    let mut values = Vec::new();
+    let mut rest = source;
+    while let Some(index) = rest.find(&pattern) {
+        let after_pattern = &rest[index + pattern.len()..];
+        let Some(end) = after_pattern.find('"') else {
+            break;
+        };
+        values.push(after_pattern[..end].to_string());
+        rest = &after_pattern[end + 1..];
+    }
+    values
+}
+
 fn extract_number_attribute(source: &str, name: &str) -> Option<f64> {
     extract_attribute(source, name)?.parse().ok()
 }
 
 fn style_refs_from_attribute(source: &str, name: &str) -> Vec<StyleRef> {
-    extract_attribute(source, name).map_or_else(Vec::new, |classes| {
-        classes
-            .split_ascii_whitespace()
-            .map(StyleRef::new)
-            .collect()
-    })
+    extract_attributes(source, name)
+        .into_iter()
+        .flat_map(|classes| {
+            classes
+                .split_ascii_whitespace()
+                .map(StyleRef::new)
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn unsupported_vue_events(source: &str) -> Vec<String> {
@@ -605,6 +802,19 @@ fn unsupported_vue_events(source: &str) -> Vec<String> {
         .filter(|event| source.contains(event))
         .map(str::to_string)
         .collect()
+}
+
+fn contains_hawk_root(source: &str) -> bool {
+    source.contains("<hawk-view") || source.contains("<hawk-text")
+}
+
+fn is_workspace_relative_asset_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains("://")
+        && !path.starts_with('/')
+        && !path.contains("..")
+        && !path.contains('\\')
+        && !path.to_ascii_lowercase().contains("%2e")
 }
 
 fn keyed_children(source: &str) -> Vec<String> {

@@ -172,7 +172,7 @@ impl Hawk2uiTruceEditor {
     /// `snapshot` is the construction-time read projection (the model's declared
     /// defaults; pass an empty [`HostSnapshot`] for a paramless editor) and
     /// `routing` maps parameter keys to truce ids for write-back. Both are
-    /// retained as the editor's [`EditorRenderState`], so once [`Editor::open`]
+    /// retained as the editor's `EditorRenderState`, so once [`Editor::open`]
     /// captures the live bridge the per-frame producer re-projects from it and
     /// replays edits — the initial scene shown before the first frame is the
     /// snapshot's defaults.
@@ -212,12 +212,12 @@ impl Hawk2uiTruceEditor {
     /// Creates an editor whose scene is built by running the plugin's compiled
     /// entry script, returning the build error to the caller.
     ///
-    /// The script's `mount` function is executed (see [`build_editor_scene`])
+    /// The script's `mount` function is executed (see `build_editor_scene`)
     /// and its returned node tree becomes the initial [`RuntimeSceneFrame`] the
     /// editor renders, sized to the plugin editor's logical dimensions. As in
     /// [`Self::from_entry_script`], `snapshot` (the default read projection) and
     /// `routing` (key → truce id for write-back) are retained as the editor's
-    /// [`EditorRenderState`], which the per-frame producer drives once
+    /// `EditorRenderState`, which the per-frame producer drives once
     /// [`Editor::open`] captures the live bridge.
     ///
     /// Prefer [`Self::from_entry_script`] at the truce `editor()` boundary, which

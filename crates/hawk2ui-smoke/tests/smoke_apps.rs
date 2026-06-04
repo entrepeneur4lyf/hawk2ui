@@ -21,7 +21,7 @@ fn desktop_basic_builds_verifies_exports_scene_first_frame_and_window_lifecycle(
 }
 
 #[test]
-fn desktop_dashboard_exercises_layout_style_snapshot_focus_pointer_and_resize() {
+fn desktop_dashboard_builds_compiles_style_renders_and_checks_recorded_interactions() {
     let fixture =
         SmokeFixture::from_workspace("examples/desktop-dashboard", SmokeTargetKind::Desktop);
     let runner = SmokeRunner;
@@ -32,7 +32,7 @@ fn desktop_dashboard_exercises_layout_style_snapshot_focus_pointer_and_resize() 
 
     assert_eq!(result.fixture_name, "desktop-dashboard");
     assert_eq!(result.layout_nodes, 18);
-    assert_eq!(result.style_rules, 12);
+    assert_eq!(result.style_rules, 4);
     assert_eq!(result.visual_snapshot_id, "desktop-dashboard:visual");
     assert_eq!(
         result.keyboard_focus_path,
@@ -46,7 +46,7 @@ fn desktop_dashboard_exercises_layout_style_snapshot_focus_pointer_and_resize() 
 }
 
 #[test]
-fn plugin_synth_editor_exercises_editor_parameters_automation_state_and_destroy() {
+fn plugin_synth_editor_exercises_baseview_lifecycle_resize_dpi_render_and_destroy() {
     let fixture =
         SmokeFixture::from_workspace("examples/plugin-synth-editor", SmokeTargetKind::Plugin);
     let runner = SmokeRunner;
@@ -82,7 +82,7 @@ fn plugin_synth_editor_exercises_editor_parameters_automation_state_and_destroy(
 }
 
 #[test]
-fn plugin_meter_analyzer_proves_non_blocking_transport_and_ui_consumption() {
+fn plugin_meter_analyzer_exercises_realtime_transport_drop_and_ui_consumption() {
     let fixture =
         SmokeFixture::from_workspace("examples/plugin-meter-analyzer", SmokeTargetKind::Plugin);
     let runner = SmokeRunner;
@@ -152,16 +152,35 @@ fn security_denials_fail_before_runtime_surface_launch() {
     assert_eq!(
         result.denials,
         vec![
-            "filesystem.undeclared",
-            "network.denied",
-            "clipboard.denied",
-            "secret.redacted",
-            "asset.unsafe",
-            "style.unsupported",
+            "filesystem.path.forbidden",
+            "network.host.denied",
+            "clipboard.plugin.denied",
+            "secret.declaration.missing",
+            "script.host-call.denied",
+            "asset.vector.unsafe-content",
+            "style.shorthand.unsupported",
             "manifest.invalid",
         ]
     );
     assert!(!result.runtime_surface_launched);
+}
+
+#[test]
+fn smoke_runner_rejects_target_kind_mismatches_and_missing_fixtures() {
+    let runner = SmokeRunner;
+    let plugin_target =
+        SmokeFixture::from_workspace("examples/desktop-basic", SmokeTargetKind::Plugin);
+    let missing = SmokeFixture::from_workspace("examples/does-not-exist", SmokeTargetKind::Desktop);
+
+    let target_error = runner
+        .run_desktop_basic(&plugin_target)
+        .expect_err("target mismatch must fail");
+    let missing_error = runner
+        .run_desktop_basic(&missing)
+        .expect_err("missing fixture must fail");
+
+    assert!(target_error.contains("desktop-basic fixture must use desktop target"));
+    assert!(missing_error.contains("required smoke fixture file is missing"));
 }
 
 #[test]

@@ -8,6 +8,7 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 description = "Performance budgets, benchmark helpers, and stability gates for Hawk2UI."
+autobenches = false
 
 [lib]
 name = "hawk2ui_perf"

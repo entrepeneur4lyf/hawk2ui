@@ -8,8 +8,6 @@ use std::{
 
 use hawk2ui_render::Geometry;
 
-use crate::VisualSnapshot;
-
 /// Required deterministic visual fixture family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VisualFixtureKind {
@@ -151,12 +149,27 @@ impl VisualFixtureSet {
     }
 }
 
-/// Image comparison metadata for deterministic snapshot checks.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Pixel format used by deterministic image comparison.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImagePixelFormat {
+    /// Pixels are stored as `0x00RRGGBB`; the top byte is ignored.
+    Rgb8Srgb,
+}
+
+impl ImagePixelFormat {
+    fn pixel_delta(self, left: u32, right: u32) -> u8 {
+        match self {
+            Self::Rgb8Srgb => rgb8_pixel_delta(left, right),
+        }
+    }
+}
+
+/// Image comparison metadata for deterministic pixel snapshot checks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImageComparisonMetadata {
     max_pixel_delta: u8,
     max_changed_pixels: u32,
-    color_space: String,
+    pixel_format: ImagePixelFormat,
 }
 
 impl ImageComparisonMetadata {
@@ -165,19 +178,28 @@ impl ImageComparisonMetadata {
     pub fn new(
         max_pixel_delta: u8,
         max_changed_pixels: u32,
-        color_space: impl Into<String>,
+        pixel_format: ImagePixelFormat,
     ) -> Self {
         Self {
             max_pixel_delta,
             max_changed_pixels,
-            color_space: color_space.into(),
+            pixel_format,
         }
     }
 
-    /// Creates strict `RGBA8` metadata for exact snapshots.
+    /// Creates strict `0x00RRGGBB` `sRGB` metadata for exact snapshots.
+    #[must_use]
+    pub fn strict_rgb8_srgb() -> Self {
+        Self::new(0, 0, ImagePixelFormat::Rgb8Srgb)
+    }
+
+    /// Creates strict `0x00RRGGBB` `sRGB` metadata for exact snapshots.
+    ///
+    /// This alias is retained for callers that used the former `RGBA8` name.
+    /// `Hawk2UI` testkit snapshots store pixels as `0x00RRGGBB`.
     #[must_use]
     pub fn strict_rgba8() -> Self {
-        Self::new(0, 0, "rgba8-srgb")
+        Self::strict_rgb8_srgb()
     }
 
     /// Returns true when an image diff is within the accepted threshold.
@@ -209,7 +231,7 @@ impl ImageComparisonMetadata {
         let mut changed_pixels = 0_u32;
         let mut max_pixel_delta = 0_u8;
         for (left, right) in baseline.pixels.iter().zip(candidate.pixels.iter()) {
-            let delta = pixel_delta(*left, *right);
+            let delta = self.pixel_format.pixel_delta(*left, *right);
             if delta > 0 {
                 changed_pixels = changed_pixels.saturating_add(1);
                 max_pixel_delta = max_pixel_delta.max(delta);
@@ -223,10 +245,10 @@ impl ImageComparisonMetadata {
         )
     }
 
-    /// Returns the expected color space.
+    /// Returns the pixel format used by comparison.
     #[must_use]
-    pub fn color_space(&self) -> &str {
-        &self.color_space
+    pub const fn pixel_format(&self) -> ImagePixelFormat {
+        self.pixel_format
     }
 }
 
@@ -489,14 +511,6 @@ impl ImageComparisonReport {
     }
 }
 
-/// Visual regression case with a baseline and candidate snapshot.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct VisualRegressionCase {
-    name: String,
-    baseline: VisualSnapshot,
-    candidate: VisualSnapshot,
-}
-
 /// Visual image regression case with baseline and candidate pixels.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VisualImageRegressionCase {
@@ -600,38 +614,9 @@ impl VisualRegressionReport {
     }
 }
 
-impl VisualRegressionCase {
-    /// Creates a visual regression case.
-    #[must_use]
-    pub fn new(
-        name: impl Into<String>,
-        baseline: VisualSnapshot,
-        candidate: VisualSnapshot,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            baseline,
-            candidate,
-        }
-    }
-
-    /// Returns the case name.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Returns true when baseline and candidate metadata match.
-    #[must_use]
-    pub fn matches_baseline(&self) -> bool {
-        self.baseline == self.candidate
-    }
-}
-
-/// Collection of visual regression cases.
+/// Collection of pixel visual regression cases.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct VisualRegressionSuite {
-    cases: Vec<VisualRegressionCase>,
     image_cases: Vec<VisualImageRegressionCase>,
 }
 
@@ -640,16 +625,8 @@ impl VisualRegressionSuite {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            cases: Vec::new(),
             image_cases: Vec::new(),
         }
-    }
-
-    /// Adds a visual regression case.
-    #[must_use]
-    pub fn with_case(mut self, case: VisualRegressionCase) -> Self {
-        self.cases.push(case);
-        self
     }
 
     /// Adds a pixel image regression case.
@@ -663,12 +640,6 @@ impl VisualRegressionSuite {
         self.image_cases
             .push(VisualImageRegressionCase::new(name, baseline, candidate));
         self
-    }
-
-    /// Returns all visual regression cases.
-    #[must_use]
-    pub fn cases(&self) -> &[VisualRegressionCase] {
-        &self.cases
     }
 
     /// Returns all image visual regression cases.
@@ -719,14 +690,6 @@ impl VisualRegressionSuite {
 
         Ok(VisualArtifactSet::new(root, files))
     }
-
-    /// Returns whether every case matches its baseline.
-    #[must_use]
-    pub fn all_match(&self) -> bool {
-        self.cases
-            .iter()
-            .all(VisualRegressionCase::matches_baseline)
-    }
 }
 
 fn write_diff_ppm(
@@ -755,7 +718,7 @@ fn write_diff_ppm(
     .write_ppm(path)
 }
 
-fn pixel_delta(left: u32, right: u32) -> u8 {
+fn rgb8_pixel_delta(left: u32, right: u32) -> u8 {
     let left_r = ((left >> 16) & 0xff) as u8;
     let left_g = ((left >> 8) & 0xff) as u8;
     let left_b = (left & 0xff) as u8;
@@ -772,7 +735,7 @@ fn diff_pixel(left: u32, right: u32) -> u32 {
     if left == right {
         return 0x0000_0000;
     }
-    let delta = u32::from(pixel_delta(left, right));
+    let delta = u32::from(ImagePixelFormat::Rgb8Srgb.pixel_delta(left, right));
     (delta << 16) | ((255 - delta) << 8)
 }
 

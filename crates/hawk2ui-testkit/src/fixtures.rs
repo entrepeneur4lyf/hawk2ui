@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{FixtureKind, TestFixture};
@@ -109,9 +109,10 @@ impl TempProject {
     ///
     /// # Errors
     ///
-    /// Returns an I/O error when a parent directory or file cannot be written.
+    /// Returns an I/O error when the relative path escapes the project root or
+    /// a parent directory or file cannot be written.
     pub fn write_file(&self, relative_path: impl AsRef<Path>, contents: &str) -> io::Result<()> {
-        let path = self.root.join(relative_path);
+        let path = self.resolve_relative(relative_path)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -122,9 +123,31 @@ impl TempProject {
     ///
     /// # Errors
     ///
-    /// Returns an I/O error when the file cannot be read.
+    /// Returns an I/O error when the relative path escapes the project root or
+    /// the file cannot be read.
     pub fn read_to_string(&self, relative_path: impl AsRef<Path>) -> io::Result<String> {
-        fs::read_to_string(self.root.join(relative_path))
+        fs::read_to_string(self.resolve_relative(relative_path)?)
+    }
+
+    fn resolve_relative(&self, relative_path: impl AsRef<Path>) -> io::Result<PathBuf> {
+        let relative_path = relative_path.as_ref();
+        if relative_path.is_absolute()
+            || relative_path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "temporary project path must stay relative to the root: {}",
+                    relative_path.display()
+                ),
+            ));
+        }
+        Ok(self.root.join(relative_path))
     }
 }
 

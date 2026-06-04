@@ -1,4 +1,7 @@
-//! Asset security policy.
+//! Asset security diagnostic evidence records.
+//!
+//! These records describe asset decisions made by the concrete asset/build validators. This module
+//! does not decode assets, compare hashes, or enforce limits by itself.
 
 use crate::{SecurityDiagnostic, SecuritySeverity};
 
@@ -27,13 +30,6 @@ pub enum AssetHashVerification {
     Verified {
         /// Verified hash.
         hash: String,
-    },
-    /// Actual hash did not match the declared hash.
-    Mismatch {
-        /// Expected hash.
-        expected: String,
-        /// Actual hash.
-        actual: String,
     },
 }
 
@@ -123,7 +119,7 @@ impl AssetSecurityRejection {
     }
 }
 
-/// Asset security policy.
+/// Asset security evidence factory.
 pub struct AssetSecurityPolicy;
 
 impl AssetSecurityPolicy {

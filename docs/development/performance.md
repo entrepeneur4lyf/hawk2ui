@@ -12,6 +12,12 @@ Every benchmark case must report an observed value in the same unit as its
 budget. A case without a measurement fails the gate, and a measurement above the
 configured `maximum` fails release readiness.
 
+The `hawk2ui-perf` bench binaries execute deterministic owned operations and
+measure the result before validation. Duration budgets use elapsed time from the
+bench body, byte budgets use the measured fixture byte total, and count budgets
+use observed guard telemetry. `--quick` reduces repeated operations for local
+checks; `--iterations=N` sets the exact repeat count.
+
 Run the benchmark gates with:
 
 - `rtk cargo bench -p hawk2ui-perf --bench startup`

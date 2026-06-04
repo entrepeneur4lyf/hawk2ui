@@ -1,4 +1,4 @@
-export function mount(host) {
+export function mount(host: any) {
   host.on("click", () => host.setState({ ready: true }));
   return {
     id: "desktop-basic-root",

@@ -1,22 +1,44 @@
 use hawk2ui_testkit::{
-    SecurityFixtureKind, SecurityRejection, SecurityRejectionFixtureSet, SecurityRejectionMatrix,
-    SecurityRejectionMatrixError,
+    SecurityFixtureKind, SecurityRejection, SecurityRejectionFixtureSet,
+    SecurityRejectionFixtureSetError, SecurityRejectionMatrix, SecurityRejectionMatrixError,
 };
+use std::path::{Path, PathBuf};
 
 #[test]
 fn security_rejections_cover_required_fixture_families() {
     let fixtures = SecurityRejectionFixtureSet::production_baseline();
 
     for kind in [
-        SecurityFixtureKind::UndeclaredCapability,
-        SecurityFixtureKind::UnsupportedSourceFeature,
-        SecurityFixtureKind::UnsafeAsset,
         SecurityFixtureKind::InvalidManifest,
-        SecurityFixtureKind::DeniedHostApi,
-        SecurityFixtureKind::SecretLeak,
+        SecurityFixtureKind::MissingAsset,
+        SecurityFixtureKind::UnsafeAsset,
+        SecurityFixtureKind::AssetHashMismatch,
+        SecurityFixtureKind::OversizedAsset,
+        SecurityFixtureKind::UnsupportedScript,
+        SecurityFixtureKind::UnsupportedStyle,
     ] {
         assert!(fixtures.fixture(kind).is_some(), "missing {kind:?}");
     }
+
+    fixtures
+        .verify_fixture_paths(workspace_root())
+        .expect("production security fixtures must exist");
+}
+
+#[test]
+fn security_rejections_report_missing_fixture_paths() {
+    let fixtures = SecurityRejectionFixtureSet::new([hawk2ui_testkit::SecurityFixture::new(
+        SecurityFixtureKind::InvalidManifest,
+        "fixtures/security/does-not-exist.toml",
+        "manifest.invalid",
+    )]);
+
+    assert_eq!(
+        fixtures.verify_fixture_paths(workspace_root()),
+        Err(SecurityRejectionFixtureSetError::MissingFixturePath {
+            path: PathBuf::from("fixtures/security/does-not-exist.toml")
+        })
+    );
 }
 
 #[test]
@@ -44,4 +66,11 @@ fn security_rejections_require_every_capability_boundary_to_have_a_case() {
             "clipboard.write".to_string()
         ))
     );
+}
+
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("testkit crate lives under crates/")
 }

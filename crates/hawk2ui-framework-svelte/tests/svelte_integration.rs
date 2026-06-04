@@ -50,6 +50,26 @@ fn svelte_5_compile_maps_lifecycle_keyed_children_events_refs_styles_assets_and_
         ["mounted:onMount", "unmounted:onDestroy"]
     );
     assert_eq!(
+        artifact.renderer_operations(),
+        [
+            "create-node:root:view",
+            "set-style:root:surface.card",
+            "set-style:root:intent.primary",
+            "set-asset:root:assets/logo.svg",
+            "set-ref:root:root_ref",
+            "bind-event:root:pointer.press",
+            "bind-lifecycle:root:mounted:onMount",
+            "bind-lifecycle:root:unmounted:onDestroy",
+            "create-node:title:text",
+            "append-child:root:title:key:title",
+            "create-node:cta:text",
+            "append-child:root:cta:key:cta",
+            "create-node:meter:text",
+            "append-child:root:meter:key:meter",
+            "commit:root",
+        ]
+    );
+    assert_eq!(
         artifact.source_map().author_file(),
         "examples/frameworks/svelte-basic/src/App.svelte"
     );
@@ -80,10 +100,82 @@ fn svelte_5_compile_accepts_explicit_native_compiler_boundary_without_source_sca
         artifact.lifecycle_handlers(),
         ["mounted:onMount", "unmounted:onDestroy"]
     );
+    assert_eq!(
+        artifact.renderer_operations(),
+        [
+            "create-node:root:view",
+            "set-style:root:surface.card",
+            "set-asset:root:assets/logo.svg",
+            "set-ref:root:root_ref",
+            "bind-event:root:pointer.press",
+            "bind-lifecycle:root:mounted:onMount",
+            "bind-lifecycle:root:unmounted:onDestroy",
+            "create-node:title:text",
+            "set-prop:title:text",
+            "set-prop:title:font_size",
+            "append-child:root:title:key:title",
+            "commit:root",
+        ]
+    );
     assert!(
         runtime
             .operation_keys()
             .contains(&"mount-element:root".into())
+    );
+}
+
+#[test]
+fn svelte_5_compile_gates_lifecycle_handlers_and_collects_all_refs() {
+    let source = SvelteComponentSource::new(
+        "src/Static.svelte",
+        r#"<hawk-view id="root" use:ref="root_ref" use:ref="panel_ref"><hawk-text id="title">Title</hawk-text></hawk-view>"#,
+    );
+
+    let artifact = SvelteIntegration::new()
+        .compile(source)
+        .expect("recognized Hawk source should compile");
+
+    assert_eq!(artifact.refs(), ["root_ref", "panel_ref"]);
+    assert!(artifact.events().is_empty());
+    assert!(artifact.lifecycle_handlers().is_empty());
+    assert!(
+        !artifact
+            .renderer_operations()
+            .iter()
+            .any(|operation| operation.contains("bind-lifecycle")),
+        "renderer operations must not report lifecycle hooks absent from the source"
+    );
+}
+
+#[test]
+fn svelte_5_compile_rejects_non_hawk_source_and_all_invalid_asset_paths() {
+    let error = SvelteIntegration::new()
+        .compile(SvelteComponentSource::new(
+            "src/Invalid.svelte",
+            r#"<div data-asset="assets/logo.svg"></div><hawk-view data-asset="assets/logo.svg" data-asset="..%2Fsecret.svg" data-asset="icons\logo.svg"></hawk-view>"#,
+        ))
+        .expect_err("invalid raw-source bridge input should fail");
+    let rules: Vec<_> = error
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.rule.as_str())
+        .collect();
+
+    assert_eq!(
+        rules,
+        ["svelte.asset.path-invalid", "svelte.asset.path-invalid"]
+    );
+
+    let no_root = SvelteIntegration::new()
+        .compile(SvelteComponentSource::new(
+            "src/NoRoot.svelte",
+            "<script></script>",
+        ))
+        .expect_err("raw-source bridge should reject non-Hawk source");
+
+    assert_eq!(
+        no_root.diagnostics()[0].rule.as_str(),
+        "svelte.compile.no-root"
     );
 }
 

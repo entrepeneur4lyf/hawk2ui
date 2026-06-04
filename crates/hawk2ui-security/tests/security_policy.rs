@@ -48,7 +48,7 @@ fn trust_boundaries_emit_stable_diagnostic_labels() {
 }
 
 #[test]
-fn source_validation_rejects_all_build_time_security_rules() {
+fn source_validation_records_all_build_time_security_rules() {
     let cases = [
         (
             SourceValidationRule::UnsupportedStyleSyntax,
@@ -105,7 +105,7 @@ fn source_validation_rejects_all_build_time_security_rules() {
 }
 
 #[test]
-fn script_sandbox_denies_all_direct_privileged_operations() {
+fn script_sandbox_records_all_direct_privileged_denials() {
     let cases = [
         (
             ScriptSandboxOperation::StringToCode,
@@ -244,4 +244,7 @@ fn secret_redaction_hides_values_in_debug_diagnostics_and_reports() {
     assert!(!serialized.contains("super-secret-value"));
     assert!(debug.contains("[REDACTED:api-token]"));
     assert!(serialized.contains("[REDACTED:api-token]"));
+    assert!(!secret.is_absent_from("leaked super-secret-value"));
+    assert!(secret.is_absent_from("clean diagnostic"));
+    assert!(SecretValue::new("empty", "").is_absent_from("any diagnostic"));
 }

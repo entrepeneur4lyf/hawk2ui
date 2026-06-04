@@ -344,6 +344,10 @@ fn style_compile_lowers_color_duration_shadow_and_transform_values() {
 .overlay {
   color: rgba(240, 245, 255, 0.5);
 }
+.short-hex {
+  color: #abc;
+  box-shadow: 0px 1px 2px #000;
+}
 "#,
     )
     .expect("production visual values must compile");
@@ -385,6 +389,24 @@ fn style_compile_lowers_color_duration_shadow_and_transform_values() {
             .unwrap()
             .value(),
         &StyleValue::ColorRgba(240, 245, 255, 128)
+    );
+
+    let short_hex = sheet
+        .rule("class(short-hex)")
+        .expect("short hex rule exists");
+    assert_eq!(
+        short_hex
+            .declaration(&PropertyId::new("color"))
+            .unwrap()
+            .value(),
+        &StyleValue::ColorRgba(170, 187, 204, 255)
+    );
+    assert_eq!(
+        short_hex
+            .declaration(&PropertyId::new("box-shadow"))
+            .unwrap()
+            .value(),
+        &StyleValue::Shadow("0 1px 2px #000".to_string())
     );
 }
 
@@ -489,6 +511,34 @@ fn style_compile_lowers_supported_grid_longhands_to_typed_records() {
             .value(),
         &StyleValue::GridPlacement("span 2".to_string())
     );
+}
+
+#[test]
+fn style_compile_rejects_values_outside_exact_keyword_and_effect_subsets() {
+    for (source, rule) in [
+        (".card { display: block; }", "style.value.unsupported"),
+        (".card { overflow: overlay; }", "style.value.unsupported"),
+        (
+            ".card { box-shadow: inset 0px 8px 24px #000000; }",
+            "style.value.unsupported",
+        ),
+        (
+            ".card { box-shadow: 0px 8px 24px #000000, 0px 0px 4px #ffffff; }",
+            "style.value.unsupported",
+        ),
+        (
+            ".card { transform: matrix(1, 0, 0, 1, 0, 0); }",
+            "style.value.unsupported",
+        ),
+    ] {
+        let error =
+            hawk2ui_style::compile_style_source(source).expect_err("unsupported value must fail");
+        assert_eq!(
+            error.diagnostics()[0].rule(),
+            rule,
+            "unexpected diagnostic for {source}"
+        );
+    }
 }
 
 #[test]

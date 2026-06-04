@@ -1,7 +1,8 @@
+use clap_sys::ext::params::{CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_STEPPED};
 use hawk2ui_build::{ArtifactSchemaVersion, HawkManifest, SealedArtifact};
 use hawk2ui_plugin::{
-    BundleOutput, FormatMetadata, ParameterFlags, ParameterModel, ParameterRange, ParameterRecord,
-    PluginEditor, PluginEditorSize,
+    BundleOutput, EnumVariant, FormatMetadata, ParameterFlags, ParameterModel, ParameterRange,
+    ParameterRecord, PluginEditor, PluginEditorSize,
 };
 use hawk2ui_plugin_adapters::{
     ClapCdylibScaffold, ClapGuiParentHandle, ClapGuiWindowApi, ClapPluginEntryPlan,
@@ -621,13 +622,15 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     assert!(source.contains("plugin_process"));
     assert!(source.contains("clap_plugin_audio_ports"));
     assert!(source.contains("clap_plugin_gui"));
-    assert!(source.contains("EDITOR_ATTACHED"));
+    assert!(source.contains("Hawk2uiPluginInstance"));
+    assert!(source.contains("editor_attached"));
     assert!(source.contains("clap_plugin_params"));
     assert!(source.contains("clap_plugin_state"));
     assert!(source.contains("PARAMETERS"));
     assert!(source.contains("Gain"));
     assert!(source.contains("hawk2ui_editor_descriptor"));
-    assert!(source.contains("hawk2ui_editor_state"));
+    assert!(source.contains("hawk2ui_editor_state_for_plugin"));
+    assert!(source.contains("hawk2ui_editor_dispatch_for_plugin"));
     assert!(source.contains("hawk2ui_editor_host_abi"));
     assert!(source.contains("hawk2ui_realtime_safety_policy"));
     assert!(source.contains("Hawk2uiRealtimeOperation::PreallocatedWrite"));
@@ -687,6 +690,51 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     assert!(
         status.success(),
         "generated CLAP host check should load the compiled library"
+    );
+}
+
+#[test]
+fn plugin_adapters_preserve_choice_defaults_and_stepped_flags_in_clap_scaffold() {
+    let metadata = FormatMetadata::new("com.hawk2ui.choice", "Choice", "Hawk2UI").version("1.0.0");
+    let mut mode = ParameterRecord::enumerated(
+        "mode",
+        "Mode",
+        2,
+        [
+            EnumVariant::new("clean", "Clean"),
+            EnumVariant::new("drive", "Drive"),
+            EnumVariant::new("wide", "Wide"),
+        ],
+    )
+    .flags(ParameterFlags::automatable());
+    mode.steps = None;
+    let parameters = ParameterModel::new([mode]);
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-clap-choice-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+
+    let output = ClapCdylibScaffold::from_metadata(&metadata)
+        .with_parameters(&parameters)
+        .write_to(&output_root)
+        .expect("CLAP scaffold should write");
+    let source = std::fs::read_to_string(&output.lib_rs_path).expect("generated source reads");
+    let expected_flags = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
+
+    assert!(
+        source.contains("name: b\"Mode\\x00\""),
+        "choice parameter name should be emitted"
+    );
+    assert!(
+        source.contains("default_value: 2.0"),
+        "choice default index should be emitted as the CLAP default value"
+    );
+    assert!(
+        source.contains(&format!("flags: {expected_flags}")),
+        "choice parameters should be stepped even when explicit steps are absent"
     );
 }
 
@@ -767,8 +815,19 @@ fn main() {
         );
         assert!(!plugin.is_null());
         assert_eq!((*plugin).desc, descriptor as *const _);
+        let second_plugin = (factory.create_plugin.expect("create second"))(
+            factory,
+            ptr::null(),
+            descriptor.id,
+        );
+        assert!(!second_plugin.is_null());
+        assert_ne!(plugin, second_plugin);
+        assert_eq!((*second_plugin).desc, descriptor as *const _);
 
         assert!(((*plugin).init.expect("plugin init"))(plugin));
+        assert!(((*second_plugin).init.expect("second plugin init"))(
+            second_plugin
+        ));
         assert!(((*plugin).activate.expect("activate"))(plugin, 48_000.0, 32, 1_024));
         assert!(((*plugin).start_processing.expect("start processing"))(plugin));
         let process = clap_sys::process::clap_process {
@@ -880,7 +939,9 @@ fn main() {
                 "response=state_saved",
                 "response=state_loaded",
                 "response=realtime_visuals_drained",
-                "function=hawk2ui_editor_dispatch",
+                "function=hawk2ui_editor_dispatch_for_plugin",
+                "function=hawk2ui_editor_state_for_plugin",
+                "compat_function=hawk2ui_editor_dispatch",
             ] {
                 assert!(
                     host_abi.contains(required_entry),
@@ -901,7 +962,8 @@ fn main() {
             for required_entry in [
                 "hawk2ui_realtime_safety_policy=1",
                 "context=audio_thread",
-                "process_callback=guarded_preallocated_copy",
+                "process_callback=preallocated_audio_buffer_copy",
+                "policy_check=operation_allowlist_self_check",
                 "allowed=preallocated_write",
                 "forbidden=allocation",
                 "forbidden=blocking_wait",
@@ -913,44 +975,56 @@ fn main() {
                 );
             }
             let editor_dispatch: libloading::Symbol<
-                unsafe extern "C" fn(*const u8, usize, *mut u8, usize, *mut usize) -> bool,
+                unsafe extern "C" fn(
+                    *const clap_sys::plugin::clap_plugin,
+                    *const u8,
+                    usize,
+                    *mut u8,
+                    usize,
+                    *mut usize,
+                ) -> bool,
             > = library
-                .get(b"hawk2ui_editor_dispatch\0")
-                .expect("editor dispatch export resolves");
-            let editor_state: libloading::Symbol<unsafe extern "C" fn() -> Hawk2uiEditorState> =
-                library.get(b"hawk2ui_editor_state\0").expect("editor state export resolves");
-            assert_editor_state(editor_state(), false, false, false, 1024, 640);
+                .get(b"hawk2ui_editor_dispatch_for_plugin\0")
+                .expect("per-plugin editor dispatch export resolves");
+            let editor_state: libloading::Symbol<
+                unsafe extern "C" fn(*const clap_sys::plugin::clap_plugin) -> Hawk2uiEditorState,
+            > = library
+                .get(b"hawk2ui_editor_state_for_plugin\0")
+                .expect("per-plugin editor state export resolves");
+            assert_editor_state(editor_state(plugin), false, false, false, 1024, 640);
             let create_response = dispatch_editor(
                 *editor_dispatch,
+                plugin,
                 "command=create\napi=x11\nfloating=false\n",
             );
             assert!(create_response.contains("response=created"));
-            assert_editor_state(editor_state(), true, false, false, 1024, 640);
-            let blocked_show_response = dispatch_editor(*editor_dispatch, "command=show\n");
+            assert_editor_state(editor_state(plugin), true, false, false, 1024, 640);
+            let blocked_show_response = dispatch_editor(*editor_dispatch, plugin, "command=show\n");
             assert!(blocked_show_response.contains("error=editor-not-attached"));
-            assert_editor_state(editor_state(), true, false, false, 1024, 640);
+            assert_editor_state(editor_state(plugin), true, false, false, 1024, 640);
             let attach_response = dispatch_editor(
                 *editor_dispatch,
+                plugin,
                 "command=set_parent\napi=x11\nparent=1\n",
             );
             assert!(attach_response.contains("response=parent_attached"));
-            assert_editor_state(editor_state(), true, true, false, 1024, 640);
-            let show_response = dispatch_editor(*editor_dispatch, "command=show\n");
+            assert_editor_state(editor_state(plugin), true, true, false, 1024, 640);
+            let show_response = dispatch_editor(*editor_dispatch, plugin, "command=show\n");
             assert!(show_response.contains("response=frame_presented"));
             assert!(show_response.contains("width=1024"));
             assert!(show_response.contains("height=640"));
             assert!(show_response.contains("presented_frame_count=1"));
-            assert_editor_state(editor_state(), true, true, true, 1024, 640);
-            let hide_response = dispatch_editor(*editor_dispatch, "command=hide\n");
+            assert_editor_state(editor_state(plugin), true, true, true, 1024, 640);
+            let hide_response = dispatch_editor(*editor_dispatch, plugin, "command=hide\n");
             assert!(hide_response.contains("response=hidden"));
-            assert_editor_state(editor_state(), true, true, false, 1024, 640);
-            let destroy_response = dispatch_editor(*editor_dispatch, "command=destroy\n");
+            assert_editor_state(editor_state(plugin), true, true, false, 1024, 640);
+            let destroy_response = dispatch_editor(*editor_dispatch, plugin, "command=destroy\n");
             assert!(destroy_response.contains("response=destroyed"));
-            assert_editor_state(editor_state(), false, false, false, 1024, 640);
+            assert_editor_state(editor_state(plugin), false, false, false, 1024, 640);
             assert!((gui.create.expect("gui create"))(plugin, preferred_api, false));
-            assert_editor_state(editor_state(), true, false, false, 1024, 640);
+            assert_editor_state(editor_state(plugin), true, false, false, 1024, 640);
             assert!(!(gui.show.expect("gui show before parent"))(plugin));
-            assert_editor_state(editor_state(), true, false, false, 1024, 640);
+            assert_editor_state(editor_state(plugin), true, false, false, 1024, 640);
             let null_parent = clap_sys::ext::gui::clap_window {
                 api: preferred_api,
                 specific: clap_sys::ext::gui::clap_window_handle {
@@ -961,7 +1035,7 @@ fn main() {
                 plugin,
                 &null_parent
             ));
-            assert_editor_state(editor_state(), true, false, false, 1024, 640);
+            assert_editor_state(editor_state(plugin), true, false, false, 1024, 640);
             let parent = clap_sys::ext::gui::clap_window {
                 api: preferred_api,
                 specific: clap_sys::ext::gui::clap_window_handle {
@@ -969,15 +1043,46 @@ fn main() {
                 },
             };
             assert!((gui.set_parent.expect("gui set parent"))(plugin, &parent));
-            assert_editor_state(editor_state(), true, true, false, 1024, 640);
+            assert_editor_state(editor_state(plugin), true, true, false, 1024, 640);
             assert!((gui.set_size.expect("gui set size"))(plugin, 1200, 720));
-            assert_editor_state(editor_state(), true, true, false, 1200, 720);
+            assert_editor_state(editor_state(plugin), true, true, false, 1200, 720);
             assert!((gui.show.expect("gui show"))(plugin));
-            assert_editor_state(editor_state(), true, true, true, 1200, 720);
+            assert_editor_state(editor_state(plugin), true, true, true, 1200, 720);
+            let second_gui = ((*second_plugin)
+                .get_extension
+                .expect("second gui extension"))(
+                second_plugin,
+                b"clap.gui\0".as_ptr().cast(),
+            );
+            assert!(!second_gui.is_null());
+            let second_gui =
+                &*(second_gui as *const clap_sys::ext::gui::clap_plugin_gui);
+            assert_editor_state(editor_state(second_plugin), false, false, false, 1024, 640);
+            assert!((second_gui.create.expect("second gui create"))(
+                second_plugin,
+                preferred_api,
+                false
+            ));
+            assert!((second_gui.set_parent.expect("second gui set parent"))(
+                second_plugin,
+                &parent
+            ));
+            assert!((second_gui.set_size.expect("second gui set size"))(
+                second_plugin,
+                640,
+                480
+            ));
+            assert!((second_gui.show.expect("second gui show"))(second_plugin));
+            assert_editor_state(editor_state(plugin), true, true, true, 1200, 720);
+            assert_editor_state(editor_state(second_plugin), true, true, true, 640, 480);
             assert!((gui.hide.expect("gui hide"))(plugin));
-            assert_editor_state(editor_state(), true, true, false, 1200, 720);
+            assert_editor_state(editor_state(plugin), true, true, false, 1200, 720);
             (gui.destroy.expect("gui destroy"))(plugin);
-            assert_editor_state(editor_state(), false, false, false, 1200, 720);
+            assert_editor_state(editor_state(plugin), false, false, false, 1200, 720);
+            assert_editor_state(editor_state(second_plugin), true, true, true, 640, 480);
+            assert!((second_gui.hide.expect("second gui hide"))(second_plugin));
+            (second_gui.destroy.expect("second gui destroy"))(second_plugin);
+            assert_editor_state(editor_state(second_plugin), false, false, false, 640, 480);
 
             let params = ((*plugin).get_extension.expect("params extension"))(
                 plugin,
@@ -985,7 +1090,20 @@ fn main() {
         );
         assert!(!params.is_null());
         let params = &*(params as *const clap_sys::ext::params::clap_plugin_params);
+        let second_params = ((*second_plugin)
+            .get_extension
+            .expect("second params extension"))(
+            second_plugin,
+            b"clap.params\0".as_ptr().cast(),
+        );
+        assert!(!second_params.is_null());
+        let second_params =
+            &*(second_params as *const clap_sys::ext::params::clap_plugin_params);
         assert_eq!((params.count.expect("param count"))(plugin), 1);
+        assert_eq!(
+            (second_params.count.expect("second param count"))(second_plugin),
+            1
+        );
         let mut info =
             std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::zeroed()
                 .assume_init();
@@ -997,7 +1115,16 @@ fn main() {
         assert_eq!(info.default_value, 0.0);
           let mut value = f64::NAN;
           assert!((params.get_value.expect("param value"))(plugin, 1, &mut value));
-          assert_eq!(value, 0.0);
+        assert_eq!(value, 0.0);
+        let mut second_value = f64::NAN;
+        assert!((second_params
+            .get_value
+            .expect("second initial param value"))(
+            second_plugin,
+            1,
+            &mut second_value
+        ));
+        assert_eq!(second_value, 0.0);
           let automation_event = clap_sys::events::clap_event_param_value {
               header: clap_sys::events::clap_event_header {
                   size: std::mem::size_of::<clap_sys::events::clap_event_param_value>() as u32,
@@ -1028,8 +1155,17 @@ fn main() {
               plugin,
               1,
               &mut automated_value,
-          ));
-          assert_eq!(automated_value, 2.25);
+        ));
+        assert_eq!(automated_value, 2.25);
+        let mut second_after_automation = f64::NAN;
+        assert!((second_params
+            .get_value
+            .expect("second param remains isolated"))(
+            second_plugin,
+            1,
+            &mut second_after_automation
+        ));
+        assert_eq!(second_after_automation, 0.0);
 
           let state = ((*plugin).get_extension.expect("state extension"))(
               plugin,
@@ -1065,6 +1201,7 @@ fn main() {
             assert_eq!(loaded_value, 3.5);
             let applied_response = dispatch_editor(
                 *editor_dispatch,
+                plugin,
                 "command=apply_parameter\nparameter_id=1\nvalue=4.25\n",
             );
             assert!(applied_response.contains("response=parameter_applied"));
@@ -1075,14 +1212,23 @@ fn main() {
                 &mut dispatched_value,
             ));
             assert_eq!(dispatched_value, 4.25);
-            let saved_response = dispatch_editor(*editor_dispatch, "command=save_state\n");
+            let mut second_after_dispatch = f64::NAN;
+            assert!((second_params
+                .get_value
+                .expect("second param remains isolated after dispatch"))(
+                second_plugin,
+                1,
+                &mut second_after_dispatch
+            ));
+            assert_eq!(second_after_dispatch, 0.0);
+            let saved_response = dispatch_editor(*editor_dispatch, plugin, "command=save_state\n");
             assert!(saved_response.contains("response=state_saved"));
             assert!(saved_response.contains("param.1.bits="));
             let load_command = format!(
                 "command=load_state\nparam.1.bits={}\n",
                 1.75f64.to_bits()
             );
-            let loaded_response = dispatch_editor(*editor_dispatch, &load_command);
+            let loaded_response = dispatch_editor(*editor_dispatch, plugin, &load_command);
             assert!(loaded_response.contains("response=state_loaded"));
             let mut c_abi_loaded_value = f64::NAN;
             assert!((params.get_value.expect("c abi loaded param value"))(
@@ -1093,21 +1239,33 @@ fn main() {
             assert_eq!(c_abi_loaded_value, 1.75);
             let visual_response = dispatch_editor(
                 *editor_dispatch,
+                plugin,
                 "command=drain_realtime_visuals\npacket_count=2\n",
             );
             assert!(visual_response.contains("response=realtime_visuals_drained"));
             assert!(visual_response.contains("packet_count=2"));
+            ((*second_plugin).destroy.expect("second plugin destroy"))(second_plugin);
+            ((*plugin).destroy.expect("plugin destroy"))(plugin);
         }
     }
 
     unsafe fn dispatch_editor(
-        dispatch: unsafe extern "C" fn(*const u8, usize, *mut u8, usize, *mut usize) -> bool,
+        dispatch: unsafe extern "C" fn(
+            *const clap_sys::plugin::clap_plugin,
+            *const u8,
+            usize,
+            *mut u8,
+            usize,
+            *mut usize,
+        ) -> bool,
+        plugin: *const clap_sys::plugin::clap_plugin,
         command: &str,
     ) -> String {
         let mut response = [0u8; 4096];
         let mut response_len = 0usize;
         assert!(unsafe {
             dispatch(
+                plugin,
                 command.as_ptr(),
                 command.len(),
                 response.as_mut_ptr(),
@@ -1258,6 +1416,9 @@ fn plugin_adapters_materialize_format_specific_layouts_and_hash_manifest() {
                 assert!(generated_cargo.contains("vst3 = \"0.3.0\""));
                 assert!(generated_lib.contains("Vst3ClassId"));
                 assert!(generated_lib.contains("GetPluginFactory"));
+                assert!(generated_lib.contains("ComWrapper::new(Hawk2uiVst3Factory)"));
+                assert!(!generated_lib.contains("std::ptr::null_mut()\n}"));
+                assert!(generated_lib.contains("unsafe fn createInstance"));
                 assert!(hashes.contains("Contents/Info.plist"));
                 assert!(hashes.contains("Contents/Resources/generated-vst3/Cargo.toml"));
                 assert!(hashes.contains("Contents/Resources/generated-vst3/src/lib.rs"));

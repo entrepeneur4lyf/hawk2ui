@@ -2,10 +2,10 @@
 
 use std::collections::BTreeSet;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Unit used by a performance budget.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BudgetUnit {
     /// Millisecond duration budget.
@@ -19,7 +19,7 @@ pub enum BudgetUnit {
 }
 
 /// Performance budget category.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PerformanceCategory {
     /// Startup and initialization budgets.
@@ -47,7 +47,7 @@ pub enum PerformanceCategory {
 }
 
 /// One performance budget row.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PerformanceBudget {
     /// Stable budget name.
     pub name: String,
@@ -98,6 +98,12 @@ impl PerformanceBudgets {
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         self.budgets.iter().any(|budget| budget.name == name)
+    }
+
+    /// Returns a budget by stable name.
+    #[must_use]
+    pub fn budget(&self, name: &str) -> Option<&PerformanceBudget> {
+        self.budgets.iter().find(|budget| budget.name == name)
     }
 
     /// Iterates over release-gating budgets.

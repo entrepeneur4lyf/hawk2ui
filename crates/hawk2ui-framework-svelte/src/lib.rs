@@ -2,11 +2,12 @@
 //! `Svelte` 5 integration for emitting `Hawk2UI` typed records.
 
 use hawk2ui_authoring::{
-    AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementId, ElementKind,
-    ElementNode, EventBinding, EventKind, EventPayloadField, FrameworkNativeProgram, HandlerRef,
-    LifecycleEventKind, NativeAuthoringElement, NativeAuthoringRuntime, NativeChild,
-    NativeLifecycleEvent, NativeRef, NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
-    NativeRuntimeBridgeError, PointerEventKind, PropValue, StyleRef,
+    AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, CustomRendererOperation,
+    CustomRendererProtocol, ElementId, ElementKind, ElementNode, EventBinding, EventKind,
+    EventPayloadField, FrameworkNativeProgram, HandlerRef, LifecycleEventKind,
+    NativeAuthoringElement, NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef,
+    NativeRuntimeBridge, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PointerEventKind,
+    PropValue, StyleRef,
 };
 use hawk2ui_runtime::RuntimeViewTree;
 use hawk2ui_style::{CompiledStyleSheet, TokenSet};
@@ -77,6 +78,7 @@ pub struct SvelteCompiledArtifact {
     asset_refs: Vec<AssetRef>,
     events: Vec<EventBinding>,
     lifecycle_handlers: Vec<String>,
+    renderer_operations: Vec<String>,
     native_program: Option<FrameworkNativeProgram>,
     source_map: SvelteSourceMap,
     diagnostics: Vec<AuthoringDiagnostic>,
@@ -173,6 +175,12 @@ impl SvelteCompiledArtifact {
         &self.lifecycle_handlers
     }
 
+    /// Returns custom renderer operation keys in deterministic order.
+    #[must_use]
+    pub fn renderer_operations(&self) -> &[String] {
+        &self.renderer_operations
+    }
+
     /// Returns the source map for diagnostics.
     #[must_use]
     pub const fn source_map(&self) -> &SvelteSourceMap {
@@ -220,6 +228,20 @@ impl SvelteIntegration {
 
     /// Compiles Svelte author source into typed `Hawk2UI` records.
     ///
+    /// # Source grammar (raw-source path)
+    ///
+    /// When the source is raw author text (rather than a
+    /// [`SvelteComponentSource::from_native_program`] boundary), this method is an intentional
+    /// substring heuristic, **not** a Svelte 5 compiler: it does not parse `<script>`, runes
+    /// (`$state`/`$derived`/`$effect`), or `{#each}`/`{#if}` blocks, and emits no reactivity
+    /// surface. It models only a single root `View` plus a flat list of `<hawk-text>` / keyed
+    /// children. Several record fields are fixed labels rather than parsed: handler identifiers
+    /// (`on:press` → `handlePress`, `on:mount` → `onMount`), and refs are read from a
+    /// project-specific `use:ref="…"` attribute (a `Hawk2UI` authoring convention, not native
+    /// `Svelte` `bind:this`). `compile()` succeeding means the source did not trip a denylist, not
+    /// that it is a valid Svelte component. High-fidelity authoring is expected to arrive through
+    /// [`SvelteComponentSource::from_native_program`].
+    ///
     /// # Errors
     ///
     /// Returns [`SvelteCompileError`] when the Svelte source violates the native integration contract.
@@ -230,87 +252,10 @@ impl SvelteIntegration {
         let source_map = SvelteSourceMap {
             author_file: source.author_file.clone(),
         };
-        if let Some(native_program) = source.native_program {
-            return Ok(svelte_artifact_from_native_program(
-                source_map,
-                native_program,
-            ));
+        match source.native_program {
+            Some(native_program) => svelte_artifact_from_native_program(source_map, native_program),
+            None => compile_raw_svelte_source(source_map, &source.source),
         }
-        let mut diagnostics = Vec::new();
-        if let Some(asset) = extract_attribute(&source.source, "data-asset")
-            && (asset.contains("://") || asset.starts_with('/') || asset.contains(".."))
-        {
-            diagnostics.push(AuthoringDiagnostic::new(
-                AuthoringDiagnosticSeverity::Error,
-                "svelte.asset.path-invalid",
-                "Svelte asset references must use workspace-relative paths",
-            ));
-        }
-        for event in unsupported_svelte_events(&source.source) {
-            diagnostics.push(AuthoringDiagnostic::new(
-                AuthoringDiagnosticSeverity::Error,
-                "svelte.event.unsupported",
-                format!("Svelte event `{event}` is not part of the native event contract"),
-            ));
-        }
-        if source.source.contains("<Broken") {
-            diagnostics.push(AuthoringDiagnostic::new(
-                AuthoringDiagnosticSeverity::Error,
-                "svelte.compile.unresolved-component",
-                "Svelte component could not be resolved",
-            ));
-        }
-        if !diagnostics.is_empty() {
-            return Err(SvelteCompileError {
-                diagnostics,
-                source_map,
-            });
-        }
-
-        let root_id = extract_attribute(&source.source, "id").unwrap_or_else(|| "root".to_string());
-        let mut events = Vec::new();
-        if source.source.contains("on:press") {
-            events.push(
-                EventBinding::new(
-                    ElementId::new(root_id.clone()),
-                    EventKind::Pointer(PointerEventKind::Press),
-                    HandlerRef::new("handlePress"),
-                )
-                .with_payload(EventPayloadField::Position),
-            );
-        }
-        if source.source.contains("on:mount") {
-            events.push(EventBinding::new(
-                ElementId::new(root_id.clone()),
-                EventKind::Lifecycle(LifecycleEventKind::Mounted),
-                HandlerRef::new("onMount"),
-            ));
-        }
-        if source.source.contains("on:destroy") {
-            events.push(EventBinding::new(
-                ElementId::new(root_id.clone()),
-                EventKind::Lifecycle(LifecycleEventKind::Unmounted),
-                HandlerRef::new("onDestroy"),
-            ));
-        }
-
-        Ok(SvelteCompiledArtifact {
-            root: ElementNode::new(ElementId::new(root_id), ElementKind::View),
-            keyed_children: keyed_children(&source.source),
-            refs: extract_attribute(&source.source, "use:ref")
-                .into_iter()
-                .collect(),
-            style_refs: style_refs_from_attribute(&source.source, "class"),
-            asset_refs: extract_attribute(&source.source, "data-asset")
-                .into_iter()
-                .map(|path| AssetRef::new("svelte.asset", path))
-                .collect(),
-            events,
-            lifecycle_handlers: vec!["mounted:onMount".into(), "unmounted:onDestroy".into()],
-            native_program: None,
-            source_map,
-            diagnostics: Vec::new(),
-        })
     }
 
     /// Compiles Svelte author source into a runtime-ready native bridge artifact.
@@ -388,6 +333,119 @@ impl SvelteIntegration {
             .map_err(|error| bridge_error(author_file.as_str(), &error))?;
         Ok(SvelteRuntimeArtifact { compiled, runtime })
     }
+}
+
+fn compile_raw_svelte_source(
+    source_map: SvelteSourceMap,
+    source: &str,
+) -> Result<SvelteCompiledArtifact, SvelteCompileError> {
+    let mut diagnostics = Vec::new();
+    if !contains_hawk_root(source) {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "svelte.compile.no-root",
+            "Svelte source must declare a hawk-view or hawk-text root for the raw-source bridge",
+        ));
+    }
+    for asset in extract_attributes(source, "data-asset") {
+        if !is_workspace_relative_asset_path(&asset) {
+            diagnostics.push(AuthoringDiagnostic::new(
+                AuthoringDiagnosticSeverity::Error,
+                "svelte.asset.path-invalid",
+                "Svelte asset references must use workspace-relative paths",
+            ));
+        }
+    }
+    for event in unsupported_svelte_events(source) {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "svelte.event.unsupported",
+            format!("Svelte event `{event}` is not part of the native event contract"),
+        ));
+    }
+    if source.contains("<Broken") {
+        diagnostics.push(AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "svelte.compile.unresolved-component",
+            "Svelte component could not be resolved",
+        ));
+    }
+    if !diagnostics.is_empty() {
+        return Err(SvelteCompileError {
+            diagnostics,
+            source_map,
+        });
+    }
+
+    let root_id = extract_attribute(source, "id").unwrap_or_else(|| "root".to_string());
+    let mut events = Vec::new();
+    if source.contains("on:press") {
+        events.push(
+            EventBinding::new(
+                ElementId::new(root_id.clone()),
+                EventKind::Pointer(PointerEventKind::Press),
+                HandlerRef::new("handlePress"),
+            )
+            .with_payload(EventPayloadField::Position),
+        );
+    }
+    if source.contains("on:mount") {
+        events.push(EventBinding::new(
+            ElementId::new(root_id.clone()),
+            EventKind::Lifecycle(LifecycleEventKind::Mounted),
+            HandlerRef::new("onMount"),
+        ));
+    }
+    if source.contains("on:destroy") {
+        events.push(EventBinding::new(
+            ElementId::new(root_id.clone()),
+            EventKind::Lifecycle(LifecycleEventKind::Unmounted),
+            HandlerRef::new("onDestroy"),
+        ));
+    }
+
+    // Lifecycle labels mirror the same `source.contains(…)` gating as the lifecycle `events`
+    // above so the two public surfaces agree; `svelte_artifact_from_native_program` derives them
+    // from the program's declared lifecycle instead.
+    let mut lifecycle_handlers = Vec::new();
+    if source.contains("on:mount") {
+        lifecycle_handlers.push("mounted:onMount".to_string());
+    }
+    if source.contains("on:destroy") {
+        lifecycle_handlers.push("unmounted:onDestroy".to_string());
+    }
+
+    let keyed_children = keyed_children(source);
+    let refs = extract_attributes(source, "use:ref");
+    let style_refs = style_refs_from_attribute(source, "class");
+    let asset_refs: Vec<_> = extract_attributes(source, "data-asset")
+        .into_iter()
+        .map(|path| AssetRef::new("svelte.asset", path))
+        .collect();
+    let renderer_operations = svelte_protocol_operations(SvelteProtocolInput {
+        author_file: source_map.author_file(),
+        source_text: source,
+        root_id: root_id.as_str(),
+        refs: &refs,
+        style_refs: &style_refs,
+        asset_refs: &asset_refs,
+        events: &events,
+        keyed_children: &keyed_children,
+    })?;
+
+    Ok(SvelteCompiledArtifact {
+        root: ElementNode::new(ElementId::new(root_id), ElementKind::View),
+        keyed_children,
+        refs,
+        style_refs,
+        asset_refs,
+        events,
+        lifecycle_handlers,
+        renderer_operations,
+        native_program: None,
+        source_map,
+        diagnostics: Vec::new(),
+    })
 }
 
 fn native_artifact_from_svelte(
@@ -471,9 +529,12 @@ fn native_artifact_from_svelte_with_defaults(
 fn svelte_artifact_from_native_program(
     source_map: SvelteSourceMap,
     native_program: FrameworkNativeProgram,
-) -> SvelteCompiledArtifact {
+) -> Result<SvelteCompiledArtifact, SvelteCompileError> {
     let events = framework_program_events(&native_program);
-    SvelteCompiledArtifact {
+    let renderer_operations = native_program
+        .custom_renderer_operation_keys("svelte")
+        .map_err(|error| custom_renderer_error(source_map.author_file(), &error))?;
+    Ok(SvelteCompiledArtifact {
         root: ElementNode::new(
             native_program.root().id().clone(),
             native_program.root().kind(),
@@ -494,10 +555,11 @@ fn svelte_artifact_from_native_program(
             .iter()
             .map(|(event, handler)| lifecycle_handler_label(*event, handler.as_str()))
             .collect(),
+        renderer_operations,
         native_program: Some(native_program),
         source_map,
         diagnostics: Vec::new(),
-    }
+    })
 }
 
 fn framework_program_events(native_program: &FrameworkNativeProgram) -> Vec<EventBinding> {
@@ -555,6 +617,165 @@ fn lifecycle_handler_label(event: NativeLifecycleEvent, handler: &str) -> String
     }
 }
 
+#[derive(Clone, Copy)]
+struct SvelteProtocolInput<'a> {
+    author_file: &'a str,
+    source_text: &'a str,
+    root_id: &'a str,
+    refs: &'a [String],
+    style_refs: &'a [StyleRef],
+    asset_refs: &'a [AssetRef],
+    events: &'a [EventBinding],
+    keyed_children: &'a [String],
+}
+
+fn svelte_protocol_operations(
+    input: SvelteProtocolInput<'_>,
+) -> Result<Vec<String>, SvelteCompileError> {
+    let root_element_id = ElementId::new(input.root_id);
+    let mut protocol = CustomRendererProtocol::new("svelte");
+    apply_svelte_protocol_operation(
+        input.author_file,
+        &mut protocol,
+        CustomRendererOperation::CreateNode {
+            id: root_element_id.clone(),
+            kind: ElementKind::View,
+        },
+    )?;
+    for style_ref in input.style_refs {
+        apply_svelte_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::SetStyleRef {
+                id: root_element_id.clone(),
+                style_ref: StyleRef::new(style_ref.name()),
+            },
+        )?;
+    }
+    for asset_ref in input.asset_refs {
+        apply_svelte_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::SetAssetRef {
+                id: root_element_id.clone(),
+                asset_ref: AssetRef::new(asset_ref.name(), asset_ref.path()),
+            },
+        )?;
+    }
+    for reference in input.refs {
+        apply_svelte_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::SetRef {
+                id: root_element_id.clone(),
+                reference: NativeRef::new(reference),
+            },
+        )?;
+    }
+    for event in input.events {
+        if !matches!(event.event(), EventKind::Lifecycle(_)) {
+            apply_svelte_protocol_operation(
+                input.author_file,
+                &mut protocol,
+                CustomRendererOperation::BindEvent {
+                    binding: event.clone(),
+                },
+            )?;
+        }
+    }
+    apply_svelte_lifecycle_protocol_operations(
+        input.author_file,
+        input.source_text,
+        input.root_id,
+        &mut protocol,
+    )?;
+    for child in input.keyed_children {
+        let child_id = ElementId::new(child);
+        apply_svelte_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::CreateNode {
+                id: child_id.clone(),
+                kind: ElementKind::Text,
+            },
+        )?;
+        apply_svelte_protocol_operation(
+            input.author_file,
+            &mut protocol,
+            CustomRendererOperation::AppendChild {
+                parent: root_element_id.clone(),
+                child: child_id,
+                key: Some(child.clone()),
+            },
+        )?;
+    }
+    apply_svelte_protocol_operation(
+        input.author_file,
+        &mut protocol,
+        CustomRendererOperation::Commit {
+            root: root_element_id,
+        },
+    )?;
+    Ok(protocol.operation_keys().to_vec())
+}
+
+fn apply_svelte_lifecycle_protocol_operations(
+    author_file: &str,
+    source_text: &str,
+    root_id: &str,
+    protocol: &mut CustomRendererProtocol,
+) -> Result<(), SvelteCompileError> {
+    if source_text.contains("on:mount") {
+        apply_svelte_protocol_operation(
+            author_file,
+            protocol,
+            CustomRendererOperation::BindLifecycle {
+                id: ElementId::new(root_id),
+                event: NativeLifecycleEvent::Mounted,
+                handler: HandlerRef::new("onMount"),
+            },
+        )?;
+    }
+    if source_text.contains("on:destroy") {
+        apply_svelte_protocol_operation(
+            author_file,
+            protocol,
+            CustomRendererOperation::BindLifecycle {
+                id: ElementId::new(root_id),
+                event: NativeLifecycleEvent::Unmounted,
+                handler: HandlerRef::new("onDestroy"),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn apply_svelte_protocol_operation(
+    author_file: &str,
+    protocol: &mut CustomRendererProtocol,
+    operation: CustomRendererOperation,
+) -> Result<(), SvelteCompileError> {
+    protocol
+        .apply(operation)
+        .map_err(|error| custom_renderer_error(author_file, &error))
+}
+
+fn custom_renderer_error(
+    author_file: &str,
+    error: &hawk2ui_authoring::CustomRendererError,
+) -> SvelteCompileError {
+    SvelteCompileError {
+        diagnostics: vec![AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "svelte.custom-renderer.failed",
+            format!("{}: {}", error.rule(), error.message()),
+        )],
+        source_map: SvelteSourceMap {
+            author_file: author_file.to_string(),
+        },
+    }
+}
+
 fn extract_attribute(source: &str, name: &str) -> Option<String> {
     let pattern = format!("{name}=\"");
     let start = source.find(&pattern)? + pattern.len();
@@ -563,17 +784,35 @@ fn extract_attribute(source: &str, name: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+fn extract_attributes(source: &str, name: &str) -> Vec<String> {
+    let pattern = format!("{name}=\"");
+    let mut values = Vec::new();
+    let mut rest = source;
+    while let Some(index) = rest.find(&pattern) {
+        let after_pattern = &rest[index + pattern.len()..];
+        let Some(end) = after_pattern.find('"') else {
+            break;
+        };
+        values.push(after_pattern[..end].to_string());
+        rest = &after_pattern[end + 1..];
+    }
+    values
+}
+
 fn extract_number_attribute(source: &str, name: &str) -> Option<f64> {
     extract_attribute(source, name)?.parse().ok()
 }
 
 fn style_refs_from_attribute(source: &str, name: &str) -> Vec<StyleRef> {
-    extract_attribute(source, name).map_or_else(Vec::new, |classes| {
-        classes
-            .split_ascii_whitespace()
-            .map(StyleRef::new)
-            .collect()
-    })
+    extract_attributes(source, name)
+        .into_iter()
+        .flat_map(|classes| {
+            classes
+                .split_ascii_whitespace()
+                .map(StyleRef::new)
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn unsupported_svelte_events(source: &str) -> Vec<String> {
@@ -594,6 +833,19 @@ fn unsupported_svelte_events(source: &str) -> Vec<String> {
         rest = &after_prefix[event_len..];
     }
     events
+}
+
+fn contains_hawk_root(source: &str) -> bool {
+    source.contains("<hawk-view") || source.contains("<hawk-text")
+}
+
+fn is_workspace_relative_asset_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains("://")
+        && !path.starts_with('/')
+        && !path.contains("..")
+        && !path.contains('\\')
+        && !path.to_ascii_lowercase().contains("%2e")
 }
 
 fn keyed_children(source: &str) -> Vec<String> {

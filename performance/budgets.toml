@@ -86,7 +86,7 @@ unit = "milliseconds"
 target = 12
 maximum = 24
 release_gate = true
-fixture = "examples/framework-svelte"
+fixture = "examples/frameworks/svelte-basic"
 
 [[budgets]]
 name = "asset-decode"
@@ -113,7 +113,7 @@ unit = "bytes"
 target = 52428800
 maximum = 104857600
 release_gate = true
-fixture = "examples/release-package"
+fixture = "examples/desktop-basic"
 
 [[budgets]]
 name = "package-verify"
@@ -122,7 +122,7 @@ unit = "milliseconds"
 target = 150
 maximum = 300
 release_gate = true
-fixture = "examples/release-package"
+fixture = "examples/desktop-basic"
 
 [[budgets]]
 name = "desktop-host-frame"

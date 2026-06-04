@@ -54,11 +54,21 @@ const items = [{ id: 'title' }, { id: 'cta' }, { id: 'meter' }];
     assert_eq!(
         artifact.renderer_operations(),
         [
-            "create:root",
-            "insert:title",
-            "insert:cta",
-            "insert:meter",
-            "patch-props:root"
+            "create-node:root:view",
+            "set-style:root:surface.card",
+            "set-style:root:intent.primary",
+            "set-asset:root:assets/logo.svg",
+            "set-ref:root:root_ref",
+            "bind-event:root:pointer.press",
+            "bind-lifecycle:root:mounted:onMounted",
+            "bind-lifecycle:root:unmounted:onUnmounted",
+            "create-node:title:text",
+            "append-child:root:title:key:title",
+            "create-node:cta:text",
+            "append-child:root:cta:key:cta",
+            "create-node:meter:text",
+            "append-child:root:meter:key:meter",
+            "commit:root",
         ]
     );
 }
@@ -87,10 +97,79 @@ fn vue_35_renderer_accepts_explicit_native_compiler_boundary_without_source_scan
         artifact.lifecycle_handlers(),
         ["mounted:onMount", "unmounted:onUnmounted"]
     );
+    assert_eq!(
+        artifact.renderer_operations(),
+        [
+            "create-node:root:view",
+            "set-style:root:surface.card",
+            "set-asset:root:assets/logo.svg",
+            "set-ref:root:root_ref",
+            "bind-event:root:pointer.press",
+            "bind-lifecycle:root:mounted:onMount",
+            "bind-lifecycle:root:unmounted:onUnmounted",
+            "create-node:title:text",
+            "set-prop:title:text",
+            "set-prop:title:font_size",
+            "append-child:root:title:key:title",
+            "commit:root",
+        ]
+    );
     assert!(
         runtime
             .operation_keys()
             .contains(&"mount-element:root".into())
+    );
+}
+
+#[test]
+fn vue_35_renderer_gates_lifecycle_handlers_and_collects_all_refs() {
+    let source = VueSingleFileComponent::new(
+        "src/Static.vue",
+        r#"<template><hawk-view id="root" ref="root_ref" ref="panel_ref"><hawk-text id="title">Title</hawk-text></hawk-view></template>"#,
+    );
+
+    let artifact = VueIntegration::new()
+        .render(source)
+        .expect("recognized Hawk source should render");
+
+    assert_eq!(artifact.refs(), ["root_ref", "panel_ref"]);
+    assert!(artifact.events().is_empty());
+    assert!(artifact.lifecycle_handlers().is_empty());
+    assert!(
+        !artifact
+            .renderer_operations()
+            .iter()
+            .any(|operation| operation.contains("bind-lifecycle")),
+        "renderer operations must not report lifecycle hooks absent from the source"
+    );
+}
+
+#[test]
+fn vue_35_renderer_rejects_non_hawk_source_and_all_invalid_asset_paths() {
+    let error = VueIntegration::new()
+        .render(VueSingleFileComponent::new(
+            "src/Invalid.vue",
+            r#"<template><hawk-view data-asset="assets/logo.svg" data-asset="%2e%2e/secret.svg" data-asset="icons\logo.svg"></hawk-view></template>"#,
+        ))
+        .expect_err("invalid raw-source bridge input should fail");
+    let rules: Vec<_> = error
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.rule.as_str())
+        .collect();
+
+    assert_eq!(rules, ["vue.asset.path-invalid", "vue.asset.path-invalid"]);
+
+    let no_root = VueIntegration::new()
+        .render(VueSingleFileComponent::new(
+            "src/NoRoot.vue",
+            "<script setup></script>",
+        ))
+        .expect_err("raw-source bridge should reject non-Hawk source");
+
+    assert_eq!(
+        no_root.diagnostics()[0].rule.as_str(),
+        "vue.renderer.no-root"
     );
 }
 

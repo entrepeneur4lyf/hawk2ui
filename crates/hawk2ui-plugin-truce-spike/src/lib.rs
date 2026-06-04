@@ -12,7 +12,7 @@
 //! designed — a one-parameter passthrough plugin whose `editor()` is
 //! [`Hawk2uiTruceEditor::from_entry_script`].
 //!
-//! Provisional by design: the [`SpikeParams`] struct and [`ENTRY_SOURCE`] are
+//! Provisional by design: the [`SpikeParams`] struct and `ENTRY_SOURCE` are
 //! hand-written here. In production, `hawk2ui-build`'s `emit_truce_params_struct`
 //! generates the `#[derive(Params)]` struct and `host_snapshot_from_model` /
 //! `edit_routing_from_model` generate the editor projection — all from the

@@ -3,7 +3,7 @@
 
 use std::sync::Mutex;
 
-use parley::{FontContext, LayoutContext, StyleProperty};
+use parley::{FontContext, FontStack, LayoutContext, StyleProperty};
 use swash::scale::ScaleContext;
 use unicode_bidi::BidiInfo;
 use unicode_segmentation::UnicodeSegmentation;
@@ -350,6 +350,7 @@ const TEXT_LAYOUT_CONTAINS_EMOJI: u8 = 1 << 0;
 const TEXT_LAYOUT_BIDI_RESOLVED: u8 = 1 << 1;
 const TEXT_LAYOUT_PARLEY_PROCESSED: u8 = 1 << 2;
 const TEXT_LAYOUT_TRUNCATED: u8 = 1 << 3;
+const TEXT_INPUT_MAX_BYTES: usize = 256 * 1024;
 
 /// Stable glyph cache key.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -484,12 +485,12 @@ impl TextBackend {
     pub fn layout(&self, input: &TextLayoutInput) -> Result<TextLayout, TextBackendError> {
         validate_input(input)?;
         let resolved_family = self.resolve_family(&input.font_family)?;
-        let display_text = truncate_text(input);
+        let display_text = self.truncate_text(input, &resolved_family)?;
         let clusters: Vec<&str> = display_text.graphemes(true).collect();
         let cluster_count = clusters.len();
         let contains_emoji = clusters.iter().any(|cluster| cluster.chars().any(is_emoji));
         let bidi_resolved = input.bidi && display_text.chars().any(is_rtl);
-        let parley_metrics = self.layout_with_parley(input, &display_text)?;
+        let parley_metrics = self.layout_with_parley(input, &resolved_family, &display_text)?;
         let lines = parley_metrics.lines;
         let line_count = u32::try_from(lines.len()).unwrap_or(u32::MAX);
         let width_px = parley_metrics.width_px;
@@ -535,10 +536,12 @@ impl TextBackend {
         let resolved_family = self.resolve_family(&input.font_family)?;
         Ok(GlyphCacheKey {
             stable_key: format!(
-                "text={}|font={resolved_family}|size={}|dpi={}|bidi={}|font-generation={}",
+                "text={}|font={resolved_family}|size={}|dpi={}|line-break={}|truncation={}|bidi={}|font-generation={}",
                 input.text,
                 input.size_px,
                 input.dpi_scale,
+                line_break_key(input.line_break),
+                truncation_key(input.truncation),
                 input.bidi,
                 self.catalog.generation()
             ),
@@ -548,6 +551,7 @@ impl TextBackend {
     fn layout_with_parley(
         &self,
         input: &TextLayoutInput,
+        resolved_family: &str,
         display_text: &str,
     ) -> Result<ParleyLayoutMetrics, TextBackendError> {
         let mut font_context = self.parley_font_context.lock().map_err(|_| {
@@ -564,6 +568,7 @@ impl TextBackend {
         })?;
         let mut builder =
             layout_context.ranged_builder(&mut font_context, display_text, input.dpi_scale, true);
+        builder.push_default(StyleProperty::FontStack(FontStack::from(resolved_family)));
         builder.push_default(StyleProperty::FontSize(input.size_px));
         let mut layout = builder.build(display_text);
         layout.break_all_lines(parley_max_advance(input));
@@ -618,6 +623,46 @@ impl TextBackend {
             baseline_px: baseline_px.unwrap_or(0.0),
         })
     }
+
+    fn truncate_text(
+        &self,
+        input: &TextLayoutInput,
+        resolved_family: &str,
+    ) -> Result<String, TextBackendError> {
+        let TruncationMode::EndEllipsis { max_width_px } = input.truncation else {
+            return Ok(input.text.clone());
+        };
+        let clusters: Vec<&str> = input.text.graphemes(true).collect();
+        let ellipsis = "…";
+        if clusters.is_empty() {
+            return Ok(ellipsis.to_string());
+        }
+        let mut low = 0_usize;
+        let mut high = clusters.len();
+        while low < high {
+            let mid = (low + high).div_ceil(2);
+            let candidate = truncated_candidate(&clusters[..mid], ellipsis);
+            if self.measure_text_width(input, resolved_family, &candidate)? <= max_width_px {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        if low == 0 {
+            return Ok(ellipsis.to_string());
+        }
+        Ok(truncated_candidate(&clusters[..low], ellipsis))
+    }
+
+    fn measure_text_width(
+        &self,
+        input: &TextLayoutInput,
+        resolved_family: &str,
+        text: &str,
+    ) -> Result<f32, TextBackendError> {
+        let metrics = self.layout_with_parley(input, resolved_family, text)?;
+        Ok(metrics.width_px)
+    }
 }
 
 fn parley_max_advance(input: &TextLayoutInput) -> Option<f32> {
@@ -632,6 +677,12 @@ fn validate_input(input: &TextLayoutInput) -> Result<(), TextBackendError> {
         return Err(TextBackendError::new(
             "text.input.empty",
             "text must not be empty",
+        ));
+    }
+    if input.text.len() > TEXT_INPUT_MAX_BYTES {
+        return Err(TextBackendError::new(
+            "text.input.too-large",
+            format!("text input must not exceed {TEXT_INPUT_MAX_BYTES} bytes"),
         ));
     }
     if !is_valid_font_family(&input.font_family) {
@@ -671,51 +722,32 @@ fn validate_input(input: &TextLayoutInput) -> Result<(), TextBackendError> {
     Ok(())
 }
 
-fn truncate_text(input: &TextLayoutInput) -> String {
-    let TruncationMode::EndEllipsis { max_width_px } = input.truncation else {
-        return input.text.clone();
-    };
-    let mut display = String::new();
-    for cluster in input.text.graphemes(true) {
-        let candidate = format!("{display}{cluster}…");
-        let clusters: Vec<&str> = candidate.graphemes(true).collect();
-        if measure_clusters(&clusters, input.size_px, input.dpi_scale) > max_width_px {
-            break;
-        }
-        display.push_str(cluster);
-    }
-    display.push('…');
+fn truncated_candidate(clusters: &[&str], ellipsis: &str) -> String {
+    let mut display = clusters.concat();
+    display.push_str(ellipsis);
     display
-}
-
-fn measure_clusters(clusters: &[&str], size_px: f32, dpi_scale: f32) -> f32 {
-    clusters.iter().fold(0.0_f32, |width, cluster| {
-        width + cluster_width_factor(cluster) * size_px * dpi_scale
-    })
-}
-
-fn cluster_width_factor(cluster: &str) -> f32 {
-    if cluster.chars().all(char::is_whitespace) {
-        0.35
-    } else if cluster.chars().any(is_emoji) {
-        1.0
-    } else if cluster.chars().any(is_cjk_or_rtl) {
-        0.8
-    } else {
-        0.55
-    }
 }
 
 fn is_emoji(character: char) -> bool {
     ('\u{1F000}'..='\u{1FAFF}').contains(&character)
 }
 
-fn is_cjk_or_rtl(character: char) -> bool {
-    is_rtl(character) || ('\u{4E00}'..='\u{9FFF}').contains(&character)
-}
-
 fn is_rtl(character: char) -> bool {
     ('\u{0590}'..='\u{08FF}').contains(&character)
+}
+
+fn line_break_key(line_break: LineBreakMode) -> String {
+    match line_break {
+        LineBreakMode::None => "none".to_string(),
+        LineBreakMode::Wrap { max_width_px } => format!("wrap:{max_width_px}"),
+    }
+}
+
+fn truncation_key(truncation: TruncationMode) -> String {
+    match truncation {
+        TruncationMode::None => "none".to_string(),
+        TruncationMode::EndEllipsis { max_width_px } => format!("end-ellipsis:{max_width_px}"),
+    }
 }
 
 fn round_tenth(value: f32) -> f32 {

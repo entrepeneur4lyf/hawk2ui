@@ -1,29 +1,24 @@
-use std::hint::black_box;
+mod common;
 
 use hawk2ui_perf::{
-    BenchmarkCase, BenchmarkKind, BenchmarkMeasurement, BenchmarkSuite, PerformanceBudgets,
-    RealtimeGuard, RealtimeOperation,
+    BenchmarkCase, BenchmarkKind, BenchmarkMeasurement, BenchmarkSuite, RealtimeGuard,
+    RealtimeOperation,
 };
 
-const BUDGETS: &str = include_str!("../../../performance/budgets.toml");
-
 fn main() {
-    let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
-    let suite = BenchmarkSuite::new("plugin-realtime").with_case(
-        BenchmarkCase::new(
-            "plugin-audio-allocation",
-            "examples/plugin-meter-analyzer",
-            BenchmarkKind::Realtime,
-        )
-        .with_measurement(BenchmarkMeasurement::new(0)),
-    );
+    let budgets = common::budgets();
+    let config = common::config();
+    let fixture = "examples/plugin-meter-analyzer";
     let guard = RealtimeGuard::audio_thread();
+    let report =
+        guard.audit((0..config.iterations()).map(|_| RealtimeOperation::PreallocatedWrite));
+    let suite = BenchmarkSuite::new("plugin-realtime").with_case(
+        BenchmarkCase::new("plugin-audio-allocation", fixture, BenchmarkKind::Realtime)
+            .with_measurement(BenchmarkMeasurement::from_count(
+                u64::try_from(report.telemetry.allocation_attempts).unwrap_or(u64::MAX),
+            )),
+    );
 
-    suite
-        .validate_against(&budgets)
-        .expect("plugin realtime benchmarks must map to budgets");
-    guard
-        .check(RealtimeOperation::PreallocatedWrite)
-        .expect("preallocated realtime writes must be permitted");
-    black_box(suite.cases.len());
+    common::finish_suite(&suite, &budgets);
+    assert_eq!(report.denied_count(), 0);
 }

@@ -1,33 +1,20 @@
-use std::hint::black_box;
+mod common;
 
-use hawk2ui_perf::{
-    BenchmarkCase, BenchmarkKind, BenchmarkMeasurement, BenchmarkSuite, PerformanceBudgets,
-};
-
-const BUDGETS: &str = include_str!("../../../performance/budgets.toml");
+use hawk2ui_perf::{BenchmarkCase, BenchmarkKind, BenchmarkSuite};
 
 fn main() {
-    let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+    let budgets = common::budgets();
+    let config = common::config();
+    let fixture = "examples/desktop-dashboard";
     let suite = BenchmarkSuite::new("layout")
         .with_case(
-            BenchmarkCase::new(
-                "layout-pass",
-                "examples/desktop-dashboard",
-                BenchmarkKind::Layout,
-            )
-            .with_measurement(BenchmarkMeasurement::new(3)),
+            BenchmarkCase::new("layout-pass", fixture, BenchmarkKind::Layout)
+                .with_measurement(common::measure_read_tree_millis(fixture, config)),
         )
         .with_case(
-            BenchmarkCase::new(
-                "text-measurement",
-                "examples/desktop-dashboard",
-                BenchmarkKind::Layout,
-            )
-            .with_measurement(BenchmarkMeasurement::new(400)),
+            BenchmarkCase::new("text-measurement", fixture, BenchmarkKind::Layout)
+                .with_measurement(common::measure_counter_micros(config, 8)),
         );
 
-    suite
-        .validate_against(&budgets)
-        .expect("layout benchmarks must map to budgets");
-    black_box(suite.cases.len());
+    common::finish_suite(&suite, &budgets);
 }

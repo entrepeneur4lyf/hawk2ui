@@ -1,4 +1,7 @@
-//! Script sandbox policy.
+//! Script sandbox diagnostic evidence.
+//!
+//! The script runtime enforces host-call and execution policy. This module records sandbox denial
+//! decisions in a stable diagnostic vocabulary after an enforcing layer has made the decision.
 
 use crate::{SecurityDiagnostic, SecuritySeverity};
 
@@ -64,11 +67,11 @@ impl ScriptSandboxDenial {
     }
 }
 
-/// Script sandbox deny policy.
+/// Script sandbox denial evidence factory.
 pub struct ScriptSandboxPolicy;
 
 impl ScriptSandboxPolicy {
-    /// Produces a denial record for a direct privileged script operation.
+    /// Produces a denial evidence record for a direct privileged script operation.
     #[must_use]
     pub fn deny(
         operation: ScriptSandboxOperation,

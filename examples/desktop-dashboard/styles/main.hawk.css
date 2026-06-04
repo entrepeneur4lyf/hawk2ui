@@ -1,4 +1,4 @@
 .dashboard { display: grid; grid-template-columns: 280px 1fr; }
-.panel { border-radius: 18px; box-shadow: 0 16px 40px rgba(0,0,0,.28); }
-.button:focus { outline: 2px solid #ffd166; }
+.panel { border-radius: 18px; box-shadow: 0 16px 40px #000000; }
+.button:hawk(focus) { border-width: 2px; color: #ffd166; }
 .graph { overflow: hidden; }

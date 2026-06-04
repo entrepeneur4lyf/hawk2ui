@@ -130,6 +130,12 @@ Acceptance:
 
 - Crate root docs and Cargo descriptions accurately match source behavior.
 
+Status:
+
+- `hawk2ui-plugin-adapters` crate documentation and Cargo description now distinguish the buildable
+  CLAP scaffold, VST3 factory metadata scaffold, and AU/standalone/desktop bundle-layout outputs
+  instead of advertising all package formats as complete host-loadable binaries.
+
 ## Confirmed Crate Selection Drift
 
 ### REM-CRATE-001: Adopt Lightning CSS For Style Parsing
@@ -1584,6 +1590,8 @@ Status:
 - CLAP adapter metadata now depends on `clap-sys` and emits a CLAP entry plan containing the CLAP ABI version, `clap_entry` symbol, plugin factory ID, plugin ID, vendor/name/version, descriptor ABI marker, and CLAP feature list.
 - CLAP package materialization now writes `Contents/Resources/clap-entry.toml` and includes it in required file and hash verification coverage.
 - CLAP `cdylib` scaffold generation now writes a Cargo project with a `clap_entry` export, plugin descriptor, plugin factory callbacks, lifecycle callbacks, realtime-safe bypass processing callback, audio-port extension, parameter extension generated from `ParameterModel`, state save/load extension, stateful GUI/editor extension configured from `PluginEditor`, and create-plugin path; tests compile it to a release dynamic library and host-load it through a generated external checker that resolves the entry, obtains the factory, reads the descriptor, creates a plugin instance, invokes lifecycle/process callbacks, reads parameter metadata/default values, round-trips state, and exercises GUI preferred API, create, parent attachment, resize, show/hide, and destroy.
+- Generated CLAP `cdylib` scaffolds now allocate one `Hawk2uiPluginInstance` per host-created plugin and store it behind `plugin_data`; editor lifecycle, presented-frame counters, parameter values, state save/load, and text dispatch commands are instance-local. The external host-load checker creates two plugin instances and verifies GUI and parameter isolation through the real dynamic-library ABI.
+- Generated CLAP parameter metadata now preserves indexed-choice default values and marks choice parameters as stepped even when explicit step metadata is absent; regression coverage inspects the generated source for the default index and CLAP stepped/automatable flags.
 - Package materialization can now embed a sealed `Hawk2UI` runtime artifact payload under `Contents/Resources/hawk2ui-runtime-artifact.json`, reference it from `hawk2ui-artifact.toml`, include it in hash coverage, and fail package verification when the payload is missing or tampered.
 - Package materialization now emits `Contents/Resources/hawk2ui-editor.toml` for runtime-backed
   packages, declaring the `baseview` host adapter, `skia` renderer, runtime artifact path, format,
@@ -1606,6 +1614,10 @@ Status:
   under `Contents/Resources/generated-clap`, embeds the same runtime editor descriptor payload used
   by host-load tests, preserves generated parameter metadata in the scaffold source, and includes
   both scaffold files in package hash verification.
+- VST3 materialization now emits a generated `cdylib` source scaffold with a non-null `GetPluginFactory`
+  implementation backed by the `vst3` crate's COM wrapper. The scaffold reports factory metadata and
+  processor/controller class records, while `createInstance` still fails explicitly until the real
+  processor/controller implementation is selected and completed.
 - Generated CLAP `cdylib` scaffolds now keep parameter values in lock-free atomic storage, save
   parameter state into the CLAP state stream, restore validated finite parameter values from host
   state payloads, clamp restored values to generated parameter ranges, and prove the round trip in
@@ -1719,8 +1731,9 @@ Evidence:
 - `hawk2ui-perf::RealtimeGuard` defines forbidden realtime operations, lock policy, and audit telemetry.
 - `release/release-criteria.toml` includes `plugin-realtime-safety` as a release-blocking criterion.
 - Generated CLAP dynamic-library scaffolds now expose `hawk2ui_realtime_safety_policy`, advertise
-  audio-thread `preallocated_write` as the only allowed process operation class, and guard the CLAP
-  `process` callback before copying audio buffers.
+  audio-thread `preallocated_write` as the only allowed process operation class, describe the
+  callback as `preallocated_audio_buffer_copy`, run an operation-allowlist self-check, and reject
+  the CLAP `process` callback before copying audio buffers if that policy check fails.
 
 Status:
 

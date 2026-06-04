@@ -1,33 +1,21 @@
-use std::hint::black_box;
+mod common;
 
-use hawk2ui_perf::{
-    BenchmarkCase, BenchmarkKind, BenchmarkMeasurement, BenchmarkSuite, PerformanceBudgets,
-};
-
-const BUDGETS: &str = include_str!("../../../performance/budgets.toml");
+use hawk2ui_perf::{BenchmarkCase, BenchmarkKind, BenchmarkSuite};
 
 fn main() {
-    let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+    let budgets = common::budgets();
+    let config = common::config();
+    let scene_fixture = "examples/desktop-dashboard";
+    let frame_fixture = "examples/style-gallery";
     let suite = BenchmarkSuite::new("render-baseline")
         .with_case(
-            BenchmarkCase::new(
-                "scene-export",
-                "examples/desktop-dashboard",
-                BenchmarkKind::Rendering,
-            )
-            .with_measurement(BenchmarkMeasurement::new(3)),
+            BenchmarkCase::new("scene-export", scene_fixture, BenchmarkKind::Rendering)
+                .with_measurement(common::measure_read_tree_millis(scene_fixture, config)),
         )
         .with_case(
-            BenchmarkCase::new(
-                "frame-render",
-                "examples/style-gallery",
-                BenchmarkKind::Rendering,
-            )
-            .with_measurement(BenchmarkMeasurement::new(7)),
+            BenchmarkCase::new("frame-render", frame_fixture, BenchmarkKind::Rendering)
+                .with_measurement(common::measure_read_tree_millis(frame_fixture, config)),
         );
 
-    suite
-        .validate_against(&budgets)
-        .expect("render baseline benchmarks must map to budgets");
-    black_box(suite.cases.len());
+    common::finish_suite(&suite, &budgets);
 }

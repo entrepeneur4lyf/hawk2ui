@@ -1937,6 +1937,7 @@ name = "hawk2ui-security"
 version = "0.1.0"
 dependencies = [
  "hawk2ui-api",
+ "zeroize",
 ]
 
 [[package]]
@@ -1955,17 +1956,21 @@ name = "hawk2ui-smoke"
 version = "0.1.0"
 dependencies = [
  "hawk2ui-authoring",
+ "hawk2ui-build",
  "hawk2ui-framework-react",
  "hawk2ui-framework-solid",
  "hawk2ui-framework-svelte",
  "hawk2ui-framework-vue",
  "hawk2ui-host",
  "hawk2ui-host-baseview",
+ "hawk2ui-host-winit",
  "hawk2ui-layout",
+ "hawk2ui-platform",
  "hawk2ui-plugin",
  "hawk2ui-render",
  "hawk2ui-runtime",
- "serde",
+ "hawk2ui-script",
+ "hawk2ui-style",
 ]
 
 [[package]]

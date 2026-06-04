@@ -1,24 +1,20 @@
-use std::hint::black_box;
+mod common;
 
-use hawk2ui_perf::{
-    BenchmarkCase, BenchmarkKind, BenchmarkMeasurement, BenchmarkSuite, PerformanceBudgets,
-};
-
-const BUDGETS: &str = include_str!("../../../performance/budgets.toml");
+use hawk2ui_perf::{BenchmarkCase, BenchmarkKind, BenchmarkSuite};
 
 fn main() {
-    let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
-    let suite = BenchmarkSuite::new("package").with_case(
-        BenchmarkCase::new(
-            "package-verify",
-            "examples/release-package",
-            BenchmarkKind::Package,
+    let budgets = common::budgets();
+    let config = common::config();
+    let fixture = "examples/desktop-basic";
+    let suite = BenchmarkSuite::new("package")
+        .with_case(
+            BenchmarkCase::new("package-size", fixture, BenchmarkKind::Package)
+                .with_measurement(common::measure_directory_bytes(fixture)),
         )
-        .with_measurement(BenchmarkMeasurement::new(120)),
-    );
+        .with_case(
+            BenchmarkCase::new("package-verify", fixture, BenchmarkKind::Package)
+                .with_measurement(common::measure_read_tree_millis(fixture, config)),
+        );
 
-    suite
-        .validate_against(&budgets)
-        .expect("package benchmarks must map to budgets");
-    black_box(suite.evaluate_against(&budgets).artifact_payload());
+    common::finish_suite(&suite, &budgets);
 }

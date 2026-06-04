@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [source]
 entry = "src/main.ts"
+style = "styles/gallery.hawk.css"
 
 [[targets]]
 kind = "desktop"

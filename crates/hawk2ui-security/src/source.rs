@@ -1,4 +1,7 @@
-//! Build-time source validation policy.
+//! Build-time source validation diagnostic evidence.
+//!
+//! Concrete validators in the build, style, script, and asset crates decide whether input is
+//! accepted. This module records those decisions in a stable security vocabulary.
 
 use crate::{SecurityDiagnostic, SecuritySeverity};
 
@@ -60,11 +63,11 @@ impl SourceValidationRecord {
     }
 }
 
-/// Source validation policy.
+/// Source validation evidence factory.
 pub struct SourceValidationPolicy;
 
 impl SourceValidationPolicy {
-    /// Produces a rejection record for a source validation rule.
+    /// Produces a rejection evidence record for a source validation rule.
     #[must_use]
     pub fn reject(rule: SourceValidationRule, path: impl Into<String>) -> SourceValidationRecord {
         SourceValidationRecord {

@@ -11,6 +11,7 @@ use hawk2ui_authoring::{
     NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge,
     PointerEventKind, PropValue, StyleRef,
 };
+use hawk2ui_build::{ArtifactSchemaVersion, BuildWorkspace, BuildWorkspaceError};
 use hawk2ui_framework_react::{ReactElementTree, ReactIntegration};
 use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
 use hawk2ui_framework_svelte::{SvelteComponentSource, SvelteIntegration};
@@ -19,7 +20,14 @@ use hawk2ui_host::{PluginEditorConfig, PluginHostAdapter, PluginParentHandle, Su
 use hawk2ui_host_baseview::{
     BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
 };
+use hawk2ui_host_winit::{SoftwareFrame, SoftwareFrameRenderer};
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
+use hawk2ui_platform::{
+    CapabilityRecord, CapabilityTable, ClipboardDataType, ClipboardManifest, ClipboardPolicy,
+    FilesystemGrant, FilesystemPolicy, FilesystemScope, NetworkManifest, NetworkPolicy,
+    PlatformContext, PlatformOperation, PlatformSecretManifest, PlatformSecretPolicy,
+    RuntimeAvailability,
+};
 use hawk2ui_plugin::{
     FrameDropPolicy, RealtimeVisualFrameGate, RealtimeVisualPacket, RealtimeVisualTransport,
 };
@@ -28,10 +36,10 @@ use hawk2ui_runtime::{
     RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
     RuntimeVisual,
 };
-use serde::{Deserialize, Serialize};
-
+use hawk2ui_script::{HostCallPolicy, ScriptBackend, StructuredValue, TimerPolicy};
+use hawk2ui_style::compile_style_source;
 /// Smoke target kind.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SmokeTargetKind {
     /// Owned desktop window target.
     Desktop,
@@ -40,7 +48,7 @@ pub enum SmokeTargetKind {
 }
 
 /// Smoke fixture path and target metadata.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SmokeFixture {
     /// Workspace-relative fixture path.
     pub relative_path: String,
@@ -72,7 +80,7 @@ impl SmokeFixture {
 }
 
 /// Smoke build result.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SmokeBuildResult {
     /// Whether the manifest and required source files were found.
     pub built: bool,
@@ -81,14 +89,14 @@ pub struct SmokeBuildResult {
 }
 
 /// Smoke scene export.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SmokeSceneExport {
     /// Root scene node identifier.
     pub root_id: String,
 }
 
 /// First-frame export.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SmokeFirstFrame {
     /// Frame identifier.
     pub frame_id: u64,
@@ -97,7 +105,7 @@ pub struct SmokeFirstFrame {
 }
 
 /// Smoke run result for a desktop fixture.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DesktopSmokeResult {
     /// Fixture name.
     pub fixture_name: String,
@@ -112,7 +120,7 @@ pub struct DesktopSmokeResult {
 }
 
 /// Smoke run result for the dense dashboard fixture.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DashboardSmokeResult {
     /// Fixture name.
     pub fixture_name: String,
@@ -131,7 +139,7 @@ pub struct DashboardSmokeResult {
 }
 
 /// Smoke run result for a plugin editor fixture.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PluginEditorSmokeResult {
     /// Fixture name.
     pub fixture_name: String,
@@ -158,7 +166,7 @@ pub struct PluginEditorSmokeResult {
 }
 
 /// Smoke run result for realtime visual fixture.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealtimeVisualSmokeResult {
     /// Realtime channel names.
     pub channels: Vec<String>,
@@ -181,7 +189,7 @@ pub struct RealtimeVisualSmokeResult {
 }
 
 /// Smoke run result for style gallery fixture.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StyleGallerySmokeResult {
     /// Gallery section names.
     pub sections: Vec<String>,
@@ -192,7 +200,7 @@ pub struct StyleGallerySmokeResult {
 }
 
 /// Smoke result for security denial fixtures.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SecurityDenialSmokeResult {
     /// Denial codes observed before launch.
     pub denials: Vec<String>,
@@ -201,7 +209,7 @@ pub struct SecurityDenialSmokeResult {
 }
 
 /// Normalized contract evidence for a public framework example.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FrameworkExampleContract {
     /// Framework name.
     pub framework: String,
@@ -218,7 +226,7 @@ pub struct FrameworkExampleContract {
 }
 
 /// Smoke result for public framework examples.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FrameworkExamplesSmokeResult {
     /// Frameworks covered by public examples.
     pub frameworks: Vec<String>,
@@ -233,7 +241,7 @@ pub struct FrameworkExamplesSmokeResult {
 }
 
 /// Smoke runner.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SmokeRunner;
 
 impl SmokeRunner {
@@ -253,6 +261,9 @@ impl SmokeRunner {
         require_file(&root.join("styles/main.hawk.css"))?;
         require_file(&root.join("assets/logo.svg"))?;
         require_file(&root.join("assets/mark.ppm"))?;
+        let artifact_verified = build_workspace_verified(&root)?;
+        let frame = render_colored_scene(320, 180, Color::rgba(8, 10, 14, 255))?;
+        require_visible_pixel(&frame, 0x0008_0a0e, "desktop-basic software frame")?;
 
         let scene = fs::read_to_string(root.join("artifacts/scene.json"))
             .map_err(|error| error.to_string())?;
@@ -269,7 +280,7 @@ impl SmokeRunner {
             fixture_name: fixture.name(),
             build: SmokeBuildResult {
                 built: true,
-                artifact_verified: true,
+                artifact_verified,
             },
             scene: SmokeSceneExport {
                 root_id: "desktop-basic-root".into(),
@@ -303,6 +314,10 @@ impl SmokeRunner {
         require_file(&root.join("manifest.hawk.toml"))?;
         require_file(&root.join("src/main.ts"))?;
         require_file(&root.join("styles/main.hawk.css"))?;
+        build_workspace_verified(&root)?;
+        let stylesheet = compile_fixture_style(&root.join("styles/main.hawk.css"))?;
+        let frame = render_colored_scene(640, 360, Color::rgba(15, 23, 34, 255))?;
+        require_visible_pixel(&frame, 0x000f_1722, "desktop-dashboard software frame")?;
         let snapshot = fs::read_to_string(root.join("artifacts/visual.snap"))
             .map_err(|error| error.to_string())?;
         for required in [
@@ -320,7 +335,7 @@ impl SmokeRunner {
         Ok(DashboardSmokeResult {
             fixture_name: fixture.name(),
             layout_nodes: 18,
-            style_rules: 12,
+            style_rules: stylesheet.rules().len(),
             visual_snapshot_id: "desktop-dashboard:visual".into(),
             keyboard_focus_path: vec!["root".into(), "sidebar".into(), "bypass-button".into()],
             pointer_events: vec!["pointer-down:graph".into(), "pointer-up:graph".into()],
@@ -497,8 +512,11 @@ impl SmokeRunner {
         require_file(&root.join("src/main.ts"))?;
         require_file(&root.join("styles/gallery.hawk.css"))?;
         require_file(&root.join("assets/vector.svg"))?;
-        let snapshots = fs::read_to_string(root.join("artifacts/snapshots.txt"))
-            .map_err(|error| error.to_string())?;
+        build_workspace_verified(&root)?;
+        let _stylesheet = compile_fixture_style(&root.join("styles/gallery.hawk.css"))?;
+        let first = render_colored_scene(480, 270, Color::rgba(18, 24, 36, 255))?;
+        let second = render_colored_scene(480, 270, Color::rgba(18, 24, 36, 255))?;
+        require_visible_pixel(&first, 0x0012_1824, "style-gallery software frame")?;
         let sections = vec![
             "typography",
             "color",
@@ -514,18 +532,10 @@ impl SmokeRunner {
             "vector-layers",
             "custom-draw",
         ];
-        for section in &sections {
-            if !snapshots.lines().any(|line| line == *section) {
-                return Err(format!("style gallery snapshot missing section: {section}"));
-            }
-        }
-        if !snapshots.contains("deterministic=true") {
-            return Err("style gallery snapshots are not marked deterministic".into());
-        }
         Ok(StyleGallerySmokeResult {
             sections: sections.into_iter().map(str::to_string).collect(),
             snapshot_count: 13,
-            deterministic: true,
+            deterministic: first.pixels() == second.pixels(),
         })
     }
 
@@ -624,28 +634,13 @@ impl SmokeRunner {
         &self,
         fixture: &SmokeFixture,
     ) -> Result<SecurityDenialSmokeResult, String> {
+        if fixture.target != SmokeTargetKind::Desktop {
+            return Err("security-denials fixture must use desktop target".into());
+        }
         let root = fixture.absolute_path();
         require_file(&root.join("manifest.hawk.toml"))?;
         require_file(&root.join("fixtures/denied.ts"))?;
-        let evidence = fs::read_to_string(root.join("fixtures/denials.txt"))
-            .map_err(|error| error.to_string())?;
-        let denials = vec![
-            "filesystem.undeclared",
-            "network.denied",
-            "clipboard.denied",
-            "secret.redacted",
-            "asset.unsafe",
-            "style.unsupported",
-            "manifest.invalid",
-        ];
-        for denial in &denials {
-            if !evidence.lines().any(|line| line == *denial) {
-                return Err(format!("security denial evidence missing: {denial}"));
-            }
-        }
-        if !evidence.contains("runtime_surface_launched=false") {
-            return Err("security denial fixture did not block runtime surface launch".into());
-        }
+        let denials = observed_security_denials()?;
         Ok(SecurityDenialSmokeResult {
             denials: denials.into_iter().map(str::to_string).collect(),
             runtime_surface_launched: false,
@@ -662,6 +657,216 @@ fn require_file(path: &Path) -> Result<(), String> {
             path.display()
         ))
     }
+}
+
+fn build_workspace_verified(root: &Path) -> Result<bool, String> {
+    let output = BuildWorkspace::load(root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .map_err(|error| format!("smoke build failed: {error:?}"))?;
+    Ok(output.verification.is_release_ready())
+}
+
+fn compile_fixture_style(path: &Path) -> Result<hawk2ui_style::CompiledStyleSheet, String> {
+    let source = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    compile_style_source(&source).map_err(|error| {
+        let rules = error
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.rule().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("style fixture failed production compilation: {rules}")
+    })
+}
+
+fn render_colored_scene(width: u16, height: u16, color: Color) -> Result<SoftwareFrame, String> {
+    let frame_width = u32::from(width);
+    let frame_height = u32::from(height);
+    let logical_width = f32::from(width);
+    let logical_height = f32::from(height);
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("smoke-root"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(logical_width, logical_height)),
+        RuntimeVisual::Fill(color),
+    ));
+    let frame = RuntimeSceneBridge::new(Viewport::new(logical_width, logical_height))
+        .build(&tree)
+        .map_err(|error| format!("smoke scene build failed: {error:?}"))?;
+    SoftwareFrameRenderer::default()
+        .render_scene_frame(&frame, frame_width, frame_height, 1.0)
+        .map_err(|error| format!("smoke software frame render failed: {}", error.rule()))
+}
+
+fn require_visible_pixel(frame: &SoftwareFrame, pixel: u32, label: &str) -> Result<(), String> {
+    if frame.pixels().contains(&pixel) {
+        Ok(())
+    } else {
+        Err(format!("{label} did not contain expected visible pixel"))
+    }
+}
+
+fn observed_security_denials() -> Result<Vec<&'static str>, String> {
+    let filesystem = FilesystemPolicy::resolve(
+        &FilesystemGrant::new(FilesystemScope::Forbidden, "/"),
+        "etc/passwd",
+    )
+    .expect_err("forbidden filesystem grant must deny");
+    assert_rule(&filesystem.diagnostic.rule, "filesystem.path.forbidden")?;
+
+    let network_table = CapabilityTable::new([CapabilityRecord::new("network.fetch")
+        .allow(PlatformOperation::NetworkRequest)
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)]);
+    let network = NetworkPolicy::request(
+        &network_table,
+        &NetworkManifest::new("network.fetch", ["api.hawk2ui.dev"]),
+        "https://evil.example/",
+        PlatformContext::Desktop,
+    )
+    .expect_err("undeclared network host must deny");
+    assert_rule(&network.diagnostic.rule, "network.host.denied")?;
+
+    let clipboard_table = CapabilityTable::new([CapabilityRecord::new("clipboard.write")
+        .allow(PlatformOperation::ClipboardWrite)
+        .availability(RuntimeAvailability::Runtime)
+        .plugin(true)]);
+    let clipboard = ClipboardPolicy::access(
+        &clipboard_table,
+        &ClipboardManifest::new("clipboard.write", [ClipboardDataType::Text]),
+        ClipboardDataType::Text,
+        PlatformOperation::ClipboardWrite,
+        PlatformContext::Plugin,
+    )
+    .expect_err("plugin clipboard access must deny when manifest omits plugin access");
+    assert_rule(&clipboard.diagnostic.rule, "clipboard.plugin.denied")?;
+
+    let secret = PlatformSecretPolicy::read(
+        &PlatformSecretManifest::new(["api-token"]),
+        "missing-token",
+        "unused",
+    )
+    .expect_err("undeclared secret must deny");
+    assert_rule(&secret.diagnostic.rule, "secret.declaration.missing")?;
+
+    let mut script = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+    let script_error = script
+        .call_host("filesystem.read", StructuredValue::Null)
+        .expect_err("denied host call must fail");
+    assert_rule(script_error.diagnostic().rule(), "script.host-call.denied")?;
+
+    let asset_rule = unsafe_asset_build_rule()?;
+    assert_rule(&asset_rule, "asset.vector.unsafe-content")?;
+
+    let style_error =
+        compile_style_source(".bad { margin: 8px; }").expect_err("unsupported shorthand must fail");
+    let style_rule = style_error
+        .diagnostics()
+        .first()
+        .ok_or_else(|| "style denial did not produce diagnostics".to_string())?
+        .rule()
+        .to_string();
+    assert_rule(&style_rule, "style.shorthand.unsupported")?;
+
+    let manifest_rule = malformed_manifest_build_rule()?;
+    assert_rule(&manifest_rule, "manifest.invalid")?;
+
+    Ok(vec![
+        "filesystem.path.forbidden",
+        "network.host.denied",
+        "clipboard.plugin.denied",
+        "secret.declaration.missing",
+        "script.host-call.denied",
+        "asset.vector.unsafe-content",
+        "style.shorthand.unsupported",
+        "manifest.invalid",
+    ])
+}
+
+fn assert_rule(actual: &str, expected: &'static str) -> Result<(), String> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "expected denial rule {expected}, observed {actual}"
+        ))
+    }
+}
+
+fn unsafe_asset_build_rule() -> Result<String, String> {
+    let root = temp_smoke_workspace("unsafe-asset")?;
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.smoke.unsafe-asset"
+name = "Unsafe Asset"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[assets]]
+id = "unsafe"
+kind = "vector"
+path = "assets/unsafe.svg"
+"#,
+    )?;
+    write_file(&root.join("src/main.ts"), "export const app = 'unsafe';")?;
+    write_file(
+        &root.join("assets/unsafe.svg"),
+        "<svg><script>alert('denied')</script></svg>",
+    )?;
+    let error = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect_err("unsafe asset workspace must fail");
+    let rule = build_workspace_error_rule(&error)?;
+    let _ = fs::remove_dir_all(root);
+    Ok(rule)
+}
+
+fn malformed_manifest_build_rule() -> Result<String, String> {
+    let root = temp_smoke_workspace("malformed-manifest")?;
+    write_file(&root.join("manifest.hawk.toml"), "[[broken]\n")?;
+    let error = BuildWorkspace::load(&root).expect_err("malformed manifest must fail");
+    let rule = build_workspace_error_rule(&error)?;
+    let _ = fs::remove_dir_all(root);
+    Ok(rule)
+}
+
+fn build_workspace_error_rule(error: &BuildWorkspaceError) -> Result<String, String> {
+    match error {
+        BuildWorkspaceError::ManifestInvalid(_) => Ok("manifest.invalid".to_string()),
+        BuildWorkspaceError::AssetCompilation(
+            hawk2ui_build::AssetCompilationError::MissingAsset { diagnostic, .. }
+            | hawk2ui_build::AssetCompilationError::UnsafeAsset { diagnostic, .. }
+            | hawk2ui_build::AssetCompilationError::UnsupportedAssetKind { diagnostic, .. },
+        ) => Ok(diagnostic.rule.clone()),
+        BuildWorkspaceError::StyleCompilation { error, .. } => error
+            .diagnostics()
+            .first()
+            .map(|diagnostic| diagnostic.rule().to_string())
+            .ok_or_else(|| "style compilation did not produce diagnostics".to_string()),
+        BuildWorkspaceError::ScriptCompilation { error, .. } => {
+            Ok(error.diagnostic().rule().to_string())
+        }
+        BuildWorkspaceError::UnsupportedScriptExtension(_) => Ok("script.unsupported".to_string()),
+        other => Err(format!("unexpected build denial: {other:?}")),
+    }
+}
+
+fn temp_smoke_workspace(name: &str) -> Result<PathBuf, String> {
+    let root = std::env::temp_dir().join(format!("hawk2ui-smoke-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn write_file(path: &Path, contents: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(path, contents).map_err(|error| error.to_string())
 }
 
 fn framework_contract(

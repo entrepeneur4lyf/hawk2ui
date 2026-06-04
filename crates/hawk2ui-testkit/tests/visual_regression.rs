@@ -9,8 +9,8 @@ use hawk2ui_runtime::{
     RuntimeSceneBridge, RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
 };
 use hawk2ui_testkit::{
-    ImageComparisonMetadata, VisualFixtureKind, VisualFixtureSet, VisualImageSnapshot,
-    VisualRegressionCase, VisualRegressionSuite, VisualSnapshot,
+    ImageComparisonMetadata, ImagePixelFormat, VisualFixtureKind, VisualFixtureSet,
+    VisualImageSnapshot, VisualRegressionError, VisualRegressionSuite,
 };
 use std::fs;
 
@@ -36,21 +36,28 @@ fn visual_regression_covers_required_fixture_families() {
 
 #[test]
 fn visual_regression_records_snapshot_and_image_comparison_metadata() {
-    let baseline = VisualSnapshot::new("card", 640, 360)
-        .with_command("draw-rounded-rect:background:12")
-        .with_command("draw-text:title:Amount");
+    let baseline = VisualImageSnapshot::from_pixels("card", 2, 1, vec![0x0010_2030, 0x0040_5060])
+        .expect("baseline validates");
     let candidate = baseline.clone();
     let comparison = ImageComparisonMetadata::strict_rgba8();
-    let suite = VisualRegressionSuite::new().with_case(VisualRegressionCase::new(
-        "card-baseline",
-        baseline,
-        candidate,
-    ));
+    let suite = VisualRegressionSuite::new().with_image_case("card-baseline", baseline, candidate);
+    let report = suite.evaluate_images(&comparison);
 
-    assert!(suite.all_match());
+    assert!(report.accepted());
     assert!(comparison.accepts(0, 0));
     assert!(!comparison.accepts(1, 0));
-    assert_eq!(comparison.color_space(), "rgba8-srgb");
+    assert_eq!(comparison.pixel_format(), ImagePixelFormat::Rgb8Srgb);
+}
+
+#[test]
+fn visual_regression_rejects_invalid_image_snapshot_dimensions() {
+    assert_eq!(
+        VisualImageSnapshot::from_pixels("bad", 2, 2, vec![0x0000_0000]),
+        Err(VisualRegressionError::PixelCountMismatch {
+            expected: 4,
+            actual: 1,
+        })
+    );
 }
 
 #[test]

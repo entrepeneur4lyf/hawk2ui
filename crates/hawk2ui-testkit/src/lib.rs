@@ -8,16 +8,16 @@ pub mod templates;
 pub mod visual;
 
 pub use fixtures::{FixtureCatalog, FixtureCatalogError, TempProject};
-pub use perf::PerformanceSuite;
+pub use perf::{PerformanceBudgetError, PerformanceBudgetReport, PerformanceSuite};
 pub use security::{
-    SecurityFixture, SecurityFixtureKind, SecurityRejectionFixtureSet, SecurityRejectionMatrix,
-    SecurityRejectionMatrixError,
+    SecurityFixture, SecurityFixtureKind, SecurityRejectionFixtureSet,
+    SecurityRejectionFixtureSetError, SecurityRejectionMatrix, SecurityRejectionMatrixError,
 };
 pub use templates::{DomainTemplateKind, DomainTemplateSuite, DomainTestTemplate};
 pub use visual::{
-    ImageComparisonMetadata, ImageComparisonReport, VisualArtifactSet, VisualFixture,
-    VisualFixtureKind, VisualFixtureSet, VisualImageRegressionCase, VisualImageSnapshot,
-    VisualRegressionCase, VisualRegressionError, VisualRegressionReport, VisualRegressionSuite,
+    ImageComparisonMetadata, ImageComparisonReport, ImagePixelFormat, VisualArtifactSet,
+    VisualFixture, VisualFixtureKind, VisualFixtureSet, VisualImageRegressionCase,
+    VisualImageSnapshot, VisualRegressionError, VisualRegressionReport, VisualRegressionSuite,
 };
 
 /// Fixture type used by deterministic `Hawk2UI` tests.
@@ -72,41 +72,6 @@ impl TestFixture {
     #[must_use]
     pub const fn kind(&self) -> FixtureKind {
         self.kind
-    }
-}
-
-/// Fixture registry error.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum FixtureError {
-    /// Requested fixture was not registered.
-    MissingFixture(String),
-}
-
-/// Deterministic fixture registry for tests and conformance suites.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FixtureRegistry {
-    fixtures: Vec<TestFixture>,
-}
-
-impl FixtureRegistry {
-    /// Creates a fixture registry from fixture records.
-    #[must_use]
-    pub fn new(fixtures: impl IntoIterator<Item = TestFixture>) -> Self {
-        Self {
-            fixtures: fixtures.into_iter().collect(),
-        }
-    }
-
-    /// Returns a required fixture by name.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`FixtureError::MissingFixture`] when no registered fixture has the requested name.
-    pub fn require(&self, name: &str) -> Result<&TestFixture, FixtureError> {
-        self.fixtures
-            .iter()
-            .find(|fixture| fixture.name == name)
-            .ok_or_else(|| FixtureError::MissingFixture(name.to_string()))
     }
 }
 
@@ -264,7 +229,7 @@ impl DiagnosticAssertion {
     }
 }
 
-/// Sealed artifact metadata used by tests.
+/// Artifact metadata used by tests.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArtifactRecord {
     name: String,
@@ -335,53 +300,6 @@ impl ArtifactAssertion {
                 actual: artifact.hash.clone(),
             })
         }
-    }
-}
-
-/// Visual snapshot metadata used by rendering tests.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct VisualSnapshot {
-    name: String,
-    width: u32,
-    height: u32,
-    commands: Vec<String>,
-}
-
-impl VisualSnapshot {
-    /// Creates visual snapshot metadata.
-    #[must_use]
-    pub fn new(name: impl Into<String>, width: u32, height: u32) -> Self {
-        Self {
-            name: name.into(),
-            width,
-            height,
-            commands: Vec::new(),
-        }
-    }
-
-    /// Adds a recorded drawing command.
-    #[must_use]
-    pub fn with_command(mut self, command: impl Into<String>) -> Self {
-        self.commands.push(command.into());
-        self
-    }
-
-    /// Returns the snapshot name.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Returns the snapshot dimensions.
-    #[must_use]
-    pub const fn size(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-
-    /// Returns the recorded drawing commands.
-    #[must_use]
-    pub fn commands(&self) -> &[String] {
-        &self.commands
     }
 }
 
@@ -492,13 +410,13 @@ mod tests {
 
     #[test]
     fn fixture_helpers_load_registered_fixture() {
-        let registry = FixtureRegistry::new([TestFixture::new(
+        let catalog = FixtureCatalog::new([TestFixture::new(
             "desktop-basic",
             "examples/desktop-basic/manifest.hawk.toml",
             FixtureKind::Manifest,
         )]);
 
-        let fixture = registry.require("desktop-basic").unwrap();
+        let fixture = catalog.require("desktop-basic").unwrap();
 
         assert_eq!(fixture.path(), "examples/desktop-basic/manifest.hawk.toml");
         assert_eq!(fixture.kind(), FixtureKind::Manifest);
@@ -506,11 +424,11 @@ mod tests {
 
     #[test]
     fn fixture_helpers_reject_missing_fixture() {
-        let registry = FixtureRegistry::new([]);
+        let catalog = FixtureCatalog::new([]);
 
         assert_eq!(
-            registry.require("missing"),
-            Err(FixtureError::MissingFixture("missing".to_string()))
+            catalog.require("missing"),
+            Err(FixtureCatalogError::MissingFixture("missing".to_string()))
         );
     }
 
@@ -536,6 +454,21 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_assertion_rejects_mismatched_rule() {
+        let diagnostic = DiagnosticRecord::error("manifest.invalid", "manifest is invalid");
+
+        assert_eq!(
+            DiagnosticAssertion::error("manifest.identity.missing").assert_matches(&diagnostic),
+            Err(DiagnosticAssertionError::Mismatch {
+                expected_severity: DiagnosticSeverity::Error,
+                expected_rule: "manifest.identity.missing".to_string(),
+                actual_severity: DiagnosticSeverity::Error,
+                actual_rule: "manifest.invalid".to_string(),
+            })
+        );
+    }
+
+    #[test]
     fn artifact_assertion_matches_hash() {
         let artifact = ArtifactRecord::new("hawk2ui.app", "fnv1a64:0123456789abcdef");
 
@@ -545,12 +478,16 @@ mod tests {
     }
 
     #[test]
-    fn visual_helper_records_snapshot_metadata() {
-        let snapshot = VisualSnapshot::new("main-window", 1280, 720).with_command("draw-rect");
+    fn artifact_assertion_rejects_mismatched_hash() {
+        let artifact = ArtifactRecord::new("hawk2ui.app", "fnv1a64:bad");
 
-        assert_eq!(snapshot.name(), "main-window");
-        assert_eq!(snapshot.size(), (1280, 720));
-        assert_eq!(snapshot.commands(), &["draw-rect"]);
+        assert_eq!(
+            ArtifactAssertion::hash("fnv1a64:0123456789abcdef").assert_matches(&artifact),
+            Err(ArtifactAssertionError::HashMismatch {
+                expected: "fnv1a64:0123456789abcdef".to_string(),
+                actual: "fnv1a64:bad".to_string(),
+            })
+        );
     }
 
     #[test]
@@ -567,10 +504,50 @@ mod tests {
 
     #[test]
     fn benchmark_helper_records_budget_name() {
+        use std::time::Duration;
+
         let expectation = BenchmarkExpectation::new("cold-start", "fixtures/perf/cold-start.toml")
             .with_max_millis(16);
+        let suite = PerformanceSuite::new([expectation.clone()]);
+        let report = suite
+            .assert_within_budget("cold-start", Duration::from_millis(12))
+            .expect("budget is enforced");
 
         assert_eq!(expectation.budget_name(), "cold-start");
         assert_eq!(expectation.max_millis(), Some(16));
+        assert_eq!(report.elapsed_millis(), 12);
+        assert_eq!(report.max_millis(), 16);
+    }
+
+    #[test]
+    fn benchmark_helper_rejects_missing_and_exceeded_budgets() {
+        use std::time::Duration;
+
+        let suite = PerformanceSuite::new([
+            BenchmarkExpectation::new("cold-start", "fixtures/perf/cold-start.toml")
+                .with_max_millis(16),
+            BenchmarkExpectation::new("warm-start", "fixtures/perf/warm-start.toml"),
+        ]);
+
+        assert_eq!(
+            suite.assert_within_budget("missing", Duration::from_millis(1)),
+            Err(PerformanceBudgetError::MissingExpectation(
+                "missing".to_string()
+            ))
+        );
+        assert_eq!(
+            suite.assert_within_budget("warm-start", Duration::from_millis(1)),
+            Err(PerformanceBudgetError::MissingBudget(
+                "warm-start".to_string()
+            ))
+        );
+        assert_eq!(
+            suite.assert_within_budget("cold-start", Duration::from_millis(17)),
+            Err(PerformanceBudgetError::BudgetExceeded {
+                budget_name: "cold-start".to_string(),
+                elapsed_millis: 17,
+                max_millis: 16,
+            })
+        );
     }
 }

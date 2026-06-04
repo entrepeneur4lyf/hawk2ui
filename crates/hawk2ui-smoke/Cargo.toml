@@ -18,14 +18,18 @@ workspace = true
 
 [dependencies]
 hawk2ui-authoring = { version = "0.1.0", path = "../hawk2ui-authoring" }
+hawk2ui-build = { version = "0.1.0", path = "../hawk2ui-build" }
 hawk2ui-framework-react = { version = "0.1.0", path = "../hawk2ui-framework-react" }
 hawk2ui-framework-solid = { version = "0.1.0", path = "../hawk2ui-framework-solid" }
 hawk2ui-framework-svelte = { version = "0.1.0", path = "../hawk2ui-framework-svelte" }
 hawk2ui-framework-vue = { version = "0.1.0", path = "../hawk2ui-framework-vue" }
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-host-baseview = { version = "0.1.0", path = "../hawk2ui-host-baseview" }
+hawk2ui-host-winit = { version = "0.1.0", path = "../hawk2ui-host-winit" }
 hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
+hawk2ui-platform = { version = "0.1.0", path = "../hawk2ui-platform" }
 hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
-serde.workspace = true
+hawk2ui-script = { version = "0.1.0", path = "../hawk2ui-script" }
+hawk2ui-style = { version = "0.1.0", path = "../hawk2ui-style" }

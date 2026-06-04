@@ -359,7 +359,7 @@ fn compile_declarations(
             ));
             continue;
         };
-        let Some(value) = parse_value(raw_value.trim(), metadata.value_type()) else {
+        let Some(value) = parse_value(&property, raw_value.trim(), metadata.value_type()) else {
             diagnostics.push(diagnostic_from_unsupported_value(
                 raw_value.trim(),
                 metadata.value_type(),
@@ -422,16 +422,18 @@ fn has_unsupported_unit(raw_value: &str, value_type: ValueType) -> bool {
     }
 }
 
-fn parse_value(raw_value: &str, value_type: ValueType) -> Option<StyleValue> {
+fn parse_value(
+    property: &PropertyId,
+    raw_value: &str,
+    value_type: ValueType,
+) -> Option<StyleValue> {
     match value_type {
-        ValueType::Keyword => {
-            is_keyword(raw_value).then(|| StyleValue::Keyword(raw_value.to_string()))
-        }
+        ValueType::Keyword => parse_keyword(property.as_str(), raw_value).map(StyleValue::Keyword),
         ValueType::Length => parse_px(raw_value).map(StyleValue::LengthPx),
         ValueType::Number => raw_value.parse::<f32>().ok().map(StyleValue::Number),
         ValueType::Color => parse_color(raw_value),
-        ValueType::Shadow => parse_expression(raw_value).map(StyleValue::Shadow),
-        ValueType::Transform => parse_expression(raw_value).map(StyleValue::Transform),
+        ValueType::Shadow => parse_shadow(raw_value).map(StyleValue::Shadow),
+        ValueType::Transform => parse_transform(raw_value).map(StyleValue::Transform),
         ValueType::Duration => parse_duration(raw_value).map(StyleValue::DurationMs),
         ValueType::TokenReference => parse_token_ref(raw_value).map(StyleValue::TokenRef),
         ValueType::GridTrackList => parse_grid_track_list(raw_value).map(StyleValue::GridTrackList),
@@ -440,10 +442,13 @@ fn parse_value(raw_value: &str, value_type: ValueType) -> Option<StyleValue> {
     }
 }
 
-fn is_keyword(raw_value: &str) -> bool {
-    raw_value
-        .chars()
-        .all(|character| character.is_ascii_alphabetic() || character == '-')
+fn parse_keyword(property: &str, raw_value: &str) -> Option<String> {
+    match property {
+        "display" => matches!(raw_value, "flex" | "grid" | "none").then(|| raw_value.to_string()),
+        "overflow" => matches!(raw_value, "visible" | "hidden" | "clip" | "scroll" | "auto")
+            .then(|| raw_value.to_string()),
+        _ => None,
+    }
 }
 
 fn parse_token_ref(raw_value: &str) -> Option<String> {
@@ -538,6 +543,18 @@ fn parse_color(raw_value: &str) -> Option<StyleValue> {
 fn parse_hex_color(raw_value: &str) -> Option<StyleValue> {
     let hex = raw_value.strip_prefix('#')?;
     let (red, green, blue, alpha) = match hex.len() {
+        3 => (
+            parse_short_hex_channel(&hex[0..1])?,
+            parse_short_hex_channel(&hex[1..2])?,
+            parse_short_hex_channel(&hex[2..3])?,
+            255,
+        ),
+        4 => (
+            parse_short_hex_channel(&hex[0..1])?,
+            parse_short_hex_channel(&hex[1..2])?,
+            parse_short_hex_channel(&hex[2..3])?,
+            parse_short_hex_channel(&hex[3..4])?,
+        ),
         6 => (
             parse_hex_channel(&hex[0..2])?,
             parse_hex_channel(&hex[2..4])?,
@@ -553,6 +570,11 @@ fn parse_hex_color(raw_value: &str) -> Option<StyleValue> {
         _ => return None,
     };
     Some(StyleValue::ColorRgba(red, green, blue, alpha))
+}
+
+fn parse_short_hex_channel(value: &str) -> Option<u8> {
+    let doubled = format!("{value}{value}");
+    parse_hex_channel(&doubled)
 }
 
 fn parse_hex_channel(value: &str) -> Option<u8> {
@@ -606,12 +628,75 @@ fn parse_alpha_channel(value: &str) -> Option<u8> {
     }
 }
 
-fn parse_expression(raw_value: &str) -> Option<String> {
-    (!raw_value.is_empty()
-        && !raw_value.contains('{')
-        && !raw_value.contains('}')
-        && !raw_value.contains(';'))
-    .then(|| raw_value.to_string())
+fn parse_shadow(raw_value: &str) -> Option<String> {
+    if raw_value == "none" {
+        return Some(raw_value.to_string());
+    }
+    if raw_value.contains(',') {
+        return None;
+    }
+    let parts: Vec<_> = raw_value.split_whitespace().collect();
+    match parts.as_slice() {
+        [offset_x, offset_y, blur, color] => {
+            parse_px(offset_x)?;
+            parse_px(offset_y)?;
+            parse_px(blur)?;
+            parse_color(color)?;
+            Some(raw_value.to_string())
+        }
+        [offset_x, offset_y, blur, spread, color] => {
+            parse_px(offset_x)?;
+            parse_px(offset_y)?;
+            parse_px(blur)?;
+            parse_px(spread)?;
+            parse_color(color)?;
+            Some(raw_value.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn parse_transform(raw_value: &str) -> Option<String> {
+    if raw_value == "none" {
+        return Some(raw_value.to_string());
+    }
+    if let Some(argument) = function_argument(raw_value, "translateX") {
+        parse_px(argument)?;
+        return Some(raw_value.to_string());
+    }
+    if let Some(argument) = function_argument(raw_value, "translateY") {
+        parse_px(argument)?;
+        return Some(raw_value.to_string());
+    }
+    if let Some(argument) = function_argument(raw_value, "scale") {
+        let scale = argument.parse::<f32>().ok()?;
+        return scale.is_finite().then(|| raw_value.to_string());
+    }
+    if let Some(argument) = function_argument(raw_value, "rotate") {
+        parse_degrees(argument)?;
+        return Some(raw_value.to_string());
+    }
+    if let Some(arguments) = function_argument(raw_value, "translate") {
+        let parts: Vec<_> = arguments.split(',').map(str::trim).collect();
+        if parts.len() == 2 && parts.iter().all(|part| parse_px(part).is_some()) {
+            return Some(raw_value.to_string());
+        }
+    }
+    None
+}
+
+fn function_argument<'a>(raw_value: &'a str, name: &str) -> Option<&'a str> {
+    raw_value
+        .strip_prefix(name)?
+        .strip_prefix('(')?
+        .strip_suffix(')')
+        .map(str::trim)
+        .filter(|argument| !argument.is_empty())
+}
+
+fn parse_degrees(raw_value: &str) -> Option<f32> {
+    let degrees = raw_value.strip_suffix("deg")?.parse::<f32>().ok()?;
+    degrees.is_finite().then_some(degrees)
 }
 
 fn diagnostic_from_validation(error: ValidationError) -> StyleCompileDiagnostic {

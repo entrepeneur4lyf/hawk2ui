@@ -1,5 +1,5 @@
 .app {
-  background: token(color.background);
-  color: token(color.text);
-  padding: token(space.page);
+  background-color: token(color.surface);
+  color: #f8fafc;
+  border-width: 0;
 }

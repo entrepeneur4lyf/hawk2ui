@@ -2,11 +2,13 @@
 
 use std::fmt;
 
+use zeroize::Zeroizing;
+
 /// Secret value wrapper that never exposes the raw value through formatting.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct SecretValue {
     name: String,
-    value: String,
+    value: Zeroizing<String>,
 }
 
 impl SecretValue {
@@ -15,7 +17,7 @@ impl SecretValue {
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            value: value.into(),
+            value: Zeroizing::new(value.into()),
         }
     }
 
@@ -26,9 +28,15 @@ impl SecretValue {
     }
 
     /// Returns true when text does not contain the raw secret value.
+    ///
+    /// This is a verbatim leak check for already-rendered diagnostics and artifacts. It is not a
+    /// general-purpose secret scanner for encoded, split, hashed, or transformed values.
     #[must_use]
     pub fn is_absent_from(&self, text: &str) -> bool {
-        !text.contains(&self.value)
+        if self.value.is_empty() {
+            return true;
+        }
+        !text.contains(&*self.value)
     }
 }
 

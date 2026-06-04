@@ -1,24 +1,15 @@
-use std::hint::black_box;
+mod common;
 
-use hawk2ui_perf::{
-    BenchmarkCase, BenchmarkKind, BenchmarkMeasurement, BenchmarkSuite, PerformanceBudgets,
-};
-
-const BUDGETS: &str = include_str!("../../../performance/budgets.toml");
+use hawk2ui_perf::{BenchmarkCase, BenchmarkKind, BenchmarkSuite};
 
 fn main() {
-    let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+    let budgets = common::budgets();
+    let config = common::config();
+    let fixture = "examples/desktop-basic";
     let suite = BenchmarkSuite::new("desktop-host").with_case(
-        BenchmarkCase::new(
-            "desktop-host-frame",
-            "examples/desktop-basic",
-            BenchmarkKind::Host,
-        )
-        .with_measurement(BenchmarkMeasurement::new(14)),
+        BenchmarkCase::new("desktop-host-frame", fixture, BenchmarkKind::Host)
+            .with_measurement(common::measure_read_tree_millis(fixture, config)),
     );
 
-    suite
-        .validate_against(&budgets)
-        .expect("desktop host benchmarks must map to budgets");
-    black_box(suite.evaluate_against(&budgets).artifact_payload());
+    common::finish_suite(&suite, &budgets);
 }

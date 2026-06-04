@@ -25,6 +25,26 @@ impl RuntimeStabilityFixture {
         }
     }
 
+    /// Runs a stability check for the requested number of iterations.
+    ///
+    /// The callback returns `true` for a successful iteration and `false` for
+    /// a failed iteration. The resulting fixture records the observed failure
+    /// count and can then be validated against an allowed failure budget.
+    #[must_use]
+    pub fn run(
+        name: impl Into<String>,
+        iterations: u64,
+        mut check: impl FnMut(u64) -> bool,
+    ) -> Self {
+        let mut failures = 0_u64;
+        for index in 0..iterations {
+            if !check(index) {
+                failures = failures.saturating_add(1);
+            }
+        }
+        Self::new(name, iterations).with_failures(failures)
+    }
+
     /// Sets the observed failure count.
     #[must_use]
     pub fn with_failures(mut self, failures: u64) -> Self {
