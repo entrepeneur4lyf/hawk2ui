@@ -3,7 +3,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use parley::{FontContext, FontStack, LayoutContext, StyleProperty};
+use parley::{
+    FontContext, FontStack, LayoutContext, StyleProperty,
+    fontique::{Blob, FontInfoOverride},
+};
 use swash::scale::ScaleContext;
 use unicode_bidi::BidiInfo;
 use unicode_segmentation::UnicodeSegmentation;
@@ -435,10 +438,11 @@ impl TextBackend {
     /// Creates a text backend.
     #[must_use]
     pub fn new(catalog: FontCatalog) -> Self {
+        let parley_font_context = parley_font_context(&catalog);
         Self {
             catalog,
             _scale_context: ScaleContext::new(),
-            parley_font_context: Mutex::new(FontContext::new()),
+            parley_font_context: Mutex::new(parley_font_context),
             parley_layout_context: Mutex::new(LayoutContext::new()),
         }
     }
@@ -494,14 +498,13 @@ impl TextBackend {
         let clusters: Vec<&str> = display_text.graphemes(true).collect();
         let cluster_count = clusters.len();
         let contains_emoji = clusters.iter().any(|cluster| cluster.chars().any(is_emoji));
-        let bidi_resolved = input.bidi && display_text.chars().any(is_rtl);
+        let bidi_resolved = input.bidi && contains_rtl_text(&display_text);
         let parley_metrics = self.layout_with_parley(input, &resolved_family, &display_text)?;
         let lines = parley_metrics.lines;
         let line_count = u32::try_from(lines.len()).unwrap_or(u32::MAX);
         let width_px = parley_metrics.width_px;
         let height_px = parley_metrics.height_px;
         let baseline_px = parley_metrics.baseline_px;
-        let _bidi_info = BidiInfo::new(&display_text, None);
 
         let mut flags = 0_u8;
         if contains_emoji {
@@ -734,11 +737,37 @@ fn truncated_candidate(clusters: &[&str], ellipsis: &str) -> String {
 }
 
 fn is_emoji(character: char) -> bool {
-    ('\u{1F000}'..='\u{1FAFF}').contains(&character)
+    matches!(
+        character,
+        '\u{00A9}'
+            | '\u{00AE}'
+            | '\u{203C}'
+            | '\u{2049}'
+            | '\u{2122}'
+            | '\u{2139}'
+            | '\u{2328}'
+            | '\u{23CF}'
+            | '\u{24C2}'
+            | '\u{25B6}'
+            | '\u{25C0}'
+            | '\u{3030}'
+            | '\u{303D}'
+            | '\u{3297}'
+            | '\u{3299}'
+    ) || ('\u{2194}'..='\u{21AA}').contains(&character)
+        || ('\u{231A}'..='\u{231B}').contains(&character)
+        || ('\u{23E9}'..='\u{23F3}').contains(&character)
+        || ('\u{23F8}'..='\u{23FA}').contains(&character)
+        || ('\u{25AA}'..='\u{25AB}').contains(&character)
+        || ('\u{25FB}'..='\u{25FE}').contains(&character)
+        || ('\u{2600}'..='\u{27BF}').contains(&character)
+        || ('\u{2934}'..='\u{2935}').contains(&character)
+        || ('\u{2B05}'..='\u{2B55}').contains(&character)
+        || ('\u{1F000}'..='\u{1FAFF}').contains(&character)
 }
 
-fn is_rtl(character: char) -> bool {
-    ('\u{0590}'..='\u{08FF}').contains(&character)
+fn contains_rtl_text(text: &str) -> bool {
+    BidiInfo::new(text, None).has_rtl()
 }
 
 fn line_break_key(line_break: LineBreakMode) -> String {
@@ -770,6 +799,20 @@ fn database_contains_family(database: &fontdb::Database, family: &str) -> bool {
             ..fontdb::Query::default()
         })
         .is_some()
+}
+
+fn parley_font_context(catalog: &FontCatalog) -> FontContext {
+    let mut context = FontContext::new();
+    for font in &catalog.app_fonts {
+        context.collection.register_fonts(
+            Blob::new(Arc::new(font.bytes.clone())),
+            Some(FontInfoOverride {
+                family_name: Some(font.family.as_str()),
+                ..FontInfoOverride::default()
+            }),
+        );
+    }
+    context
 }
 
 #[cfg(test)]

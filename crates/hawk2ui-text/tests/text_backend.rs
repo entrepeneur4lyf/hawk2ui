@@ -1,5 +1,7 @@
 use hawk2ui_text::{FontCatalog, LineBreakMode, TextBackend, TextLayoutInput, TruncationMode};
 
+const TUFFY_TTF: &[u8] = include_bytes!("fixtures/Tuffy.ttf");
+
 #[test]
 fn text_backend_discovers_app_fonts_and_chooses_fallbacks() {
     let catalog = FontCatalog::new()
@@ -29,6 +31,30 @@ fn text_backend_rejects_app_font_metadata_when_fontdb_loads_no_faces() {
 }
 
 #[test]
+fn text_backend_shapes_with_registered_app_font_bytes() {
+    let backend = TextBackend::new(
+        FontCatalog::new()
+            .with_app_font("AppDisplay", "assets/fonts/Tuffy.ttf", TUFFY_TTF.to_vec())
+            .with_system_family("sans-serif"),
+    );
+    let app_font_input = TextLayoutInput::new("mmmmmmmm", "AppDisplay", 22.0);
+    let system_font_input = TextLayoutInput::new("mmmmmmmm", "sans-serif", 22.0);
+
+    let app_font_layout = backend
+        .layout(&app_font_input)
+        .expect("app font layout succeeds");
+    let system_font_layout = backend
+        .layout(&system_font_input)
+        .expect("system font layout succeeds");
+
+    assert_eq!(app_font_layout.resolved_family(), "AppDisplay");
+    assert!(
+        (app_font_layout.width_px() - system_font_layout.width_px()).abs() > 0.1,
+        "registered app font bytes must affect Parley shaping metrics"
+    );
+}
+
+#[test]
 fn text_backend_shapes_latin_emoji_combining_and_bidi_text() {
     let backend = TextBackend::new(
         FontCatalog::new()
@@ -48,6 +74,32 @@ fn text_backend_shapes_latin_emoji_combining_and_bidi_text() {
     assert!(layout.parley_processed());
     assert_eq!(layout.line_count(), 1);
     assert!(layout.baseline_px() > 0.0);
+}
+
+#[test]
+fn text_backend_reports_bidi_for_presentation_form_characters() {
+    let backend = TextBackend::new(FontCatalog::new().with_system_family("Display"));
+    let input = TextLayoutInput::new("Gain \u{FE91}", "Display", 18.0).with_bidi(true);
+
+    let layout = backend.layout(&input).expect("layout succeeds");
+
+    assert!(
+        layout.bidi_resolved(),
+        "Arabic presentation-form characters must be reported as bidi text"
+    );
+}
+
+#[test]
+fn text_backend_reports_common_bmp_emoji_clusters() {
+    let backend = TextBackend::new(FontCatalog::new().with_system_family("Display"));
+    let input = TextLayoutInput::new("Favorite \u{2764}", "Display", 18.0);
+
+    let layout = backend.layout(&input).expect("layout succeeds");
+
+    assert!(
+        layout.contains_emoji(),
+        "BMP dingbat emoji must be reported as emoji clusters"
+    );
 }
 
 #[test]
