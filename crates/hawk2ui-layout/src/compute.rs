@@ -68,6 +68,7 @@ impl ComputedGeometry {
 pub struct LayoutOutput {
     geometry: Vec<(LayoutNodeId, ComputedGeometry)>,
     clips: Vec<(LayoutNodeId, ComputedGeometry)>,
+    diagnostics: Vec<LayoutTreeError>,
 }
 
 impl LayoutOutput {
@@ -77,7 +78,21 @@ impl LayoutOutput {
         geometry: Vec<(LayoutNodeId, ComputedGeometry)>,
         clips: Vec<(LayoutNodeId, ComputedGeometry)>,
     ) -> Self {
-        Self { geometry, clips }
+        Self {
+            geometry,
+            clips,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// Creates layout output carrying a failed convenience-path diagnostic.
+    #[must_use]
+    pub fn diagnostic(error: LayoutTreeError) -> Self {
+        Self {
+            geometry: Vec::new(),
+            clips: Vec::new(),
+            diagnostics: vec![error],
+        }
     }
 
     /// Returns geometry by node ID.
@@ -98,6 +113,12 @@ impl LayoutOutput {
             .map(|(_, clip)| clip)
     }
 
+    /// Returns diagnostics captured by the non-fallible convenience path.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[LayoutTreeError] {
+        &self.diagnostics
+    }
+
     pub(crate) fn geometry_entries_internal(&self) -> &[(LayoutNodeId, ComputedGeometry)] {
         &self.geometry
     }
@@ -108,18 +129,20 @@ impl LayoutOutput {
 }
 
 impl LayoutTree {
-    /// Computes layout geometry for this tree, returning an **empty** [`LayoutOutput`] on any
-    /// failure (invalid viewport/style, missing root, or backend error).
+    /// Computes layout geometry for this tree.
     ///
-    /// The empty result is indistinguishable from a legitimately empty tree, so a frame that
-    /// silently fails to lay out renders nothing with no diagnostic. Callers that must distinguish
-    /// failure from emptiness — hosts especially — should use [`Self::try_compute_layout`]. Note
-    /// also that text-measured leaves collapse to zero size on this path (no measurer is supplied);
-    /// use [`Self::try_compute_layout_with_text_measurer`] for trees containing measured text.
+    /// This is a convenience API for tests and trusted fixtures. Production callers should use
+    /// [`Self::try_compute_layout`] so failures can be handled as structured `Result` errors. On
+    /// this path, validation/backend failures return an output with no geometry and a diagnostic
+    /// available through [`LayoutOutput::diagnostics`]. Text-measured leaves collapse to zero size
+    /// on this path (no measurer is supplied); use
+    /// [`Self::try_compute_layout_with_text_measurer`] for trees containing measured text.
     #[must_use]
     pub fn compute_layout(&self, viewport: Viewport) -> LayoutOutput {
-        self.try_compute_layout(viewport)
-            .unwrap_or_else(|_| LayoutOutput::new(Vec::new(), Vec::new()))
+        match self.try_compute_layout(viewport) {
+            Ok(output) => output,
+            Err(error) => LayoutOutput::diagnostic(error),
+        }
     }
 
     /// Computes layout geometry for this tree and reports validation/backend failures.

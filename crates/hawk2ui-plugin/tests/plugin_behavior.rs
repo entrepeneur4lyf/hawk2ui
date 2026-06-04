@@ -328,6 +328,45 @@ fn enum_parameter_display_value_resolves_variant_names_and_falls_back() {
 }
 
 #[test]
+fn parameter_model_round_trips_bool_choice_and_integer_values_through_normalized_space() {
+    let boolean = ParameterRecord::boolean("enabled", "Enabled", false);
+    assert_eq!(
+        boolean.denormalize(0.25).unwrap(),
+        ParameterValue::Bool(false)
+    );
+    assert_eq!(
+        boolean.denormalize(0.5).unwrap(),
+        ParameterValue::Bool(true)
+    );
+    assert_close(boolean.normalize(&ParameterValue::Bool(true)).unwrap(), 1.0);
+
+    let choice = ParameterRecord::enumerated(
+        "osc.shape",
+        "Osc Shape",
+        0,
+        [
+            EnumVariant::new("sine", "Sine"),
+            EnumVariant::new("square", "Square"),
+            EnumVariant::new("saw", "Saw"),
+        ],
+    );
+    assert_eq!(choice.denormalize(0.6).unwrap(), ParameterValue::Choice(1));
+    assert_close(choice.normalize(&ParameterValue::Choice(2)).unwrap(), 1.0);
+
+    let integer = ParameterRecord::integer(
+        "voice.count",
+        "Voice Count",
+        "voices",
+        ParameterRange::new(1.0, 16.0, 4.0),
+    );
+    assert_eq!(integer.denormalize(0.5).unwrap(), ParameterValue::Int(9));
+    assert_close(
+        integer.normalize(&ParameterValue::Int(9)).unwrap(),
+        0.533_333_333_333_333_3,
+    );
+}
+
+#[test]
 fn parameter_model_supports_stepped_values_and_smoothing_metadata() {
     let parameter =
         ParameterRecord::numeric("mode", "Mode", "", ParameterRange::new(0.0, 3.0, 0.0))

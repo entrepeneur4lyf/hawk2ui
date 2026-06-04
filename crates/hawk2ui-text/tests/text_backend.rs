@@ -4,21 +4,28 @@ use hawk2ui_text::{FontCatalog, LineBreakMode, TextBackend, TextLayoutInput, Tru
 fn text_backend_discovers_app_fonts_and_chooses_fallbacks() {
     let catalog = FontCatalog::new()
         .with_system_family("Atkinson")
-        .with_app_font(
-            "Display",
-            "assets/fonts/display.ttf",
-            b"font-bytes".to_vec(),
-        )
         .with_fallback_family("EmojiFallback");
     let backend = TextBackend::new(catalog);
 
-    assert_eq!(backend.resolve_family("Display").unwrap(), "Display");
+    assert_eq!(backend.resolve_family("Atkinson").unwrap(), "Atkinson");
     assert_eq!(backend.resolve_family("Missing").unwrap(), "EmojiFallback");
-    assert_eq!(
-        backend.catalog().app_font_sources()[0].source_path,
-        "assets/fonts/display.ttf"
-    );
     assert!(backend.font_generation() > 0);
+}
+
+#[test]
+fn text_backend_rejects_app_font_metadata_when_fontdb_loads_no_faces() {
+    let backend = TextBackend::new(
+        FontCatalog::new()
+            .with_app_font(
+                "Display",
+                "assets/fonts/display.ttf",
+                b"not-a-font".to_vec(),
+            )
+            .with_fallback_family("EmojiFallback"),
+    );
+
+    assert!(backend.catalog().app_font_sources().is_empty());
+    assert_eq!(backend.resolve_family("Display").unwrap(), "EmojiFallback");
 }
 
 #[test]

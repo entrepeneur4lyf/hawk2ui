@@ -11,6 +11,10 @@ pub enum StateValue {
     Float(f64),
     /// Boolean state value.
     Bool(bool),
+    /// Indexed-choice state value.
+    Choice(u32),
+    /// Integer state value.
+    Int(i64),
     /// String state value.
     String(String),
 }

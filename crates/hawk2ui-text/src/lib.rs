@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Production text backend for `Hawk2UI` font discovery, shaping, line breaking, bidi, glyph cache, and high-DPI metrics.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use parley::{FontContext, FontStack, LayoutContext, StyleProperty};
 use swash::scale::ScaleContext;
@@ -56,13 +56,17 @@ impl FontCatalog {
         source_path: impl Into<String>,
         bytes: Vec<u8>,
     ) -> Self {
-        self.database.load_font_data(bytes.clone());
-        self.app_fonts.push(AppFont {
-            family: family.into(),
-            source_path: source_path.into(),
-            bytes,
-        });
-        self.generation = self.generation.saturating_add(1);
+        let loaded_faces = self
+            .database
+            .load_font_source(fontdb::Source::Binary(Arc::new(bytes.clone())));
+        if !loaded_faces.is_empty() {
+            self.app_fonts.push(AppFont {
+                family: family.into(),
+                source_path: source_path.into(),
+                bytes,
+            });
+            self.generation = self.generation.saturating_add(1);
+        }
         self
     }
 
@@ -97,6 +101,7 @@ impl FontCatalog {
         self.system_families
             .iter()
             .any(|candidate| is_valid_font_family(candidate) && candidate == family)
+            || database_contains_family(&self.database, family)
             || self.app_fonts.iter().any(|font| {
                 is_valid_font_family(&font.family)
                     && !font.source_path.trim().is_empty()
@@ -756,6 +761,15 @@ fn round_tenth(value: f32) -> f32 {
 
 fn is_valid_font_family(family: &str) -> bool {
     !family.trim().is_empty()
+}
+
+fn database_contains_family(database: &fontdb::Database, family: &str) -> bool {
+    database
+        .query(&fontdb::Query {
+            families: &[fontdb::Family::Name(family)],
+            ..fontdb::Query::default()
+        })
+        .is_some()
 }
 
 #[cfg(test)]

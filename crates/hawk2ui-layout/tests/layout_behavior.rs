@@ -188,6 +188,25 @@ fn layout_tree_rejects_invalid_ids_styles_and_viewports() {
 }
 
 #[test]
+fn compute_layout_returns_diagnostic_output_instead_of_silently_empty_success_on_failure() {
+    let tree = LayoutTree::new(LayoutNode::new(
+        LayoutNodeId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Row)
+            .with_size(LayoutSizing::fixed(f32::NAN, 100.0)),
+    ));
+
+    let output = tree.compute_layout(Viewport::new(300.0, 100.0));
+
+    assert!(output.geometry_entries().is_empty());
+    assert_eq!(
+        output.diagnostics(),
+        &[hawk2ui_layout::LayoutTreeError::InvalidStyle(
+            "root".to_string()
+        )]
+    );
+}
+
+#[test]
 fn flex_scroll_layout_calculates_row_column_gaps_and_padding() {
     let tree = LayoutTree::new(LayoutNode::new(
         LayoutNodeId::new("root"),

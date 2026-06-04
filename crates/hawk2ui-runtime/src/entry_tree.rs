@@ -19,6 +19,15 @@ use crate::view::{
     RuntimeVisual,
 };
 
+/// Maximum entry tree JSON payload size accepted from an entry script.
+const ENTRY_TREE_MAX_JSON_BYTES: usize = 1_048_576;
+/// Maximum semantic node nesting accepted in an entry tree.
+const ENTRY_TREE_MAX_DEPTH: usize = 64;
+/// Maximum number of semantic nodes accepted in an entry tree.
+const ENTRY_TREE_MAX_NODES: usize = 4_096;
+/// Conservative raw JSON container depth bound that catches hostile input before serde recurses.
+const ENTRY_TREE_MAX_JSON_CONTAINER_DEPTH: usize = ENTRY_TREE_MAX_DEPTH * 2;
+
 /// Kind of an [`EntryNode`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EntryNodeKind {
@@ -103,8 +112,10 @@ impl EntryNode {
     /// Returns a message when the JSON is malformed, a node is malformed, or two
     /// nodes share an id.
     pub fn from_tree_json(value: &str) -> Result<Self, String> {
+        enforce_entry_tree_source_limits(value)?;
         let value: serde_json::Value = serde_json::from_str(value)
             .map_err(|error| format!("entry tree result is not valid JSON: {error}"))?;
+        enforce_entry_tree_shape_limits(&value)?;
         let root = Self::from_json(&value)?;
         root.validate_unique_ids()?;
         Ok(root)
@@ -288,6 +299,70 @@ fn collect_ids<'a>(node: &'a EntryNode, ids: &mut BTreeSet<&'a str>) -> Result<(
     Ok(())
 }
 
+fn enforce_entry_tree_source_limits(source: &str) -> Result<(), String> {
+    if source.len() > ENTRY_TREE_MAX_JSON_BYTES {
+        return Err(format!(
+            "entry tree JSON byte length exceeds the maximum of {ENTRY_TREE_MAX_JSON_BYTES}"
+        ));
+    }
+
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for character in source.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match character {
+            '"' => in_string = true,
+            '{' | '[' => {
+                depth = depth.saturating_add(1);
+                if depth > ENTRY_TREE_MAX_JSON_CONTAINER_DEPTH {
+                    return Err(entry_tree_too_deeply_nested_error());
+                }
+            }
+            '}' | ']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn enforce_entry_tree_shape_limits(root: &serde_json::Value) -> Result<(), String> {
+    let mut node_count = 0usize;
+    let mut stack = vec![(root, 1usize)];
+    while let Some((node, depth)) = stack.pop() {
+        node_count = node_count.saturating_add(1);
+        if node_count > ENTRY_TREE_MAX_NODES {
+            return Err(format!(
+                "entry tree node count exceeds the maximum of {ENTRY_TREE_MAX_NODES}"
+            ));
+        }
+        if depth > ENTRY_TREE_MAX_DEPTH {
+            return Err(entry_tree_too_deeply_nested_error());
+        }
+        let Some(children) = node.get("children").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for child in children {
+            stack.push((child, depth + 1));
+        }
+    }
+    Ok(())
+}
+
+fn entry_tree_too_deeply_nested_error() -> String {
+    format!("entry tree nesting depth exceeds the maximum of {ENTRY_TREE_MAX_DEPTH}")
+}
+
 fn json_children(value: &serde_json::Value) -> Result<&[serde_json::Value], String> {
     match value.get("children") {
         Some(serde_json::Value::Array(children)) => Ok(children.as_slice()),
@@ -415,5 +490,49 @@ mod tests {
         )
         .expect_err("text with children must fail");
         assert!(error.contains("must not declare children"), "{error}");
+    }
+
+    #[test]
+    fn rejects_entry_tree_above_depth_limit_before_recursive_conversion() {
+        let mut value = r#"{ "id": "leaf", "type": "text", "text": "x" }"#.to_string();
+        for index in 0..70 {
+            value = format!(r#"{{ "id": "node-{index}", "type": "view", "children": [{value}] }}"#);
+        }
+
+        let error =
+            EntryNode::from_tree_json(&value).expect_err("over-deep entry tree must fail closed");
+
+        assert!(
+            error.contains("entry tree nesting depth exceeds"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_entry_tree_above_node_limit_before_runtime_tree_allocation() {
+        let children = (0..4_097)
+            .map(|index| format!(r#"{{ "id": "child-{index}", "type": "text", "text": "x" }}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let value = format!(r#"{{ "id": "root", "type": "view", "children": [{children}] }}"#);
+
+        let error = EntryNode::from_tree_json(&value)
+            .expect_err("over-large entry tree must fail before conversion");
+
+        assert!(error.contains("entry tree node count exceeds"), "{error}");
+    }
+
+    #[test]
+    fn rejects_entry_tree_above_json_byte_limit_before_parsing() {
+        let text = "x".repeat(ENTRY_TREE_MAX_JSON_BYTES);
+        let value = format!(r#"{{ "id": "root", "type": "text", "text": "{text}" }}"#);
+
+        let error =
+            EntryNode::from_tree_json(&value).expect_err("over-large JSON must fail pre-parse");
+
+        assert!(
+            error.contains("entry tree JSON byte length exceeds"),
+            "{error}"
+        );
     }
 }

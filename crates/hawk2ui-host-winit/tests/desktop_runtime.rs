@@ -234,7 +234,7 @@ fn software_frame_renders_registered_runtime_assets() {
             &AssetHash::sha256_bytes(&image_bytes),
         )
         .expect("image compiles");
-    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 16"><path d="M0 0 L32 0 L32 16 L0 16 Z"/></svg>"#;
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 16"><path fill="#ffffff" d="M0 0 L32 0 L32 16 L0 16 Z"/></svg>"##;
     let vector = assets
         .compile_vector(
             "logo",

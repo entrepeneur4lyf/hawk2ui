@@ -566,14 +566,14 @@ fn keyboard_key_label(event: &KeyboardEvent) -> String {
     }
 }
 
-fn mouse_button_label(button: baseview::MouseButton) -> &'static str {
+fn mouse_button_label(button: baseview::MouseButton) -> String {
     match button {
-        baseview::MouseButton::Left => "left",
-        baseview::MouseButton::Middle => "middle",
-        baseview::MouseButton::Right => "right",
-        baseview::MouseButton::Back => "back",
-        baseview::MouseButton::Forward => "forward",
-        baseview::MouseButton::Other(_) => "other",
+        baseview::MouseButton::Left => "left".to_string(),
+        baseview::MouseButton::Middle => "middle".to_string(),
+        baseview::MouseButton::Right => "right".to_string(),
+        baseview::MouseButton::Back => "back".to_string(),
+        baseview::MouseButton::Forward => "forward".to_string(),
+        baseview::MouseButton::Other(button) => format!("other-{button}"),
     }
 }
 
@@ -1748,7 +1748,7 @@ impl BaseviewClapRuntimeEditorHostAbiBridge {
     /// Returns the stable text ABI contract.
     #[must_use]
     pub const fn abi_contract(&self) -> &'static str {
-        "hawk2ui_host_bridge_abi=1\ncommand=create\ncommand=set_parent\ncommand=show\ncommand=hide\ncommand=destroy\ncommand=apply_parameter\ncommand=save_state\ncommand=load_state\ncommand=drain_realtime_visuals\nresponse=created\nresponse=parent_attached\nresponse=frame_presented\nresponse=hidden\nresponse=destroyed\nresponse=parameter_applied\nresponse=state_saved\nresponse=state_loaded\nresponse=realtime_visuals_drained\nfunction=hawk2ui_editor_dispatch\n"
+        "hawk2ui_host_bridge_abi=1\ncommand=create\ncommand=set_parent\ncommand=show\ncommand=hide\ncommand=destroy\ncommand=apply_parameter\ncommand=save_state\ncommand=load_state\ncommand=drain_realtime_visuals\nparameter_field=value\nparameter_field=bits\nparameter_field=bool\nparameter_field=choice\nparameter_field=int\nstate_field=param.<id>.bits\nstate_field=param.<id>.bool\nstate_field=param.<id>.choice\nstate_field=param.<id>.int\nresponse=created\nresponse=parent_attached\nresponse=frame_presented\nresponse=hidden\nresponse=destroyed\nresponse=parameter_applied\nresponse=state_saved\nresponse=state_loaded\nresponse=realtime_visuals_drained\nfunction=hawk2ui_editor_dispatch\n"
     }
 
     /// Dispatches one generated text ABI command into a live `Baseview` CLAP runtime editor host.
@@ -1822,11 +1822,11 @@ impl BaseviewClapRuntimeEditorHostAbiBridge {
             )),
             "apply_parameter" => {
                 let parameter_id = require_host_abi_field(&fields, "parameter_id")?.to_string();
-                let value = parse_host_abi_f64(require_host_abi_field(&fields, "value")?, "value")?;
+                let value = parse_host_abi_parameter_value(&fields)?;
                 let response =
                     host.dispatch(BaseviewClapRuntimeEditorHostCommand::ApplyParameter {
                         parameter_id,
-                        value: ParameterValue::Float(value),
+                        value,
                     })?;
                 Ok(response_to_host_abi_text(response))
             }
@@ -1834,20 +1834,7 @@ impl BaseviewClapRuntimeEditorHostAbiBridge {
                 host.dispatch(BaseviewClapRuntimeEditorHostCommand::SaveState)?,
             )),
             "load_state" => {
-                let mut state = PluginStateEnvelope::new(1);
-                for (key, value) in &fields {
-                    let Some(parameter_id) = key
-                        .strip_prefix("param.")
-                        .and_then(|rest| rest.strip_suffix(".bits"))
-                    else {
-                        continue;
-                    };
-                    let bits = parse_host_abi_u64(value, key)?;
-                    state = state.parameter(
-                        parameter_id.to_string(),
-                        StateValue::Float(f64::from_bits(bits)),
-                    );
-                }
+                let state = parse_host_abi_state(&fields)?;
                 Ok(response_to_host_abi_text(host.dispatch(
                     BaseviewClapRuntimeEditorHostCommand::LoadState(state),
                 )?))
@@ -2276,6 +2263,25 @@ fn parse_host_abi_u64(value: &str, field: &str) -> Result<u64, BaseviewHostError
     })
 }
 
+fn parse_host_abi_u32(value: &str, field: &str) -> Result<u32, BaseviewHostError> {
+    let value = parse_host_abi_u64(value, field)?;
+    u32::try_from(value).map_err(|error| {
+        BaseviewHostError::new(
+            "baseview.clap-host-abi.invalid-integer",
+            format!("CLAP host ABI field `{field}` is outside the u32 range: {error}"),
+        )
+    })
+}
+
+fn parse_host_abi_i64(value: &str, field: &str) -> Result<i64, BaseviewHostError> {
+    value.parse::<i64>().map_err(|error| {
+        BaseviewHostError::new(
+            "baseview.clap-host-abi.invalid-integer",
+            format!("CLAP host ABI field `{field}` has invalid integer value `{value}`: {error}"),
+        )
+    })
+}
+
 fn parse_host_abi_f64(value: &str, field: &str) -> Result<f64, BaseviewHostError> {
     let value = value.parse::<f64>().map_err(|error| {
         BaseviewHostError::new(
@@ -2291,6 +2297,101 @@ fn parse_host_abi_f64(value: &str, field: &str) -> Result<f64, BaseviewHostError
             format!("CLAP host ABI field `{field}` must be finite"),
         ))
     }
+}
+
+fn parse_host_abi_parameter_value(
+    fields: &BTreeMap<String, String>,
+) -> Result<ParameterValue, BaseviewHostError> {
+    let mut value = None;
+    if let Some(raw) = fields.get("value") {
+        set_host_abi_parameter_value(
+            &mut value,
+            ParameterValue::Float(parse_host_abi_f64(raw, "value")?),
+        )?;
+    }
+    if let Some(raw) = fields.get("bits") {
+        set_host_abi_parameter_value(
+            &mut value,
+            ParameterValue::Float(f64::from_bits(parse_host_abi_u64(raw, "bits")?)),
+        )?;
+    }
+    if let Some(raw) = fields.get("bool") {
+        set_host_abi_parameter_value(
+            &mut value,
+            ParameterValue::Bool(parse_host_abi_bool(raw, "bool")?),
+        )?;
+    }
+    if let Some(raw) = fields.get("choice") {
+        set_host_abi_parameter_value(
+            &mut value,
+            ParameterValue::Choice(parse_host_abi_u32(raw, "choice")?),
+        )?;
+    }
+    if let Some(raw) = fields.get("int") {
+        set_host_abi_parameter_value(
+            &mut value,
+            ParameterValue::Int(parse_host_abi_i64(raw, "int")?),
+        )?;
+    }
+    value.ok_or_else(|| {
+        BaseviewHostError::new(
+            "baseview.clap-host-abi.missing-field",
+            "CLAP host ABI command missing a parameter value field",
+        )
+    })
+}
+
+fn set_host_abi_parameter_value(
+    slot: &mut Option<ParameterValue>,
+    value: ParameterValue,
+) -> Result<(), BaseviewHostError> {
+    if slot.replace(value).is_some() {
+        return Err(BaseviewHostError::new(
+            "baseview.clap-host-abi.ambiguous-parameter-value",
+            "CLAP host ABI parameter command must provide exactly one value field",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_host_abi_state(
+    fields: &BTreeMap<String, String>,
+) -> Result<PluginStateEnvelope, BaseviewHostError> {
+    let mut state = PluginStateEnvelope::new(1);
+    for (key, value) in fields {
+        let Some(rest) = key.strip_prefix("param.") else {
+            continue;
+        };
+        let Some((parameter_id, suffix)) = rest.rsplit_once('.') else {
+            return Err(BaseviewHostError::new(
+                "baseview.clap-host-abi.invalid-state-field",
+                format!("CLAP host ABI state field `{key}` must include a typed suffix"),
+            ));
+        };
+        let state_value = match suffix {
+            "bits" => StateValue::Float(f64::from_bits(parse_host_abi_u64(value, key)?)),
+            "bool" => StateValue::Bool(parse_host_abi_bool(value, key)?),
+            "choice" => StateValue::Choice(parse_host_abi_u32(value, key)?),
+            "int" => StateValue::Int(parse_host_abi_i64(value, key)?),
+            other => {
+                return Err(BaseviewHostError::new(
+                    "baseview.clap-host-abi.invalid-state-field",
+                    format!("CLAP host ABI state field `{key}` has unsupported suffix `{other}`"),
+                ));
+            }
+        };
+        if state
+            .parameter_state
+            .insert(parameter_id.to_string(), state_value)
+            .is_some()
+        {
+            return Err(BaseviewHostError::new(
+                "baseview.clap-host-abi.duplicate-state-field",
+                format!("CLAP host ABI state provides multiple values for `{parameter_id}`"),
+            ));
+        }
+    }
+    Ok(state)
 }
 
 const fn parent_fixture_id_for_api(api: ClapGuiWindowApi) -> &'static str {
@@ -2323,8 +2424,20 @@ fn response_to_host_abi_text(response: BaseviewClapRuntimeEditorHostResponse) ->
         BaseviewClapRuntimeEditorHostResponse::StateSaved(state) => {
             let mut response = "response=state_saved\n".to_string();
             for (parameter_id, value) in state.parameter_state {
-                if let StateValue::Float(value) = value {
-                    let _ = writeln!(response, "param.{parameter_id}.bits={}", value.to_bits());
+                match value {
+                    StateValue::Float(value) => {
+                        let _ = writeln!(response, "param.{parameter_id}.bits={}", value.to_bits());
+                    }
+                    StateValue::Bool(value) => {
+                        let _ = writeln!(response, "param.{parameter_id}.bool={value}");
+                    }
+                    StateValue::Choice(value) => {
+                        let _ = writeln!(response, "param.{parameter_id}.choice={value}");
+                    }
+                    StateValue::Int(value) => {
+                        let _ = writeln!(response, "param.{parameter_id}.int={value}");
+                    }
+                    StateValue::String(_) => {}
                 }
             }
             response
@@ -2376,11 +2489,8 @@ fn state_value_from_parameter(value: &ParameterValue) -> StateValue {
     match value {
         ParameterValue::Float(value) => StateValue::Float(*value),
         ParameterValue::Bool(value) => StateValue::Bool(*value),
-        ParameterValue::Choice(value) => StateValue::Float(f64::from(*value)),
-        // StateValue has no integer variant; an integer persists as a float,
-        // which round-trips exactly for any realistic parameter range.
-        #[allow(clippy::cast_precision_loss)]
-        ParameterValue::Int(value) => StateValue::Float(*value as f64),
+        ParameterValue::Choice(value) => StateValue::Choice(*value),
+        ParameterValue::Int(value) => StateValue::Int(*value),
     }
 }
 
@@ -2392,6 +2502,8 @@ fn parameter_value_from_state(value: &StateValue) -> Result<ParameterValue, Base
             "CLAP runtime editor state float values must be finite",
         )),
         StateValue::Bool(value) => Ok(ParameterValue::Bool(*value)),
+        StateValue::Choice(value) => Ok(ParameterValue::Choice(*value)),
+        StateValue::Int(value) => Ok(ParameterValue::Int(*value)),
         StateValue::String(_) => Err(BaseviewHostError::new(
             "baseview.clap-runtime-editor.parameter-invalid",
             "CLAP runtime editor parameter state does not accept string values",

@@ -396,6 +396,19 @@ fn baseview_event_translator_routes_native_window_keyboard_pointer_and_teardown_
         ))]
     );
 
+    let extra_button = translator.translate(&Event::Mouse(MouseEvent::ButtonPressed {
+        button: MouseButton::Other(8),
+        modifiers: keyboard_types::Modifiers::default(),
+    }));
+    assert_eq!(
+        extra_button.events,
+        [PluginHostEvent::PointerRouted(PointerInput::new(
+            10.0,
+            12.0,
+            "other-8-down"
+        ))]
+    );
+
     let wheel = translator.translate(&Event::Mouse(MouseEvent::WheelScrolled {
         delta: ScrollDelta::Lines { x: 1.0, y: -2.0 },
         modifiers: keyboard_types::Modifiers::default(),
@@ -695,6 +708,7 @@ fn baseview_clap_runtime_editor_host_drives_callback_lifecycle_from_plugin_path(
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn baseview_clap_runtime_editor_host_tracks_parameter_and_state_events() {
     let sealed_artifact = SealedArtifact::from_manifest(
         ArtifactSchemaVersion::new(1, 0),
@@ -743,6 +757,10 @@ fn baseview_clap_runtime_editor_host_tracks_parameter_and_state_events() {
         .expect("created host accepts finite parameter value");
     host.apply_parameter_value("bypass", ParameterValue::Bool(true))
         .expect("created host accepts boolean parameter value");
+    host.apply_parameter_value("mode", ParameterValue::Choice(2))
+        .expect("created host accepts choice parameter value");
+    host.apply_parameter_value("steps", ParameterValue::Int(4))
+        .expect("created host accepts integer parameter value");
     assert_eq!(
         host.parameter_value("gain"),
         Some(&ParameterValue::Float(0.5))
@@ -770,10 +788,20 @@ fn baseview_clap_runtime_editor_host_tracks_parameter_and_state_events() {
         saved.parameter_state.get("bypass"),
         Some(&StateValue::Bool(true))
     );
+    assert_eq!(
+        saved.parameter_state.get("mode"),
+        Some(&StateValue::Choice(2))
+    );
+    assert_eq!(
+        saved.parameter_state.get("steps"),
+        Some(&StateValue::Int(4))
+    );
 
     let replacement = PluginStateEnvelope::new(1)
         .parameter("gain", StateValue::Float(0.75))
-        .parameter("bypass", StateValue::Bool(false));
+        .parameter("bypass", StateValue::Bool(false))
+        .parameter("mode", StateValue::Choice(1))
+        .parameter("steps", StateValue::Int(8));
     host.load_state(replacement)
         .expect("host loads parameter state after create");
     assert_eq!(
@@ -784,6 +812,11 @@ fn baseview_clap_runtime_editor_host_tracks_parameter_and_state_events() {
         host.parameter_value("bypass"),
         Some(&ParameterValue::Bool(false))
     );
+    assert_eq!(
+        host.parameter_value("mode"),
+        Some(&ParameterValue::Choice(1))
+    );
+    assert_eq!(host.parameter_value("steps"), Some(&ParameterValue::Int(8)));
 
     let error = host
         .apply_parameter_value("gain", ParameterValue::Float(f64::NAN))
@@ -1071,6 +1104,33 @@ fn baseview_clap_runtime_editor_host_binds_generated_text_abi_to_live_editor() {
             .expect("ABI parameter dispatch succeeds"),
         "response=parameter_applied\n"
     );
+    assert_eq!(
+        bridge
+            .dispatch_text(
+                &mut host,
+                "command=apply_parameter\nparameter_id=bypass\nbool=true\n",
+            )
+            .expect("ABI bool parameter dispatch succeeds"),
+        "response=parameter_applied\n"
+    );
+    assert_eq!(
+        bridge
+            .dispatch_text(
+                &mut host,
+                "command=apply_parameter\nparameter_id=mode\nchoice=2\n",
+            )
+            .expect("ABI choice parameter dispatch succeeds"),
+        "response=parameter_applied\n"
+    );
+    assert_eq!(
+        bridge
+            .dispatch_text(
+                &mut host,
+                "command=apply_parameter\nparameter_id=steps\nint=4\n",
+            )
+            .expect("ABI integer parameter dispatch succeeds"),
+        "response=parameter_applied\n"
+    );
     let show = bridge
         .dispatch_text(&mut host, "command=show\n")
         .expect("ABI show dispatch succeeds");
@@ -1084,8 +1144,11 @@ fn baseview_clap_runtime_editor_host_binds_generated_text_abi_to_live_editor() {
         .expect("ABI save-state dispatch succeeds");
     assert!(saved.contains("response=state_saved"));
     assert!(saved.contains("param.gain.bits="));
+    assert!(saved.contains("param.bypass.bool=true"));
+    assert!(saved.contains("param.mode.choice=2"));
+    assert!(saved.contains("param.steps.int=4"));
     let load = format!(
-        "command=load_state\nparam.gain.bits={}\n",
+        "command=load_state\nparam.gain.bits={}\nparam.bypass.bool=false\nparam.mode.choice=1\nparam.steps.int=8\n",
         0.75f64.to_bits()
     );
     assert_eq!(
@@ -1098,6 +1161,15 @@ fn baseview_clap_runtime_editor_host_binds_generated_text_abi_to_live_editor() {
         host.parameter_value("gain"),
         Some(&ParameterValue::Float(0.75))
     );
+    assert_eq!(
+        host.parameter_value("bypass"),
+        Some(&ParameterValue::Bool(false))
+    );
+    assert_eq!(
+        host.parameter_value("mode"),
+        Some(&ParameterValue::Choice(1))
+    );
+    assert_eq!(host.parameter_value("steps"), Some(&ParameterValue::Int(8)));
     let (mut writer, mut reader) =
         RealtimeVisualTransport::split_preallocated(4, FrameDropPolicy::DropNewest);
     let mut gate = RealtimeVisualFrameGate::new(60).expect("valid realtime frame gate");

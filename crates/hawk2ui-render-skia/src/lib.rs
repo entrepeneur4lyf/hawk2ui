@@ -383,12 +383,25 @@ impl SkiaLayerCacheEntry {
 #[derive(Clone, Debug)]
 struct SkiaVectorPathRecord {
     path: Path,
-    fill: Color,
+    fill: Option<Color>,
+    stroke: Option<SkiaVectorStroke>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SkiaVectorStroke {
+    color: Color,
+    width: f32,
 }
 
 #[derive(Clone, Debug)]
 struct SkiaVectorAsset {
     paths: Vec<SkiaVectorPathRecord>,
+}
+
+struct SvgVectorPathRecord<P> {
+    path: P,
+    fill: Option<Color>,
+    stroke: Option<SkiaVectorStroke>,
 }
 
 /// Default text placement and style used by the trait-level text draw call.
@@ -774,8 +787,8 @@ impl SkiaRendererBackend {
                         "compiled vector payload must be UTF-8 SVG",
                     )
                 })?;
-                let paths = extract_svg_path_data(svg);
-                self.register_vector_paths(asset.id(), paths)
+                let records = extract_svg_path_records(svg);
+                self.register_vector_records(asset.id(), records)
             }
             CompiledAssetKind::Font => self.fail(
                 "skia.asset.unsupported-kind",
@@ -811,7 +824,11 @@ impl SkiaRendererBackend {
                     "compiled vector path data is not valid SVG path syntax",
                 );
             };
-            paths.push(SkiaVectorPathRecord { path, fill });
+            paths.push(SkiaVectorPathRecord {
+                path,
+                fill: Some(fill),
+                stroke: None,
+            });
         }
         if paths.is_empty() {
             return self.fail(
@@ -845,6 +862,45 @@ impl SkiaRendererBackend {
                 .into_iter()
                 .map(|path| (path, Color::rgba(255, 255, 255, 255))),
         )
+    }
+
+    fn register_vector_records<P, I>(
+        &mut self,
+        id: impl Into<String>,
+        records: I,
+    ) -> Result<(), BackendError>
+    where
+        P: AsRef<str>,
+        I: IntoIterator<Item = SvgVectorPathRecord<P>>,
+    {
+        let id = id.into();
+        validate_asset_id(&id).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        let mut paths = Vec::new();
+        for record in records {
+            let Some(path) = Path::from_svg(record.path.as_ref()) else {
+                return self.fail(
+                    "skia.vector.invalid-path",
+                    "compiled vector path data is not valid SVG path syntax",
+                );
+            };
+            paths.push(SkiaVectorPathRecord {
+                path,
+                fill: record.fill,
+                stroke: record.stroke,
+            });
+        }
+        if paths.is_empty() {
+            return self.fail(
+                "skia.vector.empty",
+                "compiled vector asset must contain at least one path",
+            );
+        }
+        self.vector_assets
+            .insert(id.clone(), SkiaVectorAsset { paths });
+        self.commands.push(format!("register-vector:{id}"));
+        Ok(())
     }
 
     /// Sets default text placement and style for [`RendererBackend::draw_text`].
@@ -1259,9 +1315,7 @@ impl SkiaRendererBackend {
         };
         self.with_active_surface(|surface| {
             for record in &asset.paths {
-                let mut paint = paint(record.fill, PaintStyle::Fill);
-                paint.set_anti_alias(true);
-                surface.canvas().draw_path(&record.path, &paint);
+                draw_vector_path_record(surface.canvas(), record);
             }
         })?;
         self.commands.push(format!("vector:{vector}"));
@@ -1295,9 +1349,7 @@ impl SkiaRendererBackend {
             canvas.clip_rect(rect(geometry), ClipOp::Intersect, true);
             canvas.translate((geometry.x, geometry.y));
             for record in &asset.paths {
-                let mut paint = paint(record.fill, PaintStyle::Fill);
-                paint.set_anti_alias(true);
-                canvas.draw_path(&record.path, &paint);
+                draw_vector_path_record(canvas, record);
             }
             canvas.restore();
         })?;
@@ -1987,14 +2039,28 @@ fn validate_asset_id(id: &str) -> Result<(), BackendError> {
     }
 }
 
-fn extract_svg_path_data(svg: &str) -> Vec<String> {
-    let mut paths = Vec::new();
+fn extract_svg_path_records(svg: &str) -> Vec<SvgVectorPathRecord<String>> {
+    let mut records = Vec::new();
     for segment in svg.split("<path").skip(1) {
-        if let Some(value) = extract_svg_attribute(segment, "d") {
-            paths.push(value);
-        }
+        let Some(path) = extract_svg_attribute(segment, "d") else {
+            continue;
+        };
+        let fill = extract_svg_attribute(segment, "fill")
+            .map_or(Some(Color::rgba(255, 255, 255, 255)), |value| {
+                parse_svg_paint(&value, None)
+            })
+            .map(|color| apply_svg_opacity(color, extract_svg_opacity(segment, "fill-opacity")));
+        let stroke = extract_svg_attribute(segment, "stroke")
+            .and_then(|value| parse_svg_paint(&value, None))
+            .map(|color| SkiaVectorStroke {
+                color: apply_svg_opacity(color, extract_svg_opacity(segment, "stroke-opacity")),
+                width: extract_svg_attribute(segment, "stroke-width")
+                    .and_then(|value| parse_svg_positive_f32(&value))
+                    .unwrap_or(1.0),
+            });
+        records.push(SvgVectorPathRecord { path, fill, stroke });
     }
-    paths
+    records
 }
 
 fn extract_svg_attribute(segment: &str, attribute: &str) -> Option<String> {
@@ -2007,6 +2073,117 @@ fn extract_svg_attribute(segment: &str, attribute: &str) -> Option<String> {
     let value_start = start + quote.len_utf8();
     let value_end = segment[value_start..].find(quote)? + value_start;
     Some(segment[value_start..value_end].to_string())
+}
+
+fn extract_svg_opacity(segment: &str, attribute: &str) -> f32 {
+    extract_svg_attribute(segment, attribute)
+        .and_then(|value| parse_svg_opacity(&value))
+        .unwrap_or(1.0)
+}
+
+fn parse_svg_paint(value: &str, default: Option<Color>) -> Option<Color> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        parse_svg_color(value).or(default)
+    }
+}
+
+fn parse_svg_color(value: &str) -> Option<Color> {
+    let value = value.trim();
+    parse_svg_hex_color(value)
+        .or_else(|| parse_svg_rgb_color(value))
+        .or_else(|| parse_svg_named_color(value))
+}
+
+fn parse_svg_hex_color(value: &str) -> Option<Color> {
+    let hex = value.strip_prefix('#')?;
+    match hex.len() {
+        3 => {
+            let mut chars = hex.chars();
+            let r = parse_repeated_hex_nibble(chars.next()?)?;
+            let g = parse_repeated_hex_nibble(chars.next()?)?;
+            let b = parse_repeated_hex_nibble(chars.next()?)?;
+            Some(Color::rgba(r, g, b, 255))
+        }
+        6 | 8 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            let a = if hex.len() == 8 {
+                u8::from_str_radix(&hex[6..8], 16).ok()?
+            } else {
+                255
+            };
+            Some(Color::rgba(r, g, b, a))
+        }
+        _ => None,
+    }
+}
+
+fn parse_repeated_hex_nibble(value: char) -> Option<u8> {
+    let digit = value.to_digit(16)?;
+    u8::try_from(digit * 17).ok()
+}
+
+fn parse_svg_rgb_color(value: &str) -> Option<Color> {
+    let values = value.strip_prefix("rgb(")?.strip_suffix(')')?;
+    let normalized = values.replace(',', " ");
+    let mut channels = normalized
+        .split_ascii_whitespace()
+        .map(parse_svg_u8_component);
+    let r = channels.next()??;
+    let g = channels.next()??;
+    let b = channels.next()??;
+    if channels.next().is_some() {
+        return None;
+    }
+    Some(Color::rgba(r, g, b, 255))
+}
+
+fn parse_svg_u8_component(value: &str) -> Option<u8> {
+    value.parse::<u8>().ok()
+}
+
+fn parse_svg_named_color(value: &str) -> Option<Color> {
+    match value.to_ascii_lowercase().as_str() {
+        "black" => Some(Color::rgba(0, 0, 0, 255)),
+        "blue" => Some(Color::rgba(0, 0, 255, 255)),
+        "green" => Some(Color::rgba(0, 128, 0, 255)),
+        "red" => Some(Color::rgba(255, 0, 0, 255)),
+        "transparent" => Some(Color::rgba(0, 0, 0, 0)),
+        "white" => Some(Color::rgba(255, 255, 255, 255)),
+        _ => None,
+    }
+}
+
+fn parse_svg_opacity(value: &str) -> Option<f32> {
+    let value = value.parse::<f32>().ok()?;
+    if value.is_finite() {
+        Some(value.clamp(0.0, 1.0))
+    } else {
+        None
+    }
+}
+
+fn parse_svg_positive_f32(value: &str) -> Option<f32> {
+    let value = value.parse::<f32>().ok()?;
+    if value.is_finite() && value > 0.0 {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn apply_svg_opacity(color: Color, opacity: f32) -> Color {
+    Color::rgba(
+        color.r,
+        color.g,
+        color.b,
+        (f32::from(color.a) * opacity).round().clamp(0.0, 255.0) as u8,
+    )
 }
 
 fn validate_surface_size(width: u32, height: u32) -> Result<(), BackendError> {
@@ -2407,6 +2584,20 @@ fn paint(color: Color, style: PaintStyle) -> Paint {
     paint.set_style(style);
     paint.set_color(to_skia_color(color));
     paint
+}
+
+fn draw_vector_path_record(canvas: &Canvas, record: &SkiaVectorPathRecord) {
+    if let Some(fill) = record.fill {
+        let mut paint = paint(fill, PaintStyle::Fill);
+        paint.set_anti_alias(true);
+        canvas.draw_path(&record.path, &paint);
+    }
+    if let Some(stroke) = record.stroke {
+        let mut paint = paint(stroke.color, PaintStyle::Stroke);
+        paint.set_anti_alias(true);
+        paint.set_stroke_width(stroke.width);
+        canvas.draw_path(&record.path, &paint);
+    }
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]

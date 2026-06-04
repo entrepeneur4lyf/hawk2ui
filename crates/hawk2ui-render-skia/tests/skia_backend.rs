@@ -287,7 +287,7 @@ fn compiled_asset_records_register_and_render_image_and_vector_pixels() {
             &AssetHash::sha256_bytes(&image_bytes),
         )
         .unwrap();
-    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><path d="M10 10 L30 10 L30 30 L10 30 Z"/></svg>"#;
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><path fill="#ff0000" d="M10 10 L30 10 L30 30 L10 30 Z"/></svg>"##;
     let vector = assets
         .compile_vector(
             "logo",
@@ -313,6 +313,11 @@ fn compiled_asset_records_register_and_render_image_and_vector_pixels() {
 
     assert!(count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(40.0, 8.0, 16.0, 16.0)) > 0);
     assert!(count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(10.0, 10.0, 20.0, 20.0)) > 0);
+    assert_eq!(
+        snapshot.pixel_at(16, 16),
+        Some(0x00ff_0000),
+        "compiled vector fill color must survive asset lowering and Skia registration"
+    );
 }
 
 #[test]

@@ -396,23 +396,37 @@ impl ParameterRecord {
     ///
     /// # Errors
     ///
-    /// Returns a message when the parameter has no numeric range.
+    /// Returns a message when the normalized value is non-finite, the parameter range is invalid,
+    /// or the parameter kind lacks enough metadata to convert a host-normalized value.
     pub fn denormalize(&self, normalized: f64) -> Result<ParameterValue, String> {
-        let range = self
-            .range
-            .ok_or_else(|| "parameter has no numeric range".to_string())?;
-        range.validate().map_err(|error| error.message)?;
         if !normalized.is_finite() {
             return Err("normalized value must be finite".into());
         }
         let normalized = normalized.clamp(0.0, 1.0);
+        match self.default_value {
+            ParameterValue::Bool(_) => return Ok(ParameterValue::Bool(normalized >= 0.5)),
+            ParameterValue::Choice(_) => {
+                return choice_variant_count(self).map(|count| {
+                    ParameterValue::Choice(choice_index_from_normalized(normalized, count))
+                });
+            }
+            _ => {}
+        }
+
+        let range = self
+            .range
+            .ok_or_else(|| "parameter has no numeric range".to_string())?;
+        range.validate().map_err(|error| error.message)?;
         let mut value = range.min + ((range.max - range.min) * normalized);
         if let Some(steps) = self.steps {
             let max_index = f64::from(steps.saturating_sub(1));
             let index = (normalized * max_index).round();
             value = range.min + ((range.max - range.min) * (index / max_index.max(1.0)));
         }
-        Ok(ParameterValue::Float(value))
+        match self.default_value {
+            ParameterValue::Int(_) => integer_parameter_value(value),
+            _ => Ok(ParameterValue::Float(value)),
+        }
     }
 
     /// Converts typed value to normalized value.
@@ -438,6 +452,17 @@ impl ParameterRecord {
                 Ok(((value - range.min) / (range.max - range.min)).clamp(0.0, 1.0))
             }
             (None, ParameterValue::Bool(value)) => Ok(f64::from(u8::from(*value))),
+            (None, ParameterValue::Choice(value)) => {
+                let count = choice_variant_count(self)?;
+                if *value >= count {
+                    return Err("choice index is outside the variant range".into());
+                }
+                if count <= 1 {
+                    Ok(0.0)
+                } else {
+                    Ok(f64::from(*value) / f64::from(count - 1))
+                }
+            }
             _ => Err("parameter value type is incompatible".into()),
         }
     }
@@ -793,6 +818,35 @@ fn validate_enum_variants(parameter: &ParameterRecord, errors: &mut Vec<Paramete
             ));
         }
     }
+}
+
+fn choice_variant_count(parameter: &ParameterRecord) -> Result<u32, String> {
+    let count = u32::try_from(parameter.variants.len())
+        .ok()
+        .or(parameter.steps)
+        .unwrap_or(0);
+    if count == 0 {
+        Err("choice parameter must declare at least one variant".into())
+    } else {
+        Ok(count)
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn choice_index_from_normalized(normalized: f64, count: u32) -> u32 {
+    if count <= 1 {
+        0
+    } else {
+        (normalized * f64::from(count - 1)).round() as u32
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn integer_parameter_value(value: f64) -> Result<ParameterValue, String> {
+    if value < i64::MIN as f64 || value > i64::MAX as f64 {
+        return Err("integer parameter value is outside the i64 range".into());
+    }
+    Ok(ParameterValue::Int(value.round() as i64))
 }
 
 fn is_stable_id(value: &str) -> bool {
