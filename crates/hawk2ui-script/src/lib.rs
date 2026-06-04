@@ -96,9 +96,9 @@ impl ScriptModule {
 /// a visible-title probe).
 ///
 /// Both the desktop host and the plugin editor run the same entry script, so
-/// they share this convention rather than each reinventing it. The injected
-/// `__hawk2ui_host` is currently a no-op stub; it is the seam where host
-/// bindings (parameter reads, state) will be projected to editor JS.
+/// they share this convention rather than each reinventing it. This basic
+/// bootstrap exposes an empty, compatibility host; richer host projections use
+/// [`entry_mount_bootstrap_with_host`].
 #[must_use]
 pub fn entry_mount_bootstrap(source: &str) -> Option<String> {
     let source = source.replacen("export function mount", "function mount", 1);
@@ -106,15 +106,20 @@ pub fn entry_mount_bootstrap(source: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        r"{source}
+        r#"{source}
 
 const __hawk2ui_host = Object.freeze({{
-    on(_name, _handler) {{}},
+    events: Object.freeze([]),
+    on(_name, handler) {{
+        if (typeof handler !== "function") {{
+            throw new Error("hawk2ui: host.on requires a function handler");
+        }}
+    }},
     setState(_value) {{}}
 }});
 
 JSON.stringify(mount(__hawk2ui_host));
-"
+"#
     ))
 }
 
@@ -281,23 +286,32 @@ const __hawk2ui_meters_by_key = {{}};
 for (const __meter of __hawk2ui_snapshot.meters) {{
     __hawk2ui_meters_by_key[__meter.key] = __meter.value;
 }}
-function __hawk2ui_require_param(key) {{
-    if (__hawk2ui_params_by_key[key] === undefined) {{
-        throw new Error("hawk2ui: unknown parameter '" + key + "'");
-    }}
-}}
-const __hawk2ui_edits = [];
-const __hawk2ui_events = {events};
-const __hawk2ui_ui_in = {incoming_ui};
+  function __hawk2ui_require_param(key) {{
+      if (__hawk2ui_params_by_key[key] === undefined) {{
+          throw new Error("hawk2ui: unknown parameter '" + key + "'");
+      }}
+  }}
+  function __hawk2ui_dispatch_event(name, handler) {{
+      if (typeof handler !== "function") {{
+          throw new Error("hawk2ui: host.on requires a function handler");
+      }}
+      const __wanted = String(name);
+      for (const __event of __hawk2ui_events) {{
+          if (__wanted === "input" || __wanted === "*" || __wanted === __event.kind) {{
+              handler(Object.freeze(__event));
+          }}
+      }}
+  }}
+  const __hawk2ui_edits = [];
+  const __hawk2ui_events = {events};
+  const __hawk2ui_ui_in = {incoming_ui};
 let __hawk2ui_ui_out = __hawk2ui_ui_in;
 const __hawk2ui_host = Object.freeze({{
-    // Per-frame input (Decision 0004 D1/D3): the events that arrived since the
-    // previous frame, drained and in arrival order; `[]` on an idle frame.
-    // `on` is the superseded no-op (D6) — a recompiled-per-frame engine cannot
-    // hold a listener across frames, so input rides this array instead.
-    events: Object.freeze(__hawk2ui_events.map(Object.freeze)),
-    on(_name, _handler) {{}},
-    setState(_value) {{}},
+      // Per-frame input (Decision 0004 D1/D3): the events that arrived since the
+      // previous frame, drained and in arrival order; `[]` on an idle frame.
+      events: Object.freeze(__hawk2ui_events.map(Object.freeze)),
+      on(name, handler) {{ __hawk2ui_dispatch_event(name, handler); }},
+      setState(_value) {{}},
     params: Object.freeze(__hawk2ui_snapshot.params.map(Object.freeze)),
     param(key) {{
         const __found = __hawk2ui_params_by_key[key];
@@ -1700,9 +1714,56 @@ export function mount(host) {
     }
 
     #[test]
-    fn host_on_remains_a_tolerated_no_op() {
-        // D6: `host.events` supersedes `host.on`, but `host.on` stays a no-op so
-        // existing authored entries (the `new` scaffold, examples) never throw.
+    fn host_on_dispatches_current_frame_events_to_handlers() {
+        let envelope = run_entry_with_events(
+            r#"
+export function mount(host) {
+    const seen = [];
+    host.on("pointer", function (ev) {
+        seen.push("P:" + ev.button);
+        if (ev.button === "left-down") host.setParam("cutoff", 0.66);
+    });
+    host.on("key", function (ev) { seen.push("K:" + ev.key + ":" + ev.pressed); });
+    host.on("focus", function (ev) { seen.push("F:" + ev.focused); });
+    host.on("input", function (ev) { seen.push("I:" + ev.kind); });
+    return { id: "on|" + seen.join("|"), type: "view" };
+}
+"#,
+            &[
+                FrameInput::Pointer {
+                    x: 12.5,
+                    y: 34.0,
+                    button: "left-down".into(),
+                },
+                FrameInput::Key {
+                    key: "a".into(),
+                    pressed: true,
+                },
+                FrameInput::Focus { focused: true },
+            ],
+            "null",
+        );
+        assert!(
+            envelope
+                .tree_json
+                .contains("on|P:left-down|K:a:true|F:true|I:pointer|I:key|I:focus"),
+            "{}",
+            envelope.tree_json
+        );
+        assert_eq!(
+            envelope.edits,
+            vec![HostEdit::Set {
+                key: "cutoff".into(),
+                normalized: 0.66,
+            }]
+        );
+    }
+
+    #[test]
+    fn host_on_ignores_unknown_event_names_for_scaffold_compatibility() {
+        // Existing authored entries (the `new` scaffold, examples) may register
+        // non-input lifecycle names before the lifecycle surface is finalized.
+        // Unknown names are ignored rather than treated as fatal input errors.
         let envelope = run_entry(
             r#"
 export function mount(host) {

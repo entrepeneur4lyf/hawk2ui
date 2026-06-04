@@ -676,13 +676,13 @@ mod tests {
         // case). The snapshot/routing carry `cutoff` so the write verbs resolve.
         const PRESS_SCRIPT: &str = r#"
 export function mount(host) {
-    for (const ev of host.events) {
+    host.on("pointer", function (ev) {
         if (ev.kind === "pointer" && ev.button === "left-down") {
             host.beginEdit("cutoff");
             host.setParam("cutoff", 0.75);
             host.endEdit("cutoff");
         }
-    }
+    });
     return { id: "root", type: "view" };
 }
 "#;
