@@ -605,13 +605,14 @@ impl WorkspaceCommandRunner {
             Err(execution) => return execution,
         };
         CommandExecution::success(format!(
-            "built {} artifact for {}\nartifact-path: {}\nmanifest-hash: {}\ncontent-hash: {}\ncompiled-scripts: {}\ncompiled-styles: {}\ncompiled-assets: {}\nverification-status: release-ready\nsignature-policy: {}\n",
+            "built {} artifact for {}\nartifact-path: {}\nmanifest-hash: {}\ncontent-hash: {}\ncompiled-scripts: {}\ncompiled-frameworks: {}\ncompiled-styles: {}\ncompiled-assets: {}\nverification-status: release-ready\nsignature-policy: {}\n",
             profile.label(),
             output.manifest.identity.id,
             artifact_path.display(),
             artifact.hashes.manifest.0,
             artifact.hashes.content.0,
             artifact.compiled_scripts.len(),
+            artifact.compiled_frameworks.len(),
             artifact.compiled_styles.len(),
             artifact.compiled_assets.len(),
             artifact_signature_policy_label(profile)
@@ -1257,6 +1258,17 @@ fn build_workspace_error_diagnostic(error: BuildWorkspaceError, root: &Path) -> 
             )
             .file(root.join(path).display().to_string())
         }
+        BuildWorkspaceError::FrameworkCompilation {
+            path,
+            framework,
+            message,
+        } => CliDiagnostic::error(
+            "build.framework.compile-failed",
+            format!(
+                "declared {framework:?} framework source failed production compilation: {message}"
+            ),
+        )
+        .file(root.join(path).display().to_string()),
         BuildWorkspaceError::PipelineBlocked(error) => CliDiagnostic::error(
             "build.pipeline.blocked",
             format!("production build pipeline is blocked: {error:?}"),

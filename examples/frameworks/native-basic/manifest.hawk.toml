@@ -1,3 +1,16 @@
-name = "native-basic"
-framework = "native"
+[identity]
+id = "com.hawk2ui.examples.native-basic"
+name = "Hawk2UI Native Basic"
+version = "0.1.0"
+
+[source]
 entry = "src/app.ts"
+framework = "native"
+style = "styles/main.hawk.css"
+
+[capabilities]
+keys = ["native-windowing", "sealed-artifacts"]
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"

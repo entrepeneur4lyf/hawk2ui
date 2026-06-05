@@ -8,7 +8,8 @@ use hawk2ui_build::{
     AssetSourceIndex, BuildDiagnostic, BuildDiagnosticSeverity, BuildPhase, BuildPipeline,
     BuildPipelineError, BuildWorkspace, BuildWorkspaceError, CompiledAssetRecord,
     CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget,
-    PackageTargetRecord, SealedArtifact, SealedArtifactError, SourceSpan, VerificationReport,
+    PackageTargetRecord, SealedArtifact, SealedArtifactError, SourceFramework, SourceSpan,
+    VerificationReport,
 };
 use hawk2ui_plugin::{ParameterRange, ParameterValue};
 use image::{ColorType, ImageEncoder};
@@ -154,6 +155,7 @@ bundle_id = "com.hawk2ui.full"
 
 [source]
 entry = "src/main.ts"
+framework = "react"
 style = "src/style.hawk.css"
 script = "src/main.ts"
 
@@ -181,6 +183,7 @@ name = "Default"
         "com.hawk2ui.full"
     );
     assert_eq!(manifest.source.style.as_deref(), Some("src/style.hawk.css"));
+    assert_eq!(manifest.source.framework, Some(SourceFramework::React));
     assert_eq!(manifest.assets[0].id, "hero");
     assert_eq!(manifest.presets[0].id, "default");
 }

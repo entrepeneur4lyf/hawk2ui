@@ -15,6 +15,7 @@
     "packages/hawk2ui-svelte/src/**/*.ts",
     "packages/hawk2ui-react/src/**/*.ts",
     "packages/hawk2ui-vue/src/**/*.ts",
-    "packages/hawk2ui-solid/src/**/*.ts"
+    "packages/hawk2ui-solid/src/**/*.ts",
+    "packages/hawk2ui-compiler/src/**/*.ts"
   ]
 }

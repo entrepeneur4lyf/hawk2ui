@@ -3,6 +3,7 @@ import {
   compilerArtifactForApp,
   recordsForApp,
   type HawkCompilerArtifact,
+  type HawkCompilerDynamicBindingWire,
   type HawkElementSpec,
   type HawkEventSpec,
   type HawkLifecycleSpec,
@@ -24,8 +25,10 @@ type AstNode = Record<string, unknown>;
 type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 
 interface SvelteLoweringContext {
+  readonly source: string;
   readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
   readonly locals: ReadonlyMap<string, LiteralRecord>;
+  readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
 }
 
 export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteCompileOutput {
@@ -42,8 +45,10 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
   }
 
   const context: SvelteLoweringContext = {
+    source: input.source,
     arrays: literalArraysFromProgram((ast.instance as AstNode | undefined)?.content as AstNode | undefined),
     locals: new Map(),
+    dynamicBindings: [],
   };
   const root = svelteElementToSpec(rootNode, context);
   validateUniqueChildIds(root.children ?? []);
@@ -53,7 +58,7 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
     framework: "svelte",
     filename: input.filename,
     records: recordsForApp(app),
-    compilerArtifact: compilerArtifactForApp(app),
+    compilerArtifact: compilerArtifactForApp(app, [], context.dynamicBindings),
   };
 }
 
@@ -79,8 +84,10 @@ function svelteElementToSpec(node: AstNode, context: SvelteLoweringContext): Haw
     children: childSpecs(node, context),
   };
 
-  const text = textContent(node, context);
-  return text ? { ...spec, props: { text } } : spec;
+  const props = layoutProps(node, context, id, "svelte");
+  const text = textContent(node, context, id);
+  if (text) props.text = text;
+  return Object.keys(props).length > 0 ? { ...spec, props } : spec;
 }
 
 function childSpecs(node: AstNode, context: SvelteLoweringContext): readonly HawkElementSpec[] {
@@ -163,15 +170,128 @@ function attributeValue(
   throw new Error(`svelte.attribute.unsupported: attribute \`${name}\` must be static or a literal member expression.`);
 }
 
-function textContent(node: AstNode, context: SvelteLoweringContext): string | undefined {
-  const values = childrenOf(node)
-    .map((child) => {
-      if (child.type === "Text") return stringField(child, "data").trim();
-      if (child.type === "MustacheTag") return String(evaluateExpression(child.expression as AstNode | undefined, context));
-      return "";
-    })
-    .filter((value) => value.length > 0);
-  return values.length > 0 ? values.join("") : undefined;
+function textContent(
+  node: AstNode,
+  context: SvelteLoweringContext,
+  nodeId: string,
+): string | undefined {
+  const staticValues: string[] = [];
+  const dynamicExpressionParts: string[] = [];
+  const dependencies = new Set<string>();
+  let hasDynamicExpression = false;
+
+  for (const child of childrenOf(node)) {
+    if (child.type === "Text") {
+      const value = stringField(child, "data").trim();
+      if (value.length > 0) {
+        staticValues.push(value);
+        dynamicExpressionParts.push(JSON.stringify(value));
+      }
+      continue;
+    }
+    if (child.type !== "MustacheTag") continue;
+    const expression = child.expression as AstNode | undefined;
+    const staticValue = staticTextExpressionValue(expression, context);
+    if (staticValue !== undefined) {
+      const value = String(staticValue);
+      if (value.length > 0) {
+        staticValues.push(value);
+        dynamicExpressionParts.push(JSON.stringify(value));
+      }
+      continue;
+    }
+    hasDynamicExpression = true;
+    dynamicExpressionParts.push(expressionSource(expression, context));
+    for (const dependency of expressionDependencies(expression)) {
+      dependencies.add(dependency);
+    }
+  }
+
+  if (hasDynamicExpression) {
+    context.dynamicBindings.push({
+      node_id: nodeId,
+      target: { type: "prop", name: "text" },
+      expression: dynamicExpressionParts.join(" + "),
+      dependencies: [...dependencies],
+    });
+    return undefined;
+  }
+  return staticValues.length > 0 ? staticValues.join("") : undefined;
+}
+
+function staticTextExpressionValue(
+  expression: AstNode | undefined,
+  context: SvelteLoweringContext,
+): string | number | boolean | undefined {
+  try {
+    return evaluateExpression(expression, context);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("svelte.expression.unsupported")) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function layoutProps(
+  node: AstNode,
+  context: SvelteLoweringContext,
+  nodeId: string,
+  framework: string,
+): Record<string, string | number | boolean> {
+  const props: Record<string, string | number | boolean> = {};
+  for (const name of ["width", "height"]) {
+    const value = dynamicLayoutAttributeValue(node, name, context, nodeId, framework);
+    if (value !== undefined) props[name] = value;
+  }
+  return props;
+}
+
+function dynamicLayoutAttributeValue(
+  node: AstNode,
+  name: string,
+  context: SvelteLoweringContext,
+  nodeId: string,
+  framework: string,
+): number | undefined {
+  const attribute = attributesOf(node).find((item) => item.type === "Attribute" && item.name === name);
+  if (!attribute) return undefined;
+  const value = attribute.value;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${framework}.attribute.unsupported: layout prop \`${name}\` must be numeric.`);
+  }
+  const first = value[0] as AstNode;
+  if (first.type === "Text") return layoutNumber(stringField(first, "data"), nodeId, name, framework);
+  if (first.type !== "MustacheTag") {
+    throw new Error(`${framework}.attribute.unsupported: layout prop \`${name}\` must be numeric.`);
+  }
+  const expression = first.expression as AstNode | undefined;
+  const staticValue = staticTextExpressionValue(expression, context);
+  if (staticValue !== undefined) return layoutNumber(staticValue, nodeId, name, framework);
+  context.dynamicBindings.push({
+    node_id: nodeId,
+    target: { type: "prop", name },
+    expression: expressionSource(expression, context),
+    dependencies: expressionDependencies(expression),
+  });
+  return undefined;
+}
+
+function layoutNumber(
+  value: unknown,
+  nodeId: string,
+  name: string,
+  framework: string,
+): number {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() !== ""
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${framework}.layout.invalid-number: layout prop \`${name}\` on \`${nodeId}\` must be finite and non-negative.`);
+  }
+  return parsed;
 }
 
 function literalArraysFromProgram(program: AstNode | undefined): ReadonlyMap<string, readonly LiteralRecord[]> {
@@ -231,6 +351,74 @@ function literalValue(node: AstNode | undefined): string | number | boolean | un
   return undefined;
 }
 
+function expressionSource(expression: AstNode | undefined, context: SvelteLoweringContext): string {
+  const start = numberField(expression, "start");
+  const end = numberField(expression, "end");
+  const source = start !== undefined && end !== undefined
+    ? context.source.slice(start, end).trim()
+    : identifierName(expression);
+  if (!source) {
+    throw new Error("svelte.expression.unsupported: dynamic text bindings require a printable expression.");
+  }
+  return source;
+}
+
+function expressionDependencies(expression: AstNode | undefined): readonly string[] {
+  const dependencies = new Set<string>();
+  collectExpressionDependencies(expression, dependencies);
+  return [...dependencies];
+}
+
+function collectExpressionDependencies(node: AstNode | undefined, dependencies: Set<string>): void {
+  if (!node) return;
+  switch (node.type) {
+    case "Identifier": {
+      const name = identifierName(node);
+      if (name) dependencies.add(name);
+      return;
+    }
+    case "MemberExpression":
+    case "OptionalMemberExpression":
+      collectExpressionDependencies(node.object as AstNode | undefined, dependencies);
+      if (node.computed) collectExpressionDependencies(node.property as AstNode | undefined, dependencies);
+      return;
+    case "CallExpression":
+    case "OptionalCallExpression":
+      collectExpressionDependencies(node.callee as AstNode | undefined, dependencies);
+      for (const argument of arrayField(node, "arguments")) collectExpressionDependencies(argument, dependencies);
+      return;
+    case "BinaryExpression":
+    case "LogicalExpression":
+      collectExpressionDependencies(node.left as AstNode | undefined, dependencies);
+      collectExpressionDependencies(node.right as AstNode | undefined, dependencies);
+      return;
+    case "ConditionalExpression":
+      collectExpressionDependencies(node.test as AstNode | undefined, dependencies);
+      collectExpressionDependencies(node.consequent as AstNode | undefined, dependencies);
+      collectExpressionDependencies(node.alternate as AstNode | undefined, dependencies);
+      return;
+    case "UnaryExpression":
+    case "UpdateExpression":
+    case "AwaitExpression":
+      collectExpressionDependencies(node.argument as AstNode | undefined, dependencies);
+      return;
+    case "TemplateLiteral":
+      for (const expression of arrayField(node, "expressions")) collectExpressionDependencies(expression, dependencies);
+      return;
+    case "ArrayExpression":
+      for (const element of arrayField(node, "elements")) collectExpressionDependencies(element, dependencies);
+      return;
+    case "ObjectExpression":
+      for (const property of arrayField(node, "properties")) {
+        if (property.computed) collectExpressionDependencies(property.key as AstNode | undefined, dependencies);
+        collectExpressionDependencies(property.value as AstNode | undefined, dependencies);
+      }
+      return;
+    default:
+      return;
+  }
+}
+
 function firstHawkElement(nodes: readonly AstNode[]): AstNode | undefined {
   return nodes.find((node) => node.type === "Element" && isHawkTag(stringField(node, "name")));
 }
@@ -265,6 +453,16 @@ function requiredString(value: string | number | boolean | undefined, tag: strin
 function stringField(node: AstNode | undefined, field: string): string {
   const value = node?.[field];
   return typeof value === "string" ? value : "";
+}
+
+function numberField(node: AstNode | undefined, field: string): number | undefined {
+  const value = node?.[field];
+  return typeof value === "number" ? value : undefined;
+}
+
+function arrayField(node: AstNode | undefined, field: string): AstNode[] {
+  const value = node?.[field];
+  return Array.isArray(value) ? (value.filter(Boolean) as AstNode[]) : [];
 }
 
 function kindForTag(tag: string): HawkElementSpec["kind"] {

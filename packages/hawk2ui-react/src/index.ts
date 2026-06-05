@@ -1,9 +1,11 @@
 import { transformSync } from "@babel/core";
+import generate from "@babel/generator";
 import { parse } from "@babel/parser";
 import {
   compilerArtifactForApp,
   recordsForApp,
   type HawkCompilerArtifact,
+  type HawkCompilerDynamicBindingWire,
   type HawkElementSpec,
   type HawkEventSpec,
   type HawkLifecycleSpec,
@@ -33,6 +35,12 @@ type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 interface ReactLoweringContext {
   readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
   readonly locals: ReadonlyMap<string, LiteralRecord>;
+  readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
+}
+
+interface ReturnedJsxElement {
+  readonly element: AstNode;
+  readonly scope: AstNode | undefined;
 }
 
 export function compileHawkReact(input: HawkReactCompileInput): HawkReactCompileOutput {
@@ -54,33 +62,36 @@ export function compileHawkReact(input: HawkReactCompileInput): HawkReactCompile
     plugins: ["jsx", "typescript"],
   }) as unknown as AstNode;
   const program = ast.program as AstNode;
-  const rootElement = returnedJsxElement(program);
-  if (!rootElement) {
+  const returned = returnedJsxElement(program);
+  if (!returned) {
     throw new Error("react.root.missing: React compiler input must return one hawk root element.");
   }
 
   const context: ReactLoweringContext = {
-    arrays: literalArraysFromProgram(program),
+    arrays: literalArraysFromProgram(program, returned.scope),
     locals: new Map(),
+    dynamicBindings: [],
   };
-  const root = jsxElementToSpec(rootElement, context);
+  const root = jsxElementToSpec(returned.element, context);
   validateUniqueChildKeys(root);
   const app = { name: input.filename, root };
   return {
     framework: "react",
     filename: input.filename,
     records: recordsForApp(app),
-    compilerArtifact: compilerArtifactForApp(app),
+    compilerArtifact: compilerArtifactForApp(app, [], context.dynamicBindings),
   };
 }
 
-function returnedJsxElement(program: AstNode): AstNode | undefined {
+function returnedJsxElement(program: AstNode): ReturnedJsxElement | undefined {
   for (const statement of arrayField(program, "body")) {
     const declaration = statement.declaration as AstNode | undefined;
     const candidate = statement.type === "ExportNamedDeclaration" && declaration ? declaration : statement;
     if (candidate.type === "FunctionDeclaration") {
       const returned = returnArgument(candidate.body as AstNode | undefined);
-      if (returned && isHawkJsxElement(returned)) return returned;
+      if (returned && isHawkJsxElement(returned)) {
+        return { element: returned, scope: candidate.body as AstNode | undefined };
+      }
     }
   }
   return undefined;
@@ -115,8 +126,10 @@ function jsxElementToSpec(node: AstNode, context: ReactLoweringContext): HawkEle
     lifecycle: reactLifecycle(node),
     children: reactChildSpecs(node, context),
   };
-  const text = reactTextContent(node, context);
-  return text ? { ...spec, props: { text } } : spec;
+  const props = layoutProps(node, context, id, "react");
+  const text = reactTextContent(node, context, id);
+  if (text) props.text = text;
+  return Object.keys(props).length > 0 ? { ...spec, props } : spec;
 }
 
 function reactChildSpecs(node: AstNode, context: ReactLoweringContext): readonly HawkElementSpec[] {
@@ -202,22 +215,144 @@ function jsxRawAttributeValue(node: AstNode, name: string): AstNode | undefined 
   return attribute?.value as AstNode | undefined;
 }
 
-function reactTextContent(node: AstNode, context: ReactLoweringContext): string | undefined {
-  const values = arrayField(node, "children")
-    .map((child) => {
-      if (child.type === "JSXText") return String(child.value ?? "").trim();
-      if (child.type === "JSXExpressionContainer" && !isMapCall(child.expression as AstNode | undefined)) {
-        return String(evaluateExpression(child.expression as AstNode | undefined, context));
+function reactTextContent(
+  node: AstNode,
+  context: ReactLoweringContext,
+  nodeId: string,
+): string | undefined {
+  const staticValues: string[] = [];
+  const dynamicExpressionParts: string[] = [];
+  const dependencies = new Set<string>();
+  let hasDynamicExpression = false;
+
+  for (const child of arrayField(node, "children")) {
+    if (child.type === "JSXText") {
+      const value = String(child.value ?? "").trim();
+      if (value.length > 0) {
+        staticValues.push(value);
+        dynamicExpressionParts.push(JSON.stringify(value));
       }
-      return "";
-    })
-    .filter((value) => value.length > 0);
-  return values.length > 0 ? values.join("") : undefined;
+      continue;
+    }
+    if (child.type !== "JSXExpressionContainer" || isMapCall(child.expression as AstNode | undefined)) {
+      continue;
+    }
+    const expression = child.expression as AstNode | undefined;
+    const staticValue = staticTextExpressionValue(expression, context);
+    if (staticValue !== undefined) {
+      const value = String(staticValue);
+      if (value.length > 0) {
+        staticValues.push(value);
+        dynamicExpressionParts.push(JSON.stringify(value));
+      }
+      continue;
+    }
+    hasDynamicExpression = true;
+    dynamicExpressionParts.push(expressionSource(expression, "react"));
+    for (const dependency of expressionDependencies(expression)) {
+      dependencies.add(dependency);
+    }
+  }
+
+  if (hasDynamicExpression) {
+    context.dynamicBindings.push({
+      node_id: nodeId,
+      target: { type: "prop", name: "text" },
+      expression: dynamicExpressionParts.join(" + "),
+      dependencies: [...dependencies],
+    });
+    return undefined;
+  }
+  return staticValues.length > 0 ? staticValues.join("") : undefined;
 }
 
-function literalArraysFromProgram(program: AstNode): ReadonlyMap<string, readonly LiteralRecord[]> {
+function staticTextExpressionValue(
+  expression: AstNode | undefined,
+  context: ReactLoweringContext,
+): string | number | boolean | undefined {
+  const literal = literalValue(expression);
+  if (literal !== undefined) return literal;
+  if (expression?.type === "MemberExpression") {
+    const object = identifierName(expression.object as AstNode | undefined);
+    const property = identifierName(expression.property as AstNode | undefined);
+    const record = object ? context.locals.get(object) : undefined;
+    const value = property ? record?.[property] : undefined;
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function layoutProps(
+  node: AstNode,
+  context: ReactLoweringContext,
+  nodeId: string,
+  framework: string,
+): Record<string, string | number | boolean> {
+  const props: Record<string, string | number | boolean> = {};
+  for (const name of ["width", "height"]) {
+    const value = dynamicLayoutAttributeValue(node, name, context, nodeId, framework);
+    if (value !== undefined) props[name] = value;
+  }
+  return props;
+}
+
+function dynamicLayoutAttributeValue(
+  node: AstNode,
+  name: string,
+  context: ReactLoweringContext,
+  nodeId: string,
+  framework: string,
+): number | undefined {
+  const value = jsxRawAttributeValue(node, name);
+  if (!value) return undefined;
+  if (value.type === "StringLiteral") return layoutNumber(value.value, nodeId, name, framework);
+  if (value.type !== "JSXExpressionContainer") {
+    throw new Error(`${framework}.attribute.unsupported: layout prop \`${name}\` must be numeric.`);
+  }
+  const expression = value.expression as AstNode | undefined;
+  const staticValue = staticTextExpressionValue(expression, context);
+  if (staticValue !== undefined) return layoutNumber(staticValue, nodeId, name, framework);
+  context.dynamicBindings.push({
+    node_id: nodeId,
+    target: { type: "prop", name },
+    expression: expressionSource(expression, framework),
+    dependencies: expressionDependencies(expression),
+  });
+  return undefined;
+}
+
+function layoutNumber(
+  value: unknown,
+  nodeId: string,
+  name: string,
+  framework: string,
+): number {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() !== ""
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${framework}.layout.invalid-number: layout prop \`${name}\` on \`${nodeId}\` must be finite and non-negative.`);
+  }
+  return parsed;
+}
+
+function literalArraysFromProgram(
+  program: AstNode,
+  componentScope: AstNode | undefined,
+): ReadonlyMap<string, readonly LiteralRecord[]> {
   const arrays = new Map<string, readonly LiteralRecord[]>();
-  for (const statement of arrayField(program, "body")) {
+  collectLiteralArraysFromBody(arrayField(program, "body"), arrays);
+  collectLiteralArraysFromBody(arrayField(componentScope, "body"), arrays);
+  return arrays;
+}
+
+function collectLiteralArraysFromBody(
+  statements: readonly AstNode[],
+  arrays: Map<string, readonly LiteralRecord[]>,
+): void {
+  for (const statement of statements) {
     if (statement.type !== "VariableDeclaration") continue;
     for (const declaration of arrayField(statement, "declarations")) {
       const name = identifierName(declaration.id as AstNode | undefined);
@@ -225,7 +360,6 @@ function literalArraysFromProgram(program: AstNode): ReadonlyMap<string, readonl
       if (name && values) arrays.set(name, values);
     }
   }
-  return arrays;
 }
 
 function literalObjectArray(node: AstNode | undefined): readonly LiteralRecord[] | undefined {
@@ -281,6 +415,73 @@ function literalValue(node: AstNode | undefined): string | number | boolean | un
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
   }
   return undefined;
+}
+
+function expressionSource(expression: AstNode | undefined, framework: string): string {
+  if (!expression) {
+    throw new Error(`${framework}.expression.unsupported: dynamic text bindings require an expression.`);
+  }
+  const source = generate(expression as never, { concise: true }).code.trim();
+  if (!source) {
+    throw new Error(`${framework}.expression.unsupported: dynamic text bindings require a printable expression.`);
+  }
+  return source;
+}
+
+function expressionDependencies(expression: AstNode | undefined): readonly string[] {
+  const dependencies = new Set<string>();
+  collectExpressionDependencies(expression, dependencies);
+  return [...dependencies];
+}
+
+function collectExpressionDependencies(node: AstNode | undefined, dependencies: Set<string>): void {
+  if (!node) return;
+  switch (node.type) {
+    case "Identifier": {
+      const name = identifierName(node);
+      if (name) dependencies.add(name);
+      return;
+    }
+    case "MemberExpression":
+    case "OptionalMemberExpression":
+      collectExpressionDependencies(node.object as AstNode | undefined, dependencies);
+      if (node.computed) collectExpressionDependencies(node.property as AstNode | undefined, dependencies);
+      return;
+    case "CallExpression":
+    case "OptionalCallExpression":
+      collectExpressionDependencies(node.callee as AstNode | undefined, dependencies);
+      for (const argument of arrayField(node, "arguments")) collectExpressionDependencies(argument, dependencies);
+      return;
+    case "BinaryExpression":
+    case "LogicalExpression":
+      collectExpressionDependencies(node.left as AstNode | undefined, dependencies);
+      collectExpressionDependencies(node.right as AstNode | undefined, dependencies);
+      return;
+    case "ConditionalExpression":
+      collectExpressionDependencies(node.test as AstNode | undefined, dependencies);
+      collectExpressionDependencies(node.consequent as AstNode | undefined, dependencies);
+      collectExpressionDependencies(node.alternate as AstNode | undefined, dependencies);
+      return;
+    case "UnaryExpression":
+    case "UpdateExpression":
+    case "AwaitExpression":
+      collectExpressionDependencies(node.argument as AstNode | undefined, dependencies);
+      return;
+    case "TemplateLiteral":
+      for (const expression of arrayField(node, "expressions")) collectExpressionDependencies(expression, dependencies);
+      return;
+    case "ArrayExpression":
+      for (const element of arrayField(node, "elements")) collectExpressionDependencies(element, dependencies);
+      return;
+    case "ObjectExpression":
+      for (const property of arrayField(node, "properties")) {
+        if (property.computed) collectExpressionDependencies(property.key as AstNode | undefined, dependencies);
+        collectExpressionDependencies(property.value as AstNode | undefined, dependencies);
+      }
+      return;
+    default:
+      return;
+  }
 }
 
 function literalString(node: AstNode | undefined): string | undefined {

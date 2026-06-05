@@ -1,6 +1,8 @@
 //! Sealed artifact records and compatibility checks.
 
-use crate::{BuildDiagnostic, BuildDiagnosticSeverity, HawkManifest, PackageTarget};
+use crate::{
+    BuildDiagnostic, BuildDiagnosticSeverity, HawkManifest, PackageTarget, SourceFramework,
+};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -320,6 +322,55 @@ impl CompiledScriptRecord {
     }
 }
 
+/// Compiled framework-native artifact recorded in a sealed artifact.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompiledFrameworkRecord {
+    /// Stable entrypoint ID.
+    pub entrypoint_id: String,
+    /// Source framework that produced the compiler artifact.
+    pub framework: SourceFramework,
+    /// Source file path.
+    pub source_path: String,
+    /// Artifact-local payload path.
+    pub artifact_path: String,
+    /// Source content hash.
+    pub source_hash: ArtifactHash,
+    /// Canonical framework compiler artifact JSON.
+    pub compiler_artifact_json: String,
+}
+
+impl CompiledFrameworkRecord {
+    /// Creates a compiled framework record.
+    #[must_use]
+    pub fn new(
+        entrypoint_id: impl Into<String>,
+        framework: SourceFramework,
+        source_path: impl Into<String>,
+        artifact_path: impl Into<String>,
+        source_hash: ArtifactHash,
+    ) -> Self {
+        Self {
+            entrypoint_id: entrypoint_id.into(),
+            framework,
+            source_path: source_path.into(),
+            artifact_path: artifact_path.into(),
+            source_hash,
+            compiler_artifact_json: String::new(),
+        }
+    }
+
+    /// Sets the canonical framework compiler artifact JSON.
+    #[must_use]
+    pub fn with_compiler_artifact_json(
+        mut self,
+        compiler_artifact_json: impl Into<String>,
+    ) -> Self {
+        self.compiler_artifact_json = compiler_artifact_json.into();
+        self
+    }
+}
+
 /// Compiled style payload recorded in a sealed artifact.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -539,6 +590,8 @@ pub struct SealedArtifact {
     pub manifest_snapshot_hash: ArtifactHash,
     /// Compiled script payloads.
     pub compiled_scripts: Vec<CompiledScriptRecord>,
+    /// Compiled framework-native payloads.
+    pub compiled_frameworks: Vec<CompiledFrameworkRecord>,
     /// Compiled style payloads.
     pub compiled_styles: Vec<CompiledStyleRecord>,
     /// Runtime asset manifest.
@@ -570,6 +623,7 @@ impl SealedArtifact {
             manifest_snapshot,
             manifest_snapshot_hash: manifest_snapshot_hash.clone(),
             compiled_scripts: Vec::new(),
+            compiled_frameworks: Vec::new(),
             compiled_styles: Vec::new(),
             asset_manifest: Vec::new(),
             compiled_assets: Vec::new(),
@@ -598,6 +652,14 @@ impl SealedArtifact {
     #[must_use]
     pub fn with_compiled_script(mut self, script: CompiledScriptRecord) -> Self {
         self.compiled_scripts.push(script);
+        self.hashes.content = self.content_hash();
+        self
+    }
+
+    /// Adds a compiled framework record and refreshes the content hash.
+    #[must_use]
+    pub fn with_compiled_framework(mut self, framework: CompiledFrameworkRecord) -> Self {
+        self.compiled_frameworks.push(framework);
         self.hashes.content = self.content_hash();
         self
     }
@@ -915,52 +977,11 @@ impl SealedArtifact {
             payload.push_str(&target.name);
             payload.push(';');
         }
-        for script in &self.compiled_scripts {
-            payload.push_str("script=");
-            payload.push_str(&script.entrypoint_id);
-            payload.push(':');
-            payload.push_str(&script.source_path);
-            payload.push(':');
-            payload.push_str(&script.artifact_path);
-            payload.push(':');
-            payload.push_str(&script.source_hash.0);
-            payload.push(':');
-            payload.push_str(&ArtifactHash::from_bytes(script.compiled_source.as_bytes()).0);
-            payload.push(';');
-        }
-        for style in &self.compiled_styles {
-            payload.push_str("style=");
-            payload.push_str(&style.entrypoint_id);
-            payload.push(':');
-            payload.push_str(&style.source_path);
-            payload.push(':');
-            payload.push_str(&style.artifact_path);
-            payload.push(':');
-            payload.push_str(&style.source_hash.0);
-            payload.push(';');
-        }
-        for entry in &self.asset_manifest {
-            payload.push_str("asset-manifest=");
-            payload.push_str(&entry.id);
-            payload.push(':');
-            payload.push_str(&entry.kind);
-            payload.push(':');
-            payload.push_str(&entry.artifact_path);
-            payload.push(':');
-            payload.push_str(&entry.hash.0);
-            payload.push(';');
-        }
-        for asset in &self.compiled_assets {
-            payload.push_str("compiled-asset=");
-            payload.push_str(&asset.id);
-            payload.push(':');
-            payload.push_str(&asset.source_path);
-            payload.push(':');
-            payload.push_str(&asset.artifact_path);
-            payload.push(':');
-            payload.push_str(&asset.source_hash.0);
-            payload.push(';');
-        }
+        append_script_payloads(&mut payload, &self.compiled_scripts);
+        append_framework_payloads(&mut payload, &self.compiled_frameworks);
+        append_style_payloads(&mut payload, &self.compiled_styles);
+        append_asset_manifest_payloads(&mut payload, &self.asset_manifest);
+        append_compiled_asset_payloads(&mut payload, &self.compiled_assets);
         if let Some(runtime_scene) = &self.runtime_scene {
             payload.push_str("runtime-scene=");
             payload.push_str(&ArtifactHash::from_bytes(runtime_scene.to_string().as_bytes()).0);
@@ -981,6 +1002,82 @@ impl SealedArtifact {
             payload.push(';');
         }
         payload
+    }
+}
+
+fn append_script_payloads(payload: &mut String, scripts: &[CompiledScriptRecord]) {
+    for script in scripts {
+        payload.push_str("script=");
+        payload.push_str(&script.entrypoint_id);
+        payload.push(':');
+        payload.push_str(&script.source_path);
+        payload.push(':');
+        payload.push_str(&script.artifact_path);
+        payload.push(':');
+        payload.push_str(&script.source_hash.0);
+        payload.push(':');
+        payload.push_str(&ArtifactHash::from_bytes(script.compiled_source.as_bytes()).0);
+        payload.push(';');
+    }
+}
+
+fn append_framework_payloads(payload: &mut String, frameworks: &[CompiledFrameworkRecord]) {
+    for framework in frameworks {
+        payload.push_str("framework=");
+        payload.push_str(&framework.entrypoint_id);
+        payload.push(':');
+        payload.push_str(source_framework_label(framework.framework));
+        payload.push(':');
+        payload.push_str(&framework.source_path);
+        payload.push(':');
+        payload.push_str(&framework.artifact_path);
+        payload.push(':');
+        payload.push_str(&framework.source_hash.0);
+        payload.push(':');
+        payload.push_str(&ArtifactHash::from_bytes(framework.compiler_artifact_json.as_bytes()).0);
+        payload.push(';');
+    }
+}
+
+fn append_style_payloads(payload: &mut String, styles: &[CompiledStyleRecord]) {
+    for style in styles {
+        payload.push_str("style=");
+        payload.push_str(&style.entrypoint_id);
+        payload.push(':');
+        payload.push_str(&style.source_path);
+        payload.push(':');
+        payload.push_str(&style.artifact_path);
+        payload.push(':');
+        payload.push_str(&style.source_hash.0);
+        payload.push(';');
+    }
+}
+
+fn append_asset_manifest_payloads(payload: &mut String, entries: &[AssetManifestEntry]) {
+    for entry in entries {
+        payload.push_str("asset-manifest=");
+        payload.push_str(&entry.id);
+        payload.push(':');
+        payload.push_str(&entry.kind);
+        payload.push(':');
+        payload.push_str(&entry.artifact_path);
+        payload.push(':');
+        payload.push_str(&entry.hash.0);
+        payload.push(';');
+    }
+}
+
+fn append_compiled_asset_payloads(payload: &mut String, assets: &[CompiledAssetRecord]) {
+    for asset in assets {
+        payload.push_str("compiled-asset=");
+        payload.push_str(&asset.id);
+        payload.push(':');
+        payload.push_str(&asset.source_path);
+        payload.push(':');
+        payload.push_str(&asset.artifact_path);
+        payload.push(':');
+        payload.push_str(&asset.source_hash.0);
+        payload.push(';');
     }
 }
 
@@ -1042,6 +1139,16 @@ fn container_verification_error(
 ) -> SealedArtifactError {
     SealedArtifactError::ContainerVerification {
         diagnostic: BuildDiagnostic::new(BuildDiagnosticSeverity::Error, rule, message),
+    }
+}
+
+fn source_framework_label(framework: SourceFramework) -> &'static str {
+    match framework {
+        SourceFramework::Native => "native",
+        SourceFramework::React => "react",
+        SourceFramework::Solid => "solid",
+        SourceFramework::Svelte => "svelte",
+        SourceFramework::Vue => "vue",
     }
 }
 

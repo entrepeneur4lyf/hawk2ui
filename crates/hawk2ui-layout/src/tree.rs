@@ -51,6 +51,12 @@ pub struct LayoutSizing {
 }
 
 impl LayoutSizing {
+    /// Creates sizing from explicit width and height layout values.
+    #[must_use]
+    pub const fn new(width: LayoutValue, height: LayoutValue) -> Self {
+        Self { width, height }
+    }
+
     /// Creates fixed pixel sizing.
     #[must_use]
     pub const fn fixed(width: f32, height: f32) -> Self {

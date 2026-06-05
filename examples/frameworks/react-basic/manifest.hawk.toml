@@ -1,3 +1,16 @@
-name = "react-basic"
-framework = "react"
+[identity]
+id = "com.hawk2ui.examples.react-basic"
+name = "Hawk2UI React Basic"
+version = "0.1.0"
+
+[source]
 entry = "src/App.tsx"
+framework = "react"
+style = "styles/main.hawk.css"
+
+[capabilities]
+keys = ["native-windowing", "sealed-artifacts"]
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"

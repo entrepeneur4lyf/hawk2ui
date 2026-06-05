@@ -1,7 +1,7 @@
 use hawk2ui_authoring::{
-    AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkNativeNode,
-    FrameworkNativeProgram, HandlerRef, NativeLifecycleEvent, NativeRef, PointerEventKind,
-    PropValue, StyleRef,
+    AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkDynamicBinding,
+    FrameworkNativeNode, FrameworkNativeProgram, HandlerRef, NativeLifecycleEvent, NativeRef,
+    PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_framework_svelte::{SvelteComponentSource, SvelteIntegration};
 use hawk2ui_layout::Viewport;
@@ -59,7 +59,13 @@ fn svelte_5_compile_accepts_versioned_compiler_json_artifact() {
         ]
       }
     }]
-  }
+  },
+  "dynamic_bindings": [{
+    "node_id": "title",
+    "target": { "type": "prop", "name": "text" },
+    "expression": "label",
+    "dependencies": ["label"]
+  }]
 }
 "#,
     )
@@ -70,6 +76,14 @@ fn svelte_5_compile_accepts_versioned_compiler_json_artifact() {
         .expect("Svelte compiler JSON should render through runtime");
 
     assert_eq!(artifact.compiled().keyed_children(), ["title"]);
+    assert_eq!(
+        artifact
+            .dynamic_bindings()
+            .iter()
+            .map(FrameworkDynamicBinding::stable_key)
+            .collect::<Vec<_>>(),
+        ["title:prop:text=label"]
+    );
     assert_eq!(artifact.metadata_for("root").unwrap().refs(), ["root_ref"]);
     assert_eq!(
         artifact.metadata_for("root").unwrap().asset_paths(),

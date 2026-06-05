@@ -1,0 +1,13 @@
+{
+  "name": "@hawk2ui/compiler",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "hawk2ui-compile": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src"],
+  "description": "Framework compiler dispatcher and artifact CLI for Hawk2UI."
+}

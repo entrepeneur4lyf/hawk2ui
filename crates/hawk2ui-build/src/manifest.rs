@@ -21,6 +21,22 @@ pub enum PackageTarget {
     Plugin,
 }
 
+/// Source framework used to compile the entrypoint.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceFramework {
+    /// Direct native authoring package.
+    Native,
+    /// React compiler package.
+    React,
+    /// Solid compiler package.
+    Solid,
+    /// Svelte compiler package.
+    Svelte,
+    /// Vue compiler package.
+    Vue,
+}
+
 /// Validated Hawk manifest.
 #[derive(Clone, Debug, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -88,6 +104,8 @@ pub struct ManifestIdentity {
 pub struct SourceEntrypoint {
     /// Source entry path.
     pub entry: String,
+    /// Optional source framework for framework-specific compiler dispatch.
+    pub framework: Option<SourceFramework>,
     /// Optional style entry path.
     pub style: Option<String>,
     /// Optional script entry path.

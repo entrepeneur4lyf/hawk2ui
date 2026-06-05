@@ -1,9 +1,9 @@
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_authoring::{
     AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ChildList, ElementId, ElementKind,
-    ElementNode, EventKind, EventPayloadField, FrameworkNativeNode, FrameworkNativeProgram,
-    FrameworkNativeProgramWire, FrameworkReactiveBinding, HandlerRef, KeyedChild,
-    NativeLifecycleEvent, NativeRef, PointerEventKind, PropValue, StyleRef,
+    ElementNode, EventKind, EventPayloadField, FrameworkDynamicBinding, FrameworkNativeNode,
+    FrameworkNativeProgram, FrameworkNativeProgramWire, FrameworkReactiveBinding, HandlerRef,
+    KeyedChild, NativeLifecycleEvent, NativeRef, PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_render::CustomSurfaceCategory;
 use hawk2ui_runtime::RuntimeVisual;
@@ -152,12 +152,20 @@ fn framework_native_program_wire_round_trips_real_compiler_artifacts() {
       }
     }]
   },
-  "reactivity": [
-    { "kind": "signal", "name": "params" },
-    { "kind": "keyed-for-each", "name": "params" },
-    { "kind": "effect", "name": "meter-paint" }
-  ]
-}
+    "reactivity": [
+      { "kind": "signal", "name": "params" },
+      { "kind": "keyed-for-each", "name": "params" },
+      { "kind": "effect", "name": "meter-paint" }
+    ],
+    "dynamic_bindings": [
+      {
+        "node_id": "title",
+        "target": { "type": "prop", "name": "text" },
+        "expression": "params.title",
+        "dependencies": ["params"]
+      }
+    ]
+  }
 "#;
 
     let wire =
@@ -196,6 +204,14 @@ fn framework_native_program_wire_round_trips_real_compiler_artifacts() {
             "for-each:keyed:params",
             "effect:meter-paint"
         ]
+    );
+    assert_eq!(
+        program
+            .dynamic_bindings()
+            .iter()
+            .map(FrameworkDynamicBinding::stable_key)
+            .collect::<Vec<_>>(),
+        ["title:prop:text=params.title"]
     );
 
     let encoded = wire.to_json().expect("compiler wire artifact serializes");

@@ -184,6 +184,7 @@ impl FrameworkNativeNode {
 pub struct FrameworkNativeProgram {
     root: FrameworkNativeNode,
     reactivity: Vec<FrameworkReactiveBinding>,
+    dynamic_bindings: Vec<FrameworkDynamicBinding>,
 }
 
 /// Versioned native compiler artifact emitted by framework-specific compilers.
@@ -197,6 +198,9 @@ pub struct FrameworkNativeProgramWire {
     /// Framework reactivity bindings emitted by the compiler.
     #[serde(default)]
     pub reactivity: Vec<FrameworkReactiveBindingWire>,
+    /// Runtime-evaluated property bindings emitted by the compiler.
+    #[serde(default)]
+    pub dynamic_bindings: Vec<FrameworkDynamicBindingWire>,
 }
 
 impl FrameworkNativeProgramWire {
@@ -402,6 +406,34 @@ pub enum FrameworkReactiveBindingKindWire {
     Effect,
 }
 
+/// Wire runtime binding emitted by a framework compiler for non-static expressions.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkDynamicBindingWire {
+    /// Target native node id.
+    pub node_id: String,
+    /// Target native property or text slot.
+    pub target: FrameworkDynamicBindingTargetWire,
+    /// Framework expression preserved by the compiler.
+    pub expression: String,
+    /// Runtime dependencies needed to re-evaluate the expression.
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+}
+
+/// Wire target for a runtime binding.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum FrameworkDynamicBindingTargetWire {
+    /// Bind a native property.
+    Prop {
+        /// Native property name.
+        name: String,
+    },
+    /// Bind the node text slot.
+    Text,
+}
+
 impl FrameworkNativeProgram {
     /// Creates a framework native program with one root node.
     #[must_use]
@@ -409,6 +441,7 @@ impl FrameworkNativeProgram {
         Self {
             root,
             reactivity: Vec::new(),
+            dynamic_bindings: Vec::new(),
         }
     }
 
@@ -425,10 +458,23 @@ impl FrameworkNativeProgram {
         self
     }
 
+    /// Adds a runtime dynamic binding declared by the compiler boundary.
+    #[must_use]
+    pub fn with_dynamic_binding(mut self, binding: FrameworkDynamicBinding) -> Self {
+        self.dynamic_bindings.push(binding);
+        self
+    }
+
     /// Returns declared reactivity bindings in compiler order.
     #[must_use]
     pub fn reactivity(&self) -> &[FrameworkReactiveBinding] {
         &self.reactivity
+    }
+
+    /// Returns declared runtime dynamic bindings in compiler order.
+    #[must_use]
+    pub fn dynamic_bindings(&self) -> &[FrameworkDynamicBinding] {
+        &self.dynamic_bindings
     }
 
     /// Returns keyed direct children in compiler order.
@@ -475,6 +521,9 @@ impl FrameworkNativeProgram {
             true,
             0,
         )?);
+        for binding in &self.dynamic_bindings {
+            runtime.bind_dynamic(binding.clone());
+        }
         runtime.finish()
     }
 }
@@ -496,6 +545,9 @@ impl TryFrom<FrameworkNativeProgramWire> for FrameworkNativeProgram {
         let mut program = Self::new(framework_native_node_from_wire(wire.root)?);
         for binding in wire.reactivity {
             program = program.with_reactive_binding(framework_reactivity_from_wire(binding)?);
+        }
+        for binding in wire.dynamic_bindings {
+            program = program.with_dynamic_binding(framework_dynamic_binding_from_wire(binding)?);
         }
         Ok(program)
     }
@@ -684,6 +736,45 @@ fn framework_reactivity_from_wire(
     })
 }
 
+fn framework_dynamic_binding_from_wire(
+    binding: FrameworkDynamicBindingWire,
+) -> Result<FrameworkDynamicBinding, AdapterError> {
+    validate_non_empty(
+        "framework-native-program.dynamic-binding.node-id-invalid",
+        "dynamic binding node id",
+        &binding.node_id,
+    )?;
+    validate_non_empty(
+        "framework-native-program.dynamic-binding.expression-invalid",
+        "dynamic binding expression",
+        &binding.expression,
+    )?;
+    for dependency in &binding.dependencies {
+        validate_non_empty(
+            "framework-native-program.dynamic-binding.dependency-invalid",
+            "dynamic binding dependency",
+            dependency,
+        )?;
+    }
+    let target = match binding.target {
+        FrameworkDynamicBindingTargetWire::Prop { name } => {
+            validate_non_empty(
+                "framework-native-program.dynamic-binding.target-invalid",
+                "dynamic binding target property",
+                &name,
+            )?;
+            FrameworkDynamicBindingTarget::Prop { name }
+        }
+        FrameworkDynamicBindingTargetWire::Text => FrameworkDynamicBindingTarget::Text,
+    };
+    Ok(FrameworkDynamicBinding {
+        node_id: binding.node_id,
+        target,
+        expression: binding.expression,
+        dependencies: binding.dependencies,
+    })
+}
+
 fn validate_non_empty(
     rule: &'static str,
     label: &'static str,
@@ -697,6 +788,97 @@ fn validate_non_empty(
     } else {
         Ok(())
     }
+}
+
+/// Runtime dynamic binding declared by a framework compiler boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FrameworkDynamicBinding {
+    node_id: String,
+    target: FrameworkDynamicBindingTarget,
+    expression: String,
+    dependencies: Vec<String>,
+}
+
+impl FrameworkDynamicBinding {
+    /// Creates a property binding for a framework expression.
+    #[must_use]
+    pub fn prop(
+        node_id: impl Into<String>,
+        name: impl Into<String>,
+        expression: impl Into<String>,
+        dependencies: impl Into<Vec<String>>,
+    ) -> Self {
+        Self {
+            node_id: node_id.into(),
+            target: FrameworkDynamicBindingTarget::Prop { name: name.into() },
+            expression: expression.into(),
+            dependencies: dependencies.into(),
+        }
+    }
+
+    /// Creates a text-slot binding for a framework expression.
+    #[must_use]
+    pub fn text(
+        node_id: impl Into<String>,
+        expression: impl Into<String>,
+        dependencies: impl Into<Vec<String>>,
+    ) -> Self {
+        Self {
+            node_id: node_id.into(),
+            target: FrameworkDynamicBindingTarget::Text,
+            expression: expression.into(),
+            dependencies: dependencies.into(),
+        }
+    }
+
+    /// Returns the target node id.
+    #[must_use]
+    pub fn node_id(&self) -> &str {
+        &self.node_id
+    }
+
+    /// Returns the binding target.
+    #[must_use]
+    pub const fn target(&self) -> &FrameworkDynamicBindingTarget {
+        &self.target
+    }
+
+    /// Returns the preserved framework expression.
+    #[must_use]
+    pub fn expression(&self) -> &str {
+        &self.expression
+    }
+
+    /// Returns runtime dependency names in compiler order.
+    #[must_use]
+    pub fn dependencies(&self) -> &[String] {
+        &self.dependencies
+    }
+
+    /// Returns the stable key used by diagnostics and runtime bridge records.
+    #[must_use]
+    pub fn stable_key(&self) -> String {
+        match &self.target {
+            FrameworkDynamicBindingTarget::Prop { name } => {
+                format!("{}:prop:{name}={}", self.node_id, self.expression)
+            }
+            FrameworkDynamicBindingTarget::Text => {
+                format!("{}:text={}", self.node_id, self.expression)
+            }
+        }
+    }
+}
+
+/// Target for a runtime dynamic binding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FrameworkDynamicBindingTarget {
+    /// Bind a named native property.
+    Prop {
+        /// Native property name.
+        name: String,
+    },
+    /// Bind the node text slot.
+    Text,
 }
 
 /// Reactive primitive declared by a framework compiler boundary.

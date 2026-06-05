@@ -1,10 +1,11 @@
-import { parse as parseScript } from "@babel/parser";
+import { parse as parseScript, parseExpression } from "@babel/parser";
 import { parse as parseTemplate } from "@vue/compiler-dom";
 import { compileTemplate, parse as parseSfc } from "@vue/compiler-sfc";
 import {
   compilerArtifactForApp,
   recordsForApp,
   type HawkCompilerArtifact,
+  type HawkCompilerDynamicBindingWire,
   type HawkElementSpec,
   type HawkEventSpec,
   type HawkLifecycleSpec,
@@ -34,6 +35,7 @@ type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 interface VueLoweringContext {
   readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
   readonly locals: ReadonlyMap<string, LiteralRecord>;
+  readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
 }
 
 export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput {
@@ -62,6 +64,7 @@ export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput
   const context: VueLoweringContext = {
     arrays: literalArraysFromScript(script),
     locals: new Map(),
+    dynamicBindings: [],
   };
   const root = vueElementToSpec(rootNode, context);
   validateUniqueChildKeys(root);
@@ -70,7 +73,7 @@ export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput
     framework: "vue",
     filename: input.filename,
     records: recordsForApp(app),
-    compilerArtifact: compilerArtifactForApp(app),
+    compilerArtifact: compilerArtifactForApp(app, [], context.dynamicBindings),
   };
 }
 
@@ -96,8 +99,10 @@ function vueElementToSpec(node: AstNode, context: VueLoweringContext): HawkEleme
     lifecycle: vueLifecycle(node),
     children: vueChildSpecs(node, context),
   };
-  const text = vueTextContent(node, context);
-  return text ? { ...spec, props: { text } } : spec;
+  const props = layoutProps(node, context, id, "vue");
+  const text = vueTextContent(node, context, id);
+  if (text) props.text = text;
+  return Object.keys(props).length > 0 ? { ...spec, props } : spec;
 }
 
 function vueChildSpecs(node: AstNode, context: VueLoweringContext): readonly HawkElementSpec[] {
@@ -176,18 +181,125 @@ function vueAttributeValue(
   return expression ? evaluateVueExpression(expression, context) : undefined;
 }
 
-function vueTextContent(node: AstNode, context: VueLoweringContext): string | undefined {
-  const values = arrayField(node, "children")
-    .map((child) => {
-      if (child.type === 2) return String(child.content ?? "").trim();
-      if (child.type === 5) {
-        const expression = stringField((child.content as AstNode | undefined), "content");
-        return String(evaluateVueExpression(expression, context));
+function vueTextContent(
+  node: AstNode,
+  context: VueLoweringContext,
+  nodeId: string,
+): string | undefined {
+  const staticValues: string[] = [];
+  const dynamicExpressionParts: string[] = [];
+  const dependencies = new Set<string>();
+  let hasDynamicExpression = false;
+
+  for (const child of arrayField(node, "children")) {
+    if (child.type === 2) {
+      const value = String(child.content ?? "").trim();
+      if (value.length > 0) {
+        staticValues.push(value);
+        dynamicExpressionParts.push(JSON.stringify(value));
       }
-      return "";
-    })
-    .filter((value) => value.length > 0);
-  return values.length > 0 ? values.join("") : undefined;
+      continue;
+    }
+    if (child.type !== 5) continue;
+    const expression = stringField((child.content as AstNode | undefined), "content");
+    const staticValue = staticVueExpressionValue(expression, context);
+    if (staticValue !== undefined) {
+      const value = String(staticValue);
+      if (value.length > 0) {
+        staticValues.push(value);
+        dynamicExpressionParts.push(JSON.stringify(value));
+      }
+      continue;
+    }
+    hasDynamicExpression = true;
+    dynamicExpressionParts.push(expressionSource(expression, "vue"));
+    for (const dependency of expressionDependencies(expression)) {
+      dependencies.add(dependency);
+    }
+  }
+
+  if (hasDynamicExpression) {
+    context.dynamicBindings.push({
+      node_id: nodeId,
+      target: { type: "prop", name: "text" },
+      expression: dynamicExpressionParts.join(" + "),
+      dependencies: [...dependencies],
+    });
+    return undefined;
+  }
+  return staticValues.length > 0 ? staticValues.join("") : undefined;
+}
+
+function staticVueExpressionValue(
+  expression: string | undefined,
+  context: VueLoweringContext,
+): string | number | boolean | undefined {
+  try {
+    return evaluateVueExpression(expression, context);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("vue.expression.unsupported")) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function layoutProps(
+  node: AstNode,
+  context: VueLoweringContext,
+  nodeId: string,
+  framework: string,
+): Record<string, string | number | boolean> {
+  const props: Record<string, string | number | boolean> = {};
+  for (const name of ["width", "height"]) {
+    const value = dynamicLayoutAttributeValue(node, name, context, nodeId, framework);
+    if (value !== undefined) props[name] = value;
+  }
+  return props;
+}
+
+function dynamicLayoutAttributeValue(
+  node: AstNode,
+  name: string,
+  context: VueLoweringContext,
+  nodeId: string,
+  framework: string,
+): number | undefined {
+  const staticAttr = arrayField(node, "props").find((prop) => prop.type === 6 && prop.name === name);
+  const staticValue = staticAttr?.value as AstNode | undefined;
+  if (typeof staticValue?.content === "string") return layoutNumber(staticValue.content, nodeId, name, framework);
+
+  const bound = vueDirectives(node, "bind").find(
+    (directive) => stringField(directive.arg as AstNode | undefined, "content") === name,
+  );
+  const expression = stringField(bound?.exp as AstNode | undefined, "content");
+  if (!expression) return undefined;
+  const staticExpression = staticVueExpressionValue(expression, context);
+  if (staticExpression !== undefined) return layoutNumber(staticExpression, nodeId, name, framework);
+  context.dynamicBindings.push({
+    node_id: nodeId,
+    target: { type: "prop", name },
+    expression: expressionSource(expression, framework),
+    dependencies: expressionDependencies(expression),
+  });
+  return undefined;
+}
+
+function layoutNumber(
+  value: unknown,
+  nodeId: string,
+  name: string,
+  framework: string,
+): number {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() !== ""
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${framework}.layout.invalid-number: layout prop \`${name}\` on \`${nodeId}\` must be finite and non-negative.`);
+  }
+  return parsed;
 }
 
 function vueHandlerName(directive: AstNode): string {
@@ -269,6 +381,72 @@ function literalExpressionValue(expression: string): string | number | boolean |
   if (expression === "false") return false;
   const number = Number(expression);
   return Number.isFinite(number) && expression.trim() !== "" ? number : undefined;
+}
+
+function expressionSource(expression: string | undefined, framework: string): string {
+  const source = expression?.trim() ?? "";
+  if (!source) {
+    throw new Error(`${framework}.expression.unsupported: dynamic text bindings require a printable expression.`);
+  }
+  return source;
+}
+
+function expressionDependencies(expression: string | undefined): readonly string[] {
+  const source = expressionSource(expression, "vue");
+  const parsed = parseExpression(source, { plugins: ["typescript"] }) as unknown as AstNode;
+  const dependencies = new Set<string>();
+  collectExpressionDependencies(parsed, dependencies);
+  return [...dependencies];
+}
+
+function collectExpressionDependencies(node: AstNode | undefined, dependencies: Set<string>): void {
+  if (!node) return;
+  switch (node.type) {
+    case "Identifier": {
+      const name = identifierName(node);
+      if (name) dependencies.add(name);
+      return;
+    }
+    case "MemberExpression":
+    case "OptionalMemberExpression":
+      collectExpressionDependencies(node.object as AstNode | undefined, dependencies);
+      if (node.computed) collectExpressionDependencies(node.property as AstNode | undefined, dependencies);
+      return;
+    case "CallExpression":
+    case "OptionalCallExpression":
+      collectExpressionDependencies(node.callee as AstNode | undefined, dependencies);
+      for (const argument of arrayField(node, "arguments")) collectExpressionDependencies(argument, dependencies);
+      return;
+    case "BinaryExpression":
+    case "LogicalExpression":
+      collectExpressionDependencies(node.left as AstNode | undefined, dependencies);
+      collectExpressionDependencies(node.right as AstNode | undefined, dependencies);
+      return;
+    case "ConditionalExpression":
+      collectExpressionDependencies(node.test as AstNode | undefined, dependencies);
+      collectExpressionDependencies(node.consequent as AstNode | undefined, dependencies);
+      collectExpressionDependencies(node.alternate as AstNode | undefined, dependencies);
+      return;
+    case "UnaryExpression":
+    case "UpdateExpression":
+    case "AwaitExpression":
+      collectExpressionDependencies(node.argument as AstNode | undefined, dependencies);
+      return;
+    case "TemplateLiteral":
+      for (const expression of arrayField(node, "expressions")) collectExpressionDependencies(expression, dependencies);
+      return;
+    case "ArrayExpression":
+      for (const element of arrayField(node, "elements")) collectExpressionDependencies(element, dependencies);
+      return;
+    case "ObjectExpression":
+      for (const property of arrayField(node, "properties")) {
+        if (property.computed) collectExpressionDependencies(property.key as AstNode | undefined, dependencies);
+        collectExpressionDependencies(property.value as AstNode | undefined, dependencies);
+      }
+      return;
+    default:
+      return;
+  }
 }
 
 function literalValue(node: AstNode | undefined): string | number | boolean | undefined {

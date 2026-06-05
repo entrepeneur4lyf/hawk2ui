@@ -1,16 +1,17 @@
 //! Filesystem-backed project build workspace.
 
 use std::{
-    fs,
+    env, fs,
     path::{Component, Path, PathBuf},
+    process::Command,
 };
 
 use crate::{
     ArtifactHash, ArtifactSchemaVersion, AssetCompilationError, AssetCompilationPlan,
     AssetManifestEntry, AssetSource, AssetSourceIndex, BuildDiagnostic, BuildDiagnosticSeverity,
-    BuildPhase, BuildPipeline, BuildPipelineError, CompiledAssetRecord, CompiledScriptRecord,
-    CompiledStyleRecord, HawkManifest, ManifestError, PackageTargetRecord, SealedArtifact,
-    VerificationReport,
+    BuildPhase, BuildPipeline, BuildPipelineError, CompiledAssetRecord, CompiledFrameworkRecord,
+    CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError, PackageTargetRecord,
+    SealedArtifact, SourceFramework, VerificationReport,
 };
 use hawk2ui_script::{ScriptBackend, ScriptBackendError, ScriptExecutionLimits, ScriptModule};
 use hawk2ui_style::{StyleCompileError, compile_style_source};
@@ -75,8 +76,20 @@ impl BuildWorkspace {
         let mut pipeline = BuildPipeline::production();
 
         let mut artifact = SealedArtifact::from_manifest(schema_version, &self.manifest);
-        artifact = artifact
-            .with_compiled_script(self.compiled_script("entry", &self.manifest.source.entry)?);
+        artifact = match self.manifest.source.framework {
+            Some(
+                framework @ (SourceFramework::React
+                | SourceFramework::Solid
+                | SourceFramework::Svelte
+                | SourceFramework::Vue),
+            ) => artifact.with_compiled_framework(self.compiled_framework(
+                "entry",
+                framework,
+                &self.manifest.source.entry,
+            )?),
+            Some(SourceFramework::Native) | None => artifact
+                .with_compiled_script(self.compiled_script("entry", &self.manifest.source.entry)?),
+        };
 
         if let Some(script) = &self.manifest.source.script
             && script != &self.manifest.source.entry
@@ -173,6 +186,74 @@ impl BuildWorkspace {
         ))
     }
 
+    fn compiled_framework(
+        &self,
+        entrypoint_id: &str,
+        framework: SourceFramework,
+        path: &str,
+    ) -> Result<CompiledFrameworkRecord, BuildWorkspaceError> {
+        let bytes = self.read_declared_file(path)?;
+        let compiler_artifact_json = self.compile_framework_source(framework, path)?;
+        serde_json::from_str::<serde_json::Value>(&compiler_artifact_json).map_err(|error| {
+            BuildWorkspaceError::FrameworkCompilation {
+                path: path.into(),
+                framework,
+                message: format!("framework compiler emitted invalid JSON: {error}"),
+            }
+        })?;
+        Ok(CompiledFrameworkRecord::new(
+            entrypoint_id,
+            framework,
+            path,
+            format!("frameworks/{entrypoint_id}.hawk.framework.json"),
+            ArtifactHash::from_bytes(&bytes),
+        )
+        .with_compiler_artifact_json(compiler_artifact_json))
+    }
+
+    fn compile_framework_source(
+        &self,
+        framework: SourceFramework,
+        path: &str,
+    ) -> Result<String, BuildWorkspaceError> {
+        let mut command = framework_compiler_command();
+        command
+            .current_dir(&self.root)
+            .arg("--framework")
+            .arg(source_framework_label(framework))
+            .arg("--input")
+            .arg(path);
+        let output =
+            command
+                .output()
+                .map_err(|error| BuildWorkspaceError::FrameworkCompilation {
+                    path: path.into(),
+                    framework,
+                    message: format!("failed to launch framework compiler: {error}"),
+                })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let message = if stderr.trim().is_empty() {
+                stdout.trim().to_string()
+            } else {
+                stderr.trim().to_string()
+            };
+            return Err(BuildWorkspaceError::FrameworkCompilation {
+                path: path.into(),
+                framework,
+                message,
+            });
+        }
+        String::from_utf8(output.stdout).map_err(|error| {
+            BuildWorkspaceError::FrameworkCompilation {
+                path: path.into(),
+                framework,
+                message: format!("framework compiler emitted non-UTF-8 output: {error}"),
+            }
+        })
+    }
+
     fn asset_sources(&self) -> Result<AssetSourceIndex, BuildWorkspaceError> {
         self.manifest
             .assets
@@ -205,11 +286,11 @@ impl BuildWorkspace {
         mut report: VerificationReport,
         artifact: &SealedArtifact,
     ) -> VerificationReport {
-        if artifact.compiled_scripts.is_empty() {
+        if artifact.compiled_scripts.is_empty() && artifact.compiled_frameworks.is_empty() {
             report = report.with_diagnostic(BuildDiagnostic::new(
                 BuildDiagnosticSeverity::Error,
-                "verification.script.missing",
-                "artifact must contain at least one compiled script",
+                "verification.entry-payload.missing",
+                "artifact must contain at least one compiled script or framework artifact",
             ));
         }
         if self.manifest.source.style.is_some() && artifact.compiled_styles.is_empty() {
@@ -324,8 +405,44 @@ pub enum BuildWorkspaceError {
         /// Style compiler error.
         error: StyleCompileError,
     },
+    /// Framework source compilation failed.
+    FrameworkCompilation {
+        /// Framework source path that failed compilation.
+        path: String,
+        /// Framework selected for compilation.
+        framework: SourceFramework,
+        /// Compiler failure message.
+        message: String,
+    },
     /// Script file extension is not supported by the production compiler.
     UnsupportedScriptExtension(String),
     /// Production pipeline verification failed.
     PipelineBlocked(BuildPipelineError),
+}
+
+fn framework_compiler_command() -> Command {
+    if let Ok(binary) = env::var("HAWK2UI_COMPILER_BIN") {
+        return Command::new(binary);
+    }
+    let mut command = Command::new("bun");
+    command.arg(default_framework_compiler_script());
+    command
+}
+
+fn default_framework_compiler_script() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap_or_else(|| Path::new("."))
+        .join("packages/hawk2ui-compiler/src/cli.ts")
+}
+
+fn source_framework_label(framework: SourceFramework) -> &'static str {
+    match framework {
+        SourceFramework::Native => "native",
+        SourceFramework::React => "react",
+        SourceFramework::Solid => "solid",
+        SourceFramework::Svelte => "svelte",
+        SourceFramework::Vue => "vue",
+    }
 }

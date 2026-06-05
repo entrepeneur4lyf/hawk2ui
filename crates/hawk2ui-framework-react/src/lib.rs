@@ -3,9 +3,9 @@
 
 use hawk2ui_authoring::{
     AdapterError, AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementNode,
-    EventBinding, EventKind, FrameworkNativeProgram, FrameworkNativeProgramWire, HandlerRef,
-    LifecycleEventKind, NativeLifecycleEvent, NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
-    NativeRuntimeBridgeError, StyleRef,
+    EventBinding, EventKind, FrameworkDynamicBinding, FrameworkNativeProgram,
+    FrameworkNativeProgramWire, HandlerRef, LifecycleEventKind, NativeLifecycleEvent,
+    NativeRuntimeBridge, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, StyleRef,
 };
 use hawk2ui_runtime::RuntimeViewTree;
 use hawk2ui_style::{CompiledStyleSheet, TokenSet};
@@ -130,6 +130,12 @@ impl ReactRuntimeArtifact {
     #[must_use]
     pub fn operation_keys(&self) -> &[String] {
         self.runtime.operation_keys()
+    }
+
+    /// Returns runtime dynamic bindings in compiler declaration order.
+    #[must_use]
+    pub fn dynamic_bindings(&self) -> &[FrameworkDynamicBinding] {
+        self.runtime.dynamic_bindings()
     }
 }
 

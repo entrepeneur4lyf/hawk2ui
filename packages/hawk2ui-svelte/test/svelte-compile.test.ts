@@ -38,6 +38,46 @@ test("Svelte compiler rejects unsupported events", () => {
   ).toThrow("svelte.event.unsupported");
 });
 
+test("Svelte compiler preserves dynamic text bindings from template expressions", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let label = getLabel();</script><hawk-view id="root"><hawk-text id="title">{label}</hawk-text></hawk-view>',
+  });
+
+  expect(output.compilerArtifact.dynamic_bindings).toEqual([
+    {
+      node_id: "title",
+      target: { type: "prop", name: "text" },
+      expression: "label",
+      dependencies: ["label"],
+    },
+  ]);
+});
+
+test("Svelte compiler preserves dynamic layout prop bindings from template expressions", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let panelWidth = getWidth(); let panelHeight = getHeight();</script><hawk-view id="root"><hawk-view id="panel" width={panelWidth} height={panelHeight}></hawk-view></hawk-view>',
+  });
+
+  expect(output.compilerArtifact.dynamic_bindings).toEqual([
+    {
+      node_id: "panel",
+      target: { type: "prop", name: "width" },
+      expression: "panelWidth",
+      dependencies: ["panelWidth"],
+    },
+    {
+      node_id: "panel",
+      target: { type: "prop", name: "height" },
+      expression: "panelHeight",
+      dependencies: ["panelHeight"],
+    },
+  ]);
+});
+
 test("Svelte compiler rejects duplicate child ids", () => {
   expect(() =>
     compileHawkSvelte({

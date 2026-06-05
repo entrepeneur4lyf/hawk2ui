@@ -1,7 +1,7 @@
 //! Native authoring to runtime view bridge.
 
 use hawk2ui_api::Diagnostic;
-use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle};
+use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, LayoutValue};
 use hawk2ui_render::{Color, CustomSurfaceCategory, Transform};
 use hawk2ui_runtime::{
     RuntimeCustomSurfaceVisual, RuntimeGlowEffect, RuntimeLinearGradient, RuntimeSceneError,
@@ -12,6 +12,7 @@ use hawk2ui_style::{
     CompiledStyleSheet, PropertyId, RuntimeStyleError, RuntimeStyleTable, StyleValue, TokenSet,
 };
 
+use crate::adapter::{FrameworkDynamicBinding, FrameworkDynamicBindingTarget};
 use crate::{
     AuthoringArtifact, ElementKind, NativeAuthoringArtifact, NativeAuthoringElement, NativeChild,
     PropValue, StyleRef,
@@ -41,6 +42,7 @@ impl NativeRuntimeBridge {
     ) -> Result<NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError> {
         let mut bridged = Self::bridge_element_with_style_resources(artifact.root(), None)?;
         bridged.operation_keys = artifact.operation_keys().to_vec();
+        bridged.dynamic_bindings = artifact.dynamic_bindings().to_vec();
         Ok(bridged)
     }
 
@@ -124,6 +126,7 @@ impl NativeRuntimeBridge {
             }),
         )?;
         bridged.operation_keys = artifact.operation_keys().to_vec();
+        bridged.dynamic_bindings = artifact.dynamic_bindings().to_vec();
         Ok(bridged)
     }
 
@@ -149,6 +152,7 @@ impl NativeRuntimeBridge {
             }),
         )?;
         bridged.operation_keys = artifact.operation_keys().to_vec();
+        bridged.dynamic_bindings = artifact.dynamic_bindings().to_vec();
         Ok(bridged)
     }
 
@@ -232,6 +236,7 @@ impl NativeRuntimeBridge {
             runtime_tree: tree,
             metadata,
             operation_keys: element_operation_keys(root),
+            dynamic_bindings: Vec::new(),
         })
     }
 
@@ -255,6 +260,7 @@ pub struct NativeRuntimeBridgeArtifact {
     runtime_tree: RuntimeViewTree,
     metadata: Vec<NativeRuntimeNodeMetadata>,
     operation_keys: Vec<String>,
+    dynamic_bindings: Vec<FrameworkDynamicBinding>,
 }
 
 impl NativeRuntimeBridgeArtifact {
@@ -282,6 +288,133 @@ impl NativeRuntimeBridgeArtifact {
     #[must_use]
     pub fn operation_keys(&self) -> &[String] {
         &self.operation_keys
+    }
+
+    /// Returns runtime dynamic bindings in compiler declaration order.
+    #[must_use]
+    pub fn dynamic_bindings(&self) -> &[FrameworkDynamicBinding] {
+        &self.dynamic_bindings
+    }
+
+    /// Applies one evaluated dynamic binding value to the runtime tree.
+    ///
+    /// Text bindings patch the node's [`RuntimeVisual::Text`] payload and mark the node as
+    /// invalidated. Non-text property targets are rejected until the runtime bridge has typed
+    /// patchers for those native properties.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeRuntimeBridgeError`] when the binding target is unsupported, the target node
+    /// is missing, or the target node is not a text visual.
+    pub fn apply_dynamic_binding(
+        mut self,
+        binding: &FrameworkDynamicBinding,
+        value: PropValue,
+    ) -> Result<Self, NativeRuntimeBridgeError> {
+        match binding.target() {
+            FrameworkDynamicBindingTarget::Text => {
+                let text = dynamic_value_text(value)?;
+                self.runtime_tree = apply_dynamic_text(self.runtime_tree, binding.node_id(), text)?;
+                Ok(self)
+            }
+            FrameworkDynamicBindingTarget::Prop { name } if name == "text" => {
+                let text = dynamic_value_text(value)?;
+                self.runtime_tree = apply_dynamic_text(self.runtime_tree, binding.node_id(), text)?;
+                Ok(self)
+            }
+            FrameworkDynamicBindingTarget::Prop { name } if name == "width" || name == "height" => {
+                let size_value = dynamic_value_layout_number(&value, name)?;
+                self.runtime_tree = apply_dynamic_layout_size(
+                    self.runtime_tree,
+                    binding.node_id(),
+                    name,
+                    size_value,
+                )?;
+                Ok(self)
+            }
+            FrameworkDynamicBindingTarget::Prop { name } => Err(NativeRuntimeBridgeError::new(
+                "native-runtime.dynamic-binding.unsupported-target",
+                format!(
+                    "dynamic binding target `{}:{name}` is not supported by the runtime bridge",
+                    binding.node_id()
+                ),
+            )),
+        }
+    }
+}
+
+fn apply_dynamic_text(
+    tree: RuntimeViewTree,
+    node_id: &str,
+    text: String,
+) -> Result<RuntimeViewTree, NativeRuntimeBridgeError> {
+    let runtime_id = RuntimeViewId::new(node_id);
+    let Some(node) = tree.node(&runtime_id) else {
+        return Err(NativeRuntimeBridgeError::new(
+            "native-runtime.dynamic-binding.node-missing",
+            format!("dynamic binding target node `{node_id}` is not present in the runtime tree"),
+        ));
+    };
+    let visual = match node.visual().clone() {
+        RuntimeVisual::Text(text_visual) => RuntimeVisual::Text(text_visual.with_text(text)),
+        _ => {
+            return Err(NativeRuntimeBridgeError::new(
+                "native-runtime.dynamic-binding.visual-kind-invalid",
+                format!("dynamic text binding target `{node_id}` is not a text visual"),
+            ));
+        }
+    };
+    tree.update_visual(&runtime_id, visual)
+        .map_err(NativeRuntimeBridgeError::from)
+}
+
+fn apply_dynamic_layout_size(
+    tree: RuntimeViewTree,
+    node_id: &str,
+    name: &str,
+    value: f32,
+) -> Result<RuntimeViewTree, NativeRuntimeBridgeError> {
+    let runtime_id = RuntimeViewId::new(node_id);
+    let Some(node) = tree.node(&runtime_id) else {
+        return Err(NativeRuntimeBridgeError::new(
+            "native-runtime.dynamic-binding.node-missing",
+            format!("dynamic binding target node `{node_id}` is not present in the runtime tree"),
+        ));
+    };
+    let mut layout_style = node.layout_style().clone();
+    let current_size = layout_style.size();
+    let next_size = if name == "width" {
+        LayoutSizing::new(LayoutValue::px(value), current_size.height())
+    } else {
+        LayoutSizing::new(current_size.width(), LayoutValue::px(value))
+    };
+    layout_style = layout_style.with_size(next_size);
+    tree.update_layout_style(&runtime_id, layout_style)
+        .map_err(NativeRuntimeBridgeError::from)
+}
+
+fn dynamic_value_text(value: PropValue) -> Result<String, NativeRuntimeBridgeError> {
+    match value {
+        PropValue::String(value) => Ok(value),
+        PropValue::Bool(value) => Ok(value.to_string()),
+        PropValue::Number(value) if value.is_finite() => Ok(value.to_string()),
+        PropValue::Number(_) => Err(NativeRuntimeBridgeError::new(
+            "native-runtime.dynamic-binding.value-invalid",
+            "dynamic text binding numeric value must be finite",
+        )),
+    }
+}
+
+fn dynamic_value_layout_number(
+    value: &PropValue,
+    name: &str,
+) -> Result<f32, NativeRuntimeBridgeError> {
+    match value {
+        PropValue::Number(value) => narrow_number(*value, name, NumberDomain::NonNegative),
+        PropValue::String(_) | PropValue::Bool(_) => Err(NativeRuntimeBridgeError::new(
+            "native-runtime.dynamic-binding.value-invalid",
+            format!("dynamic layout binding `{name}` requires a finite non-negative number"),
+        )),
     }
 }
 

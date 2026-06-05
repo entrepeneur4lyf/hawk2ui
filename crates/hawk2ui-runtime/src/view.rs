@@ -59,6 +59,13 @@ impl RuntimeTextVisual {
         &self.text
     }
 
+    /// Replaces the text payload while preserving font and color settings.
+    #[must_use]
+    pub fn with_text(mut self, text: impl Into<String>) -> Self {
+        self.text = text.into();
+        self
+    }
+
     /// Returns the requested font size in logical pixels.
     #[must_use]
     pub const fn font_size(&self) -> f32 {
@@ -895,6 +902,24 @@ impl RuntimeViewTree {
             return Err(RuntimeSceneError::MissingNode(node_id.as_str().to_string()));
         };
         self.entries[index].node.visual = visual;
+        self.entries[index].invalidated = true;
+        Ok(self)
+    }
+
+    /// Replaces a runtime node layout style and marks that node for relayout/repaint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when the node is missing.
+    pub fn update_layout_style(
+        mut self,
+        node_id: &RuntimeViewId,
+        layout_style: LayoutStyle,
+    ) -> Result<Self, RuntimeSceneError> {
+        let Some(index) = self.index_of(node_id) else {
+            return Err(RuntimeSceneError::MissingNode(node_id.as_str().to_string()));
+        };
+        self.entries[index].node.layout_style = layout_style;
         self.entries[index].invalidated = true;
         Ok(self)
     }

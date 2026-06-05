@@ -5,15 +5,24 @@
     "": {
       "devDependencies": {
         "@babel/core": "7.29.7",
+        "@babel/generator": "7.29.7",
         "@babel/parser": "7.29.7",
         "@babel/preset-react": "7.29.7",
         "@babel/preset-typescript": "7.29.7",
         "@types/babel__core": "7.20.5",
+        "@types/babel__generator": "^7.27.0",
         "@vue/compiler-dom": "3.5.35",
         "@vue/compiler-sfc": "3.5.35",
         "babel-preset-solid": "1.9.12",
         "svelte": "5.56.2",
         "typescript": "6.0.3",
+      },
+    },
+    "packages/hawk2ui-compiler": {
+      "name": "@hawk2ui/compiler",
+      "version": "0.1.0",
+      "bin": {
+        "hawk2ui-compile": "./src/cli.ts",
       },
     },
     "packages/hawk2ui-native": {
@@ -25,6 +34,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@babel/core": "7.29.7",
+        "@babel/generator": "7.29.7",
         "@babel/parser": "7.29.7",
         "@babel/preset-react": "7.29.7",
         "@babel/preset-typescript": "7.29.7",
@@ -38,6 +48,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@babel/core": "7.29.7",
+        "@babel/generator": "7.29.7",
         "@babel/parser": "7.29.7",
         "@babel/preset-typescript": "7.29.7",
         "babel-preset-solid": "1.9.12",
@@ -132,6 +143,8 @@
     "@babel/traverse": ["@babel/traverse@7.29.7", "", { "dependencies": { "@babel/code-frame": "^7.29.7", "@babel/generator": "^7.29.7", "@babel/helper-globals": "^7.29.7", "@babel/parser": "^7.29.7", "@babel/template": "^7.29.7", "@babel/types": "^7.29.7", "debug": "^4.3.1" } }, "sha512-EhlfNQtZ+NK22w5BM61ciuiq1m58ed33Wr1Xan//ZRTy6hgjnwyCffRYwzsGXdASJSUJ1guZILsErh1eQcl+zw=="],
 
     "@babel/types": ["@babel/types@7.29.7", "", { "dependencies": { "@babel/helper-string-parser": "^7.29.7", "@babel/helper-validator-identifier": "^7.29.7" } }, "sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA=="],
+
+    "@hawk2ui/compiler": ["@hawk2ui/compiler@workspace:packages/hawk2ui-compiler"],
 
     "@hawk2ui/native": ["@hawk2ui/native@workspace:packages/hawk2ui-native"],
 

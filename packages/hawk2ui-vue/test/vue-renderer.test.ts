@@ -18,6 +18,46 @@ test("Vue compiler emits versioned native compiler artifacts from SFC templates"
   ]);
 });
 
+test("Vue compiler preserves dynamic text bindings from template interpolations", () => {
+  const output = compileHawkVue({
+    filename: "App.vue",
+    source:
+      '<script setup>const label = computed(() => "Title");</script><template><hawk-view id="root"><hawk-text id="title">{{ label }}</hawk-text></hawk-view></template>',
+  });
+
+  expect(output.compilerArtifact.dynamic_bindings).toEqual([
+    {
+      node_id: "title",
+      target: { type: "prop", name: "text" },
+      expression: "label",
+      dependencies: ["label"],
+    },
+  ]);
+});
+
+test("Vue compiler preserves dynamic layout prop bindings from template bindings", () => {
+  const output = compileHawkVue({
+    filename: "App.vue",
+    source:
+      '<script setup>const panelWidth = computed(() => 240); const panelHeight = computed(() => 120);</script><template><hawk-view id="root"><hawk-view id="panel" :width="panelWidth" :height="panelHeight"></hawk-view></hawk-view></template>',
+  });
+
+  expect(output.compilerArtifact.dynamic_bindings).toEqual([
+    {
+      node_id: "panel",
+      target: { type: "prop", name: "width" },
+      expression: "panelWidth",
+      dependencies: ["panelWidth"],
+    },
+    {
+      node_id: "panel",
+      target: { type: "prop", name: "height" },
+      expression: "panelHeight",
+      dependencies: ["panelHeight"],
+    },
+  ]);
+});
+
 test("Vue renderer renders, patches, removes children, and unmounts deterministically", () => {
   const renderer = createHawkVueRenderer();
   const target = { id: "host" };

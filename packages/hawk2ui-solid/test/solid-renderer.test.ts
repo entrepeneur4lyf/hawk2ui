@@ -5,7 +5,7 @@ test("Solid compiler emits versioned native compiler artifacts from TSX", () => 
   const output = compileHawkSolid({
     filename: "App.tsx",
     source:
-      'const [items] = createSignal([{ id: "title" }, { id: "cta" }]); export function App() { return <hawk-view id="root" ref={root_ref} class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}><For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For></hawk-view>; }',
+      'export function App() { const [items] = createSignal([{ id: "title" }, { id: "cta" }]); return <hawk-view id="root" ref={root_ref} class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}><For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For></hawk-view>; }',
   });
 
   expect(output.compilerArtifact.schema_version).toBe(1);
@@ -16,6 +16,46 @@ test("Solid compiler emits versioned native compiler artifacts from TSX", () => 
     { kind: "signal", name: "items" },
     { kind: "keyed-for-each", name: "items" },
     { kind: "effect", name: "root-props" },
+  ]);
+});
+
+test("Solid compiler preserves dynamic text bindings from signal expressions", () => {
+  const output = compileHawkSolid({
+    filename: "App.tsx",
+    source:
+      'const [label] = createSignal("Title"); export function App() { return <hawk-view id="root"><hawk-text id="title">{label()}</hawk-text></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.dynamic_bindings).toEqual([
+    {
+      node_id: "title",
+      target: { type: "prop", name: "text" },
+      expression: "label()",
+      dependencies: ["label"],
+    },
+  ]);
+});
+
+test("Solid compiler preserves dynamic layout prop bindings from signal expressions", () => {
+  const output = compileHawkSolid({
+    filename: "App.tsx",
+    source:
+      'const [panelWidth] = createSignal(240); const [panelHeight] = createSignal(120); export function App() { return <hawk-view id="root"><hawk-view id="panel" width={panelWidth()} height={panelHeight()}></hawk-view></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.dynamic_bindings).toEqual([
+    {
+      node_id: "panel",
+      target: { type: "prop", name: "width" },
+      expression: "panelWidth()",
+      dependencies: ["panelWidth"],
+    },
+    {
+      node_id: "panel",
+      target: { type: "prop", name: "height" },
+      expression: "panelHeight()",
+      dependencies: ["panelHeight"],
+    },
   ]);
 });
 

@@ -9,6 +9,9 @@ use std::{
 
 use boa_engine::{Context, JsValue, JsVariant, Source};
 use hawk2ui_api::Diagnostic;
+use hawk2ui_authoring::{
+    FrameworkDynamicBinding, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PropValue,
+};
 use oxc_allocator::Allocator;
 use oxc_codegen::Codegen;
 use oxc_parser::Parser;
@@ -594,6 +597,114 @@ pub enum StructuredValue {
     String(String),
 }
 
+/// Dependency value made available while evaluating a framework dynamic binding expression.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DynamicExpressionValue {
+    /// Null value.
+    Null,
+    /// Boolean value.
+    Bool(bool),
+    /// Numeric value.
+    Number(f64),
+    /// String value.
+    String(String),
+    /// Ordered array value.
+    Array(Vec<DynamicExpressionValue>),
+    /// Object value keyed by stable property name.
+    Object(BTreeMap<String, DynamicExpressionValue>),
+}
+
+impl DynamicExpressionValue {
+    /// Creates a null value.
+    #[must_use]
+    pub const fn null() -> Self {
+        Self::Null
+    }
+
+    /// Creates a boolean value.
+    #[must_use]
+    pub const fn bool(value: bool) -> Self {
+        Self::Bool(value)
+    }
+
+    /// Creates a numeric value.
+    #[must_use]
+    pub const fn number(value: f64) -> Self {
+        Self::Number(value)
+    }
+
+    /// Creates a string value.
+    #[must_use]
+    pub fn string(value: impl Into<String>) -> Self {
+        Self::String(value.into())
+    }
+
+    /// Creates an array value.
+    #[must_use]
+    pub fn array(values: impl IntoIterator<Item = DynamicExpressionValue>) -> Self {
+        Self::Array(values.into_iter().collect())
+    }
+
+    /// Creates an object value.
+    #[must_use]
+    pub fn object<K>(entries: impl IntoIterator<Item = (K, DynamicExpressionValue)>) -> Self
+    where
+        K: Into<String>,
+    {
+        Self::Object(
+            entries
+                .into_iter()
+                .map(|(key, value)| (key.into(), value))
+                .collect(),
+        )
+    }
+
+    const fn is_container(&self) -> bool {
+        matches!(self, Self::Array(_) | Self::Object(_))
+    }
+}
+
+/// How one dependency is projected into a dynamic expression evaluation scope.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DynamicExpressionBinding {
+    /// Plain value binding, used by React, Svelte, and Vue-style expressions such as `label`.
+    Value(DynamicExpressionValue),
+    /// Getter function binding, used by Solid-style signal expressions such as `label()`.
+    Getter(DynamicExpressionValue),
+}
+
+/// Dependency environment for one framework dynamic binding expression.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DynamicExpressionEnvironment {
+    bindings: BTreeMap<String, DynamicExpressionBinding>,
+}
+
+impl DynamicExpressionEnvironment {
+    /// Creates an empty dynamic expression environment.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            bindings: BTreeMap::new(),
+        }
+    }
+
+    /// Adds a plain dependency value.
+    #[must_use]
+    pub fn with_value(mut self, name: impl Into<String>, value: DynamicExpressionValue) -> Self {
+        self.bindings
+            .insert(name.into(), DynamicExpressionBinding::Value(value));
+        self
+    }
+
+    /// Adds a getter dependency value.
+    #[must_use]
+    pub fn with_getter(mut self, name: impl Into<String>, value: DynamicExpressionValue) -> Self {
+        self.bindings
+            .insert(name.into(), DynamicExpressionBinding::Getter(value));
+        self
+    }
+}
+
 /// Script execution output.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScriptExecution {
@@ -860,6 +971,18 @@ impl ScriptBackendError {
     pub const fn diagnostic(&self) -> &ScriptDiagnostic {
         &self.diagnostic
     }
+
+    /// Returns the diagnostic rule.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        self.diagnostic.rule()
+    }
+
+    /// Returns the diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        self.diagnostic.message()
+    }
 }
 
 impl From<ScriptBackendError> for Diagnostic {
@@ -962,6 +1085,66 @@ impl ScriptBackend {
         };
         self.executed_modules.push(module);
         Ok(execution)
+    }
+
+    /// Evaluates one framework dynamic binding expression against a dependency environment.
+    ///
+    /// The expression is executed by Boa under the backend's deterministic execution limits. Plain
+    /// dependencies are projected as `const name = value`; getter dependencies are projected as
+    /// `const name = () => value`, matching Solid-style signal reads.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptBackendError`] when the backend is stopped, dependency names are unsafe,
+    /// dependency values cannot be represented as JavaScript literals, or JavaScript evaluation
+    /// fails.
+    pub fn evaluate_dynamic_expression(
+        &mut self,
+        expression: &str,
+        environment: &DynamicExpressionEnvironment,
+    ) -> Result<StructuredValue, ScriptBackendError> {
+        self.ensure_running()?;
+        evaluate_dynamic_expression(expression, environment, self.execution_limits)
+    }
+
+    /// Evaluates one framework dynamic binding into a native property value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptBackendError`] when expression evaluation fails or the expression result
+    /// cannot be represented as a native scalar property value.
+    pub fn evaluate_dynamic_binding(
+        &mut self,
+        binding: &FrameworkDynamicBinding,
+        environment: &DynamicExpressionEnvironment,
+    ) -> Result<PropValue, ScriptBackendError> {
+        structured_value_to_prop_value(
+            self.evaluate_dynamic_expression(binding.expression(), environment)?,
+        )
+    }
+
+    /// Evaluates and applies every dynamic binding carried by a runtime bridge artifact.
+    ///
+    /// Bindings are applied in compiler declaration order. Each successful application returns a new
+    /// runtime tree with the affected node invalidated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptBackendError`] when expression evaluation fails, a value cannot be converted
+    /// into a native property value, or the runtime bridge rejects the patch target.
+    pub fn apply_dynamic_bindings(
+        &mut self,
+        mut artifact: NativeRuntimeBridgeArtifact,
+        environment: &DynamicExpressionEnvironment,
+    ) -> Result<NativeRuntimeBridgeArtifact, ScriptBackendError> {
+        let bindings = artifact.dynamic_bindings().to_vec();
+        for binding in bindings {
+            let value = self.evaluate_dynamic_binding(&binding, environment)?;
+            artifact = artifact
+                .apply_dynamic_binding(&binding, value)
+                .map_err(|error| script_error_from_runtime_bridge(&error))?;
+        }
+        Ok(artifact)
     }
 
     /// Compiles a JavaScript or TypeScript module into executable JavaScript without evaluating it.
@@ -1317,6 +1500,152 @@ fn evaluate_javascript(
     })
 }
 
+fn evaluate_dynamic_expression(
+    expression: &str,
+    environment: &DynamicExpressionEnvironment,
+    limits: ScriptExecutionLimits,
+) -> Result<StructuredValue, ScriptBackendError> {
+    if expression.trim().is_empty() {
+        return Err(ScriptBackendError::new(
+            "script.dynamic-expression.empty",
+            "dynamic binding expression must not be empty",
+        ));
+    }
+    let source = dynamic_expression_source(expression, environment)?;
+    enforce_source_limit(
+        "script.dynamic-expression.too-large",
+        "dynamic expression source exceeds configured execution limit",
+        source.len(),
+        limits.max_source_bytes(),
+    )?;
+    evaluate_javascript(&source, limits)
+}
+
+fn dynamic_expression_source(
+    expression: &str,
+    environment: &DynamicExpressionEnvironment,
+) -> Result<String, ScriptBackendError> {
+    let mut source = String::from("\"use strict\";\n");
+    for (name, binding) in &environment.bindings {
+        if !is_safe_identifier(name) {
+            return Err(ScriptBackendError::new(
+                "script.dynamic-expression.dependency-invalid",
+                format!(
+                    "dynamic expression dependency `{name}` is not a safe JavaScript identifier"
+                ),
+            ));
+        }
+        match binding {
+            DynamicExpressionBinding::Value(value) => {
+                writeln!(
+                    source,
+                    "const {name} = {};",
+                    dynamic_expression_binding_literal(value)?
+                )
+                .map_err(dynamic_expression_source_error)?;
+            }
+            DynamicExpressionBinding::Getter(value) => {
+                writeln!(
+                    source,
+                    "const {name} = () => {};",
+                    dynamic_expression_binding_literal(value)?
+                )
+                .map_err(dynamic_expression_source_error)?;
+            }
+        }
+    }
+    write!(source, "({});", expression.trim()).map_err(dynamic_expression_source_error)?;
+    Ok(source)
+}
+
+fn dynamic_expression_source_error(error: fmt::Error) -> ScriptBackendError {
+    ScriptBackendError::new(
+        "script.dynamic-expression.source-failed",
+        format!("failed to build dynamic expression source: {error}"),
+    )
+}
+
+fn dynamic_expression_binding_literal(
+    value: &DynamicExpressionValue,
+) -> Result<String, ScriptBackendError> {
+    let literal = dynamic_expression_value_js_literal(value)?;
+    if value.is_container() {
+        Ok(format!("Object.freeze({literal})"))
+    } else {
+        Ok(literal)
+    }
+}
+
+fn dynamic_expression_value_js_literal(
+    value: &DynamicExpressionValue,
+) -> Result<String, ScriptBackendError> {
+    match value {
+        DynamicExpressionValue::Null => Ok("null".to_string()),
+        DynamicExpressionValue::Bool(value) => Ok(value.to_string()),
+        DynamicExpressionValue::Number(value) if value.is_finite() => Ok(value.to_string()),
+        DynamicExpressionValue::Number(_) => Err(ScriptBackendError::new(
+            "script.dynamic-expression.value-invalid",
+            "dynamic expression numeric dependency value must be finite",
+        )),
+        DynamicExpressionValue::String(value) => Ok(js_string_literal(value)),
+        DynamicExpressionValue::Array(values) => {
+            let mut literal = String::from("[");
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    literal.push(',');
+                }
+                literal.push_str(&dynamic_expression_value_js_literal(value)?);
+            }
+            literal.push(']');
+            Ok(literal)
+        }
+        DynamicExpressionValue::Object(values) => {
+            let mut literal = String::from("{");
+            for (index, (key, value)) in values.iter().enumerate() {
+                if index > 0 {
+                    literal.push(',');
+                }
+                literal.push_str(&js_string_literal(key));
+                literal.push(':');
+                literal.push_str(&dynamic_expression_value_js_literal(value)?);
+            }
+            literal.push('}');
+            Ok(literal)
+        }
+    }
+}
+
+fn is_safe_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first == '$' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|character| character == '_' || character == '$' || character.is_ascii_alphanumeric())
+}
+
+fn structured_value_to_prop_value(value: StructuredValue) -> Result<PropValue, ScriptBackendError> {
+    match value {
+        StructuredValue::Bool(value) => Ok(PropValue::Bool(value)),
+        StructuredValue::Number(value) if value.is_finite() => Ok(PropValue::Number(value)),
+        StructuredValue::Number(_) => Err(ScriptBackendError::new(
+            "script.dynamic-binding.value-invalid",
+            "dynamic binding numeric result must be finite",
+        )),
+        StructuredValue::String(value) => Ok(PropValue::String(value)),
+        StructuredValue::Null => Err(ScriptBackendError::new(
+            "script.dynamic-binding.value-unsupported",
+            "dynamic binding expression result cannot be null or undefined",
+        )),
+    }
+}
+
+fn script_error_from_runtime_bridge(error: &NativeRuntimeBridgeError) -> ScriptBackendError {
+    ScriptBackendError::new(error.rule(), error.message())
+}
+
 fn evaluate_javascript_with_host_jobs(
     source: &str,
     limits: ScriptExecutionLimits,
@@ -1618,6 +1947,91 @@ export function mount(host) {
                 .is_err(),
             "reading an unknown parameter key must throw"
         );
+    }
+
+    #[test]
+    fn dynamic_expression_evaluator_reads_values_objects_and_signal_getters() {
+        let mut backend =
+            ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+        let environment = DynamicExpressionEnvironment::new()
+            .with_value("label", DynamicExpressionValue::string("Live"))
+            .with_value(
+                "params",
+                DynamicExpressionValue::object([(
+                    "title",
+                    DynamicExpressionValue::string("Filter"),
+                )]),
+            )
+            .with_getter("meter", DynamicExpressionValue::number(0.75));
+
+        let value = backend
+            .evaluate_dynamic_expression("label + ':' + params.title + ':' + meter()", &environment)
+            .expect("dynamic binding expression evaluates");
+
+        assert_eq!(value, StructuredValue::String("Live:Filter:0.75".into()));
+    }
+
+    #[test]
+    fn dynamic_expression_evaluator_rejects_unsafe_dependency_names() {
+        let mut backend =
+            ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+        let environment = DynamicExpressionEnvironment::new().with_value(
+            "label; globalThis.pwned = true",
+            DynamicExpressionValue::string("bad"),
+        );
+
+        let error = backend
+            .evaluate_dynamic_expression("label", &environment)
+            .expect_err("dependency names must be identifier-safe");
+
+        assert_eq!(error.rule(), "script.dynamic-expression.dependency-invalid");
+    }
+
+    #[test]
+    fn dynamic_binding_evaluator_applies_values_to_runtime_artifacts() {
+        use hawk2ui_authoring::{
+            FrameworkDynamicBinding, FrameworkNativeNode, FrameworkNativeProgram,
+            NativeRuntimeBridge, PropValue,
+        };
+        use hawk2ui_runtime::{RuntimeViewId, RuntimeVisual};
+
+        let program = FrameworkNativeProgram::new(
+            FrameworkNativeNode::new("root", hawk2ui_authoring::ElementKind::View).with_child(
+                "title",
+                FrameworkNativeNode::new("title", hawk2ui_authoring::ElementKind::Text)
+                    .with_prop("width", PropValue::Number(160.0))
+                    .with_prop("height", PropValue::Number(32.0)),
+            ),
+        )
+        .with_dynamic_binding(FrameworkDynamicBinding::prop(
+            "title",
+            "text",
+            "label",
+            vec!["label".to_string()],
+        ));
+        let native = program
+            .to_native_authoring_artifact("App.tsx", true)
+            .expect("program finalizes");
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact(&native)
+            .expect("program bridges");
+        let environment = DynamicExpressionEnvironment::new()
+            .with_value("label", DynamicExpressionValue::string("Live"));
+        let mut backend =
+            ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+
+        let patched = backend
+            .apply_dynamic_bindings(runtime, &environment)
+            .expect("dynamic binding evaluates and patches runtime");
+
+        let title = patched
+            .runtime_tree()
+            .node(&RuntimeViewId::new("title"))
+            .expect("title node exists");
+        assert!(matches!(
+            title.visual(),
+            RuntimeVisual::Text(text) if text.text() == "Live"
+        ));
     }
 
     fn run_entry(source: &str, incoming_ui: &str) -> EntryEnvelope {

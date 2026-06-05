@@ -1930,6 +1930,8 @@ version = "0.1.0"
 dependencies = [
  "boa_engine",
  "hawk2ui-api",
+ "hawk2ui-authoring",
+ "hawk2ui-runtime",
  "oxc_allocator",
  "oxc_codegen",
  "oxc_parser",

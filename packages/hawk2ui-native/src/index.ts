@@ -77,10 +77,22 @@ export interface HawkCompilerReactiveBindingWire {
   readonly name: string;
 }
 
+export type HawkCompilerDynamicBindingTargetWire =
+  | { readonly type: "prop"; readonly name: string }
+  | { readonly type: "text" };
+
+export interface HawkCompilerDynamicBindingWire {
+  readonly node_id: string;
+  readonly target: HawkCompilerDynamicBindingTargetWire;
+  readonly expression: string;
+  readonly dependencies: readonly string[];
+}
+
 export interface HawkCompilerArtifact {
   readonly schema_version: 1;
   readonly root: HawkCompilerNodeWire;
   readonly reactivity: readonly HawkCompilerReactiveBindingWire[];
+  readonly dynamic_bindings: readonly HawkCompilerDynamicBindingWire[];
 }
 
 export interface HawkCompiledApp extends HawkAppSpec {
@@ -103,15 +115,23 @@ export function createHawkApp(spec: HawkAppSpec): HawkCompiledApp {
 export function compilerArtifactForApp(
   spec: HawkAppSpec,
   reactivity: readonly HawkCompilerReactiveBindingWire[] = [],
+  dynamicBindings: readonly HawkCompilerDynamicBindingWire[] = [],
 ): HawkCompilerArtifact {
   if (!spec.name.trim()) {
     throw new Error("Hawk2UI native app requires a stable name.");
   }
   validateElement(spec.root);
+  validateDynamicBindings(dynamicBindings, elementIds(spec.root));
   return {
     schema_version: 1,
     root: elementToWire(spec.root),
     reactivity: reactivity.map((binding) => ({ ...binding })),
+    dynamic_bindings: dynamicBindings.map((binding) => ({
+      node_id: binding.node_id,
+      target: { ...binding.target },
+      expression: binding.expression,
+      dependencies: [...binding.dependencies],
+    })),
   };
 }
 
@@ -224,6 +244,43 @@ function validateElement(element: HawkElementSpec): void {
       throw new Error(`native.asset.path-invalid: asset \`${asset.name}\` must use a workspace-relative safe path`);
     }
   }
+}
+
+function validateDynamicBindings(
+  bindings: readonly HawkCompilerDynamicBindingWire[],
+  ids: ReadonlySet<string>,
+): void {
+  for (const binding of bindings) {
+    if (!binding.node_id.trim()) {
+      throw new Error("native.dynamic-binding.node-id-invalid: dynamic bindings require stable node ids.");
+    }
+    if (!ids.has(binding.node_id)) {
+      throw new Error(`native.dynamic-binding.node-missing: dynamic binding references unknown node \`${binding.node_id}\`.`);
+    }
+    if (!binding.expression.trim()) {
+      throw new Error("native.dynamic-binding.expression-invalid: dynamic bindings require non-empty expressions.");
+    }
+    if (binding.target.type === "prop" && !binding.target.name.trim()) {
+      throw new Error("native.dynamic-binding.target-invalid: prop bindings require a property name.");
+    }
+    for (const dependency of binding.dependencies) {
+      if (!dependency.trim()) {
+        throw new Error("native.dynamic-binding.dependency-invalid: dynamic binding dependencies must be non-empty.");
+      }
+    }
+  }
+}
+
+function elementIds(root: HawkElementSpec): ReadonlySet<string> {
+  const ids = new Set<string>();
+  const visit = (element: HawkElementSpec): void => {
+    ids.add(element.id);
+    for (const child of element.children ?? []) {
+      visit(child);
+    }
+  };
+  visit(root);
+  return ids;
 }
 
 function isUnsafeAssetPath(path: string): boolean {

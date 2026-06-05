@@ -1,3 +1,16 @@
-name = "solid-basic"
-framework = "solid"
+[identity]
+id = "com.hawk2ui.examples.solid-basic"
+name = "Hawk2UI Solid Basic"
+version = "0.1.0"
+
+[source]
 entry = "src/App.tsx"
+framework = "solid"
+style = "styles/main.hawk.css"
+
+[capabilities]
+keys = ["native-windowing", "sealed-artifacts"]
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"

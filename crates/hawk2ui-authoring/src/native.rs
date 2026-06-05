@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use hawk2ui_api::Diagnostic;
 
+use crate::adapter::FrameworkDynamicBinding;
 use crate::{
     AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementId, ElementKind, ElementNode,
     EventBinding, EventKind, HandlerRef, LifecycleEventKind, PropValue,
@@ -318,6 +319,7 @@ pub struct NativeAuthoringArtifact {
     name: String,
     root: NativeAuthoringElement,
     events: Vec<EventBinding>,
+    dynamic_bindings: Vec<FrameworkDynamicBinding>,
     diagnostics: Vec<AuthoringDiagnostic>,
     operation_keys: Vec<String>,
 }
@@ -339,6 +341,12 @@ impl NativeAuthoringArtifact {
     #[must_use]
     pub fn events(&self) -> &[EventBinding] {
         &self.events
+    }
+
+    /// Returns runtime dynamic bindings in compiler declaration order.
+    #[must_use]
+    pub fn dynamic_bindings(&self) -> &[FrameworkDynamicBinding] {
+        &self.dynamic_bindings
     }
 
     /// Returns non-fatal diagnostics collected during finalization.
@@ -393,6 +401,7 @@ impl From<NativeAuthoringError> for Diagnostic {
 pub struct NativeAuthoringRuntime {
     name: String,
     root: Option<NativeAuthoringElement>,
+    dynamic_bindings: Vec<FrameworkDynamicBinding>,
 }
 
 impl NativeAuthoringRuntime {
@@ -402,12 +411,18 @@ impl NativeAuthoringRuntime {
         Self {
             name: name.into(),
             root: None,
+            dynamic_bindings: Vec::new(),
         }
     }
 
     /// Sets the root element to be finalized.
     pub fn mount(&mut self, root: NativeAuthoringElement) {
         self.root = Some(root);
+    }
+
+    /// Adds a runtime dynamic binding to the finalized native artifact.
+    pub fn bind_dynamic(&mut self, binding: FrameworkDynamicBinding) {
+        self.dynamic_bindings.push(binding);
     }
 
     /// Finalizes the mounted root into deterministic typed records.
@@ -454,6 +469,7 @@ impl NativeAuthoringRuntime {
             name: self.name,
             root,
             events,
+            dynamic_bindings: self.dynamic_bindings,
             diagnostics,
             operation_keys,
         })

@@ -19,6 +19,8 @@ workspace = true
 [dependencies]
 boa_engine = "0.21.1"
 hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
+hawk2ui-authoring = { version = "0.1.0", path = "../hawk2ui-authoring" }
+hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
 oxc_allocator = "0.133.0"
 oxc_codegen = "0.133.0"
 oxc_parser = "0.133.0"

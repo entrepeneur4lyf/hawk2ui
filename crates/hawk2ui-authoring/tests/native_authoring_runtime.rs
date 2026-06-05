@@ -1,9 +1,10 @@
 use hawk2ui_authoring::{
-    AssetRef, ElementKind, EventKind, EventPayloadField, NativeAuthoringElement,
+    AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkDynamicBinding,
+    FrameworkNativeProgram, FrameworkNativeProgramWire, NativeAuthoringElement,
     NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge,
     PointerEventKind, PropValue, StyleRef,
 };
-use hawk2ui_layout::Viewport;
+use hawk2ui_layout::{LayoutValue, Viewport};
 use hawk2ui_render::{Color, CustomSurfaceCategory, Geometry, RendererBackend};
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend};
 use hawk2ui_runtime::RuntimeViewId;
@@ -232,6 +233,145 @@ fn native_runtime_bridge_converts_authoring_artifact_to_runtime_view_tree() {
     );
     assert_eq!(bridged.metadata_for("root").unwrap().refs(), ["root_ref"]);
     assert_eq!(bridged.operation_keys(), artifact.operation_keys());
+}
+
+#[test]
+fn framework_dynamic_bindings_survive_native_runtime_bridge() {
+    let compiler_json = r#"{
+        "schema_version": 1,
+        "root": {
+            "id": "root",
+            "kind": "view",
+            "children": [
+                {
+                    "key": "title",
+                    "node": {
+                        "id": "title",
+                        "kind": "text",
+                        "props": [
+                            {"name": "width", "value": {"type": "number", "value": 160}},
+                            {"name": "height", "value": {"type": "number", "value": 32}}
+                        ]
+                    }
+                }
+            ]
+        },
+        "dynamic_bindings": [
+            {
+                "node_id": "title",
+                "target": {"type": "prop", "name": "text"},
+                "expression": "label",
+                "dependencies": ["label"]
+            }
+        ]
+    }"#;
+    let program = FrameworkNativeProgram::try_from(
+        FrameworkNativeProgramWire::from_json(compiler_json).expect("compiler JSON parses"),
+    )
+    .expect("compiler artifact validates");
+
+    let artifact = program
+        .to_native_authoring_artifact("App.tsx", true)
+        .expect("framework program finalizes");
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact(&artifact)
+        .expect("framework artifact bridges");
+
+    let expected = ["title:prop:text=label"];
+    assert_eq!(
+        artifact
+            .dynamic_bindings()
+            .iter()
+            .map(FrameworkDynamicBinding::stable_key)
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(
+        bridged
+            .dynamic_bindings()
+            .iter()
+            .map(FrameworkDynamicBinding::stable_key)
+            .collect::<Vec<_>>(),
+        expected
+    );
+
+    let patched = bridged
+        .apply_dynamic_binding(
+            &artifact.dynamic_bindings()[0],
+            PropValue::String("Live Title".to_string()),
+        )
+        .expect("dynamic binding applies to runtime tree");
+    let frame = RuntimeSceneBridge::new(Viewport::new(180.0, 80.0))
+        .build(patched.runtime_tree())
+        .expect("patched runtime tree builds");
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Text { id, text, .. }
+                if id.as_str() == "title" && text == "Live Title"
+        )
+    }));
+}
+
+#[test]
+fn framework_dynamic_size_bindings_update_runtime_layout() {
+    let compiler_json = r#"{
+        "schema_version": 1,
+        "root": {
+            "id": "root",
+            "kind": "view",
+            "children": [
+                {
+                    "key": "panel",
+                    "node": {
+                        "id": "panel",
+                        "kind": "view",
+                        "props": [
+                            {"name": "width", "value": {"type": "number", "value": 160}},
+                            {"name": "height", "value": {"type": "number", "value": 80}}
+                        ]
+                    }
+                }
+            ]
+        },
+        "dynamic_bindings": [
+            {
+                "node_id": "panel",
+                "target": {"type": "prop", "name": "width"},
+                "expression": "panelWidth",
+                "dependencies": ["panelWidth"]
+            },
+            {
+                "node_id": "panel",
+                "target": {"type": "prop", "name": "height"},
+                "expression": "panelHeight",
+                "dependencies": ["panelHeight"]
+            }
+        ]
+    }"#;
+    let program = FrameworkNativeProgram::try_from(
+        FrameworkNativeProgramWire::from_json(compiler_json).expect("compiler JSON parses"),
+    )
+    .expect("compiler artifact validates");
+    let artifact = program
+        .to_native_authoring_artifact("App.tsx", true)
+        .expect("framework program finalizes");
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact(&artifact)
+        .expect("framework artifact bridges");
+
+    let patched = bridged
+        .apply_dynamic_binding(&artifact.dynamic_bindings()[0], PropValue::Number(240.0))
+        .expect("dynamic width applies")
+        .apply_dynamic_binding(&artifact.dynamic_bindings()[1], PropValue::Number(120.0))
+        .expect("dynamic height applies");
+
+    let panel = patched
+        .runtime_tree()
+        .node(&RuntimeViewId::new("panel"))
+        .expect("panel node exists");
+    assert_eq!(panel.layout_style().size().width(), LayoutValue::Px(240.0));
+    assert_eq!(panel.layout_style().size().height(), LayoutValue::Px(120.0));
 }
 
 #[test]
