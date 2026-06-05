@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
 //! Production text backend for `Hawk2UI` font discovery, shaping, line breaking, bidi, glyph cache, and high-DPI metrics.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 use parley::{
     FontContext, FontStack, LayoutContext, StyleProperty,
@@ -381,6 +384,71 @@ impl GlyphCacheKey {
     }
 }
 
+/// Snapshot of the text backend glyph/layout cache.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GlyphCacheStats {
+    entries: usize,
+    hits: u64,
+    misses: u64,
+    font_generation: u64,
+}
+
+impl GlyphCacheStats {
+    /// Returns cached layout entry count.
+    #[must_use]
+    pub const fn entries(self) -> usize {
+        self.entries
+    }
+
+    /// Returns cache hit count since backend creation or the last clear.
+    #[must_use]
+    pub const fn hits(self) -> u64 {
+        self.hits
+    }
+
+    /// Returns cache miss count since backend creation or the last clear.
+    #[must_use]
+    pub const fn misses(self) -> u64 {
+        self.misses
+    }
+
+    /// Returns the font catalog generation this cache is keyed against.
+    #[must_use]
+    pub const fn font_generation(self) -> u64 {
+        self.font_generation
+    }
+}
+
+#[derive(Debug, Default)]
+struct GlyphCache {
+    entries: BTreeMap<String, GlyphCacheEntry>,
+    hits: u64,
+    misses: u64,
+}
+
+impl GlyphCache {
+    fn stats(&self, font_generation: u64) -> GlyphCacheStats {
+        GlyphCacheStats {
+            entries: self.entries.len(),
+            hits: self.hits,
+            misses: self.misses,
+            font_generation,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.hits = 0;
+        self.misses = 0;
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct GlyphCacheEntry {
+    layout: TextLayout,
+    font_generation: u64,
+}
+
 /// Text backend diagnostic.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TextDiagnostic {
@@ -439,6 +507,7 @@ pub struct TextBackend {
     _scale_context: ScaleContext,
     parley_font_context: Mutex<FontContext>,
     parley_layout_context: Mutex<LayoutContext<()>>,
+    glyph_cache: Mutex<GlyphCache>,
 }
 
 impl TextBackend {
@@ -451,6 +520,7 @@ impl TextBackend {
             _scale_context: ScaleContext::new(),
             parley_font_context: Mutex::new(parley_font_context),
             parley_layout_context: Mutex::new(LayoutContext::new()),
+            glyph_cache: Mutex::new(GlyphCache::default()),
         }
     }
 
@@ -563,6 +633,63 @@ impl TextBackend {
                 self.catalog.generation()
             ),
         })
+    }
+
+    /// Produces a text layout using the backend glyph/layout cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TextBackendError`] when input validation, font resolution, or
+    /// layout shaping fails.
+    pub fn layout_cached(&self, input: &TextLayoutInput) -> Result<TextLayout, TextBackendError> {
+        let key = self.glyph_cache_key(input)?.stable_key;
+        let font_generation = self.catalog.generation();
+        {
+            let mut cache = self
+                .glyph_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(entry) = cache.entries.get(&key)
+                && entry.font_generation == font_generation
+            {
+                let layout = entry.layout.clone();
+                cache.hits = cache.hits.saturating_add(1);
+                return Ok(layout);
+            }
+            cache.entries.remove(&key);
+            cache.misses = cache.misses.saturating_add(1);
+        }
+
+        let layout = self.layout(input)?;
+        let mut cache = self
+            .glyph_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.entries.insert(
+            key,
+            GlyphCacheEntry {
+                layout: layout.clone(),
+                font_generation,
+            },
+        );
+        Ok(layout)
+    }
+
+    /// Returns a snapshot of glyph/layout cache activity.
+    #[must_use]
+    pub fn glyph_cache_stats(&self) -> GlyphCacheStats {
+        self.glyph_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .stats(self.catalog.generation())
+    }
+
+    /// Clears all cached glyph/layout entries and cache counters.
+    pub fn clear_glyph_cache(&self) {
+        self.glyph_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     fn layout_with_parley(

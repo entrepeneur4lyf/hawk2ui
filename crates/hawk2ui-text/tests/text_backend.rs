@@ -189,6 +189,54 @@ fn text_backend_generates_stable_glyph_cache_invalidation_keys() {
 }
 
 #[test]
+fn text_backend_caches_layouts_by_glyph_key_and_tracks_cache_stats() {
+    let backend = TextBackend::new(
+        FontCatalog::new()
+            .with_app_font("AppDisplay", "assets/fonts/Tuffy.ttf", TUFFY_TTF.to_vec())
+            .with_fallback_family("AppDisplay"),
+    );
+    let input = TextLayoutInput::new("Cache me", "AppDisplay", 18.0).with_dpi_scale(2.0);
+
+    let initial = backend.glyph_cache_stats();
+    assert_eq!(initial.entries(), 0);
+    assert_eq!(initial.hits(), 0);
+    assert_eq!(initial.misses(), 0);
+    assert_eq!(initial.font_generation(), backend.font_generation());
+
+    let first = backend
+        .layout_cached(&input)
+        .expect("first cached layout succeeds");
+    let after_miss = backend.glyph_cache_stats();
+    assert_eq!(after_miss.entries(), 1);
+    assert_eq!(after_miss.hits(), 0);
+    assert_eq!(after_miss.misses(), 1);
+
+    let second = backend
+        .layout_cached(&input)
+        .expect("second cached layout succeeds");
+    let after_hit = backend.glyph_cache_stats();
+    assert_eq!(first, second);
+    assert_eq!(after_hit.entries(), 1);
+    assert_eq!(after_hit.hits(), 1);
+    assert_eq!(after_hit.misses(), 1);
+
+    let different_size = input.clone().with_dpi_scale(1.0);
+    backend
+        .layout_cached(&different_size)
+        .expect("distinct glyph key should layout");
+    let after_second_miss = backend.glyph_cache_stats();
+    assert_eq!(after_second_miss.entries(), 2);
+    assert_eq!(after_second_miss.hits(), 1);
+    assert_eq!(after_second_miss.misses(), 2);
+
+    backend.clear_glyph_cache();
+    let cleared = backend.glyph_cache_stats();
+    assert_eq!(cleared.entries(), 0);
+    assert_eq!(cleared.hits(), 0);
+    assert_eq!(cleared.misses(), 0);
+}
+
+#[test]
 fn text_backend_rejects_invalid_layout_and_cache_inputs() {
     let backend = TextBackend::new(FontCatalog::new().with_system_family("Display"));
 
