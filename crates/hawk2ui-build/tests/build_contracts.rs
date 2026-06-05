@@ -3,12 +3,12 @@ use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_build::{
     ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1, ArtifactHash, ArtifactSchemaVersion,
     ArtifactSignature, ArtifactSignaturePolicy, ArtifactSignatureVerificationKey,
-    ArtifactSignatureVerifier, AssetCompilationError, AssetCompilationPlan, AssetDimensions,
-    AssetKind, AssetManifestEntry, AssetSanitizationStatus, AssetSource, AssetSourceIndex,
-    BuildDiagnostic, BuildDiagnosticSeverity, BuildPhase, BuildPipeline, BuildPipelineError,
-    BuildWorkspace, BuildWorkspaceError, CompiledAssetRecord, CompiledScriptRecord,
-    CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget, PackageTargetRecord,
-    SealedArtifact, SealedArtifactError, SourceSpan, VerificationReport,
+    ArtifactSignatureVerifier, ArtifactSigningKey, AssetCompilationError, AssetCompilationPlan,
+    AssetDimensions, AssetKind, AssetManifestEntry, AssetSanitizationStatus, AssetSource,
+    AssetSourceIndex, BuildDiagnostic, BuildDiagnosticSeverity, BuildPhase, BuildPipeline,
+    BuildPipelineError, BuildWorkspace, BuildWorkspaceError, CompiledAssetRecord,
+    CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget,
+    PackageTargetRecord, SealedArtifact, SealedArtifactError, SourceSpan, VerificationReport,
 };
 use hawk2ui_plugin::{ParameterRange, ParameterValue};
 use image::{ColorType, ImageEncoder};
@@ -1129,6 +1129,34 @@ fn sealed_artifact_container_serializes_verifies_and_enforces_signature_policy()
         &verifier,
     )
     .expect("trusted release signature verifies");
+    assert_eq!(trusted, signed);
+}
+
+#[test]
+fn artifact_signing_key_signs_verifiable_release_container() {
+    let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
+    let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(CompiledScriptRecord::new(
+            "main",
+            "src/main.ts",
+            "scripts/main.hawk.js",
+            ArtifactHash::from_bytes(b"script"),
+        ));
+    let signing_key = ArtifactSigningKey::ed25519_sha256_v1("release-key", [7; 32]);
+
+    let signed = signing_key.sign(&artifact);
+    let release_bytes = signed
+        .to_container_bytes(ArtifactSignaturePolicy::RequireVerifiedSignature)
+        .expect("signed release container serializes");
+    let verifier = ArtifactSignatureVerifier::new([signing_key.verification_key()]);
+    let trusted = SealedArtifact::from_trusted_container_bytes(
+        &release_bytes,
+        ArtifactSchemaVersion::new(1, 0),
+        &verifier,
+    )
+    .expect("trusted signature verifies");
+
+    assert_eq!(signed.signature.key_id, "release-key");
     assert_eq!(trusted, signed);
 }
 

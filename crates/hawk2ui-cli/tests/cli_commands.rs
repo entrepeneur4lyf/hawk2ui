@@ -1,3 +1,4 @@
+use hawk2ui_build::ArtifactSigningKey;
 use hawk2ui_cli::{CliCommand, CliExitCode, CommandCatalog, WorkspaceCommandRunner};
 use std::{
     fs,
@@ -167,7 +168,7 @@ fn workspace_new_project_creates_buildable_desktop_and_plugin_scaffold() {
     let validate = WorkspaceCommandRunner::new(&root).execute(CliCommand::Validate);
     assert_eq!(validate.exit_code, CliExitCode::Success);
 
-    let build = WorkspaceCommandRunner::new(&root).execute(CliCommand::BuildRelease);
+    let build = signed_runner(&root).execute(CliCommand::BuildRelease);
     assert_eq!(build.exit_code, CliExitCode::Success);
     assert!(build.stdout.contains("compiled-scripts: 2"));
     assert!(build.stdout.contains("compiled-styles: 1"));
@@ -483,7 +484,7 @@ path = "assets/logo.svg"
     );
     write_file(&root.join("assets/logo.svg"), "<svg />");
 
-    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::BuildRelease);
+    let execution = signed_runner(&root).execute(CliCommand::BuildRelease);
 
     assert_eq!(execution.exit_code, CliExitCode::Success);
     assert!(execution.stdout.contains("built production artifact"));
@@ -493,30 +494,71 @@ path = "assets/logo.svg"
     assert!(execution.stdout.contains("content-hash: sha256:"));
     assert!(execution.stdout.contains("artifact-path: "));
     assert!(
+        execution
+            .stdout
+            .contains("signature-policy: verified-release")
+    );
+    assert!(
         root.join("target/hawk2ui/release/hawk2ui-artifact.hawk")
             .is_file()
     );
 }
 
 #[test]
+fn workspace_build_release_requires_release_signing_key() {
+    let root = temp_cli_workspace("build-release-unsigned");
+    write_desktop_project(&root, "com.hawk2ui.cli-build-unsigned", "Unsigned Build");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::BuildRelease);
+
+    assert_eq!(execution.exit_code, CliExitCode::Verification);
+    assert_eq!(
+        execution.diagnostics[0].rule,
+        "artifact.signature.signing-key-missing"
+    );
+}
+
+#[test]
+fn workspace_build_release_and_verify_accept_hex_release_key_configuration() {
+    let root = temp_cli_workspace("build-release-hex-signing");
+    write_desktop_project_with_asset(&root, "com.hawk2ui.cli-hex-signing", "Hex Signing");
+    let signing_key_hex = "07".repeat(32);
+    let verification_key =
+        ArtifactSigningKey::ed25519_sha256_v1("hex-release-key", [7; 32]).verification_key();
+
+    let build = WorkspaceCommandRunner::new(&root)
+        .with_release_signing_key_hex("hex-release-key", signing_key_hex)
+        .expect("hex signing key should parse")
+        .execute(CliCommand::BuildRelease);
+    assert_eq!(build.exit_code, CliExitCode::Success);
+
+    let artifact_path = root.join("target/hawk2ui/release/hawk2ui-artifact.hawk");
+    let verify = WorkspaceCommandRunner::new(&root)
+        .with_trusted_release_key_hex("hex-release-key", verification_key.public_key)
+        .execute(CliCommand::VerifyArtifact {
+            path: Some(artifact_path.display().to_string()),
+        });
+
+    assert_eq!(verify.exit_code, CliExitCode::Success);
+    assert!(verify.stdout.contains("trust-status: release-ready"));
+}
+
+#[test]
 fn workspace_verify_artifact_reads_written_container_and_rejects_tampering() {
     let root = temp_cli_workspace("verify-artifact");
-    write_desktop_project(&root, "com.hawk2ui.cli-verify", "CLI Verify");
+    write_desktop_project_with_asset(&root, "com.hawk2ui.cli-verify", "CLI Verify");
 
-    let build = WorkspaceCommandRunner::new(&root).execute(CliCommand::BuildRelease);
+    let build = signed_runner(&root).execute(CliCommand::BuildRelease);
     assert_eq!(build.exit_code, CliExitCode::Success);
     let artifact_path = root.join("target/hawk2ui/release/hawk2ui-artifact.hawk");
 
-    let verify = WorkspaceCommandRunner::new(&root).execute(CliCommand::VerifyArtifact {
+    let verify = signed_runner(&root).execute(CliCommand::VerifyArtifact {
         path: Some(artifact_path.display().to_string()),
     });
     assert_eq!(verify.exit_code, CliExitCode::Success);
     assert!(verify.stdout.contains("verified artifact container"));
-    assert!(
-        verify
-            .stdout
-            .contains("signature-status: unsigned-development")
-    );
+    assert!(verify.stdout.contains("signature-status: verified"));
+    assert!(verify.stdout.contains("trust-status: release-ready"));
 
     let mut bytes = fs::read(&artifact_path).expect("artifact container should be readable");
     let last = bytes
@@ -525,7 +567,7 @@ fn workspace_verify_artifact_reads_written_container_and_rejects_tampering() {
     *last ^= 0x01;
     fs::write(&artifact_path, bytes).expect("tampered artifact should be written");
 
-    let tampered = WorkspaceCommandRunner::new(&root).execute(CliCommand::VerifyArtifact {
+    let tampered = signed_runner(&root).execute(CliCommand::VerifyArtifact {
         path: Some(artifact_path.display().to_string()),
     });
     assert_eq!(tampered.exit_code, CliExitCode::Verification);
@@ -534,6 +576,30 @@ fn workspace_verify_artifact_reads_written_container_and_rejects_tampering() {
             .rule
             .starts_with("artifact.container")
             || tampered.diagnostics[0].rule.starts_with("artifact.schema")
+    );
+}
+
+#[test]
+fn workspace_verify_artifact_rejects_unsigned_development_container() {
+    let root = temp_cli_workspace("verify-unsigned-artifact");
+    write_desktop_project_with_asset(
+        &root,
+        "com.hawk2ui.cli-verify-unsigned",
+        "CLI Verify Unsigned",
+    );
+
+    let build = WorkspaceCommandRunner::new(&root).execute(CliCommand::BuildDev);
+    assert_eq!(build.exit_code, CliExitCode::Success);
+    let artifact_path = root.join("target/hawk2ui/dev/hawk2ui-artifact.hawk");
+
+    let verify = signed_runner(&root).execute(CliCommand::VerifyArtifact {
+        path: Some(artifact_path.display().to_string()),
+    });
+
+    assert_eq!(verify.exit_code, CliExitCode::Verification);
+    assert_eq!(
+        verify.diagnostics[0].rule,
+        "security.package.signature-missing"
     );
 }
 
@@ -870,6 +936,13 @@ fn write_file(path: &Path, contents: &str) {
     fs::write(path, contents).expect("test file should be written");
 }
 
+fn signed_runner(root: &Path) -> WorkspaceCommandRunner {
+    let signing_key = ArtifactSigningKey::ed25519_sha256_v1("test-release-key", [7; 32]);
+    WorkspaceCommandRunner::new(root)
+        .with_release_signing_key(signing_key.clone())
+        .with_trusted_release_key(signing_key.verification_key())
+}
+
 fn write_desktop_project(root: &Path, id: &str, name: &str) {
     write_file(
         &root.join("manifest.hawk.toml"),
@@ -898,4 +971,40 @@ name = "linux-wayland"
         &root.join("styles/main.hawk.css"),
         ".root { display: flex; font-size: 18px; background-color: token(color.surface); }",
     );
+}
+
+fn write_desktop_project_with_asset(root: &Path, id: &str, name: &str) {
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        &format!(
+            r#"
+[identity]
+id = "{id}"
+name = "{name}"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+style = "styles/main.hawk.css"
+
+[capabilities]
+keys = ["native-windowing", "sealed-artifacts"]
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+"#
+        ),
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'desktop';");
+    write_file(
+        &root.join("styles/main.hawk.css"),
+        ".root { display: flex; font-size: 18px; background-color: token(color.surface); }",
+    );
+    write_file(&root.join("assets/logo.svg"), "<svg />");
 }

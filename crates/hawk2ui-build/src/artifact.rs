@@ -1,10 +1,11 @@
 //! Sealed artifact records and compatibility checks.
 
 use crate::{BuildDiagnostic, BuildDiagnosticSeverity, HawkManifest, PackageTarget};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fmt;
 
 const SEALED_ARTIFACT_CONTAINER_MAGIC: &[u8] = b"HAWK2UI-ARTIFACT-V1\n";
 const SEALED_ARTIFACT_SIGNATURE_PAYLOAD_MAGIC: &[u8] = b"HAWK2UI-ARTIFACT-SIGNATURE-V1\n";
@@ -58,6 +59,12 @@ fn push_hex(output: &mut String, bytes: &[u8]) {
         output.push(hex_nibble(byte >> 4));
         output.push(hex_nibble(byte & 0x0f));
     }
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    push_hex(&mut encoded, bytes);
+    encoded
 }
 
 fn hex_nibble(value: u8) -> char {
@@ -199,6 +206,75 @@ impl ArtifactSignatureVerifier {
                     "sealed artifact signature does not match artifact payload",
                 )
             })
+    }
+}
+
+/// Ed25519 signing key used to produce release artifact signatures.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ArtifactSigningKey {
+    key_id: String,
+    signing_key: [u8; 32],
+}
+
+impl ArtifactSigningKey {
+    /// Creates an Ed25519 release artifact signing key from raw private key bytes.
+    #[must_use]
+    pub fn ed25519_sha256_v1(key_id: impl Into<String>, signing_key: [u8; 32]) -> Self {
+        Self {
+            key_id: key_id.into(),
+            signing_key,
+        }
+    }
+
+    /// Creates an Ed25519 release artifact signing key from hex private key bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealedArtifactError`] when the private key is not 32 bytes of hex-encoded
+    /// Ed25519 signing material.
+    pub fn ed25519_sha256_v1_hex(
+        key_id: impl Into<String>,
+        signing_key: impl Into<String>,
+    ) -> Result<Self, SealedArtifactError> {
+        let signing_key = signing_key.into();
+        let signing_key = decode_hex_array::<32>(
+            &signing_key,
+            "artifact.signature.invalid-signing-key",
+            "sealed artifact signing key is not valid hex Ed25519 key material",
+        )?;
+        Ok(Self::ed25519_sha256_v1(key_id, signing_key))
+    }
+
+    /// Returns the public verification key corresponding to this signing key.
+    #[must_use]
+    pub fn verification_key(&self) -> ArtifactSignatureVerificationKey {
+        let signing_key = SigningKey::from_bytes(&self.signing_key);
+        ArtifactSignatureVerificationKey::ed25519_sha256_v1(
+            self.key_id.clone(),
+            signing_key.verifying_key().to_bytes(),
+        )
+    }
+
+    /// Signs a sealed artifact and returns a copy carrying verified release metadata.
+    #[must_use]
+    pub fn sign(&self, artifact: &SealedArtifact) -> SealedArtifact {
+        let signing_key = SigningKey::from_bytes(&self.signing_key);
+        let signature = signing_key.sign(&artifact.signature_payload_bytes());
+        artifact.clone().with_signature(ArtifactSignature::verified(
+            ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1,
+            self.key_id.clone(),
+            encode_hex(&signature.to_bytes()),
+        ))
+    }
+}
+
+impl fmt::Debug for ArtifactSigningKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ArtifactSigningKey")
+            .field("key_id", &self.key_id)
+            .field("signing_key", &"<redacted>")
+            .finish()
     }
 }
 

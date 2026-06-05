@@ -27,7 +27,11 @@ Hawk2UI compiles familiar web authoring primitives into a signed native artifact
 ```bash
 cargo run -p hawk2ui-cli -- new            # scaffold a project
 cargo run -p hawk2ui-cli -- dev            # hot-reload the native surface
-cargo run -p hawk2ui-cli -- build-release  # produce a sealed artifact
+cargo run -p hawk2ui-cli -- build-dev      # produce an unsigned local artifact
+
+HAWK2UI_RELEASE_SIGNING_KEY_ID=local-release \
+HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
+cargo run -p hawk2ui-cli -- build-release  # produce a signed release artifact
 ```
 
 ## How It Works
@@ -57,7 +61,12 @@ The `hawk2ui-cli` binary drives the authoring workflow:
 ```bash
 cargo run -p hawk2ui-cli -- new            # scaffold a project
 cargo run -p hawk2ui-cli -- dev            # watch + hot-reload the native surface
-cargo run -p hawk2ui-cli -- build-release  # produce a sealed artifact
+cargo run -p hawk2ui-cli -- build-dev      # produce an unsigned local artifact
+HAWK2UI_RELEASE_SIGNING_KEY_ID=local-release \
+HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
+cargo run -p hawk2ui-cli -- build-release  # produce a signed release artifact
+HAWK2UI_TRUSTED_RELEASE_KEYS=local-release:<64-hex-public-key> \
+cargo run -p hawk2ui-cli -- verify-artifact # verify release trust
 cargo run -p hawk2ui-cli -- package-plugin # CLAP / VST3 / AU / standalone
 ```
 
@@ -98,3 +107,29 @@ Maintained by Shawn ([@entrepeneur4lyf](https://github.com/entrepeneur4lyf)).
 - **Framework licensing & inquiries** — shawn@hawk2ui.com
 - **GitHub** — [@entrepeneur4lyf](https://github.com/entrepeneur4lyf)
 - **X** — [@entrepeneur4lyf](https://x.com/entrepeneur4lyf)
+
+## Production Readiness Blockers
+
+The framework is under active production hardening. The items below are the
+remaining blockers before Hawk2UI should be described as production-ready rather
+than production-directed.
+
+| Area | Status | Required before production-ready |
+|---|---|---|
+| Security model enforcement | Partially remediated | Build-release now requires Ed25519 signing, sealed release artifacts require verified signature metadata, and verify-artifact runs package trust validation. Extend the same trust gate to every production artifact consumer and document release key management. |
+| CSS accepted-subset enforcement | Open blocker | Finalize supported keyword values and grammar for complex properties such as `box-shadow` and `transform`; reject unsupported syntax deterministically. |
+| Smoke-test realness | Open blocker | Ensure smoke tests exercise real build, style, script, rendering, and host-winit paths instead of recorder-only or metadata-only paths. |
+| Release evidence | Open blocker | Add a release gate that checks README/manual/product claims against the actual production crate registry and verification evidence. |
+| Framework source fidelity | Open blocker | Keep framework adapters honest by making native-program lowering the source of truth and removing fabricated source-scan metadata. |
+| Effects pipeline | Open blocker | Wire effects end-to-end from style to runtime to render commands to Skia output for gradients, shadows, glow, and related layer effects. |
+| Performance measurement | Open blocker | Add deterministic performance gates for artifact size, allocations, and render/runtime hot paths; keep wall-clock timings advisory. |
+| Plugin parameter fidelity | Open blocker | Preserve `Choice` and `Bool` parameter type/default/state semantics across plugin metadata, host bridges, and package outputs. |
+| VST3 implementation | Open blocker | Replace scaffold/null-factory behavior with a real VST3 factory and COM-compatible class exposure. |
+| Font pipeline depth | Open blocker | Complete deeper app-font/glyph-cache behavior beyond the current text-shaping and Skia font-size fixes. |
+| Host surface abstraction | Open blocker | Unify real host adapters behind a production `HostSurface`/frame-presentation boundary or explicitly isolate test-only surfaces. |
+| Platform backends | Open blocker | Implement concrete filesystem, network, clipboard, and secret-store backends behind the platform policy layer. |
+| Security evidence vocabulary | Needs decision | Either keep `hawk2ui-security` as evidence records backed by real validators, or reduce it to secret-redaction primitives until production consumers exist. |
+
+Recently closed hardening items include CLAP multi-instance state isolation,
+text shaping correctness, string-snapshot testkit removal, renderer scene/text
+path hardening, and conformance security fixture validation.

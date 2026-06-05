@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Command-line interface for `Hawk2UI` validation, builds, runs, packaging, and diagnostics.
 
-use hawk2ui_cli::{CommandCatalog, WorkspaceCommandRunner};
+use hawk2ui_cli::{CliExitCode, CommandCatalog, CommandExecution, WorkspaceCommandRunner};
 
 fn main() {
     let catalog = CommandCatalog;
@@ -14,9 +14,19 @@ fn main() {
                     std::process::exit(12);
                 }
             };
-            let execution = WorkspaceCommandRunner::new(root)
-                .with_unbounded_dev_loop()
-                .execute(command);
+            let runner =
+                match WorkspaceCommandRunner::new(root).with_release_security_from_environment() {
+                    Ok(runner) => runner,
+                    Err(diagnostic) => {
+                        let execution =
+                            CommandExecution::failure(CliExitCode::Verification, vec![*diagnostic]);
+                        if !execution.stderr.is_empty() {
+                            eprint!("{}", execution.stderr);
+                        }
+                        std::process::exit(execution.exit_code as i32);
+                    }
+                };
+            let execution = runner.with_unbounded_dev_loop().execute(command);
             if !execution.stdout.is_empty() {
                 print!("{}", execution.stdout);
             }

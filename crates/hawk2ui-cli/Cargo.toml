@@ -21,6 +21,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
 hawk2ui-assets = { version = "0.1.0", path = "../hawk2ui-assets" }
 hawk2ui-build = { version = "0.1.0", path = "../hawk2ui-build" }
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
@@ -32,6 +33,7 @@ hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
 hawk2ui-schema = { version = "0.1.0", path = "../hawk2ui-schema" }
 hawk2ui-script = { version = "0.1.0", path = "../hawk2ui-script" }
+hawk2ui-security-model = { version = "0.1.0", path = "../hawk2ui-security-model" }
 notify.workspace = true
 serde.workspace = true
 serde_json = "1"

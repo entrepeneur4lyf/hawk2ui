@@ -14,9 +14,9 @@ pub mod workspace;
 pub use artifact::{
     ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1, ArtifactHash, ArtifactHashes,
     ArtifactSchemaVersion, ArtifactSignature, ArtifactSignaturePolicy, ArtifactSignatureStatus,
-    ArtifactSignatureVerificationKey, ArtifactSignatureVerifier, AssetManifestEntry, BuildMetadata,
-    CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord, SealedArtifact,
-    SealedArtifactError, TargetArtifactMetadata,
+    ArtifactSignatureVerificationKey, ArtifactSignatureVerifier, ArtifactSigningKey,
+    AssetManifestEntry, BuildMetadata, CompiledAssetRecord, CompiledScriptRecord,
+    CompiledStyleRecord, SealedArtifact, SealedArtifactError, TargetArtifactMetadata,
 };
 pub use assets::{
     AssetCompilationError, AssetCompilationPlan, AssetCompilationRecord, AssetDimensions,

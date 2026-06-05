@@ -2,6 +2,7 @@
 
 use std::{
     collections::BTreeSet,
+    env,
     fmt::Write as _,
     fs,
     path::{Component, Path, PathBuf},
@@ -11,7 +12,8 @@ use std::{
 
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits, AssetRecord};
 use hawk2ui_build::{
-    ArtifactSchemaVersion, ArtifactSignaturePolicy, AssetCompilationError, BuildDiagnostic,
+    ArtifactSchemaVersion, ArtifactSignaturePolicy, ArtifactSignatureVerificationKey,
+    ArtifactSignatureVerifier, ArtifactSigningKey, AssetCompilationError, BuildDiagnostic,
     BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput, CompiledScriptRecord, HawkManifest,
     ManifestError, PackageTarget, PinParamIds, SealedArtifact, SealedArtifactError,
     emit_truce_params_struct, pin_param_ids,
@@ -31,6 +33,7 @@ use hawk2ui_script::{
     HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy,
     entry_mount_bootstrap,
 };
+use hawk2ui_security_model::{PackageTrustRecord, PackageTrustValidator, VerificationReportStatus};
 
 use crate::{
     CliCommand, CliDiagnostic, CliExitCode, DevChangeClassifier, DevLoop, DevPatchKind,
@@ -41,6 +44,9 @@ use crate::{
 const ARTIFACT_SCHEMA_VERSION: ArtifactSchemaVersion = ArtifactSchemaVersion::new(1, 0);
 const MAX_ARTIFACT_CONTAINER_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_RUNTIME_ASSET_BYTES: u64 = 64 * 1024 * 1024;
+const RELEASE_SIGNING_KEY_ID_ENV: &str = "HAWK2UI_RELEASE_SIGNING_KEY_ID";
+const RELEASE_SIGNING_KEY_HEX_ENV: &str = "HAWK2UI_RELEASE_SIGNING_KEY_HEX";
+const TRUSTED_RELEASE_KEYS_ENV: &str = "HAWK2UI_TRUSTED_RELEASE_KEYS";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BuildProfile {
@@ -131,6 +137,8 @@ impl CommandExecution {
 pub struct WorkspaceCommandRunner {
     root: PathBuf,
     dev_iteration_limit: Option<usize>,
+    release_signing_key: Option<ArtifactSigningKey>,
+    trusted_release_keys: Vec<ArtifactSignatureVerificationKey>,
 }
 
 impl WorkspaceCommandRunner {
@@ -140,6 +148,8 @@ impl WorkspaceCommandRunner {
         Self {
             root: root.into(),
             dev_iteration_limit: Some(1),
+            release_signing_key: None,
+            trusted_release_keys: Vec::new(),
         }
     }
 
@@ -155,6 +165,125 @@ impl WorkspaceCommandRunner {
     pub const fn with_unbounded_dev_loop(mut self) -> Self {
         self.dev_iteration_limit = None;
         self
+    }
+
+    /// Configures the release signing key used by `build-release`.
+    #[must_use]
+    pub fn with_release_signing_key(mut self, signing_key: ArtifactSigningKey) -> Self {
+        self.release_signing_key = Some(signing_key);
+        self
+    }
+
+    /// Configures the release signing key from hex-encoded Ed25519 private key bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CliDiagnostic`] when the key id is empty or the key material is malformed.
+    pub fn with_release_signing_key_hex(
+        self,
+        key_id: impl Into<String>,
+        signing_key: impl Into<String>,
+    ) -> Result<Self, Box<CliDiagnostic>> {
+        let key_id = key_id.into();
+        if key_id.trim().is_empty() {
+            return Err(Box::new(CliDiagnostic::error(
+                "artifact.signature.signing-key-id-missing",
+                "release signing key id must not be empty",
+            )));
+        }
+        let signing_key = ArtifactSigningKey::ed25519_sha256_v1_hex(key_id, signing_key)
+            .map_err(|error| Box::new(sealed_artifact_error_diagnostic(error)))?;
+        Ok(self.with_release_signing_key(signing_key))
+    }
+
+    /// Adds a trusted release verification key used by `verify-artifact`.
+    #[must_use]
+    pub fn with_trusted_release_key(mut self, key: ArtifactSignatureVerificationKey) -> Self {
+        self.trusted_release_keys.push(key);
+        self
+    }
+
+    /// Adds a trusted release verification key from hex-encoded Ed25519 public key bytes.
+    #[must_use]
+    pub fn with_trusted_release_key_hex(
+        self,
+        key_id: impl Into<String>,
+        public_key: impl Into<String>,
+    ) -> Self {
+        self.with_trusted_release_key(ArtifactSignatureVerificationKey::ed25519_sha256_v1_hex(
+            key_id, public_key,
+        ))
+    }
+
+    /// Loads release signing and trust configuration from process environment variables.
+    ///
+    /// Supported variables:
+    ///
+    /// - `HAWK2UI_RELEASE_SIGNING_KEY_ID`
+    /// - `HAWK2UI_RELEASE_SIGNING_KEY_HEX`
+    /// - `HAWK2UI_TRUSTED_RELEASE_KEYS` as comma-separated `key-id:public-key-hex` entries
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CliDiagnostic`] when the environment is partially configured or malformed.
+    pub fn with_release_security_from_environment(self) -> Result<Self, Box<CliDiagnostic>> {
+        self.with_release_security_values(
+            env::var(RELEASE_SIGNING_KEY_ID_ENV).ok(),
+            env::var(RELEASE_SIGNING_KEY_HEX_ENV).ok(),
+            env::var(TRUSTED_RELEASE_KEYS_ENV).ok(),
+        )
+    }
+
+    fn with_release_security_values(
+        mut self,
+        signing_key_id: Option<String>,
+        signing_key_hex: Option<String>,
+        trusted_release_keys: Option<String>,
+    ) -> Result<Self, Box<CliDiagnostic>> {
+        match (
+            non_empty_env(signing_key_id),
+            non_empty_env(signing_key_hex),
+        ) {
+            (Some(key_id), Some(signing_key)) => {
+                self = self.with_release_signing_key_hex(key_id, signing_key)?;
+            }
+            (None, None) => {}
+            _ => {
+                return Err(Box::new(CliDiagnostic::error(
+                    "artifact.signature.signing-config-incomplete",
+                    format!(
+                        "{RELEASE_SIGNING_KEY_ID_ENV} and {RELEASE_SIGNING_KEY_HEX_ENV} must be set together"
+                    ),
+                )));
+            }
+        }
+
+        if let Some(entries) = non_empty_env(trusted_release_keys) {
+            for entry in entries
+                .split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+            {
+                let Some((key_id, public_key)) = entry.split_once(':') else {
+                    return Err(Box::new(CliDiagnostic::error(
+                        "artifact.signature.trusted-key-config-invalid",
+                        format!(
+                            "{TRUSTED_RELEASE_KEYS_ENV} entries must use key-id:public-key-hex"
+                        ),
+                    )));
+                };
+                if key_id.trim().is_empty() || public_key.trim().is_empty() {
+                    return Err(Box::new(CliDiagnostic::error(
+                        "artifact.signature.trusted-key-config-invalid",
+                        format!(
+                            "{TRUSTED_RELEASE_KEYS_ENV} entries must include key id and public key"
+                        ),
+                    )));
+                }
+                self = self.with_trusted_release_key_hex(key_id.trim(), public_key.trim());
+            }
+        }
+        Ok(self)
     }
 
     /// Executes one parsed command.
@@ -467,21 +596,55 @@ impl WorkspaceCommandRunner {
                 .collect();
             return CommandExecution::failure(CliExitCode::Verification, diagnostics);
         }
-        let artifact_path = match self.write_artifact_container(&output, profile) {
+        let artifact = match self.artifact_for_profile(&output.artifact, profile) {
+            Ok(artifact) => artifact,
+            Err(execution) => return execution,
+        };
+        let artifact_path = match self.write_artifact_container(&artifact, profile) {
             Ok(path) => path,
             Err(execution) => return execution,
         };
         CommandExecution::success(format!(
-            "built {} artifact for {}\nartifact-path: {}\nmanifest-hash: {}\ncontent-hash: {}\ncompiled-scripts: {}\ncompiled-styles: {}\ncompiled-assets: {}\nverification-status: release-ready\nsignature-policy: unsigned-development\n",
+            "built {} artifact for {}\nartifact-path: {}\nmanifest-hash: {}\ncontent-hash: {}\ncompiled-scripts: {}\ncompiled-styles: {}\ncompiled-assets: {}\nverification-status: release-ready\nsignature-policy: {}\n",
             profile.label(),
             output.manifest.identity.id,
             artifact_path.display(),
-            output.artifact.hashes.manifest.0,
-            output.artifact.hashes.content.0,
-            output.artifact.compiled_scripts.len(),
-            output.artifact.compiled_styles.len(),
-            output.artifact.compiled_assets.len()
+            artifact.hashes.manifest.0,
+            artifact.hashes.content.0,
+            artifact.compiled_scripts.len(),
+            artifact.compiled_styles.len(),
+            artifact.compiled_assets.len(),
+            artifact_signature_policy_label(profile)
         ))
+    }
+
+    fn artifact_for_profile(
+        &self,
+        artifact: &SealedArtifact,
+        profile: BuildProfile,
+    ) -> Result<SealedArtifact, CommandExecution> {
+        match profile {
+            BuildProfile::Development => Ok(artifact.clone()),
+            BuildProfile::Production => {
+                let Some(signing_key) = &self.release_signing_key else {
+                    return Err(CommandExecution::failure(
+                        CliExitCode::Verification,
+                        vec![CliDiagnostic::error(
+                            "artifact.signature.signing-key-missing",
+                            "build-release requires a release signing key",
+                        )],
+                    ));
+                };
+                let signed = signing_key.sign(artifact);
+                let verifier = self.release_verifier_with_signing_key(signing_key);
+                Self::validate_release_artifact_trust(&signed, &verifier).map_err(
+                    |diagnostic| {
+                        CommandExecution::failure(CliExitCode::Verification, vec![*diagnostic])
+                    },
+                )?;
+                Ok(signed)
+            }
+        }
     }
 
     fn dev_changed_files(
@@ -526,8 +689,15 @@ impl WorkspaceCommandRunner {
                 );
             }
         };
+        let verifier = self.trusted_release_verifier();
+        if let Err(diagnostic) = Self::validate_release_artifact_trust(&artifact, &verifier) {
+            return CommandExecution::failure(
+                CliExitCode::Verification,
+                vec![(*diagnostic).file(artifact_path.display().to_string())],
+            );
+        }
         CommandExecution::success(format!(
-            "verified artifact container\npath: {}\ncontent-hash: {}\nsignature-status: {}\n",
+            "verified artifact container\npath: {}\ncontent-hash: {}\nsignature-status: {}\ntrust-status: release-ready\n",
             artifact_path.display(),
             artifact.hashes.content.0,
             artifact_signature_status(&artifact),
@@ -829,13 +999,12 @@ impl WorkspaceCommandRunner {
 
     fn write_artifact_container(
         &self,
-        output: &BuildWorkspaceOutput,
+        artifact: &SealedArtifact,
         profile: BuildProfile,
     ) -> Result<PathBuf, CommandExecution> {
         let artifact_path = self.artifact_output_path(profile);
-        let bytes = output
-            .artifact
-            .to_container_bytes(ArtifactSignaturePolicy::AllowUnsignedDevelopment)
+        let bytes = artifact
+            .to_container_bytes(artifact_signature_policy(profile))
             .map_err(|error| {
                 CommandExecution::failure(
                     CliExitCode::Verification,
@@ -863,6 +1032,47 @@ impl WorkspaceCommandRunner {
             .join("hawk2ui-artifact.hawk")
     }
 
+    fn trusted_release_verifier(&self) -> ArtifactSignatureVerifier {
+        ArtifactSignatureVerifier::new(self.configured_trusted_release_keys())
+    }
+
+    fn release_verifier_with_signing_key(
+        &self,
+        signing_key: &ArtifactSigningKey,
+    ) -> ArtifactSignatureVerifier {
+        let mut keys = self.configured_trusted_release_keys();
+        let signing_verification_key = signing_key.verification_key();
+        if !keys.contains(&signing_verification_key) {
+            keys.push(signing_verification_key);
+        }
+        ArtifactSignatureVerifier::new(keys)
+    }
+
+    fn configured_trusted_release_keys(&self) -> Vec<ArtifactSignatureVerificationKey> {
+        let mut keys = self.trusted_release_keys.clone();
+        if let Some(signing_key) = &self.release_signing_key {
+            let verification_key = signing_key.verification_key();
+            if !keys.contains(&verification_key) {
+                keys.push(verification_key);
+            }
+        }
+        keys
+    }
+
+    fn validate_release_artifact_trust(
+        artifact: &SealedArtifact,
+        verifier: &ArtifactSignatureVerifier,
+    ) -> Result<(), Box<CliDiagnostic>> {
+        let record = PackageTrustRecord::from_trusted_sealed_artifact(
+            artifact,
+            verifier,
+            VerificationReportStatus::Present,
+        );
+        PackageTrustValidator::new(ARTIFACT_SCHEMA_VERSION.major)
+            .validate(&record)
+            .map_err(|violation| Box::new(package_trust_violation_diagnostic(violation)))
+    }
+
     fn manifest_path(&self) -> PathBuf {
         self.root.join("manifest.hawk.toml")
     }
@@ -886,6 +1096,17 @@ fn read_artifact_container_bytes(path: &Path) -> Result<Vec<u8>, CommandExecutio
         ));
     }
     fs::read(path).map_err(|error| io_failure("artifact.container.read-failed", path, &error))
+}
+
+fn non_empty_env(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {
@@ -1099,6 +1320,27 @@ fn sealed_artifact_error_diagnostic(error: SealedArtifactError) -> CliDiagnostic
         | SealedArtifactError::SignatureVerification { diagnostic } => diagnostic,
     };
     CliDiagnostic::error(diagnostic.rule, diagnostic.message)
+}
+
+fn package_trust_violation_diagnostic(
+    violation: hawk2ui_security_model::PackageTrustViolation,
+) -> CliDiagnostic {
+    let diagnostic = hawk2ui_api::Diagnostic::from(violation);
+    CliDiagnostic::error(diagnostic.rule.as_str(), diagnostic.message)
+}
+
+const fn artifact_signature_policy(profile: BuildProfile) -> ArtifactSignaturePolicy {
+    match profile {
+        BuildProfile::Development => ArtifactSignaturePolicy::AllowUnsignedDevelopment,
+        BuildProfile::Production => ArtifactSignaturePolicy::RequireVerifiedSignature,
+    }
+}
+
+const fn artifact_signature_policy_label(profile: BuildProfile) -> &'static str {
+    match profile {
+        BuildProfile::Development => "unsigned-development",
+        BuildProfile::Production => "verified-release",
+    }
 }
 
 fn artifact_signature_status(artifact: &SealedArtifact) -> &'static str {
