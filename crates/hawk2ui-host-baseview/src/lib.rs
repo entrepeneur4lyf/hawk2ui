@@ -4,6 +4,7 @@
 use baseview::{
     EventStatus, Size, Window, WindowHandle, WindowHandler, WindowOpenOptions, WindowScalePolicy,
 };
+use hawk2ui_build::ArtifactSignatureVerifier;
 use hawk2ui_host::{
     HostPlatformHandle, KeyboardInput, PluginEditorConfig, PluginHostAdapter, PluginHostEvent,
     PointerInput, SurfaceMetrics, SurfaceOwnership,
@@ -1669,6 +1670,7 @@ impl BaseviewClapRuntimeEditor {
 #[derive(Debug)]
 pub struct BaseviewClapRuntimeEditorHost {
     plugin_path: PathBuf,
+    release_verifier: ArtifactSignatureVerifier,
     linux_display_handle: Option<u64>,
     session: Option<ClapRuntimeEditorSession>,
     editor: Option<BaseviewClapRuntimeEditor>,
@@ -1882,10 +1884,14 @@ impl BaseviewClapRuntimeEditorHostAbiBridge {
 
 impl BaseviewClapRuntimeEditorHost {
     /// Creates a host lifecycle bridge for the CLAP plugin path received by the plugin host.
+    ///
+    /// The host starts with an empty release keyring and therefore rejects signed runtime packages
+    /// until [`Self::with_release_verifier`] supplies trusted release keys.
     #[must_use]
     pub fn new(plugin_path: impl Into<PathBuf>, linux_display_handle: Option<u64>) -> Self {
         Self {
             plugin_path: plugin_path.into(),
+            release_verifier: ArtifactSignatureVerifier::default(),
             linux_display_handle,
             session: None,
             editor: None,
@@ -1893,6 +1899,13 @@ impl BaseviewClapRuntimeEditorHost {
             parameter_values: BTreeMap::new(),
             latest_realtime_packets: Vec::new(),
         }
+    }
+
+    /// Supplies the trusted release keyring used when resolving the runtime editor package.
+    #[must_use]
+    pub fn with_release_verifier(mut self, verifier: ArtifactSignatureVerifier) -> Self {
+        self.release_verifier = verifier;
+        self
     }
 
     /// Returns whether CLAP GUI create has resolved a verified runtime editor session.
@@ -2031,8 +2044,11 @@ impl BaseviewClapRuntimeEditorHost {
                 "Baseview CLAP runtime editors do not support native Wayland parent handles",
             ));
         }
-        let session = ClapRuntimeEditorSession::load_from_clap_plugin_path(&self.plugin_path)
-            .map_err(|error| baseview_error_from_materialization_error(&error))?;
+        let session = ClapRuntimeEditorSession::load_trusted_from_clap_plugin_path(
+            &self.plugin_path,
+            &self.release_verifier,
+        )
+        .map_err(|error| baseview_error_from_materialization_error(&error))?;
         self.session = Some(session);
         self.editor = None;
         self.created_api = Some(api);

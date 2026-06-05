@@ -118,7 +118,7 @@ than production-directed.
 
 | Area | Status | Required before production-ready |
 |---|---|---|
-| Security model enforcement | Partially remediated | Build-release and package-plugin now require Ed25519 signing, sealed release artifacts require verified signature metadata, and verify-artifact runs package trust validation. Extend trusted-key validation into runtime/plugin artifact loaders and document release key management. |
+| Security model enforcement | Enforcement remediated; docs pending | Build-release and package-plugin require Ed25519 signing, sealed release artifacts require verified signature metadata, verify-artifact runs package trust validation, and CLAP runtime/Baseview plugin loaders validate artifacts against trusted release keys. Document release key management before production-ready release. |
 | CSS accepted-subset enforcement | Open blocker | Finalize supported keyword values and grammar for complex properties such as `box-shadow` and `transform`; reject unsupported syntax deterministically. |
 | Smoke-test realness | Open blocker | Ensure smoke tests exercise real build, style, script, rendering, and host-winit paths instead of recorder-only or metadata-only paths. |
 | Release evidence | Open blocker | Add a release gate that checks README/manual/product claims against the actual production crate registry and verification evidence. |

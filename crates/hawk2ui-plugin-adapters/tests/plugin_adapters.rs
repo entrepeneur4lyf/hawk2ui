@@ -1,5 +1,8 @@
 use clap_sys::ext::params::{CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_STEPPED};
-use hawk2ui_build::{ArtifactSchemaVersion, HawkManifest, SealedArtifact};
+use hawk2ui_build::{
+    ArtifactHash, ArtifactSchemaVersion, ArtifactSignatureVerifier, ArtifactSigningKey,
+    CompiledScriptRecord, HawkManifest, SealedArtifact,
+};
 use hawk2ui_plugin::{
     BundleOutput, EnumVariant, FormatMetadata, ParameterFlags, ParameterModel, ParameterRange,
     ParameterRecord, PluginEditor, PluginEditorSize,
@@ -448,6 +451,86 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
     );
 }
 
+#[test]
+fn plugin_adapters_trusted_runtime_editor_loader_enforces_release_keys() {
+    let (signed_artifact, verifier) = signed_runtime_artifact();
+    let runtime_artifact =
+        serde_json::to_value(&signed_artifact).expect("signed artifact serializes");
+    let output_root = unique_temp_dir("hawk2ui-plugin-trusted-runtime-artifact");
+    let request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.trusted-runtime", "Trusted Runtime", "Hawk2UI"),
+        BundleOutput::new(output_root.to_string_lossy(), "TrustedRuntime"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("trusted artifact package plan succeeds")
+        .materialize()
+        .expect("trusted artifact package materializes");
+    let root = Path::new(&outputs[0].output_path);
+
+    let trusted_session = ClapRuntimeEditorSession::load_trusted_from_package(root, &verifier)
+        .expect("trusted signed runtime editor package loads");
+    assert_eq!(trusted_session.sealed_artifact(), &signed_artifact);
+
+    let clap_plugin_path = root.join("TrustedRuntime.clap");
+    let trusted_from_plugin_path =
+        ClapRuntimeEditorSession::load_trusted_from_clap_plugin_path(&clap_plugin_path, &verifier)
+            .expect("trusted signed runtime editor package resolves from CLAP entry path");
+    assert_eq!(trusted_from_plugin_path, trusted_session);
+
+    let untrusted_error = ClapRuntimeEditorSession::load_trusted_from_package(
+        root,
+        &ArtifactSignatureVerifier::default(),
+    )
+    .expect_err("signed packages from unknown keys must be denied");
+    assert_eq!(
+        untrusted_error.diagnostic().rule(),
+        "package.clap-runtime-editor.security.package.signature-invalid"
+    );
+
+    let unsigned_artifact = unsigned_runtime_artifact();
+    let unsigned_output_root = unique_temp_dir("hawk2ui-plugin-unsigned-runtime-artifact");
+    let unsigned_request = PackageRequest::new(
+        FormatMetadata::new(
+            "com.hawk2ui.unsigned-runtime",
+            "Unsigned Runtime",
+            "Hawk2UI",
+        ),
+        BundleOutput::new(unsigned_output_root.to_string_lossy(), "UnsignedRuntime"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(
+        serde_json::to_value(&unsigned_artifact).expect("unsigned artifact serializes"),
+    )
+    .with_format(PackageFormat::Clap);
+    let unsigned_outputs = PackageAdapterSet::new()
+        .plan(&unsigned_request)
+        .expect("unsigned artifact package plan succeeds")
+        .materialize()
+        .expect("unsigned artifact package materializes");
+
+    let unsigned_error = ClapRuntimeEditorSession::load_trusted_from_package(
+        &unsigned_outputs[0].output_path,
+        &verifier,
+    )
+    .expect_err("unsigned runtime editor packages must be denied");
+    assert_eq!(
+        unsigned_error.diagnostic().rule(),
+        "package.clap-runtime-editor.security.package.signature-missing"
+    );
+}
+
 const VALID_PLUGIN_MANIFEST: &str = r#"
 [identity]
 id = "com.hawk2ui.runtime"
@@ -472,6 +555,48 @@ name = "Runtime"
 width = 960
 height = 540
 "#;
+
+fn signed_runtime_artifact() -> (SealedArtifact, ArtifactSignatureVerifier) {
+    let signing_key = ArtifactSigningKey::ed25519_sha256_v1("release-key", [7; 32]);
+    let artifact = unsigned_runtime_artifact();
+    (
+        signing_key.sign(&artifact),
+        ArtifactSignatureVerifier::new([signing_key.verification_key()]),
+    )
+}
+
+fn unsigned_runtime_artifact() -> SealedArtifact {
+    SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_compiled_script(CompiledScriptRecord::new(
+        "main",
+        "src/main.ts",
+        "scripts/main.hawk.js",
+        ArtifactHash::from_bytes(b"trusted-runtime-script"),
+    ))
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [8, 10, 14, 255] },
+            "children": []
+        }
+    }))
+}
+
+fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "{prefix}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ))
+}
 
 #[test]
 fn plugin_adapters_build_clap_entry_plan_from_clap_sys_contract() {

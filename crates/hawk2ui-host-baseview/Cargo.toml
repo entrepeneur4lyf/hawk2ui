@@ -22,6 +22,7 @@ pedantic = "warn"
 
 [dependencies]
 baseview = { package = "baseview-truce", version = "0.1.1-truce.4", features = ["opengl"] }
+hawk2ui-build = { version = "0.1.0", path = "../hawk2ui-build" }
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
@@ -38,5 +39,4 @@ libc = "0.2"
 x11rb = "0.13.2"
 
 [dev-dependencies]
-hawk2ui-build = { version = "0.1.0", path = "../hawk2ui-build" }
 serde_json = "1"

@@ -1,4 +1,7 @@
-use hawk2ui_build::{ArtifactSchemaVersion, HawkManifest, SealedArtifact};
+use hawk2ui_build::{
+    ArtifactHash, ArtifactSchemaVersion, ArtifactSignatureVerifier, ArtifactSigningKey,
+    CompiledScriptRecord, HawkManifest, SealedArtifact,
+};
 use hawk2ui_host::{
     HostPlatformHandle, KeyboardInput, PluginEditorConfig, PluginHostAdapter, PluginHostEvent,
     PluginParentHandle, PointerInput, RendererResizeBridge, SurfaceMetrics,
@@ -672,8 +675,7 @@ fn baseview_clap_runtime_editor_host_drives_callback_lifecycle_from_plugin_path(
             "children": []
         }
     }));
-    let runtime_artifact =
-        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let (runtime_artifact, verifier) = signed_runtime_artifact_value(sealed_artifact);
     let output_root = temp_package_root("hawk2ui-baseview-clap-host-callback-lifecycle");
     let request = PackageRequest::new(
         FormatMetadata::new("com.hawk2ui.host-callback", "Host Callback", "Hawk2UI"),
@@ -692,7 +694,8 @@ fn baseview_clap_runtime_editor_host_drives_callback_lifecycle_from_plugin_path(
         .materialize()
         .expect("materialization succeeds");
     let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostCallback.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
+        .with_release_verifier(verifier);
 
     let error = host.show().expect_err("show before create must fail");
     assert_eq!(error.rule(), "baseview.clap-runtime-editor.not-attached");
@@ -726,6 +729,64 @@ fn baseview_clap_runtime_editor_host_drives_callback_lifecycle_from_plugin_path(
 }
 
 #[test]
+fn baseview_clap_runtime_editor_host_requires_trusted_release_key() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": []
+        }
+    }));
+    let (runtime_artifact, verifier) = signed_runtime_artifact_value(sealed_artifact);
+    let output_root = temp_package_root("hawk2ui-baseview-clap-host-trusted-release");
+    let request = PackageRequest::new(
+        FormatMetadata::new(
+            "com.hawk2ui.host-trusted-release",
+            "Host Trusted Release",
+            "Hawk2UI",
+        ),
+        BundleOutput::new(output_root.to_string_lossy(), "HostTrustedRelease"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("trusted release package plan succeeds")
+        .materialize()
+        .expect("trusted release package materializes");
+    let clap_plugin_path =
+        std::path::Path::new(&outputs[0].output_path).join("HostTrustedRelease.clap");
+
+    let mut untrusted_host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+    let error = untrusted_host
+        .create(ClapGuiWindowApi::X11, false)
+        .expect_err("host create must reject packages signed by unknown keys");
+    assert_eq!(
+        error.rule(),
+        "package.clap-runtime-editor.security.package.signature-invalid"
+    );
+
+    let mut trusted_host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
+        .with_release_verifier(verifier);
+    trusted_host
+        .create(ClapGuiWindowApi::X11, false)
+        .expect("host create accepts trusted signed runtime package");
+    assert!(trusted_host.created());
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn baseview_clap_runtime_editor_host_tracks_parameter_and_state_events() {
     let sealed_artifact = SealedArtifact::from_manifest(
@@ -742,8 +803,7 @@ fn baseview_clap_runtime_editor_host_tracks_parameter_and_state_events() {
             "children": []
         }
     }));
-    let runtime_artifact =
-        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let (runtime_artifact, verifier) = signed_runtime_artifact_value(sealed_artifact);
     let output_root = temp_package_root("hawk2ui-baseview-clap-host-parameter-state");
     let request = PackageRequest::new(
         FormatMetadata::new("com.hawk2ui.host-state", "Host State", "Hawk2UI"),
@@ -762,7 +822,8 @@ fn baseview_clap_runtime_editor_host_tracks_parameter_and_state_events() {
         .materialize()
         .expect("materialization succeeds");
     let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostState.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
+        .with_release_verifier(verifier);
 
     let error = host
         .apply_parameter_value("gain", ParameterValue::Float(0.5))
@@ -867,8 +928,7 @@ fn baseview_clap_runtime_editor_host_drains_realtime_visuals_with_frame_gate() {
             "children": []
         }
     }));
-    let runtime_artifact =
-        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let (runtime_artifact, verifier) = signed_runtime_artifact_value(sealed_artifact);
     let output_root = temp_package_root("hawk2ui-baseview-clap-host-realtime");
     let request = PackageRequest::new(
         FormatMetadata::new("com.hawk2ui.host-realtime", "Host Realtime", "Hawk2UI"),
@@ -887,7 +947,8 @@ fn baseview_clap_runtime_editor_host_drains_realtime_visuals_with_frame_gate() {
         .materialize()
         .expect("materialization succeeds");
     let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostRealtime.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
+        .with_release_verifier(verifier);
     let (mut writer, mut reader) =
         RealtimeVisualTransport::split_preallocated(4, FrameDropPolicy::DropNewest);
     let mut gate = RealtimeVisualFrameGate::new(60).expect("valid realtime frame gate");
@@ -960,8 +1021,7 @@ fn baseview_clap_runtime_editor_host_dispatches_typed_abi_commands() {
             "children": []
         }
     }));
-    let runtime_artifact =
-        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let (runtime_artifact, verifier) = signed_runtime_artifact_value(sealed_artifact);
     let output_root = temp_package_root("hawk2ui-baseview-clap-host-command-dispatch");
     let request = PackageRequest::new(
         FormatMetadata::new("com.hawk2ui.host-command", "Host Command", "Hawk2UI"),
@@ -980,7 +1040,8 @@ fn baseview_clap_runtime_editor_host_dispatches_typed_abi_commands() {
         .materialize()
         .expect("materialization succeeds");
     let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostCommand.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
+        .with_release_verifier(verifier);
 
     assert_eq!(
         host.dispatch(BaseviewClapRuntimeEditorHostCommand::Create {
@@ -1068,8 +1129,7 @@ fn baseview_clap_runtime_editor_host_binds_generated_text_abi_to_live_editor() {
             "children": []
         }
     }));
-    let runtime_artifact =
-        serde_json::to_value(&sealed_artifact).expect("sealed artifact serializes");
+    let (runtime_artifact, verifier) = signed_runtime_artifact_value(sealed_artifact);
     let output_root = temp_package_root("hawk2ui-baseview-clap-host-text-abi");
     let request = PackageRequest::new(
         FormatMetadata::new("com.hawk2ui.host-text-abi", "Host Text ABI", "Hawk2UI"),
@@ -1088,7 +1148,8 @@ fn baseview_clap_runtime_editor_host_binds_generated_text_abi_to_live_editor() {
         .materialize()
         .expect("materialization succeeds");
     let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostTextAbi.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
+        .with_release_verifier(verifier);
     let bridge = BaseviewClapRuntimeEditorHostAbiBridge::new();
 
     assert!(
@@ -1341,6 +1402,23 @@ fn temp_package_root(prefix: &str) -> std::path::PathBuf {
             .expect("system clock should be after unix epoch")
             .as_nanos()
     ))
+}
+
+fn signed_runtime_artifact_value(
+    artifact: SealedArtifact,
+) -> (serde_json::Value, ArtifactSignatureVerifier) {
+    let signing_key = ArtifactSigningKey::ed25519_sha256_v1("baseview-test-release-key", [11; 32]);
+    let signed_artifact =
+        signing_key.sign(&artifact.with_compiled_script(CompiledScriptRecord::new(
+            "main",
+            "src/main.ts",
+            "scripts/main.hawk.js",
+            ArtifactHash::from_bytes(b"baseview-runtime-script"),
+        )));
+    (
+        serde_json::to_value(&signed_artifact).expect("signed artifact serializes"),
+        ArtifactSignatureVerifier::new([signing_key.verification_key()]),
+    )
 }
 
 const VALID_PLUGIN_MANIFEST: &str = r#"

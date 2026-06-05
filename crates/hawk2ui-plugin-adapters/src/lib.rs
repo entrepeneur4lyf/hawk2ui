@@ -17,19 +17,22 @@ use std::{
 use clap_sys::ext::params::{
     CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_HIDDEN, CLAP_PARAM_IS_READONLY, CLAP_PARAM_IS_STEPPED,
 };
-use hawk2ui_build::SealedArtifact;
+use hawk2ui_api::Diagnostic;
+use hawk2ui_build::{ArtifactSignatureVerifier, SealedArtifact};
 use hawk2ui_host::{HostPlatformHandle, PluginEditorConfig, PluginParentHandle, SurfaceMetrics};
 use hawk2ui_plugin::{
     BundleOutput, FormatMetadata, ParameterModel, ParameterRecord, ParameterValue, PluginEditor,
     PluginEditorSize,
 };
 use hawk2ui_runtime::{RuntimeSceneFrame, RuntimeScenePayload};
+use hawk2ui_security_model::{PackageTrustRecord, PackageTrustValidator, VerificationReportStatus};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-plugin-adapters";
+const CLAP_RUNTIME_EDITOR_ARTIFACT_SCHEMA_MAJOR: u32 = 1;
 
 /// Returns the canonical Cargo package name for diagnostics and conformance checks.
 #[must_use]
@@ -525,6 +528,25 @@ impl ClapRuntimeEditorSession {
         })
     }
 
+    /// Loads a trusted runtime-backed editor session from a materialized CLAP package directory.
+    ///
+    /// This performs normal package hash/schema validation and then verifies that the embedded
+    /// sealed runtime artifact was signed by one of the supplied release keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageMaterializationError`] when structural package validation fails or when the
+    /// embedded runtime artifact is unsigned, signed by an untrusted key, or otherwise fails package
+    /// trust validation.
+    pub fn load_trusted_from_package(
+        package_root: impl AsRef<Path>,
+        verifier: &ArtifactSignatureVerifier,
+    ) -> Result<Self, PackageMaterializationError> {
+        let session = Self::load_from_package(package_root)?;
+        validate_clap_runtime_editor_package_trust(&session.sealed_artifact, verifier)?;
+        Ok(session)
+    }
+
     /// Loads a runtime-backed editor session by resolving the package root from a CLAP plugin path.
     ///
     /// The supplied path may be the materialized package root, the generated `.clap` entry file, or a
@@ -542,6 +564,35 @@ impl ClapRuntimeEditorSession {
         for candidate in plugin_path.ancestors() {
             if is_runtime_editor_package_root(candidate) {
                 return Self::load_from_package(candidate);
+            }
+        }
+        Err(materialization_error(
+            "package.clap-runtime-editor.package-root-unresolved",
+            format!(
+                "failed to resolve Hawk2UI CLAP runtime editor package root from {}",
+                plugin_path.display()
+            ),
+        ))
+    }
+
+    /// Loads a trusted runtime-backed editor session by resolving a CLAP plugin path.
+    ///
+    /// The supplied path may be the materialized package root, the generated `.clap` entry file, or a
+    /// file nested under the package. After resolving the package root, this verifies the embedded
+    /// sealed runtime artifact against the supplied release key verifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageMaterializationError`] when the package root cannot be resolved, structural
+    /// package validation fails, or release trust validation fails.
+    pub fn load_trusted_from_clap_plugin_path(
+        plugin_path: impl AsRef<Path>,
+        verifier: &ArtifactSignatureVerifier,
+    ) -> Result<Self, PackageMaterializationError> {
+        let plugin_path = plugin_path.as_ref();
+        for candidate in plugin_path.ancestors() {
+            if is_runtime_editor_package_root(candidate) {
+                return Self::load_trusted_from_package(candidate, verifier);
             }
         }
         Err(materialization_error(
@@ -642,6 +693,33 @@ fn is_runtime_editor_package_root(candidate: &Path) -> bool {
     let resources_path = candidate.join("Contents").join("Resources");
     resources_path.join("hawk2ui-editor.toml").is_file()
         && resources_path.join("hawk2ui-hashes.toml").is_file()
+}
+
+fn validate_clap_runtime_editor_package_trust(
+    artifact: &SealedArtifact,
+    verifier: &ArtifactSignatureVerifier,
+) -> Result<(), PackageMaterializationError> {
+    let record = PackageTrustRecord::from_trusted_sealed_artifact(
+        artifact,
+        verifier,
+        VerificationReportStatus::Present,
+    );
+    PackageTrustValidator::new(CLAP_RUNTIME_EDITOR_ARTIFACT_SCHEMA_MAJOR)
+        .validate(&record)
+        .map_err(clap_runtime_editor_package_trust_error)
+}
+
+fn clap_runtime_editor_package_trust_error(
+    violation: hawk2ui_security_model::PackageTrustViolation,
+) -> PackageMaterializationError {
+    let diagnostic = Diagnostic::from(violation);
+    materialization_error(
+        format!("package.clap-runtime-editor.{}", diagnostic.rule.as_str()),
+        format!(
+            "CLAP runtime editor package trust validation failed: {}",
+            diagnostic.message
+        ),
+    )
 }
 
 fn sealed_artifact_error_message(error: &hawk2ui_build::SealedArtifactError) -> String {
