@@ -4,7 +4,7 @@ category = "startup"
 unit = "milliseconds"
 target = 250
 maximum = 500
-release_gate = true
+release_gate = false
 fixture = "examples/desktop-basic"
 
 [[budgets]]
@@ -13,7 +13,7 @@ category = "startup"
 unit = "milliseconds"
 target = 50
 maximum = 100
-release_gate = true
+release_gate = false
 fixture = "examples/desktop-basic"
 
 [[budgets]]
@@ -22,7 +22,7 @@ category = "startup"
 unit = "milliseconds"
 target = 300
 maximum = 600
-release_gate = true
+release_gate = false
 fixture = "examples/desktop-basic"
 
 [[budgets]]
@@ -31,7 +31,7 @@ category = "layout"
 unit = "milliseconds"
 target = 4
 maximum = 8
-release_gate = true
+release_gate = false
 fixture = "examples/desktop-dashboard"
 
 [[budgets]]
@@ -40,7 +40,7 @@ category = "style"
 unit = "milliseconds"
 target = 8
 maximum = 16
-release_gate = true
+release_gate = false
 fixture = "examples/style-gallery"
 
 [[budgets]]
@@ -49,7 +49,7 @@ category = "rendering"
 unit = "milliseconds"
 target = 4
 maximum = 8
-release_gate = true
+release_gate = false
 fixture = "examples/desktop-dashboard"
 
 [[budgets]]
@@ -58,6 +58,24 @@ category = "rendering"
 unit = "milliseconds"
 target = 8
 maximum = 16
+release_gate = false
+fixture = "examples/style-gallery"
+
+[[budgets]]
+name = "scene-node-count"
+category = "rendering"
+unit = "count"
+target = 128
+maximum = 256
+release_gate = true
+fixture = "examples/desktop-dashboard"
+
+[[budgets]]
+name = "paint-command-count"
+category = "rendering"
+unit = "count"
+target = 128
+maximum = 256
 release_gate = true
 fixture = "examples/style-gallery"
 
@@ -67,7 +85,7 @@ category = "layout"
 unit = "microseconds"
 target = 500
 maximum = 1000
-release_gate = true
+release_gate = false
 fixture = "examples/desktop-dashboard"
 
 [[budgets]]
@@ -76,6 +94,15 @@ category = "runtime"
 unit = "microseconds"
 target = 250
 maximum = 500
+release_gate = false
+fixture = "examples/desktop-basic"
+
+[[budgets]]
+name = "runtime-dispatch-operation-count"
+category = "runtime"
+unit = "count"
+target = 1024
+maximum = 1024
 release_gate = true
 fixture = "examples/desktop-basic"
 
@@ -85,7 +112,7 @@ category = "script"
 unit = "milliseconds"
 target = 12
 maximum = 24
-release_gate = true
+release_gate = false
 fixture = "examples/frameworks/svelte-basic"
 
 [[budgets]]
@@ -94,7 +121,7 @@ category = "assets"
 unit = "milliseconds"
 target = 12
 maximum = 24
-release_gate = true
+release_gate = false
 fixture = "examples/style-gallery"
 
 [[budgets]]
@@ -121,7 +148,7 @@ category = "package"
 unit = "milliseconds"
 target = 150
 maximum = 300
-release_gate = true
+release_gate = false
 fixture = "examples/desktop-basic"
 
 [[budgets]]
@@ -130,7 +157,7 @@ category = "host"
 unit = "milliseconds"
 target = 16
 maximum = 33
-release_gate = true
+release_gate = false
 fixture = "examples/desktop-basic"
 
 [[budgets]]

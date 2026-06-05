@@ -11,6 +11,16 @@ use serde::Serialize;
 
 use crate::{PerformanceBudgets, PerformanceCategory};
 
+/// Evidence quality for a benchmark measurement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MeasurementQuality {
+    /// Deterministic measurement suitable for release gates.
+    Deterministic,
+    /// Wall-clock measurement retained for trend visibility only.
+    AdvisoryWallClock,
+}
+
 /// Benchmark category used by a performance suite.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -161,25 +171,48 @@ impl BenchmarkCase {
 pub struct BenchmarkMeasurement {
     /// Observed value.
     pub observed: u64,
+    /// Evidence quality of the measurement.
+    pub quality: MeasurementQuality,
 }
 
 impl BenchmarkMeasurement {
     /// Creates a benchmark measurement from an already-observed value.
     #[must_use]
     pub const fn new(observed: u64) -> Self {
-        Self { observed }
+        Self {
+            observed,
+            quality: MeasurementQuality::Deterministic,
+        }
+    }
+
+    /// Creates a benchmark measurement with explicit evidence quality.
+    #[must_use]
+    pub const fn with_quality(observed: u64, quality: MeasurementQuality) -> Self {
+        Self { observed, quality }
+    }
+
+    /// Returns whether this measurement can satisfy a release gate.
+    #[must_use]
+    pub const fn release_gate_eligible(self) -> bool {
+        matches!(self.quality, MeasurementQuality::Deterministic)
     }
 
     /// Creates a millisecond duration measurement from a [`Duration`].
     #[must_use]
     pub fn from_duration_millis(duration: Duration) -> Self {
-        Self::new(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        Self::with_quality(
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+            MeasurementQuality::AdvisoryWallClock,
+        )
     }
 
     /// Creates a microsecond duration measurement from a [`Duration`].
     #[must_use]
     pub fn from_duration_micros(duration: Duration) -> Self {
-        Self::new(u64::try_from(duration.as_micros()).unwrap_or(u64::MAX))
+        Self::with_quality(
+            u64::try_from(duration.as_micros()).unwrap_or(u64::MAX),
+            MeasurementQuality::AdvisoryWallClock,
+        )
     }
 
     /// Measures a closure and records elapsed milliseconds.
@@ -222,6 +255,8 @@ pub struct BenchmarkReportEntry {
     pub kind: BenchmarkKind,
     /// Observed measurement, when reported.
     pub observed: Option<u64>,
+    /// Evidence quality, when a measurement was reported.
+    pub quality: Option<MeasurementQuality>,
     /// Maximum accepted measurement, when the budget exists.
     pub maximum: Option<u64>,
     /// Whether the row passed its budget.
@@ -281,6 +316,7 @@ impl BenchmarkReport {
                     fixture: &entry.fixture,
                     kind: entry.kind,
                     observed: entry.observed,
+                    quality: entry.quality,
                     maximum: entry.maximum,
                     accepted: entry.accepted,
                     failure: entry.failure.as_deref(),
@@ -323,6 +359,7 @@ struct BenchmarkReportArtifactEntry<'entry> {
     fixture: &'entry str,
     kind: BenchmarkKind,
     observed: Option<u64>,
+    quality: Option<MeasurementQuality>,
     maximum: Option<u64>,
     accepted: bool,
     failure: Option<&'entry str>,
@@ -483,6 +520,8 @@ pub enum BenchmarkError {
         /// Maximum allowed value.
         maximum: u64,
     },
+    /// Advisory wall-clock evidence was used for a release-gating budget.
+    AdvisoryMeasurementUsedForReleaseGate(String),
 }
 
 fn validate_case(case: &BenchmarkCase, budgets: &PerformanceBudgets) -> Result<(), BenchmarkError> {
@@ -506,6 +545,14 @@ fn validate_case(case: &BenchmarkCase, budgets: &PerformanceBudgets) -> Result<(
     let Some(measurement) = case.measurement else {
         return Err(BenchmarkError::MissingMeasurement(case.budget_name.clone()));
     };
+    if budget.release_gate && !measurement.release_gate_eligible() {
+        return Err(BenchmarkError::AdvisoryMeasurementUsedForReleaseGate(
+            case.budget_name.clone(),
+        ));
+    }
+    if matches!(measurement.quality, MeasurementQuality::AdvisoryWallClock) {
+        return Ok(());
+    }
     if measurement.observed > budget.maximum {
         return Err(BenchmarkError::BudgetExceeded {
             budget_name: case.budget_name.clone(),
@@ -523,6 +570,7 @@ fn report_entry(case: &BenchmarkCase, budgets: &PerformanceBudgets) -> Benchmark
             fixture: case.fixture.clone(),
             kind: case.kind,
             observed: case.measurement.map(|measurement| measurement.observed),
+            quality: case.measurement.map(|measurement| measurement.quality),
             maximum: None,
             accepted: false,
             failure: Some("missing-budget".to_string()),
@@ -534,6 +582,7 @@ fn report_entry(case: &BenchmarkCase, budgets: &PerformanceBudgets) -> Benchmark
             fixture: case.fixture.clone(),
             kind: case.kind,
             observed: case.measurement.map(|measurement| measurement.observed),
+            quality: case.measurement.map(|measurement| measurement.quality),
             maximum: Some(budget.maximum),
             accepted: false,
             failure: Some("fixture-mismatch".to_string()),
@@ -545,6 +594,7 @@ fn report_entry(case: &BenchmarkCase, budgets: &PerformanceBudgets) -> Benchmark
             fixture: case.fixture.clone(),
             kind: case.kind,
             observed: case.measurement.map(|measurement| measurement.observed),
+            quality: case.measurement.map(|measurement| measurement.quality),
             maximum: Some(budget.maximum),
             accepted: false,
             failure: Some("category-mismatch".to_string()),
@@ -556,17 +606,32 @@ fn report_entry(case: &BenchmarkCase, budgets: &PerformanceBudgets) -> Benchmark
             fixture: case.fixture.clone(),
             kind: case.kind,
             observed: None,
+            quality: None,
             maximum: Some(budget.maximum),
             accepted: false,
             failure: Some("missing-measurement".to_string()),
         };
     };
-    let accepted = measurement.observed <= budget.maximum;
+    if budget.release_gate && !measurement.release_gate_eligible() {
+        return BenchmarkReportEntry {
+            budget_name: case.budget_name.clone(),
+            fixture: case.fixture.clone(),
+            kind: case.kind,
+            observed: Some(measurement.observed),
+            quality: Some(measurement.quality),
+            maximum: Some(budget.maximum),
+            accepted: false,
+            failure: Some("advisory-measurement".to_string()),
+        };
+    }
+    let accepted = measurement.quality == MeasurementQuality::AdvisoryWallClock
+        || measurement.observed <= budget.maximum;
     BenchmarkReportEntry {
         budget_name: case.budget_name.clone(),
         fixture: case.fixture.clone(),
         kind: case.kind,
         observed: Some(measurement.observed),
+        quality: Some(measurement.quality),
         maximum: Some(budget.maximum),
         accepted,
         failure: (!accepted).then(|| "budget-exceeded".to_string()),

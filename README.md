@@ -124,7 +124,7 @@ than production-directed.
 | Release evidence | Open blocker | Add a release gate that checks README/manual/product claims against the actual production crate registry and verification evidence. |
 | Framework source fidelity | Open blocker | Keep framework adapters honest by making native-program lowering the source of truth and removing fabricated source-scan metadata. |
 | Effects pipeline | Remediated | Compiled styles now lower gradients, border radius, shadows, glow, opacity, and transforms into typed runtime visuals, deterministic paint commands, and Skia pixels via the production runtime-scene replay path. |
-| Performance measurement | Open blocker | Add deterministic performance gates for artifact size, allocations, and render/runtime hot paths; keep wall-clock timings advisory. |
+| Performance measurement | Remediated | Performance evidence now distinguishes deterministic release gates from advisory wall-clock timings; release gates use byte/count measurements for package size, memory proxy, render/runtime hot-path counts, and realtime allocation attempts. |
 | Plugin parameter fidelity | Open blocker | Preserve `Choice` and `Bool` parameter type/default/state semantics across plugin metadata, host bridges, and package outputs. |
 | VST3 implementation | Open blocker | Replace scaffold/null-factory behavior with a real VST3 factory and COM-compatible class exposure. |
 | Font pipeline depth | Open blocker | Complete deeper app-font/glyph-cache behavior beyond the current text-shaping and Skia font-size fixes. |

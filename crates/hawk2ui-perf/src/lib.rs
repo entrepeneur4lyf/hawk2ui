@@ -11,7 +11,7 @@ pub use budgets::{
 };
 pub use harness::{
     BenchmarkArtifactSet, BenchmarkCase, BenchmarkError, BenchmarkKind, BenchmarkMeasurement,
-    BenchmarkReport, BenchmarkReportEntry, BenchmarkRunConfig, BenchmarkSuite,
+    BenchmarkReport, BenchmarkReportEntry, BenchmarkRunConfig, BenchmarkSuite, MeasurementQuality,
 };
 pub use realtime::{
     RealtimeContext, RealtimeGuard, RealtimeGuardError, RealtimeLockPolicy, RealtimeOperation,
@@ -46,8 +46,11 @@ mod tests {
             "style-compile",
             "scene-export",
             "frame-render",
+            "scene-node-count",
+            "paint-command-count",
             "text-measurement",
             "runtime-event-dispatch",
+            "runtime-dispatch-operation-count",
             "js-evaluate",
             "asset-decode",
             "memory-working-set",
@@ -174,6 +177,59 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_suite_rejects_advisory_wall_clock_measurements_for_release_gates() {
+        let budgets = PerformanceBudgets::parse(
+            r#"
+            [[budgets]]
+            name = "frame-render"
+            category = "rendering"
+            unit = "milliseconds"
+            target = 8
+            maximum = 16
+            release_gate = true
+            fixture = "examples/style-gallery"
+        "#,
+        )
+        .expect("performance budgets parse");
+        let suite = BenchmarkSuite::new("render").with_case(
+            BenchmarkCase::new(
+                "frame-render",
+                "examples/style-gallery",
+                BenchmarkKind::Rendering,
+            )
+            .with_measurement(BenchmarkMeasurement::measure_millis(|| {})),
+        );
+
+        assert_eq!(
+            suite.validate_against(&budgets),
+            Err(BenchmarkError::AdvisoryMeasurementUsedForReleaseGate(
+                "frame-render".to_owned()
+            ))
+        );
+        let report = suite.evaluate_against(&budgets);
+        assert_eq!(report.failed_count(), 1);
+        assert!(
+            report
+                .artifact_payload()
+                .contains("failure = \"advisory-measurement\"")
+        );
+    }
+
+    #[test]
+    fn release_gate_budget_file_uses_only_deterministic_units() {
+        let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
+
+        for budget in budgets.release_gates() {
+            assert!(
+                matches!(budget.unit, BudgetUnit::Bytes | BudgetUnit::Count),
+                "release gate `{}` must use bytes/count, not {:?}",
+                budget.name,
+                budget.unit
+            );
+        }
+    }
+
+    #[test]
     fn benchmark_suite_rejects_fixture_mismatch() {
         let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
         let suite = BenchmarkSuite::new("render").with_case(
@@ -240,7 +296,7 @@ mod tests {
         assert_eq!(
             BenchmarkSuite::validate_release_gate_coverage(&budgets, [&partial]),
             Err(BenchmarkError::MissingReleaseGateCase(
-                "artifact-load".to_owned()
+                "scene-node-count".to_owned()
             ))
         );
 

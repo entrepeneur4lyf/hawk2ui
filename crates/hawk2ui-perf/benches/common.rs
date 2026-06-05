@@ -57,8 +57,16 @@ pub(crate) fn measure_counter_micros(
     })
 }
 
+pub(crate) fn measure_operation_count(operations: u64) -> BenchmarkMeasurement {
+    BenchmarkMeasurement::from_count(operations)
+}
+
 pub(crate) fn measure_directory_bytes(fixture: &str) -> BenchmarkMeasurement {
     BenchmarkMeasurement::from_bytes(read_tree_bytes(&fixture_path(fixture)))
+}
+
+pub(crate) fn measure_tree_file_count(fixture: &str) -> BenchmarkMeasurement {
+    BenchmarkMeasurement::from_count(read_tree_file_count(&fixture_path(fixture)))
 }
 
 pub(crate) fn finish_suite(suite: &BenchmarkSuite, budgets: &PerformanceBudgets) {
@@ -98,6 +106,12 @@ fn read_tree_bytes(root: &Path) -> u64 {
         black_box(bytes);
     }
     total
+}
+
+fn read_tree_file_count(root: &Path) -> u64 {
+    let mut files = Vec::new();
+    collect_files(root, &mut files);
+    u64::try_from(files.len()).unwrap_or(u64::MAX)
 }
 
 fn collect_files(path: &Path, files: &mut Vec<PathBuf>) {
