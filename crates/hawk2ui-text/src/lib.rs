@@ -237,6 +237,7 @@ pub struct TextLayout {
     resolved_family: String,
     display_text: String,
     lines: Vec<TextLayoutLine>,
+    font_size_px: f32,
     width_px: f32,
     height_px: f32,
     baseline_px: f32,
@@ -297,6 +298,12 @@ impl TextLayout {
     #[must_use]
     pub fn lines(&self) -> &[TextLayoutLine] {
         &self.lines
+    }
+
+    /// Returns the physical font size used for shaping.
+    #[must_use]
+    pub const fn font_size_px(&self) -> f32 {
+        self.font_size_px
     }
 
     /// Returns measured width in physical pixels.
@@ -495,6 +502,7 @@ impl TextBackend {
         validate_input(input)?;
         let resolved_family = self.resolve_family(&input.font_family)?;
         let display_text = self.truncate_text(input, &resolved_family)?;
+        let font_size_px = scaled_font_size_px(input)?;
         let clusters: Vec<&str> = display_text.graphemes(true).collect();
         let cluster_count = clusters.len();
         let contains_emoji = clusters.iter().any(|cluster| cluster.chars().any(is_emoji));
@@ -522,6 +530,7 @@ impl TextBackend {
             resolved_family,
             display_text,
             lines,
+            font_size_px,
             width_px: round_tenth(width_px),
             height_px: round_tenth(height_px),
             baseline_px: round_tenth(baseline_px),
@@ -728,6 +737,18 @@ fn validate_input(input: &TextLayoutInput) -> Result<(), TextBackendError> {
         ));
     }
     Ok(())
+}
+
+fn scaled_font_size_px(input: &TextLayoutInput) -> Result<f32, TextBackendError> {
+    let font_size_px = round_tenth(input.size_px * input.dpi_scale);
+    if font_size_px.is_finite() && font_size_px > 0.0 {
+        Ok(font_size_px)
+    } else {
+        Err(TextBackendError::new(
+            "text.input.invalid-scaled-size",
+            "font size multiplied by DPI scale must be finite and greater than zero",
+        ))
+    }
 }
 
 fn truncated_candidate(clusters: &[&str], ellipsis: &str) -> String {

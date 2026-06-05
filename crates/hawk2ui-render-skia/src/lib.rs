@@ -1648,7 +1648,7 @@ impl SkiaRendererBackend {
                 "backend does not support text rendering",
             );
         }
-        let font_size = font_size_from_layout(layout)?;
+        let font_size = layout.font_size_px();
         validate_text_layout(layout, x, y, font_size).inspect_err(|error| {
             self.diagnostics.push(error.diagnostic().clone());
         })?;
@@ -2291,18 +2291,6 @@ fn validate_text_layout(
         }
     }
     Ok(())
-}
-
-fn font_size_from_layout(layout: &TextLayout) -> Result<f32, BackendError> {
-    let font_size = layout.baseline_px() / 0.8;
-    if font_size.is_finite() && font_size > 0.0 {
-        Ok(font_size)
-    } else {
-        Err(BackendError::new(
-            "skia.text.invalid-layout",
-            "text layout baseline must produce a finite positive font size",
-        ))
-    }
 }
 
 fn validate_blur(rule: &'static str, blur_radius: f32) -> Result<(), BackendError> {

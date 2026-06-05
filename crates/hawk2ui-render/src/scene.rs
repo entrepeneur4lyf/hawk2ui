@@ -1,5 +1,7 @@
 //! Retained scene graph records.
 
+use std::collections::BTreeMap;
+
 /// Stable scene node identifier.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SceneNodeId(String);
@@ -627,18 +629,21 @@ impl Default for SceneGraphDiff {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneGraph {
     entries: Vec<SceneEntry>,
+    index_by_id: BTreeMap<SceneNodeId, usize>,
 }
 
 impl SceneGraph {
     /// Creates a scene graph with a root node.
     #[must_use]
     pub fn new(root: SceneNode) -> Self {
+        let root_id = root.id().clone();
         Self {
             entries: vec![SceneEntry {
                 node: root,
                 parent: None,
                 children: Vec::new(),
             }],
+            index_by_id: BTreeMap::from([(root_id, 0)]),
         }
     }
 
@@ -666,6 +671,8 @@ impl SceneGraph {
         };
         let child_id = child.id().clone();
         self.entries[parent_index].children.push(child_id);
+        let child_index = self.entries.len();
+        self.index_by_id.insert(child.id().clone(), child_index);
         self.entries.push(SceneEntry {
             node: child,
             parent: Some(parent_id),
@@ -731,35 +738,29 @@ impl SceneGraph {
     /// Returns a node by ID.
     #[must_use]
     pub fn node(&self, node_id: &SceneNodeId) -> Option<&SceneNode> {
-        self.entries
-            .iter()
-            .find(|entry| entry.node.id().as_str() == node_id.as_str())
+        self.index_of(node_id)
+            .and_then(|index| self.entries.get(index))
             .map(|entry| &entry.node)
     }
 
     /// Returns a node parent by ID.
     #[must_use]
     pub fn parent_of(&self, node_id: &SceneNodeId) -> Option<&SceneNodeId> {
-        self.entries
-            .iter()
-            .find(|entry| entry.node.id().as_str() == node_id.as_str())
+        self.index_of(node_id)
+            .and_then(|index| self.entries.get(index))
             .and_then(|entry| entry.parent.as_ref())
     }
 
     /// Returns children sorted by z-order.
     #[must_use]
     pub fn children_sorted_by_z(&self, node_id: &SceneNodeId) -> Vec<&SceneNode> {
-        let mut children: Vec<_> = self
-            .entries
-            .iter()
-            .find(|entry| entry.node.id().as_str() == node_id.as_str())
-            .map_or_else(Vec::new, |entry| {
-                entry
-                    .children
-                    .iter()
-                    .filter_map(|child_id| self.node(child_id))
-                    .collect()
-            });
+        let mut children: Vec<_> = self.entry(node_id).map_or_else(Vec::new, |entry| {
+            entry
+                .children
+                .iter()
+                .filter_map(|child_id| self.node(child_id))
+                .collect()
+        });
         children.sort_by_key(|node| node.z_order());
         children
     }
@@ -864,15 +865,12 @@ impl SceneGraph {
     }
 
     fn index_of(&self, node_id: &SceneNodeId) -> Option<usize> {
-        self.entries
-            .iter()
-            .position(|entry| entry.node.id().as_str() == node_id.as_str())
+        self.index_by_id.get(node_id).copied()
     }
 
     fn entry(&self, node_id: &SceneNodeId) -> Option<&SceneEntry> {
-        self.entries
-            .iter()
-            .find(|entry| entry.node.id().as_str() == node_id.as_str())
+        self.index_of(node_id)
+            .and_then(|index| self.entries.get(index))
     }
 
     fn push_paint_order<'a>(&'a self, node_id: &SceneNodeId, nodes: &mut Vec<&'a SceneNode>) {

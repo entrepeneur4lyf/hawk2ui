@@ -321,6 +321,36 @@ fn compiled_asset_records_register_and_render_image_and_vector_pixels() {
 }
 
 #[test]
+fn compiled_vector_style_paint_survives_asset_lowering_and_skia_registration() {
+    let mut assets = AssetBackend::new(AssetLimits::default());
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><path style="fill:#00cc66" d="M10 10 L30 10 L30 30 L10 30 Z"/></svg>"#;
+    let vector = assets
+        .compile_vector(
+            "styled-logo",
+            "assets/styled-logo.svg",
+            svg,
+            &AssetHash::sha256_bytes(svg),
+        )
+        .unwrap();
+
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 80, 48).unwrap();
+    backend.register_compiled_asset(&vector).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(8, 10, 14, 255)).unwrap();
+    backend.draw_vector("styled-logo").unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+
+    assert_eq!(
+        snapshot.pixel_at(16, 16),
+        Some(0x0000_cc66),
+        "styled SVG fill color must survive asset lowering and Skia registration"
+    );
+}
+
+#[test]
 fn skia_backend_replays_runtime_scene_frame_commands() {
     let mut assets = AssetBackend::new(AssetLimits::default());
     let image_bytes = png_1x1();

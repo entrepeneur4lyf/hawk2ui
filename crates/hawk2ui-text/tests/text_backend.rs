@@ -74,6 +74,7 @@ fn text_backend_shapes_latin_emoji_combining_and_bidi_text() {
     assert!(layout.parley_processed());
     assert_eq!(layout.line_count(), 1);
     assert!(layout.baseline_px() > 0.0);
+    assert_close(layout.font_size_px(), 36.0);
 }
 
 #[test]
