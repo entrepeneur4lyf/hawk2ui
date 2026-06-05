@@ -3,12 +3,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use hawk2ui_api::Diagnostic;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     AssetRef, ComponentInstance, CustomSurfaceDeclaration, ElementId, ElementKind, ElementNode,
-    EventBinding, HandlerRef, NativeAuthoringArtifact, NativeAuthoringElement,
-    NativeAuthoringError, NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef,
-    PropValue, StyleRef,
+    EventBinding, EventKind, EventPayloadField, HandlerRef, NativeAuthoringArtifact,
+    NativeAuthoringElement, NativeAuthoringError, NativeAuthoringRuntime, NativeChild,
+    NativeLifecycleEvent, NativeRef, PropValue, StyleRef,
 };
 use crate::{limits::MAX_AUTHORING_TREE_DEPTH, operation_keys};
 
@@ -185,6 +186,222 @@ pub struct FrameworkNativeProgram {
     reactivity: Vec<FrameworkReactiveBinding>,
 }
 
+/// Versioned native compiler artifact emitted by framework-specific compilers.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkNativeProgramWire {
+    /// Wire schema version. Version `1` is the current compiler artifact format.
+    pub schema_version: u32,
+    /// Root node emitted by the framework compiler.
+    pub root: FrameworkNativeNodeWire,
+    /// Framework reactivity bindings emitted by the compiler.
+    #[serde(default)]
+    pub reactivity: Vec<FrameworkReactiveBindingWire>,
+}
+
+impl FrameworkNativeProgramWire {
+    /// Current wire schema version.
+    pub const SCHEMA_VERSION: u32 = 1;
+
+    /// Parses a JSON compiler artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] when the artifact is not valid JSON or does not match the wire schema.
+    pub fn from_json(json: &str) -> Result<Self, AdapterError> {
+        serde_json::from_str(json).map_err(|error| {
+            AdapterError::with_rule(
+                "framework-native-program.json-invalid",
+                format!("framework native program artifact is invalid JSON: {error}"),
+            )
+        })
+    }
+
+    /// Serializes this compiler artifact to deterministic JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] when the artifact cannot be serialized.
+    pub fn to_json(&self) -> Result<String, AdapterError> {
+        serde_json::to_string(self).map_err(|error| {
+            AdapterError::with_rule(
+                "framework-native-program.json-serialize-failed",
+                format!("framework native program artifact could not be serialized: {error}"),
+            )
+        })
+    }
+}
+
+/// Wire representation of a framework-emitted native node.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkNativeNodeWire {
+    /// Stable native node id.
+    pub id: String,
+    /// Native element kind.
+    pub kind: FrameworkNativeElementKindWire,
+    /// Optional framework key for this node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Ordered typed properties.
+    #[serde(default)]
+    pub props: Vec<FrameworkNativePropWire>,
+    /// Ordered native refs.
+    #[serde(default)]
+    pub refs: Vec<String>,
+    /// Ordered style registry refs.
+    #[serde(default)]
+    pub style_refs: Vec<String>,
+    /// Ordered asset refs.
+    #[serde(default)]
+    pub asset_refs: Vec<FrameworkNativeAssetWire>,
+    /// Ordered event bindings.
+    #[serde(default)]
+    pub events: Vec<FrameworkNativeEventWire>,
+    /// Ordered lifecycle bindings.
+    #[serde(default)]
+    pub lifecycle: Vec<FrameworkNativeLifecycleWire>,
+    /// Ordered child nodes.
+    #[serde(default)]
+    pub children: Vec<FrameworkNativeChildWire>,
+}
+
+/// Wire element kind names.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FrameworkNativeElementKindWire {
+    /// Generic layout or grouping view.
+    View,
+    /// Text node.
+    Text,
+    /// Button control.
+    Button,
+    /// Host-rendered custom draw surface.
+    CustomSurface,
+}
+
+/// Ordered wire property.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkNativePropWire {
+    /// Property name.
+    pub name: String,
+    /// Typed property value.
+    pub value: FrameworkNativePropValueWire,
+}
+
+/// Wire property value.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum FrameworkNativePropValueWire {
+    /// String property value.
+    String(String),
+    /// Boolean property value.
+    Bool(bool),
+    /// Floating-point number property value.
+    Number(f64),
+}
+
+/// Wire asset reference.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkNativeAssetWire {
+    /// Stable asset registry name.
+    pub name: String,
+    /// Workspace-relative asset path.
+    pub path: String,
+}
+
+/// Wire event binding.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkNativeEventWire {
+    /// Stable event key, such as `pointer.press`.
+    pub kind: String,
+    /// Stable handler reference.
+    pub handler: String,
+    /// Requested payload fields.
+    #[serde(default)]
+    pub payload_fields: Vec<FrameworkNativePayloadFieldWire>,
+}
+
+/// Wire event payload field.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FrameworkNativePayloadFieldWire {
+    /// Pointer or geometry position.
+    Position,
+    /// Movement delta.
+    Delta,
+    /// Text or control value.
+    Value,
+    /// Keyboard key identifier.
+    Key,
+}
+
+/// Wire lifecycle binding.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkNativeLifecycleWire {
+    /// Lifecycle event.
+    pub event: FrameworkNativeLifecycleEventWire,
+    /// Stable handler reference.
+    pub handler: String,
+}
+
+/// Wire lifecycle event.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FrameworkNativeLifecycleEventWire {
+    /// Node mounted into the native tree.
+    Mounted,
+    /// Node suspended while preserving native state.
+    Suspended,
+    /// Node resumed after a suspension.
+    Resumed,
+    /// Node reconciled after a hot-reload patch.
+    HotReloaded,
+    /// Node entered an error boundary.
+    ErrorBoundary,
+    /// Node received a shutdown notification before unmount.
+    Shutdown,
+    /// Node removed from the native tree.
+    Unmounted,
+}
+
+/// Wire child node.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkNativeChildWire {
+    /// Optional append key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Child node.
+    pub node: FrameworkNativeNodeWire,
+}
+
+/// Wire reactivity binding.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkReactiveBindingWire {
+    /// Binding kind.
+    pub kind: FrameworkReactiveBindingKindWire,
+    /// Binding source/name.
+    pub name: String,
+}
+
+/// Wire reactivity binding kind.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FrameworkReactiveBindingKindWire {
+    /// A named signal/source value.
+    Signal,
+    /// A keyed list rendered from a named source value.
+    KeyedForEach,
+    /// A named effect/update group.
+    Effect,
+}
+
 impl FrameworkNativeProgram {
     /// Creates a framework native program with one root node.
     #[must_use]
@@ -259,6 +476,226 @@ impl FrameworkNativeProgram {
             0,
         )?);
         runtime.finish()
+    }
+}
+
+impl TryFrom<FrameworkNativeProgramWire> for FrameworkNativeProgram {
+    type Error = AdapterError;
+
+    fn try_from(wire: FrameworkNativeProgramWire) -> Result<Self, Self::Error> {
+        if wire.schema_version != FrameworkNativeProgramWire::SCHEMA_VERSION {
+            return Err(AdapterError::with_rule(
+                "framework-native-program.schema-version-unsupported",
+                format!(
+                    "unsupported framework native program schema version `{}`",
+                    wire.schema_version
+                ),
+            ));
+        }
+
+        let mut program = Self::new(framework_native_node_from_wire(wire.root)?);
+        for binding in wire.reactivity {
+            program = program.with_reactive_binding(framework_reactivity_from_wire(binding)?);
+        }
+        Ok(program)
+    }
+}
+
+fn framework_native_node_from_wire(
+    wire: FrameworkNativeNodeWire,
+) -> Result<FrameworkNativeNode, AdapterError> {
+    validate_non_empty(
+        "framework-native-program.node.id-invalid",
+        "node id",
+        &wire.id,
+    )?;
+    let mut node = FrameworkNativeNode::new(wire.id, element_kind_from_wire(wire.kind));
+    if let Some(key) = wire.key {
+        validate_non_empty(
+            "framework-native-program.node.key-invalid",
+            "node key",
+            &key,
+        )?;
+        node = node.with_key(key);
+    }
+    for prop in wire.props {
+        validate_non_empty(
+            "framework-native-program.prop.name-invalid",
+            "property name",
+            &prop.name,
+        )?;
+        node = node.with_prop(prop.name, prop_value_from_wire(prop.value)?);
+    }
+    for reference in wire.refs {
+        validate_non_empty(
+            "framework-native-program.ref.name-invalid",
+            "ref name",
+            &reference,
+        )?;
+        node = node.with_ref(NativeRef::new(reference));
+    }
+    for style_ref in wire.style_refs {
+        validate_non_empty(
+            "framework-native-program.style-ref.name-invalid",
+            "style ref",
+            &style_ref,
+        )?;
+        node = node.with_style(StyleRef::new(style_ref));
+    }
+    for asset in wire.asset_refs {
+        validate_non_empty(
+            "framework-native-program.asset.name-invalid",
+            "asset name",
+            &asset.name,
+        )?;
+        validate_non_empty(
+            "framework-native-program.asset.path-invalid",
+            "asset path",
+            &asset.path,
+        )?;
+        node = node.with_asset(AssetRef::new(asset.name, asset.path));
+    }
+    for event in wire.events {
+        validate_non_empty(
+            "framework-native-program.event.handler-invalid",
+            "event handler",
+            &event.handler,
+        )?;
+        let event_kind = event.kind.parse::<EventKind>().map_err(|()| {
+            AdapterError::with_rule(
+                "framework-native-program.event.kind-invalid",
+                format!(
+                    "framework compiler emitted unsupported event kind `{}`",
+                    event.kind
+                ),
+            )
+        })?;
+        node = node.with_event(
+            event_kind,
+            HandlerRef::new(event.handler),
+            event
+                .payload_fields
+                .into_iter()
+                .map(event_payload_field_from_wire),
+        );
+    }
+    for lifecycle in wire.lifecycle {
+        node = with_lifecycle_from_wire(node, lifecycle)?;
+    }
+    for child in wire.children {
+        node = with_child_from_wire(node, child)?;
+    }
+    Ok(node)
+}
+
+fn with_lifecycle_from_wire(
+    node: FrameworkNativeNode,
+    lifecycle: FrameworkNativeLifecycleWire,
+) -> Result<FrameworkNativeNode, AdapterError> {
+    validate_non_empty(
+        "framework-native-program.lifecycle.handler-invalid",
+        "lifecycle handler",
+        &lifecycle.handler,
+    )?;
+    Ok(node.with_lifecycle(
+        lifecycle_event_from_wire(lifecycle.event),
+        HandlerRef::new(lifecycle.handler),
+    ))
+}
+
+fn with_child_from_wire(
+    node: FrameworkNativeNode,
+    child: FrameworkNativeChildWire,
+) -> Result<FrameworkNativeNode, AdapterError> {
+    let child_node = framework_native_node_from_wire(child.node)?;
+    let Some(key) = child.key else {
+        return Ok(node.with_unkeyed_child(child_node));
+    };
+    validate_non_empty(
+        "framework-native-program.child.key-invalid",
+        "child key",
+        &key,
+    )?;
+    Ok(node.with_child(key, child_node))
+}
+
+fn element_kind_from_wire(kind: FrameworkNativeElementKindWire) -> ElementKind {
+    match kind {
+        FrameworkNativeElementKindWire::View => ElementKind::View,
+        FrameworkNativeElementKindWire::Text => ElementKind::Text,
+        FrameworkNativeElementKindWire::Button => ElementKind::Button,
+        FrameworkNativeElementKindWire::CustomSurface => ElementKind::CustomSurface,
+    }
+}
+
+fn prop_value_from_wire(value: FrameworkNativePropValueWire) -> Result<PropValue, AdapterError> {
+    match value {
+        FrameworkNativePropValueWire::String(value) => Ok(PropValue::String(value)),
+        FrameworkNativePropValueWire::Bool(value) => Ok(PropValue::Bool(value)),
+        FrameworkNativePropValueWire::Number(value) if value.is_finite() => {
+            Ok(PropValue::Number(value))
+        }
+        FrameworkNativePropValueWire::Number(value) => Err(AdapterError::with_rule(
+            "framework-native-program.prop.number-invalid",
+            format!("framework compiler emitted non-finite numeric property value `{value}`"),
+        )),
+    }
+}
+
+const fn event_payload_field_from_wire(
+    field: FrameworkNativePayloadFieldWire,
+) -> EventPayloadField {
+    match field {
+        FrameworkNativePayloadFieldWire::Position => EventPayloadField::Position,
+        FrameworkNativePayloadFieldWire::Delta => EventPayloadField::Delta,
+        FrameworkNativePayloadFieldWire::Value => EventPayloadField::Value,
+        FrameworkNativePayloadFieldWire::Key => EventPayloadField::Key,
+    }
+}
+
+const fn lifecycle_event_from_wire(
+    event: FrameworkNativeLifecycleEventWire,
+) -> NativeLifecycleEvent {
+    match event {
+        FrameworkNativeLifecycleEventWire::Mounted => NativeLifecycleEvent::Mounted,
+        FrameworkNativeLifecycleEventWire::Suspended => NativeLifecycleEvent::Suspended,
+        FrameworkNativeLifecycleEventWire::Resumed => NativeLifecycleEvent::Resumed,
+        FrameworkNativeLifecycleEventWire::HotReloaded => NativeLifecycleEvent::HotReloaded,
+        FrameworkNativeLifecycleEventWire::ErrorBoundary => NativeLifecycleEvent::ErrorBoundary,
+        FrameworkNativeLifecycleEventWire::Shutdown => NativeLifecycleEvent::Shutdown,
+        FrameworkNativeLifecycleEventWire::Unmounted => NativeLifecycleEvent::Unmounted,
+    }
+}
+
+fn framework_reactivity_from_wire(
+    binding: FrameworkReactiveBindingWire,
+) -> Result<FrameworkReactiveBinding, AdapterError> {
+    validate_non_empty(
+        "framework-native-program.reactivity.name-invalid",
+        "reactivity binding name",
+        &binding.name,
+    )?;
+    Ok(match binding.kind {
+        FrameworkReactiveBindingKindWire::Signal => FrameworkReactiveBinding::Signal(binding.name),
+        FrameworkReactiveBindingKindWire::KeyedForEach => {
+            FrameworkReactiveBinding::KeyedForEach(binding.name)
+        }
+        FrameworkReactiveBindingKindWire::Effect => FrameworkReactiveBinding::Effect(binding.name),
+    })
+}
+
+fn validate_non_empty(
+    rule: &'static str,
+    label: &'static str,
+    value: &str,
+) -> Result<(), AdapterError> {
+    if value.trim().is_empty() {
+        Err(AdapterError::with_rule(
+            rule,
+            format!("framework compiler emitted empty {label}"),
+        ))
+    } else {
+        Ok(())
     }
 }
 

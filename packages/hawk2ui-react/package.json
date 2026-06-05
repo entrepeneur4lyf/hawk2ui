@@ -2,6 +2,12 @@
   "name": "@hawk2ui/react",
   "version": "0.1.0",
   "type": "module",
+  "dependencies": {
+    "@babel/core": "7.29.7",
+    "@babel/parser": "7.29.7",
+    "@babel/preset-react": "7.29.7",
+    "@babel/preset-typescript": "7.29.7"
+  },
   "peerDependencies": {
     "react": ">=19"
   },

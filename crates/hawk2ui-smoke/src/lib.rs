@@ -7,9 +7,10 @@ use std::{
 };
 
 use hawk2ui_authoring::{
-    AssetRef, ElementKind, EventKind, EventPayloadField, NativeAuthoringElement,
-    NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge,
-    PointerEventKind, PropValue, StyleRef,
+    AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkNativeNode,
+    FrameworkNativeProgram, HandlerRef, NativeAuthoringElement, NativeAuthoringRuntime,
+    NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge, PointerEventKind, PropValue,
+    StyleRef,
 };
 use hawk2ui_build::{
     ArtifactSchemaVersion, BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput,
@@ -1132,11 +1133,41 @@ fn native_root() -> NativeAuthoringElement {
         .with_lifecycle(NativeLifecycleEvent::Unmounted, "onUnmount")
 }
 
-fn svelte_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleContract, String> {
+fn framework_example_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
+    FrameworkNativeProgram::new(
+        FrameworkNativeNode::new("root", ElementKind::View)
+            .with_ref(NativeRef::new("root_ref"))
+            .with_style(StyleRef::new("surface.card"))
+            .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
+            .with_event(
+                EventKind::Pointer(PointerEventKind::Press),
+                HandlerRef::new("handlePress"),
+                [EventPayloadField::Position],
+            )
+            .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new("onMount"))
+            .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted))
+            .with_child(
+                "title",
+                FrameworkNativeNode::new("title", ElementKind::Text)
+                    .with_key("title")
+                    .with_prop("text", PropValue::String("title".to_string()))
+                    .with_prop("font_size", PropValue::Number(18.0)),
+            )
+            .with_child(
+                "cta",
+                FrameworkNativeNode::new("cta", ElementKind::Text)
+                    .with_key("cta")
+                    .with_prop("text", PropValue::String("cta".to_string()))
+                    .with_prop("font_size", PropValue::Number(18.0)),
+            ),
+    )
+}
+
+fn svelte_contract(source_file: &Path, _source: &str) -> Result<FrameworkExampleContract, String> {
     let artifact = SvelteIntegration::new()
-        .compile_to_runtime(SvelteComponentSource::new(
+        .compile_to_runtime(SvelteComponentSource::from_native_program(
             source_file.display().to_string(),
-            source,
+            framework_example_program("svelte.asset", "onDestroy"),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(FrameworkExampleContract {
@@ -1159,11 +1190,11 @@ fn svelte_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleC
     })
 }
 
-fn react_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleContract, String> {
+fn react_contract(source_file: &Path, _source: &str) -> Result<FrameworkExampleContract, String> {
     let artifact = ReactIntegration::new()
-        .render_to_runtime(ReactElementTree::new(
+        .render_to_runtime(ReactElementTree::from_native_program(
             source_file.display().to_string(),
-            source,
+            framework_example_program("react.asset", "onUnmount"),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(FrameworkExampleContract {
@@ -1186,11 +1217,11 @@ fn react_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleCo
     })
 }
 
-fn vue_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleContract, String> {
+fn vue_contract(source_file: &Path, _source: &str) -> Result<FrameworkExampleContract, String> {
     let artifact = VueIntegration::new()
-        .render_to_runtime(VueSingleFileComponent::new(
+        .render_to_runtime(VueSingleFileComponent::from_native_program(
             source_file.display().to_string(),
-            source,
+            framework_example_program("vue.asset", "onUnmounted"),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(FrameworkExampleContract {
@@ -1213,11 +1244,11 @@ fn vue_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleCont
     })
 }
 
-fn solid_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleContract, String> {
+fn solid_contract(source_file: &Path, _source: &str) -> Result<FrameworkExampleContract, String> {
     let artifact = SolidIntegration::new()
-        .render_to_runtime(SolidComponentSource::new(
+        .render_to_runtime(SolidComponentSource::from_native_program(
             source_file.display().to_string(),
-            source,
+            framework_example_program("solid.asset", "onCleanup"),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(FrameworkExampleContract {

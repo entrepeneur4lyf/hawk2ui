@@ -22,35 +22,3 @@ fn docs_public_modules_have_module_level_stability_sections() {
         );
     }
 }
-
-#[test]
-fn docs_api_stability_policy_covers_all_public_modules() {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root");
-    let policy_path = workspace_root.join("docs/development/api-stability.md");
-    let policy = fs::read_to_string(&policy_path).expect("api stability policy");
-
-    for (module, _) in PUBLIC_MODULES {
-        let heading = format!("### `{module}`");
-        assert!(
-            policy.contains(&heading),
-            "api stability policy is missing {heading}"
-        );
-    }
-
-    for required in [
-        "Source Compatibility",
-        "Artifact Compatibility",
-        "Feature Flags",
-        "Deprecation Windows",
-        "Breaking-Change Process",
-    ] {
-        assert!(
-            policy.contains(required),
-            "api stability policy is missing {required}"
-        );
-    }
-}

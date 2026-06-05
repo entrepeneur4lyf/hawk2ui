@@ -2,11 +2,10 @@
 //! `Solid` integration for emitting `Hawk2UI` typed records.
 
 use hawk2ui_authoring::{
-    AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementId, ElementKind,
-    ElementNode, EventBinding, EventKind, EventPayloadField, FrameworkNativeProgram, HandlerRef,
-    LifecycleEventKind, NativeAuthoringElement, NativeAuthoringRuntime, NativeChild,
-    NativeLifecycleEvent, NativeRef, NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
-    NativeRuntimeBridgeError, PointerEventKind, PropValue, StyleRef,
+    AdapterError, AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementNode,
+    EventBinding, EventKind, FrameworkNativeProgram, FrameworkNativeProgramWire, HandlerRef,
+    LifecycleEventKind, NativeLifecycleEvent, NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
+    NativeRuntimeBridgeError, StyleRef,
 };
 use hawk2ui_runtime::RuntimeViewTree;
 use hawk2ui_style::{CompiledStyleSheet, TokenSet};
@@ -50,6 +49,21 @@ impl SolidComponentSource {
             source: String::new(),
             native_program: Some(native_program),
         }
+    }
+
+    /// Creates a Solid source unit from a versioned native compiler JSON artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError`] when the JSON wire artifact is malformed, unsupported, or violates
+    /// the native authoring contract.
+    pub fn from_compiler_json(
+        author_file: impl Into<String>,
+        compiler_json: &str,
+    ) -> Result<Self, AdapterError> {
+        let wire = FrameworkNativeProgramWire::from_json(compiler_json)?;
+        let native_program = FrameworkNativeProgram::try_from(wire)?;
+        Ok(Self::from_native_program(author_file, native_program))
     }
 }
 
@@ -175,8 +189,8 @@ impl SolidRenderedArtifact {
 
     /// Returns Solid fine-grained reactivity descriptors.
     ///
-    /// Raw source fixtures emit the conservative fallback descriptor set. Native compiler-boundary
-    /// input derives this list from [`hawk2ui_authoring::FrameworkReactiveBinding`] records.
+    /// The list is derived from [`hawk2ui_authoring::FrameworkReactiveBinding`] records emitted by
+    /// the Solid compiler adapter.
     #[must_use]
     pub fn fine_grained_updates(&self) -> &[String] {
         &self.fine_grained_updates
@@ -221,18 +235,12 @@ impl SolidIntegration {
         Self
     }
 
-    /// Renders a Solid component into typed `Hawk2UI` records.
+    /// Renders typed Solid compiler output into typed `Hawk2UI` records.
     ///
-    /// # Source grammar (raw-source path)
-    ///
-    /// When the component carries raw author source (rather than a
-    /// [`SolidComponentSource::from_native_program`] boundary), this method is an intentional
-    /// substring heuristic, **not** a Solid/JSX parser. It models only a single root `View` plus a
-    /// flat list of `<hawk-text>` / keyed children, and several record fields are fixed labels
-    /// rather than parsed from the source: handler identifiers (`onPointerDown` → `handlePress`),
-    /// the ref name (gated on the literal `ref={root_ref}`), and `fine_grained_updates` (a fixed
-    /// reactivity descriptor — see [`SolidRenderedArtifact::fine_grained_updates`]). High-fidelity
-    /// authoring is expected to arrive through [`SolidComponentSource::from_native_program`].
+    /// Raw `.tsx` source is not accepted here. Production use must enter through
+    /// [`SolidComponentSource::from_native_program`] or
+    /// [`SolidComponentSource::from_compiler_json`] after the Solid compiler adapter has produced
+    /// the native program artifact.
     ///
     /// # Errors
     ///
@@ -245,105 +253,9 @@ impl SolidIntegration {
             author_file: component.author_file.clone(),
         };
         if let Some(native_program) = component.native_program {
-            return Ok(solid_artifact_from_native_program(
-                source_map,
-                native_program,
-            ));
+            return solid_artifact_from_native_program(source_map, native_program);
         }
-        let mut diagnostics = Vec::new();
-        if let Some(asset) = extract_attribute(&component.source, "data-asset")
-            && (asset.contains("://") || asset.starts_with('/') || asset.contains(".."))
-        {
-            diagnostics.push(AuthoringDiagnostic::new(
-                AuthoringDiagnosticSeverity::Error,
-                "solid.asset.path-invalid",
-                "Solid asset references must use workspace-relative paths",
-            ));
-        }
-        for event in unsupported_solid_events(&component.source) {
-            diagnostics.push(AuthoringDiagnostic::new(
-                AuthoringDiagnosticSeverity::Error,
-                "solid.event.unsupported",
-                format!("Solid event `{event}` is not part of the native event contract"),
-            ));
-        }
-        push_duplicate_child_key_diagnostics(&mut diagnostics, &component.source);
-        if component.source.contains("<Missing") {
-            diagnostics.push(AuthoringDiagnostic::new(
-                AuthoringDiagnosticSeverity::Error,
-                "solid.renderer.unresolved-component",
-                "Solid renderer could not resolve component",
-            ));
-        }
-        if !diagnostics.is_empty() {
-            return Err(SolidRenderError {
-                diagnostics,
-                source_map,
-            });
-        }
-
-        let root_id =
-            extract_attribute(&component.source, "id").unwrap_or_else(|| "root".to_string());
-        let mut events = Vec::new();
-        if component.source.contains("onPointerDown") {
-            events.push(
-                EventBinding::new(
-                    ElementId::new(root_id.clone()),
-                    EventKind::Pointer(PointerEventKind::Press),
-                    HandlerRef::new("handlePress"),
-                )
-                .with_payload(EventPayloadField::Position),
-            );
-        }
-        if component.source.contains("onMount") {
-            events.push(EventBinding::new(
-                ElementId::new(root_id.clone()),
-                EventKind::Lifecycle(LifecycleEventKind::Mounted),
-                HandlerRef::new("onMount"),
-            ));
-        }
-        if component.source.contains("onCleanup") {
-            events.push(EventBinding::new(
-                ElementId::new(root_id.clone()),
-                EventKind::Lifecycle(LifecycleEventKind::Unmounted),
-                HandlerRef::new("onCleanup"),
-            ));
-        }
-
-        // Lifecycle labels mirror the same `source.contains(…)` gating as the lifecycle `events`
-        // above so the two public surfaces agree; `solid_artifact_from_native_program` derives them
-        // from the program's declared lifecycle instead.
-        let mut lifecycle_handlers = Vec::new();
-        if component.source.contains("onMount") {
-            lifecycle_handlers.push("mounted:onMount".to_string());
-        }
-        if component.source.contains("onCleanup") {
-            lifecycle_handlers.push("unmounted:onCleanup".to_string());
-        }
-
-        Ok(SolidRenderedArtifact {
-            root: ElementNode::new(ElementId::new(root_id), ElementKind::View),
-            keyed_children: keyed_children(&component.source),
-            refs: if component.source.contains("ref={root_ref}") {
-                vec!["root_ref".into()]
-            } else {
-                Vec::new()
-            },
-            style_refs: style_refs_from_attribute(&component.source, "class"),
-            asset_refs: extract_attribute(&component.source, "data-asset")
-                .into_iter()
-                .map(|path| AssetRef::new("solid.asset", path))
-                .collect(),
-            events,
-            lifecycle_handlers,
-            fine_grained_updates: vec![
-                "signal:items".into(),
-                "for-each:keyed".into(),
-                "effect:root-props".into(),
-            ],
-            native_program: None,
-            source_map,
-        })
+        Err(compiler_artifact_required_error(source_map))
     }
 
     /// Renders a Solid component into a runtime-ready native bridge artifact.
@@ -357,10 +269,8 @@ impl SolidIntegration {
         component: SolidComponentSource,
     ) -> Result<SolidRuntimeArtifact, SolidRenderError> {
         let author_file = component.author_file.clone();
-        let source_text = component.source.clone();
         let rendered = self.render(component)?;
-        let native_artifact =
-            native_artifact_from_solid(author_file.as_str(), source_text.as_str(), &rendered)?;
+        let native_artifact = native_artifact_from_solid(author_file.as_str(), &rendered)?;
         let runtime = NativeRuntimeBridge::new()
             .bridge_artifact(&native_artifact)
             .map_err(|error| bridge_error(author_file.as_str(), &error))?;
@@ -380,14 +290,9 @@ impl SolidIntegration {
         tokens: &TokenSet,
     ) -> Result<SolidRuntimeArtifact, SolidRenderError> {
         let author_file = component.author_file.clone();
-        let source_text = component.source.clone();
         let rendered = self.render(component)?;
-        let native_artifact = native_artifact_from_solid_with_defaults(
-            author_file.as_str(),
-            source_text.as_str(),
-            &rendered,
-            false,
-        )?;
+        let native_artifact =
+            native_artifact_from_solid_with_defaults(author_file.as_str(), &rendered, false)?;
         let runtime = NativeRuntimeBridge::new()
             .bridge_artifact_with_styles(&native_artifact, sheet, tokens)
             .map_err(|error| bridge_error(author_file.as_str(), &error))?;
@@ -408,14 +313,9 @@ impl SolidIntegration {
         theme: &str,
     ) -> Result<SolidRuntimeArtifact, SolidRenderError> {
         let author_file = component.author_file.clone();
-        let source_text = component.source.clone();
         let rendered = self.render(component)?;
-        let native_artifact = native_artifact_from_solid_with_defaults(
-            author_file.as_str(),
-            source_text.as_str(),
-            &rendered,
-            false,
-        )?;
+        let native_artifact =
+            native_artifact_from_solid_with_defaults(author_file.as_str(), &rendered, false)?;
         let runtime = NativeRuntimeBridge::new()
             .bridge_artifact_with_theme(&native_artifact, sheet, tokens, theme)
             .map_err(|error| bridge_error(author_file.as_str(), &error))?;
@@ -425,15 +325,13 @@ impl SolidIntegration {
 
 fn native_artifact_from_solid(
     author_file: &str,
-    source_text: &str,
     rendered: &SolidRenderedArtifact,
 ) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, SolidRenderError> {
-    native_artifact_from_solid_with_defaults(author_file, source_text, rendered, true)
+    native_artifact_from_solid_with_defaults(author_file, rendered, true)
 }
 
 fn native_artifact_from_solid_with_defaults(
     author_file: &str,
-    source_text: &str,
     rendered: &SolidRenderedArtifact,
     include_default_visual_props: bool,
 ) -> Result<hawk2ui_authoring::NativeAuthoringArtifact, SolidRenderError> {
@@ -447,66 +345,20 @@ fn native_artifact_from_solid_with_defaults(
                 },
             });
     }
-    let mut runtime = NativeAuthoringRuntime::new(author_file);
-    let mut root = NativeAuthoringElement::new(rendered.root().id().as_str(), ElementKind::View);
-    if include_default_visual_props {
-        root = root.with_prop("background", PropValue::String("#080a0e".to_string()));
-    }
-    for reference in rendered.refs() {
-        root = root.with_ref(NativeRef::new(reference));
-    }
-    for style in rendered.style_refs() {
-        root = root.with_style(StyleRef::new(style));
-    }
-    for asset in rendered.asset_refs() {
-        root = root.with_asset(AssetRef::new(asset.name(), asset.path()));
-    }
-    if source_text.contains("onPointerDown") {
-        root = root.with_event(
-            EventKind::Pointer(PointerEventKind::Press),
-            "handlePress",
-            [EventPayloadField::Position],
-        );
-    }
-    if source_text.contains("onMount") {
-        root = root.with_lifecycle(NativeLifecycleEvent::Mounted, "onMount");
-    }
-    if source_text.contains("onCleanup") {
-        root = root.with_lifecycle(NativeLifecycleEvent::Unmounted, "onCleanup");
-    }
-    let font_size = extract_number_attribute(source_text, "data-font-size").unwrap_or(18.0);
-    for child_id in rendered.keyed_children() {
-        root = root.with_child(NativeChild::keyed(
-            child_id,
-            NativeAuthoringElement::new(child_id, ElementKind::Text)
-                .with_prop(
-                    "text",
-                    PropValue::String(
-                        static_hawk_text_content(source_text, child_id)
-                            .unwrap_or_else(|| child_id.clone()),
-                    ),
-                )
-                .with_prop("font_size", PropValue::Number(font_size))
-                .with_prop("color", PropValue::String("#ffffff".to_string()))
-                .with_prop("width", PropValue::Number(160.0))
-                .with_prop("height", PropValue::Number(32.0)),
-        ));
-    }
-    runtime.mount(root);
-    runtime.finish().map_err(|error| SolidRenderError {
-        diagnostics: error.diagnostics().to_vec(),
-        source_map: SolidSourceMap {
-            author_file: author_file.to_string(),
-        },
-    })
+    Err(compiler_artifact_required_error(SolidSourceMap {
+        author_file: author_file.to_string(),
+    }))
 }
 
 fn solid_artifact_from_native_program(
     source_map: SolidSourceMap,
     native_program: FrameworkNativeProgram,
-) -> SolidRenderedArtifact {
+) -> Result<SolidRenderedArtifact, SolidRenderError> {
     let events = framework_program_events(&native_program);
-    SolidRenderedArtifact {
+    native_program
+        .custom_renderer_operation_keys("solid")
+        .map_err(|error| custom_renderer_error(source_map.author_file(), &error))?;
+    Ok(SolidRenderedArtifact {
         root: ElementNode::new(
             native_program.root().id().clone(),
             native_program.root().kind(),
@@ -530,7 +382,7 @@ fn solid_artifact_from_native_program(
         fine_grained_updates: solid_fine_grained_updates(&native_program),
         native_program: Some(native_program),
         source_map,
-    }
+    })
 }
 
 fn solid_fine_grained_updates(native_program: &FrameworkNativeProgram) -> Vec<String> {
@@ -584,6 +436,33 @@ fn bridge_error(author_file: &str, error: &NativeRuntimeBridgeError) -> SolidRen
     }
 }
 
+fn compiler_artifact_required_error(source_map: SolidSourceMap) -> SolidRenderError {
+    SolidRenderError {
+        diagnostics: vec![AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "solid.compiler-artifact.required",
+            "Solid source must be compiled by the Solid compiler adapter before entering the Rust renderer",
+        )],
+        source_map,
+    }
+}
+
+fn custom_renderer_error(
+    author_file: &str,
+    error: &hawk2ui_authoring::CustomRendererError,
+) -> SolidRenderError {
+    SolidRenderError {
+        diagnostics: vec![AuthoringDiagnostic::new(
+            AuthoringDiagnosticSeverity::Error,
+            "solid.custom-renderer.failed",
+            format!("{}: {}", error.rule(), error.message()),
+        )],
+        source_map: SolidSourceMap {
+            author_file: author_file.to_string(),
+        },
+    }
+}
+
 fn lifecycle_handler_label(event: NativeLifecycleEvent, handler: &str) -> String {
     match event {
         NativeLifecycleEvent::Mounted => format!("mounted:{handler}"),
@@ -593,141 +472,6 @@ fn lifecycle_handler_label(event: NativeLifecycleEvent, handler: &str) -> String
         NativeLifecycleEvent::ErrorBoundary => format!("error-boundary:{handler}"),
         NativeLifecycleEvent::Shutdown => format!("shutdown:{handler}"),
         NativeLifecycleEvent::Unmounted => format!("unmounted:{handler}"),
-    }
-}
-
-fn extract_attribute(source: &str, name: &str) -> Option<String> {
-    let pattern = format!("{name}=\"");
-    let start = source.find(&pattern)? + pattern.len();
-    let rest = &source[start..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
-}
-
-fn extract_number_attribute(source: &str, name: &str) -> Option<f64> {
-    extract_attribute(source, name)?.parse().ok()
-}
-
-fn style_refs_from_attribute(source: &str, name: &str) -> Vec<StyleRef> {
-    extract_attribute(source, name).map_or_else(Vec::new, |classes| {
-        classes
-            .split_ascii_whitespace()
-            .map(StyleRef::new)
-            .collect()
-    })
-}
-
-fn unsupported_solid_events(source: &str) -> Vec<String> {
-    ["onClick", "onHover", "onMouseEnter", "onKeyDown"]
-        .into_iter()
-        .filter(|event| source.contains(event))
-        .map(str::to_string)
-        .collect()
-}
-
-fn push_duplicate_child_key_diagnostics(diagnostics: &mut Vec<AuthoringDiagnostic>, source: &str) {
-    for child_id in duplicate_static_hawk_text_ids(source) {
-        diagnostics.push(AuthoringDiagnostic::new(
-            AuthoringDiagnosticSeverity::Error,
-            "solid.child-key.duplicate",
-            format!("Solid child key `{child_id}` is declared more than once"),
-        ));
-    }
-}
-
-fn keyed_children(source: &str) -> Vec<String> {
-    let mut ids = if source.contains("<For each={items()}") {
-        declared_item_ids(source)
-    } else {
-        Vec::new()
-    };
-    for id in static_hawk_text_ids(source) {
-        push_unique(&mut ids, id);
-    }
-    ids
-}
-
-fn static_hawk_text_ids(source: &str) -> Vec<String> {
-    let mut ids = Vec::new();
-    for id in static_hawk_text_ids_all(source) {
-        push_unique(&mut ids, id);
-    }
-    ids
-}
-
-fn duplicate_static_hawk_text_ids(source: &str) -> Vec<String> {
-    let mut seen = Vec::new();
-    let mut duplicates = Vec::new();
-    for id in static_hawk_text_ids_all(source) {
-        if seen.iter().any(|existing| existing == &id) {
-            push_unique(&mut duplicates, id);
-        } else {
-            seen.push(id);
-        }
-    }
-    duplicates
-}
-
-fn static_hawk_text_ids_all(source: &str) -> Vec<String> {
-    let mut ids = Vec::new();
-    let mut rest = source;
-    while let Some(index) = rest.find("<hawk-text") {
-        let after = &rest[index..];
-        let segment = after.split('>').next().unwrap_or(after);
-        if let Some(id) = extract_attribute(segment, "id")
-            && !id.is_empty()
-        {
-            ids.push(id);
-        }
-        rest = &after["<hawk-text".len()..];
-    }
-    ids
-}
-
-fn static_hawk_text_content(source: &str, child_id: &str) -> Option<String> {
-    let mut rest = source;
-    while let Some(index) = rest.find("<hawk-text") {
-        let after = &rest[index..];
-        let tag_end = after.find('>')?;
-        let tag = &after[..tag_end];
-        if extract_attribute(tag, "id").as_deref() == Some(child_id) {
-            let body = &after[tag_end + 1..];
-            let end = body.find("</hawk-text>")?;
-            let text = body[..end].trim();
-            return (!text.is_empty()).then(|| text.to_string());
-        }
-        rest = &after["<hawk-text".len()..];
-    }
-    None
-}
-
-fn declared_item_ids(source: &str) -> Vec<String> {
-    let mut ids = Vec::new();
-    let mut rest = source;
-    while let Some(index) = rest.find("id:") {
-        let after = rest[index + "id:".len()..].trim_start();
-        let Some(quote) = after
-            .chars()
-            .next()
-            .filter(|quote| matches!(quote, '\'' | '"'))
-        else {
-            rest = after;
-            continue;
-        };
-        let value = &after[quote.len_utf8()..];
-        let Some(end) = value.find(quote) else {
-            break;
-        };
-        let id = &value[..end];
-        push_unique(&mut ids, id.to_string());
-        rest = &value[end + quote.len_utf8()..];
-    }
-    ids
-}
-
-fn push_unique(ids: &mut Vec<String>, id: String) {
-    if !id.is_empty() && !ids.iter().any(|existing| existing == &id) {
-        ids.push(id);
     }
 }
 

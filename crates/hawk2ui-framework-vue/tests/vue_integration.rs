@@ -10,20 +10,89 @@ use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeViewId};
 use hawk2ui_style::{TokenSet, compile_style_source};
 
 #[test]
-fn vue_35_renderer_maps_lifecycle_keyed_children_events_refs_styles_assets_and_source_maps() {
-    let source = VueSingleFileComponent::new(
-        "examples/frameworks/vue-basic/src/App.vue",
-        r#"
-<script setup>
-const items = [{ id: 'title' }, { id: 'cta' }, { id: 'meter' }];
-</script>
+fn vue_35_render_rejects_raw_source_without_compiler_artifact() {
+    let error = VueIntegration::new()
+        .render(VueSingleFileComponent::new(
+            "src/App.vue",
+            r#"<template><hawk-view id="root"><hawk-text id="title">Title</hawk-text></hawk-view></template>"#,
+        ))
+        .expect_err("raw Vue source must not be substring-scanned in production");
 
-<template>
-  <hawk-view id="root" ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted">
-    <hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text>
-  </hawk-view>
-</template>
+    assert_eq!(
+        error.diagnostics()[0].rule.as_str(),
+        "vue.compiler-artifact.required"
+    );
+}
+
+#[test]
+fn vue_35_render_accepts_versioned_compiler_json_artifact() {
+    let source = VueSingleFileComponent::from_compiler_json(
+        "src/App.vue",
+        r#"
+{
+  "schema_version": 1,
+  "root": {
+    "id": "root",
+    "kind": "view",
+    "refs": ["root_ref"],
+    "style_refs": ["surface.card"],
+    "asset_refs": [{ "name": "vue.asset", "path": "assets/logo.svg" }],
+    "events": [{
+      "kind": "pointer.press",
+      "handler": "handlePress",
+      "payload_fields": ["position"]
+    }],
+    "lifecycle": [
+      { "event": "mounted", "handler": "onMount" },
+      { "event": "unmounted", "handler": "onUnmounted" }
+    ],
+    "children": [{
+      "key": "title",
+      "node": {
+        "id": "title",
+        "kind": "text",
+        "key": "title",
+        "props": [
+          { "name": "text", "value": { "type": "string", "value": "Compiled Title" } },
+          { "name": "font_size", "value": { "type": "number", "value": 18.0 } }
+        ]
+      }
+    }]
+  }
+}
 "#,
+    )
+    .expect("Vue compiler JSON should parse");
+
+    let artifact = VueIntegration::new()
+        .render_to_runtime(source)
+        .expect("Vue compiler JSON should render through runtime");
+
+    assert_eq!(artifact.rendered().keyed_children(), ["title"]);
+    assert_eq!(artifact.metadata_for("root").unwrap().refs(), ["root_ref"]);
+    assert_eq!(
+        artifact.metadata_for("root").unwrap().asset_paths(),
+        ["assets/logo.svg"]
+    );
+    assert!(
+        artifact
+            .operation_keys()
+            .contains(&"mount-element:root".into())
+    );
+}
+
+#[test]
+fn vue_35_renderer_maps_lifecycle_keyed_children_events_refs_styles_assets_and_source_maps() {
+    let source = VueSingleFileComponent::from_native_program(
+        "examples/frameworks/vue-basic/src/App.vue",
+        framework_native_program_with_children(
+            "vue.asset",
+            "onMounted",
+            "onUnmounted",
+            &["surface.card", "intent.primary"],
+            &["root_ref"],
+            &[("title", "title"), ("cta", "cta"), ("meter", "meter")],
+        ),
     );
 
     let artifact = VueIntegration::new()
@@ -63,10 +132,16 @@ const items = [{ id: 'title' }, { id: 'cta' }, { id: 'meter' }];
             "bind-lifecycle:root:mounted:onMounted",
             "bind-lifecycle:root:unmounted:onUnmounted",
             "create-node:title:text",
+            "set-prop:title:text",
+            "set-prop:title:font_size",
             "append-child:root:title:key:title",
             "create-node:cta:text",
+            "set-prop:cta:text",
+            "set-prop:cta:font_size",
             "append-child:root:cta:key:cta",
             "create-node:meter:text",
+            "set-prop:meter:text",
+            "set-prop:meter:font_size",
             "append-child:root:meter:key:meter",
             "commit:root",
         ]
@@ -123,9 +198,9 @@ fn vue_35_renderer_accepts_explicit_native_compiler_boundary_without_source_scan
 
 #[test]
 fn vue_35_renderer_gates_lifecycle_handlers_and_collects_all_refs() {
-    let source = VueSingleFileComponent::new(
+    let source = VueSingleFileComponent::from_native_program(
         "src/Static.vue",
-        r#"<template><hawk-view id="root" ref="root_ref" ref="panel_ref"><hawk-text id="title">Title</hawk-text></hawk-view></template>"#,
+        static_framework_native_program(&[], &["root_ref", "panel_ref"], &[("title", "Title")]),
     );
 
     let artifact = VueIntegration::new()
@@ -151,25 +226,25 @@ fn vue_35_renderer_rejects_non_hawk_source_and_all_invalid_asset_paths() {
             "src/Invalid.vue",
             r#"<template><hawk-view data-asset="assets/logo.svg" data-asset="%2e%2e/secret.svg" data-asset="icons\logo.svg"></hawk-view></template>"#,
         ))
-        .expect_err("invalid raw-source bridge input should fail");
+        .expect_err("raw Vue source should fail before Rust-side source scanning");
     let rules: Vec<_> = error
         .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.rule.as_str())
         .collect();
 
-    assert_eq!(rules, ["vue.asset.path-invalid", "vue.asset.path-invalid"]);
+    assert_eq!(rules, ["vue.compiler-artifact.required"]);
 
     let no_root = VueIntegration::new()
         .render(VueSingleFileComponent::new(
             "src/NoRoot.vue",
             "<script setup></script>",
         ))
-        .expect_err("raw-source bridge should reject non-Hawk source");
+        .expect_err("raw Vue source should require a compiler artifact");
 
     assert_eq!(
         no_root.diagnostics()[0].rule.as_str(),
-        "vue.renderer.no-root"
+        "vue.compiler-artifact.required"
     );
 }
 
@@ -182,47 +257,48 @@ fn vue_35_renderer_reports_author_source_diagnostics() {
 
     let error = VueIntegration::new()
         .render(source)
-        .expect_err("invalid Vue source should fail");
+        .expect_err("raw Vue source should fail before source-level diagnostics");
     let rules: Vec<_> = error
         .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.rule.as_str())
         .collect();
 
-    assert_eq!(
-        rules,
-        [
-            "vue.asset.path-invalid",
-            "vue.renderer.unresolved-component"
-        ]
-    );
+    assert_eq!(rules, ["vue.compiler-artifact.required"]);
     assert_eq!(error.source_map().author_file(), "src/Broken.vue");
 }
 
 #[test]
 fn vue_35_renderer_rejects_duplicate_static_child_keys() {
-    let source = VueSingleFileComponent::new(
+    let source = VueSingleFileComponent::from_native_program(
         "src/DuplicateKeys.vue",
-        r#"<template><hawk-view id="root"><hawk-text id="title">A</hawk-text><hawk-text id="title">B</hawk-text></hawk-view></template>"#,
+        duplicate_child_key_program(),
     );
 
     let error = VueIntegration::new()
         .render(source)
-        .expect_err("duplicate static child ids should fail");
+        .expect_err("duplicate keyed compiler output should fail");
 
-    assert!(
-        error
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.rule.as_str() == "vue.child-key.duplicate")
-    );
+    assert!(error.diagnostics().iter().any(|diagnostic| {
+        diagnostic.rule.as_str() == "vue.custom-renderer.failed"
+            && diagnostic
+                .message
+                .contains("custom-renderer.child-key.duplicate")
+    }));
 }
 
 #[test]
 fn vue_35_renderer_bridges_to_runtime_tree() {
-    let source = VueSingleFileComponent::new(
+    let source = VueSingleFileComponent::from_native_program(
         "examples/frameworks/vue-basic/src/App.vue",
-        r#"<script setup>const items = [{ id: 'title' }, { id: 'cta' }, { id: 'meter' }];</script><template><hawk-view id="root" ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted"><hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text></hawk-view></template>"#,
+        framework_native_program_with_children(
+            "vue.asset",
+            "onMounted",
+            "onUnmounted",
+            &["surface.card", "intent.primary"],
+            &["root_ref"],
+            &[("title", "title"), ("cta", "cta"), ("meter", "meter")],
+        ),
     );
 
     let artifact = VueIntegration::new()
@@ -258,9 +334,9 @@ fn vue_35_renderer_bridges_to_runtime_tree() {
 
 #[test]
 fn vue_35_renderer_preserves_static_text_children() {
-    let source = VueSingleFileComponent::new(
+    let source = VueSingleFileComponent::from_native_program(
         "examples/frameworks/vue-basic/src/App.vue",
-        r#"<template><hawk-view id="root"><hawk-text id="title">Static Title</hawk-text></hawk-view></template>"#,
+        static_framework_native_program(&[], &[], &[("title", "Static Title")]),
     );
 
     let artifact = VueIntegration::new()
@@ -294,9 +370,9 @@ fn vue_35_renderer_preserves_static_text_children() {
 
 #[test]
 fn vue_35_render_to_runtime_with_styles_applies_compiled_root_background() {
-    let source = VueSingleFileComponent::new(
+    let source = VueSingleFileComponent::from_native_program(
         "examples/frameworks/vue-basic/src/App.vue",
-        r#"<template><hawk-view id="root" class="surface"></hawk-view></template>"#,
+        static_framework_native_program(&["surface"], &[], &[]),
     );
     let sheet = compile_style_source(".surface { background-color: token(color.surface); }")
         .expect("style source compiles");
@@ -323,9 +399,9 @@ fn vue_35_render_to_runtime_with_styles_applies_compiled_root_background() {
 
 #[test]
 fn vue_35_render_to_runtime_with_theme_applies_theme_background() {
-    let source = VueSingleFileComponent::new(
+    let source = VueSingleFileComponent::from_native_program(
         "examples/frameworks/vue-basic/src/App.vue",
-        r#"<template><hawk-view id="root" class="surface"></hawk-view></template>"#,
+        static_framework_native_program(&["surface"], &[], &[]),
     );
     let sheet = compile_style_source(".surface { background-color: token(color.surface); }")
         .expect("style source compiles");
@@ -378,23 +454,90 @@ fn vue_smoke_app_declares_public_package_entrypoint() {
 }
 
 fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
+    framework_native_program_with_children(
+        asset_name,
+        "onMount",
+        unmounted,
+        &["surface.card"],
+        &["root_ref"],
+        &[("title", "Boundary Title")],
+    )
+}
+
+fn framework_native_program_with_children(
+    asset_name: &str,
+    mounted: &str,
+    unmounted: &str,
+    styles: &[&str],
+    refs: &[&str],
+    children: &[(&str, &str)],
+) -> FrameworkNativeProgram {
+    let mut root = FrameworkNativeNode::new("root", ElementKind::View)
+        .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
+        .with_event(
+            EventKind::Pointer(PointerEventKind::Press),
+            HandlerRef::new("handlePress"),
+            [EventPayloadField::Position],
+        )
+        .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new(mounted))
+        .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted));
+    for style in styles {
+        root = root.with_style(StyleRef::new(*style));
+    }
+    for reference in refs {
+        root = root.with_ref(NativeRef::new(*reference));
+    }
+    for (child_id, text) in children {
+        root = root.with_child(
+            *child_id,
+            FrameworkNativeNode::new(*child_id, ElementKind::Text)
+                .with_key(*child_id)
+                .with_prop("text", PropValue::String((*text).to_string()))
+                .with_prop("font_size", PropValue::Number(18.0)),
+        );
+    }
+    FrameworkNativeProgram::new(root)
+}
+
+fn static_framework_native_program(
+    styles: &[&str],
+    refs: &[&str],
+    children: &[(&str, &str)],
+) -> FrameworkNativeProgram {
+    let mut root = FrameworkNativeNode::new("root", ElementKind::View);
+    for style in styles {
+        root = root.with_style(StyleRef::new(*style));
+    }
+    for reference in refs {
+        root = root.with_ref(NativeRef::new(*reference));
+    }
+    for (child_id, text) in children {
+        root = root.with_child(
+            *child_id,
+            FrameworkNativeNode::new(*child_id, ElementKind::Text)
+                .with_key(*child_id)
+                .with_prop("text", PropValue::String((*text).to_string()))
+                .with_prop("font_size", PropValue::Number(18.0)),
+        );
+    }
+    FrameworkNativeProgram::new(root)
+}
+
+fn duplicate_child_key_program() -> FrameworkNativeProgram {
     FrameworkNativeProgram::new(
         FrameworkNativeNode::new("root", ElementKind::View)
-            .with_ref(NativeRef::new("root_ref"))
-            .with_style(StyleRef::new("surface.card"))
-            .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
-            .with_event(
-                EventKind::Pointer(PointerEventKind::Press),
-                HandlerRef::new("handlePress"),
-                [EventPayloadField::Position],
-            )
-            .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new("onMount"))
-            .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted))
             .with_child(
                 "title",
                 FrameworkNativeNode::new("title", ElementKind::Text)
                     .with_key("title")
-                    .with_prop("text", PropValue::String("Boundary Title".to_string()))
+                    .with_prop("text", PropValue::String("A".to_string()))
+                    .with_prop("font_size", PropValue::Number(18.0)),
+            )
+            .with_child(
+                "title",
+                FrameworkNativeNode::new("duplicate-title", ElementKind::Text)
+                    .with_key("title")
+                    .with_prop("text", PropValue::String("B".to_string()))
                     .with_prop("font_size", PropValue::Number(18.0)),
             ),
     )

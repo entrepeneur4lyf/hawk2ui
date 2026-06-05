@@ -1,5 +1,23 @@
 import { expect, test } from "bun:test";
-import { renderHawkSolid } from "../src/index.ts";
+import { compileHawkSolid, renderHawkSolid } from "../src/index.ts";
+
+test("Solid compiler emits versioned native compiler artifacts from TSX", () => {
+  const output = compileHawkSolid({
+    filename: "App.tsx",
+    source:
+      'const [items] = createSignal([{ id: "title" }, { id: "cta" }]); export function App() { return <hawk-view id="root" ref={root_ref} class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}><For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.schema_version).toBe(1);
+  expect(output.compilerArtifact.root.id).toBe("root");
+  expect(output.compilerArtifact.root.style_refs).toEqual(["surface.card"]);
+  expect(output.compilerArtifact.root.children.map((child) => child.key)).toEqual(["title", "cta"]);
+  expect(output.compilerArtifact.reactivity).toEqual([
+    { kind: "signal", name: "items" },
+    { kind: "keyed-for-each", name: "items" },
+    { kind: "effect", name: "root-props" },
+  ]);
+});
 
 test("Solid renderer records fine-grained updates, removals, and dispose", () => {
   let component = {

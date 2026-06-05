@@ -2,6 +2,11 @@
   "name": "@hawk2ui/vue",
   "version": "0.1.0",
   "type": "module",
+  "dependencies": {
+    "@babel/parser": "7.29.7",
+    "@vue/compiler-dom": "3.5.35",
+    "@vue/compiler-sfc": "3.5.35"
+  },
   "peerDependencies": {
     "vue": ">=3.5"
   },

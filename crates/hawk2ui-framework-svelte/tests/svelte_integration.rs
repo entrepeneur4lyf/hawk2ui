@@ -11,21 +11,88 @@ use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneFrame,
 use hawk2ui_style::{TokenSet, compile_style_source};
 
 #[test]
-fn svelte_5_compile_maps_lifecycle_keyed_children_events_refs_styles_assets_and_source_maps() {
-    let source = SvelteComponentSource::new(
-        "examples/frameworks/svelte-basic/src/App.svelte",
-        r#"
-<script>
-  import logo from '../assets/logo.svg';
-  let items = [{ id: 'title' }, { id: 'cta' }, { id: 'meter' }];
-</script>
+fn svelte_5_compile_rejects_raw_source_without_compiler_artifact() {
+    let error = SvelteIntegration::new()
+        .compile(SvelteComponentSource::new(
+            "src/App.svelte",
+            r#"<hawk-view id="root"><hawk-text id="title">Title</hawk-text></hawk-view>"#,
+        ))
+        .expect_err("raw Svelte source must not be substring-scanned in production");
 
-<hawk-view id="root" use:ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>
-  {#each items as item (item.id)}
-    <hawk-text id={item.id}>{item.id}</hawk-text>
-  {/each}
-</hawk-view>
+    assert_eq!(
+        error.diagnostics()[0].rule.as_str(),
+        "svelte.compiler-artifact.required"
+    );
+}
+
+#[test]
+fn svelte_5_compile_accepts_versioned_compiler_json_artifact() {
+    let source = SvelteComponentSource::from_compiler_json(
+        "src/App.svelte",
+        r#"
+{
+  "schema_version": 1,
+  "root": {
+    "id": "root",
+    "kind": "view",
+    "refs": ["root_ref"],
+    "style_refs": ["surface.card"],
+    "asset_refs": [{ "name": "svelte.asset", "path": "assets/logo.svg" }],
+    "events": [{
+      "kind": "pointer.press",
+      "handler": "handlePress",
+      "payload_fields": ["position"]
+    }],
+    "lifecycle": [
+      { "event": "mounted", "handler": "onMount" },
+      { "event": "unmounted", "handler": "onDestroy" }
+    ],
+    "children": [{
+      "key": "title",
+      "node": {
+        "id": "title",
+        "kind": "text",
+        "key": "title",
+        "props": [
+          { "name": "text", "value": { "type": "string", "value": "Compiled Title" } },
+          { "name": "font_size", "value": { "type": "number", "value": 18.0 } }
+        ]
+      }
+    }]
+  }
+}
 "#,
+    )
+    .expect("Svelte compiler JSON should parse");
+
+    let artifact = SvelteIntegration::new()
+        .compile_to_runtime(source)
+        .expect("Svelte compiler JSON should render through runtime");
+
+    assert_eq!(artifact.compiled().keyed_children(), ["title"]);
+    assert_eq!(artifact.metadata_for("root").unwrap().refs(), ["root_ref"]);
+    assert_eq!(
+        artifact.metadata_for("root").unwrap().asset_paths(),
+        ["assets/logo.svg"]
+    );
+    assert!(
+        artifact
+            .operation_keys()
+            .contains(&"mount-element:root".into())
+    );
+}
+
+#[test]
+fn svelte_5_compile_maps_lifecycle_keyed_children_events_refs_styles_assets_and_source_maps() {
+    let source = SvelteComponentSource::from_native_program(
+        "examples/frameworks/svelte-basic/src/App.svelte",
+        framework_native_program_with_children(
+            "svelte.asset",
+            "onDestroy",
+            &["surface.card", "intent.primary"],
+            &["root_ref"],
+            &[("title", "title"), ("cta", "cta"), ("meter", "meter")],
+        ),
     );
 
     let artifact = SvelteIntegration::new()
@@ -61,10 +128,16 @@ fn svelte_5_compile_maps_lifecycle_keyed_children_events_refs_styles_assets_and_
             "bind-lifecycle:root:mounted:onMount",
             "bind-lifecycle:root:unmounted:onDestroy",
             "create-node:title:text",
+            "set-prop:title:text",
+            "set-prop:title:font_size",
             "append-child:root:title:key:title",
             "create-node:cta:text",
+            "set-prop:cta:text",
+            "set-prop:cta:font_size",
             "append-child:root:cta:key:cta",
             "create-node:meter:text",
+            "set-prop:meter:text",
+            "set-prop:meter:font_size",
             "append-child:root:meter:key:meter",
             "commit:root",
         ]
@@ -126,9 +199,9 @@ fn svelte_5_compile_accepts_explicit_native_compiler_boundary_without_source_sca
 
 #[test]
 fn svelte_5_compile_gates_lifecycle_handlers_and_collects_all_refs() {
-    let source = SvelteComponentSource::new(
+    let source = SvelteComponentSource::from_native_program(
         "src/Static.svelte",
-        r#"<hawk-view id="root" use:ref="root_ref" use:ref="panel_ref"><hawk-text id="title">Title</hawk-text></hawk-view>"#,
+        static_framework_native_program(&[], &["root_ref", "panel_ref"], &[("title", "Title")]),
     );
 
     let artifact = SvelteIntegration::new()
@@ -154,28 +227,25 @@ fn svelte_5_compile_rejects_non_hawk_source_and_all_invalid_asset_paths() {
             "src/Invalid.svelte",
             r#"<div data-asset="assets/logo.svg"></div><hawk-view data-asset="assets/logo.svg" data-asset="..%2Fsecret.svg" data-asset="icons\logo.svg"></hawk-view>"#,
         ))
-        .expect_err("invalid raw-source bridge input should fail");
+        .expect_err("raw Svelte source should fail before Rust-side source scanning");
     let rules: Vec<_> = error
         .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.rule.as_str())
         .collect();
 
-    assert_eq!(
-        rules,
-        ["svelte.asset.path-invalid", "svelte.asset.path-invalid"]
-    );
+    assert_eq!(rules, ["svelte.compiler-artifact.required"]);
 
     let no_root = SvelteIntegration::new()
         .compile(SvelteComponentSource::new(
             "src/NoRoot.svelte",
             "<script></script>",
         ))
-        .expect_err("raw-source bridge should reject non-Hawk source");
+        .expect_err("raw Svelte source should require a compiler artifact");
 
     assert_eq!(
         no_root.diagnostics()[0].rule.as_str(),
-        "svelte.compile.no-root"
+        "svelte.compiler-artifact.required"
     );
 }
 
@@ -188,40 +258,34 @@ fn svelte_5_compile_reports_author_source_diagnostics() {
 
     let error = SvelteIntegration::new()
         .compile(source)
-        .expect_err("invalid Svelte source should fail");
+        .expect_err("raw Svelte source should fail before source-level diagnostics");
     let rules: Vec<_> = error
         .diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.rule.as_str())
         .collect();
 
-    assert_eq!(
-        rules,
-        [
-            "svelte.asset.path-invalid",
-            "svelte.compile.unresolved-component"
-        ]
-    );
+    assert_eq!(rules, ["svelte.compiler-artifact.required"]);
     assert_eq!(error.source_map().author_file(), "src/Broken.svelte");
 }
 
 #[test]
 fn svelte_5_compile_rejects_duplicate_static_child_keys() {
-    let source = SvelteComponentSource::new(
+    let source = SvelteComponentSource::from_native_program(
         "src/DuplicateKeys.svelte",
-        r#"<hawk-view id="root"><hawk-text id="title">A</hawk-text><hawk-text id="title">B</hawk-text></hawk-view>"#,
+        duplicate_child_key_program(),
     );
 
     let error = SvelteIntegration::new()
         .compile(source)
-        .expect_err("duplicate static child ids should fail");
+        .expect_err("duplicate keyed compiler output should fail");
 
-    assert!(
-        error
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.rule.as_str() == "svelte.child-key.duplicate")
-    );
+    assert!(error.diagnostics().iter().any(|diagnostic| {
+        diagnostic.rule.as_str() == "svelte.custom-renderer.failed"
+            && diagnostic
+                .message
+                .contains("custom-renderer.child-key.duplicate")
+    }));
 }
 
 #[test]
@@ -248,18 +312,15 @@ fn svelte_smoke_app_declares_public_package_entrypoint() {
 
 #[test]
 fn svelte_5_compile_to_runtime_uses_native_bridge_contract() {
-    let source = SvelteComponentSource::new(
+    let source = SvelteComponentSource::from_native_program(
         "examples/frameworks/svelte-basic/src/App.svelte",
-        r#"
-<script>
-  let items = [{ id: 'title' }, { id: 'cta' }, { id: 'meter' }];
-</script>
-<hawk-view id="root" use:ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>
-  {#each items as item (item.id)}
-    <hawk-text id={item.id}>{item.id}</hawk-text>
-  {/each}
-</hawk-view>
-"#,
+        framework_native_program_with_children(
+            "svelte.asset",
+            "onDestroy",
+            &["surface.card", "intent.primary"],
+            &["root_ref"],
+            &[("title", "title"), ("cta", "cta"), ("meter", "meter")],
+        ),
     );
 
     let artifact = SvelteIntegration::new()
@@ -300,9 +361,9 @@ fn svelte_5_compile_to_runtime_uses_native_bridge_contract() {
 
 #[test]
 fn svelte_5_compile_to_runtime_preserves_static_text_children() {
-    let source = SvelteComponentSource::new(
+    let source = SvelteComponentSource::from_native_program(
         "examples/frameworks/svelte-basic/src/App.svelte",
-        r#"<hawk-view id="root"><hawk-text id="title">Static Title</hawk-text></hawk-view>"#,
+        static_framework_native_program(&[], &[], &[("title", "Static Title")]),
     );
 
     let artifact = SvelteIntegration::new()
@@ -336,9 +397,15 @@ fn svelte_5_compile_to_runtime_preserves_static_text_children() {
 
 #[test]
 fn svelte_5_runtime_bridge_renders_visible_skia_pixels() {
-    let source = SvelteComponentSource::new(
+    let source = SvelteComponentSource::from_native_program(
         "examples/frameworks/svelte-basic/src/App.svelte",
-        r#"<script>let items = [{ id: 'title' }, { id: 'cta' }, { id: 'meter' }];</script><hawk-view id="root" use:ref="root_ref" class="surface.card intent.primary" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>{#each items as item (item.id)}<hawk-text id={item.id}>{item.id}</hawk-text>{/each}</hawk-view>"#,
+        framework_native_program_with_children(
+            "svelte.asset",
+            "onDestroy",
+            &["surface.card", "intent.primary"],
+            &["root_ref"],
+            &[("title", "title"), ("cta", "cta"), ("meter", "meter")],
+        ),
     );
     let artifact = SvelteIntegration::new()
         .compile_to_runtime(source)
@@ -371,9 +438,9 @@ fn svelte_5_runtime_bridge_renders_visible_skia_pixels() {
 
 #[test]
 fn svelte_5_compile_to_runtime_with_styles_applies_compiled_root_background() {
-    let source = SvelteComponentSource::new(
+    let source = SvelteComponentSource::from_native_program(
         "examples/frameworks/svelte-basic/src/App.svelte",
-        r#"<hawk-view id="root" class="surface"></hawk-view>"#,
+        static_framework_native_program(&["surface"], &[], &[]),
     );
     let sheet = compile_style_source(".surface { background-color: token(color.surface); }")
         .expect("style source compiles");
@@ -400,9 +467,9 @@ fn svelte_5_compile_to_runtime_with_styles_applies_compiled_root_background() {
 
 #[test]
 fn svelte_5_compile_to_runtime_with_theme_applies_theme_background() {
-    let source = SvelteComponentSource::new(
+    let source = SvelteComponentSource::from_native_program(
         "examples/frameworks/svelte-basic/src/App.svelte",
-        r#"<hawk-view id="root" class="surface"></hawk-view>"#,
+        static_framework_native_program(&["surface"], &[], &[]),
     );
     let sheet = compile_style_source(".surface { background-color: token(color.surface); }")
         .expect("style source compiles");
@@ -471,23 +538,88 @@ fn count_changed_pixels(
 }
 
 fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
+    framework_native_program_with_children(
+        asset_name,
+        unmounted,
+        &["surface.card"],
+        &["root_ref"],
+        &[("title", "Boundary Title")],
+    )
+}
+
+fn framework_native_program_with_children(
+    asset_name: &str,
+    unmounted: &str,
+    styles: &[&str],
+    refs: &[&str],
+    children: &[(&str, &str)],
+) -> FrameworkNativeProgram {
+    let mut root = FrameworkNativeNode::new("root", ElementKind::View)
+        .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
+        .with_event(
+            EventKind::Pointer(PointerEventKind::Press),
+            HandlerRef::new("handlePress"),
+            [EventPayloadField::Position],
+        )
+        .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new("onMount"))
+        .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted));
+    for style in styles {
+        root = root.with_style(StyleRef::new(*style));
+    }
+    for reference in refs {
+        root = root.with_ref(NativeRef::new(*reference));
+    }
+    for (child_id, text) in children {
+        root = root.with_child(
+            *child_id,
+            FrameworkNativeNode::new(*child_id, ElementKind::Text)
+                .with_key(*child_id)
+                .with_prop("text", PropValue::String((*text).to_string()))
+                .with_prop("font_size", PropValue::Number(18.0)),
+        );
+    }
+    FrameworkNativeProgram::new(root)
+}
+
+fn static_framework_native_program(
+    styles: &[&str],
+    refs: &[&str],
+    children: &[(&str, &str)],
+) -> FrameworkNativeProgram {
+    let mut root = FrameworkNativeNode::new("root", ElementKind::View);
+    for style in styles {
+        root = root.with_style(StyleRef::new(*style));
+    }
+    for reference in refs {
+        root = root.with_ref(NativeRef::new(*reference));
+    }
+    for (child_id, text) in children {
+        root = root.with_child(
+            *child_id,
+            FrameworkNativeNode::new(*child_id, ElementKind::Text)
+                .with_key(*child_id)
+                .with_prop("text", PropValue::String((*text).to_string()))
+                .with_prop("font_size", PropValue::Number(18.0)),
+        );
+    }
+    FrameworkNativeProgram::new(root)
+}
+
+fn duplicate_child_key_program() -> FrameworkNativeProgram {
     FrameworkNativeProgram::new(
         FrameworkNativeNode::new("root", ElementKind::View)
-            .with_ref(NativeRef::new("root_ref"))
-            .with_style(StyleRef::new("surface.card"))
-            .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
-            .with_event(
-                EventKind::Pointer(PointerEventKind::Press),
-                HandlerRef::new("handlePress"),
-                [EventPayloadField::Position],
-            )
-            .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new("onMount"))
-            .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted))
             .with_child(
                 "title",
                 FrameworkNativeNode::new("title", ElementKind::Text)
                     .with_key("title")
-                    .with_prop("text", PropValue::String("Boundary Title".to_string()))
+                    .with_prop("text", PropValue::String("A".to_string()))
+                    .with_prop("font_size", PropValue::Number(18.0)),
+            )
+            .with_child(
+                "title",
+                FrameworkNativeNode::new("duplicate-title", ElementKind::Text)
+                    .with_key("title")
+                    .with_prop("text", PropValue::String("B".to_string()))
                     .with_prop("font_size", PropValue::Number(18.0)),
             ),
     )

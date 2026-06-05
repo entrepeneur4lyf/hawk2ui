@@ -1600,6 +1600,8 @@ dependencies = [
  "hawk2ui-render-skia",
  "hawk2ui-runtime",
  "hawk2ui-style",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

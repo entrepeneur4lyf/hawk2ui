@@ -5,7 +5,7 @@ test("Svelte compiler emits lifecycle, child props, and deterministic records", 
   const output = compileHawkSvelte({
     filename: "App.svelte",
     source:
-      '<hawk-view id="root" use:ref="root_ref" class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}><hawk-text id="title">Title</hawk-text><hawk-button id="cta">Go</hawk-button></hawk-view>',
+      '<hawk-view id="root" use:root_ref class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}><hawk-text id="title">Title</hawk-text><hawk-button id="cta">Go</hawk-button></hawk-view>',
   });
 
   expect(output.records).toEqual([
@@ -20,6 +20,12 @@ test("Svelte compiler emits lifecycle, child props, and deterministic records", 
     "mount-element:cta",
     "prop:cta:text=Go",
     "lifecycle:unmounted:root:onDestroy",
+  ]);
+  expect(output.compilerArtifact.root.style_refs).toEqual(["surface.card"]);
+  expect(output.compilerArtifact.root.children.map((child) => child.key)).toEqual(["title", "cta"]);
+  expect(output.compilerArtifact.root.lifecycle).toEqual([
+    { event: "mounted", handler: "onMount" },
+    { event: "unmounted", handler: "onDestroy" },
   ]);
 });
 

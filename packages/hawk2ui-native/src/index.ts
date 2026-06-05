@@ -1,4 +1,4 @@
-export type HawkElementKind = "view" | "text" | "button";
+export type HawkElementKind = "view" | "text" | "button" | "custom-surface";
 
 export interface HawkElementSpec {
   readonly id: string;
@@ -28,8 +28,64 @@ export interface HawkLifecycleSpec {
   readonly handler: string;
 }
 
+export type HawkCompilerPropValueWire =
+  | { readonly type: "string"; readonly value: string }
+  | { readonly type: "bool"; readonly value: boolean }
+  | { readonly type: "number"; readonly value: number };
+
+export interface HawkCompilerPropWire {
+  readonly name: string;
+  readonly value: HawkCompilerPropValueWire;
+}
+
+export interface HawkCompilerAssetWire {
+  readonly name: string;
+  readonly path: string;
+}
+
+export interface HawkCompilerEventWire {
+  readonly kind: "pointer.press";
+  readonly handler: string;
+  readonly payload_fields: readonly ("position" | "delta" | "value" | "key")[];
+}
+
+export interface HawkCompilerLifecycleWire {
+  readonly event: "mounted" | "unmounted";
+  readonly handler: string;
+}
+
+export interface HawkCompilerChildWire {
+  readonly key?: string;
+  readonly node: HawkCompilerNodeWire;
+}
+
+export interface HawkCompilerNodeWire {
+  readonly id: string;
+  readonly kind: HawkElementKind;
+  readonly key?: string;
+  readonly props: readonly HawkCompilerPropWire[];
+  readonly refs: readonly string[];
+  readonly style_refs: readonly string[];
+  readonly asset_refs: readonly HawkCompilerAssetWire[];
+  readonly events: readonly HawkCompilerEventWire[];
+  readonly lifecycle: readonly HawkCompilerLifecycleWire[];
+  readonly children: readonly HawkCompilerChildWire[];
+}
+
+export interface HawkCompilerReactiveBindingWire {
+  readonly kind: "signal" | "keyed-for-each" | "effect";
+  readonly name: string;
+}
+
+export interface HawkCompilerArtifact {
+  readonly schema_version: 1;
+  readonly root: HawkCompilerNodeWire;
+  readonly reactivity: readonly HawkCompilerReactiveBindingWire[];
+}
+
 export interface HawkCompiledApp extends HawkAppSpec {
   readonly records: readonly string[];
+  readonly compilerArtifact: HawkCompilerArtifact;
 }
 
 export function createHawkApp(spec: HawkAppSpec): HawkCompiledApp {
@@ -37,7 +93,26 @@ export function createHawkApp(spec: HawkAppSpec): HawkCompiledApp {
     throw new Error("Hawk2UI native app requires a stable name.");
   }
   validateElement(spec.root);
-  return { ...spec, records: recordsForApp(spec) };
+  return {
+    ...spec,
+    records: recordsForApp(spec),
+    compilerArtifact: compilerArtifactForApp(spec),
+  };
+}
+
+export function compilerArtifactForApp(
+  spec: HawkAppSpec,
+  reactivity: readonly HawkCompilerReactiveBindingWire[] = [],
+): HawkCompilerArtifact {
+  if (!spec.name.trim()) {
+    throw new Error("Hawk2UI native app requires a stable name.");
+  }
+  validateElement(spec.root);
+  return {
+    schema_version: 1,
+    root: elementToWire(spec.root),
+    reactivity: reactivity.map((binding) => ({ ...binding })),
+  };
 }
 
 export function recordsForApp(spec: HawkAppSpec): readonly string[] {
@@ -83,6 +158,51 @@ function emitLifecycle(
   for (const child of element.children ?? []) {
     emitLifecycle(child, phase, records);
   }
+}
+
+function elementToWire(element: HawkElementSpec): HawkCompilerNodeWire {
+  return {
+    id: element.id,
+    kind: element.kind,
+    ...(element.key ? { key: element.key } : {}),
+    props: Object.entries(element.props ?? {}).map(([name, value]) => ({
+      name,
+      value: propValueToWire(value, element.id, name),
+    })),
+    refs: [...(element.refs ?? [])],
+    style_refs: [...(element.styleRefs ?? [])],
+    asset_refs: (element.assetRefs ?? []).map((asset) => ({ ...asset })),
+    events: (element.events ?? []).map((event) => ({
+      kind: event.kind,
+      handler: event.handler,
+      payload_fields: ["position"],
+    })),
+    lifecycle: (element.lifecycle ?? []).map((lifecycle) => ({
+      event: lifecycle.phase,
+      handler: lifecycle.handler,
+    })),
+    children: (element.children ?? []).map((child) => ({
+      ...(child.key ? { key: child.key } : {}),
+      node: elementToWire(child),
+    })),
+  };
+}
+
+function propValueToWire(
+  value: string | number | boolean,
+  elementId: string,
+  name: string,
+): HawkCompilerPropValueWire {
+  if (typeof value === "string") {
+    return { type: "string", value };
+  }
+  if (typeof value === "boolean") {
+    return { type: "bool", value };
+  }
+  if (!Number.isFinite(value)) {
+    throw new Error(`native.prop.number-invalid: property \`${name}\` on \`${elementId}\` must be finite.`);
+  }
+  return { type: "number", value };
 }
 
 function validateElement(element: HawkElementSpec): void {

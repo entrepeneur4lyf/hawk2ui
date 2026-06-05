@@ -45,7 +45,7 @@ fn framework_conformance_diagnostics_point_to_author_source_files() {
     assert_eq!(report.diagnostics().len(), 4);
     for diagnostic in report.diagnostics() {
         assert!(diagnostic.author_file().starts_with("src/Broken"));
-        assert!(diagnostic.rule().contains("asset.path-invalid"));
+        assert!(diagnostic.rule().contains("compiler-artifact.required"));
     }
 }
 
@@ -97,7 +97,7 @@ fn framework_conformance_failure_matrix_rejects_invalid_contracts() {
     assert!(report.has_failure(
         FrameworkKind::Svelte,
         "invalid-asset-path",
-        "svelte.asset.path-invalid"
+        "native.asset.path-invalid"
     ));
     assert!(report.has_failure(
         FrameworkKind::Svelte,
@@ -107,17 +107,17 @@ fn framework_conformance_failure_matrix_rejects_invalid_contracts() {
     assert!(report.has_failure(
         FrameworkKind::Svelte,
         "unsupported-event",
-        "svelte.event.unsupported"
+        "svelte.compiler-artifact.required"
     ));
     assert!(report.has_failure(
         FrameworkKind::React,
         "invalid-asset-path",
-        "react.asset.path-invalid"
+        "native.asset.path-invalid"
     ));
     assert!(report.has_failure(
         FrameworkKind::React,
         "unsupported-event",
-        "react.event.unsupported"
+        "react.compiler-artifact.required"
     ));
     assert!(report.has_failure(
         FrameworkKind::React,
@@ -127,12 +127,12 @@ fn framework_conformance_failure_matrix_rejects_invalid_contracts() {
     assert!(report.has_failure(
         FrameworkKind::Vue,
         "invalid-asset-path",
-        "vue.asset.path-invalid"
+        "native.asset.path-invalid"
     ));
     assert!(report.has_failure(
         FrameworkKind::Vue,
         "unsupported-event",
-        "vue.event.unsupported"
+        "vue.compiler-artifact.required"
     ));
     assert!(report.has_failure(
         FrameworkKind::Vue,
@@ -142,12 +142,12 @@ fn framework_conformance_failure_matrix_rejects_invalid_contracts() {
     assert!(report.has_failure(
         FrameworkKind::Solid,
         "invalid-asset-path",
-        "solid.asset.path-invalid"
+        "native.asset.path-invalid"
     ));
     assert!(report.has_failure(
         FrameworkKind::Solid,
         "unsupported-event",
-        "solid.event.unsupported"
+        "solid.compiler-artifact.required"
     ));
     assert!(report.has_failure(
         FrameworkKind::Solid,

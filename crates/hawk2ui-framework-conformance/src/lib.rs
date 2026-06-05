@@ -447,9 +447,9 @@ fn native_snapshot() -> Result<ConformanceSnapshot, String> {
 
 fn svelte_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = SvelteIntegration::new()
-        .compile(SvelteComponentSource::new(
+        .compile(SvelteComponentSource::from_native_program(
             "src/App.svelte",
-            svelte_conformance_source(),
+            framework_native_program("svelte.asset", "onUnmount"),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
@@ -473,9 +473,9 @@ fn svelte_snapshot() -> Result<ConformanceSnapshot, String> {
 
 fn react_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = ReactIntegration::new()
-        .render(ReactElementTree::new(
+        .render(ReactElementTree::from_native_program(
             "src/App.tsx",
-            react_conformance_source(),
+            framework_native_program("react.asset", "onUnmount"),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
@@ -499,9 +499,9 @@ fn react_snapshot() -> Result<ConformanceSnapshot, String> {
 
 fn vue_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = VueIntegration::new()
-        .render(VueSingleFileComponent::new(
+        .render(VueSingleFileComponent::from_native_program(
             "src/App.vue",
-            vue_conformance_source(),
+            framework_native_program("vue.asset", "onUnmount"),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
@@ -525,9 +525,9 @@ fn vue_snapshot() -> Result<ConformanceSnapshot, String> {
 
 fn solid_snapshot() -> Result<ConformanceSnapshot, String> {
     let artifact = SolidIntegration::new()
-        .render(SolidComponentSource::new(
+        .render(SolidComponentSource::from_native_program(
             "src/App.tsx",
-            solid_conformance_source(),
+            framework_native_program("solid.asset", "onUnmount"),
         ))
         .map_err(|error| format!("{error:?}"))?;
     Ok(ConformanceSnapshot {
@@ -785,62 +785,20 @@ fn runtime_text_child(id: &str) -> NativeAuthoringElement {
         .with_prop("height", PropValue::Number(32.0))
 }
 
-fn svelte_conformance_source() -> &'static str {
-    r#"
-<script>
-  let items = [{ id: 'title' }, { id: 'cta' }];
-</script>
-
-<hawk-view id="root" use:ref="root_ref" class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}>
-  {#each items as item (item.id)}
-    <hawk-text id={item.id}>{item.id}</hawk-text>
-  {/each}
-</hawk-view>
-"#
-}
-
-fn react_conformance_source() -> &'static str {
-    r#"
-export function App() {
-  const items = [{ id: 'title' }, { id: 'cta' }];
-  return <hawk-view id="root" ref="root_ref" className="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>
-    {items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}
-  </hawk-view>;
-}
-"#
-}
-
-fn vue_conformance_source() -> &'static str {
-    r#"
-<script setup>
-const items = [{ id: 'title' }, { id: 'cta' }];
-</script>
-
-<template>
-  <hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted">
-    <hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text>
-  </hawk-view>
-</template>
-"#
-}
-
-fn solid_conformance_source() -> &'static str {
-    r#"
-export function App() {
-  const [items] = createSignal([{ id: 'title' }, { id: 'cta' }]);
-  return <hawk-view id="root" ref={root_ref} class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}>
-    <For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For>
-  </hawk-view>;
-}
-"#
-}
-
 fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
+    framework_native_program_with_asset_path(asset_name, "assets/logo.svg", unmounted)
+}
+
+fn framework_native_program_with_asset_path(
+    asset_name: &str,
+    asset_path: &str,
+    unmounted: &str,
+) -> FrameworkNativeProgram {
     FrameworkNativeProgram::new(
         FrameworkNativeNode::new("root", ElementKind::View)
             .with_ref(NativeRef::new("root_ref"))
             .with_style(StyleRef::new("surface.card"))
-            .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
+            .with_asset(AssetRef::new(asset_name, asset_path))
             .with_event(
                 EventKind::Pointer(PointerEventKind::Press),
                 HandlerRef::new("handlePress"),
@@ -850,6 +808,24 @@ fn framework_native_program(asset_name: &str, unmounted: &str) -> FrameworkNativ
             .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted))
             .with_child("title", framework_text_node("title"))
             .with_child("cta", framework_text_node("cta")),
+    )
+}
+
+fn invalid_layout_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
+    FrameworkNativeProgram::new(
+        FrameworkNativeNode::new("root", ElementKind::View)
+            .with_ref(NativeRef::new("root_ref"))
+            .with_style(StyleRef::new("surface.card"))
+            .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
+            .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new("onMount"))
+            .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted))
+            .with_child(
+                "title",
+                FrameworkNativeNode::new("title", ElementKind::Text)
+                    .with_key("title")
+                    .with_prop("text", PropValue::String("title".to_string()))
+                    .with_prop("font_size", PropValue::Number(0.0)),
+            ),
     )
 }
 
@@ -930,9 +906,9 @@ fn native_duplicate_key_failure() -> Result<FrameworkFailureEvidence, String> {
 
 fn svelte_invalid_asset_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = SvelteIntegration::new()
-        .compile(SvelteComponentSource::new(
+        .compile_to_runtime(SvelteComponentSource::from_native_program(
             "src/Broken.svelte",
-            "<hawk-view data-asset=\"../secret.svg\" />",
+            framework_native_program_with_asset_path("svelte.asset", "../secret.svg", "onDestroy"),
         ))
         .map_or_else(Ok, |_| {
             Err("unsafe Svelte asset path fixture was accepted".to_string())
@@ -946,9 +922,9 @@ fn svelte_invalid_asset_failure() -> Result<FrameworkFailureEvidence, String> {
 
 fn svelte_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = SvelteIntegration::new()
-        .compile_to_runtime(SvelteComponentSource::new(
+        .compile_to_runtime(SvelteComponentSource::from_native_program(
             "src/Broken.svelte",
-              r#"<script>let items = [{ id: 'title' }];</script><hawk-view id="root">{#each items as item (item.id)}<hawk-text id={item.id} data-font-size="0">{item.id}</hawk-text>{/each}</hawk-view>"#,
+            invalid_layout_program("svelte.asset", "onDestroy"),
         ))
         .map_or_else(Ok, |_| {
             Err("invalid Svelte runtime layout number fixture was accepted".to_string())
@@ -978,9 +954,9 @@ fn svelte_unsupported_event_failure() -> Result<FrameworkFailureEvidence, String
 
 fn react_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = ReactIntegration::new()
-        .render_to_runtime(ReactElementTree::new(
+        .render_to_runtime(ReactElementTree::from_native_program(
             "src/Broken.tsx",
-              r#"const items = [{ id: 'title' }];<hawk-view id="root">{items.map((item) => <hawk-text id={item.id} key={item.id} data-font-size="0">{item.id}</hawk-text>)}</hawk-view>"#,
+            invalid_layout_program("react.asset", "onUnmount"),
         ))
         .map_or_else(Ok, |_| {
             Err("invalid React runtime layout number fixture was accepted".to_string())
@@ -994,9 +970,9 @@ fn react_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
 
 fn react_invalid_asset_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = ReactIntegration::new()
-        .render(ReactElementTree::new(
+        .render_to_runtime(ReactElementTree::from_native_program(
             "src/Broken.tsx",
-            r#"<hawk-view data-asset="../secret.svg" />"#,
+            framework_native_program_with_asset_path("react.asset", "../secret.svg", "onUnmount"),
         ))
         .map_or_else(Ok, |_| {
             Err("unsafe React asset path fixture was accepted".to_string())
@@ -1026,9 +1002,9 @@ fn react_unsupported_event_failure() -> Result<FrameworkFailureEvidence, String>
 
 fn vue_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = VueIntegration::new()
-        .render_to_runtime(VueSingleFileComponent::new(
+        .render_to_runtime(VueSingleFileComponent::from_native_program(
             "src/Broken.vue",
-              r#"<script setup>const items = [{ id: 'title' }];</script><template><hawk-view id="root"><hawk-text v-for="item in items" :id="item.id" :key="item.id" data-font-size="0">{{ item.id }}</hawk-text></hawk-view></template>"#,
+            invalid_layout_program("vue.asset", "onUnmounted"),
         ))
         .map_or_else(Ok, |_| {
             Err("invalid Vue runtime layout number fixture was accepted".to_string())
@@ -1042,9 +1018,9 @@ fn vue_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
 
 fn vue_invalid_asset_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = VueIntegration::new()
-        .render(VueSingleFileComponent::new(
+        .render_to_runtime(VueSingleFileComponent::from_native_program(
             "src/Broken.vue",
-            r#"<template><hawk-view data-asset="../secret.svg" /></template>"#,
+            framework_native_program_with_asset_path("vue.asset", "../secret.svg", "onUnmounted"),
         ))
         .map_or_else(Ok, |_| {
             Err("unsafe Vue asset path fixture was accepted".to_string())
@@ -1074,9 +1050,9 @@ fn vue_unsupported_event_failure() -> Result<FrameworkFailureEvidence, String> {
 
 fn solid_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = SolidIntegration::new()
-        .render_to_runtime(SolidComponentSource::new(
+        .render_to_runtime(SolidComponentSource::from_native_program(
             "src/Broken.tsx",
-              r#"const [items] = createSignal([{ id: 'title' }]);<hawk-view id="root"><For each={items()}>{(item) => <hawk-text id={item.id} data-font-size="0">{item.id}</hawk-text>}</For></hawk-view>"#,
+            invalid_layout_program("solid.asset", "onCleanup"),
         ))
         .map_or_else(Ok, |_| {
             Err("invalid Solid runtime layout number fixture was accepted".to_string())
@@ -1090,9 +1066,9 @@ fn solid_invalid_layout_failure() -> Result<FrameworkFailureEvidence, String> {
 
 fn solid_invalid_asset_failure() -> Result<FrameworkFailureEvidence, String> {
     let error = SolidIntegration::new()
-        .render(SolidComponentSource::new(
+        .render_to_runtime(SolidComponentSource::from_native_program(
             "src/Broken.tsx",
-            r#"<hawk-view data-asset="../secret.svg" />"#,
+            framework_native_program_with_asset_path("solid.asset", "../secret.svg", "onCleanup"),
         ))
         .map_or_else(Ok, |_| {
             Err("unsafe Solid asset path fixture was accepted".to_string())

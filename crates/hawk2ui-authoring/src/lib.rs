@@ -14,8 +14,13 @@ pub mod state;
 
 pub use adapter::{
     AdapterError, CustomRendererError, CustomRendererOperation, CustomRendererProtocol,
-    FrameworkNativeNode, FrameworkNativeProgram, FrameworkReactiveBinding, NativeRendererAdapter,
-    NodeOperation, RecordingNativeRendererAdapter,
+    FrameworkNativeAssetWire, FrameworkNativeChildWire, FrameworkNativeElementKindWire,
+    FrameworkNativeEventWire, FrameworkNativeLifecycleEventWire, FrameworkNativeLifecycleWire,
+    FrameworkNativeNode, FrameworkNativeNodeWire, FrameworkNativePayloadFieldWire,
+    FrameworkNativeProgram, FrameworkNativeProgramWire, FrameworkNativePropValueWire,
+    FrameworkNativePropWire, FrameworkReactiveBinding, FrameworkReactiveBindingKindWire,
+    FrameworkReactiveBindingWire, NativeRendererAdapter, NodeOperation,
+    RecordingNativeRendererAdapter,
 };
 pub use compile::{
     AuthoringArtifact, AuthoringDiagnostic, AuthoringDiagnosticSeverity, compile_authoring_source,

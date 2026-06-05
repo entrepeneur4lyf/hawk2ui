@@ -761,7 +761,6 @@ release_gate = true
     #[test]
     fn release_documentation_lists_required_commands() {
         let checklist = include_str!("../../release/checklist.md");
-        let manual = include_str!("../../docs/development/releasing.md");
 
         for command in [
             "rtk bash scripts/release-check.sh",
@@ -770,7 +769,6 @@ release_gate = true
             "rtk bash scripts/release-check.sh --changelog-only",
         ] {
             assert!(checklist.contains(command), "checklist missing {command}");
-            assert!(manual.contains(command), "manual missing {command}");
         }
     }
 

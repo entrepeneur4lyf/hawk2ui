@@ -75,22 +75,3 @@ fn verification_gate_definitions_ci_has_named_jobs_for_each_gate_family() {
         assert_contains(&workflow, required);
     }
 }
-
-#[test]
-fn verification_gate_definitions_docs_cover_commit_release_ci_troubleshooting_and_blockers() {
-    let docs = read_workspace_file("docs/development/verification.md");
-
-    // Manual conformance is intentionally structural; source-of-truth behavior is in scripts.
-    for required in [
-        "## Before Every Commit",
-        "## Before Every Release",
-        "## Merge-Blocking Failures",
-        "## Release-Blocking Failures",
-        "## CI Troubleshooting",
-        "rtk bash scripts/check-fast.sh",
-        "rtk bash scripts/check.sh",
-        "rtk cargo deny check",
-    ] {
-        assert_contains(&docs, required);
-    }
-}

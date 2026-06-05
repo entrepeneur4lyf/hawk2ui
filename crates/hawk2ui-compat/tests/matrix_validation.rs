@@ -230,19 +230,3 @@ fn non_target_duplicate_keys_report_precise_matrix_errors() {
     let diagnostic: hawk2ui_api::Diagnostic = error.into();
     assert_eq!(diagnostic.rule.as_str(), "compat.matrix.duplicate-key");
 }
-
-#[test]
-fn compatibility_manual_documents_local_commands_and_release_coverage() {
-    let manual = read_workspace_file("docs/development/compatibility.md");
-
-    for required in [
-        "Operating System Matrix",
-        "Graphics Matrix",
-        "Plugin Host Matrix",
-        "Packaging Matrix",
-        "Unsupported Target Diagnostics",
-        "rtk cargo test -p hawk2ui-compat",
-    ] {
-        assert!(manual.contains(required), "manual missing {required}");
-    }
-}

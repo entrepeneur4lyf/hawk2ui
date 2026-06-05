@@ -1,5 +1,22 @@
 import { expect, test } from "bun:test";
-import { createHawkReactRoot } from "../src/index.ts";
+import { compileHawkReact, createHawkReactRoot } from "../src/index.ts";
+
+test("React compiler emits versioned native compiler artifacts from TSX", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'const items = [{ id: "title" }, { id: "cta" }]; export function App() { return <hawk-view id="root" ref="root_ref" className="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>{items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}</hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.schema_version).toBe(1);
+  expect(output.compilerArtifact.root.id).toBe("root");
+  expect(output.compilerArtifact.root.style_refs).toEqual(["surface.card"]);
+  expect(output.compilerArtifact.root.children.map((child) => child.key)).toEqual(["title", "cta"]);
+  expect(output.compilerArtifact.root.lifecycle).toEqual([
+    { event: "mounted", handler: "onMount" },
+    { event: "unmounted", handler: "onUnmount" },
+  ]);
+});
 
 test("React root renders, updates, removes children, and unmounts deterministically", () => {
   const root = createHawkReactRoot({ id: "host" });

@@ -1,9 +1,334 @@
-import { recordsForApp, type HawkElementSpec } from "../../hawk2ui-native/src/index.ts";
+import { parse as parseScript } from "@babel/parser";
+import { parse as parseTemplate } from "@vue/compiler-dom";
+import { compileTemplate, parse as parseSfc } from "@vue/compiler-sfc";
+import {
+  compilerArtifactForApp,
+  recordsForApp,
+  type HawkCompilerArtifact,
+  type HawkElementSpec,
+  type HawkEventSpec,
+  type HawkLifecycleSpec,
+} from "../../hawk2ui-native/src/index.ts";
+
+export interface HawkVueCompileInput {
+  readonly filename: string;
+  readonly source: string;
+}
+
+export interface HawkVueCompileOutput {
+  readonly framework: "vue";
+  readonly filename: string;
+  readonly records: readonly string[];
+  readonly compilerArtifact: HawkCompilerArtifact;
+}
 
 export interface HawkVueRenderer {
   readonly records: readonly string[];
   readonly render: (component: unknown, target: { readonly id: string }) => void;
   readonly unmount: (target: { readonly id: string }) => void;
+}
+
+type AstNode = Record<string, unknown>;
+type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
+
+interface VueLoweringContext {
+  readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
+  readonly locals: ReadonlyMap<string, LiteralRecord>;
+}
+
+export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput {
+  if (!input.filename.endsWith(".vue")) {
+    throw new Error("Hawk2UI Vue compiler inputs must be .vue files.");
+  }
+  const parsed = parseSfc(input.source, { filename: input.filename });
+  if (parsed.errors.length > 0) {
+    throw new Error(`vue.sfc.invalid: ${parsed.errors.map(String).join("; ")}`);
+  }
+  const templateSource = parsed.descriptor.template?.content;
+  if (!templateSource) {
+    throw new Error("vue.template.missing: Vue SFC compiler input must contain a template.");
+  }
+  const compiled = compileTemplate({ source: templateSource, filename: input.filename, id: "hawk2ui" });
+  if (compiled.errors.length > 0) {
+    throw new Error(`vue.template.invalid: ${compiled.errors.map(String).join("; ")}`);
+  }
+
+  const ast = parseTemplate(templateSource) as unknown as AstNode;
+  const rootNode = firstVueHawkElement(arrayField(ast, "children"));
+  if (!rootNode) {
+    throw new Error("vue.root.missing: Vue compiler output must contain one hawk root element.");
+  }
+  const script = parsed.descriptor.scriptSetup?.content ?? parsed.descriptor.script?.content ?? "";
+  const context: VueLoweringContext = {
+    arrays: literalArraysFromScript(script),
+    locals: new Map(),
+  };
+  const root = vueElementToSpec(rootNode, context);
+  validateUniqueChildKeys(root);
+  const app = { name: input.filename, root };
+  return {
+    framework: "vue",
+    filename: input.filename,
+    records: recordsForApp(app),
+    compilerArtifact: compilerArtifactForApp(app),
+  };
+}
+
+function vueElementToSpec(node: AstNode, context: VueLoweringContext): HawkElementSpec {
+  const tag = stringField(node, "tag");
+  const id = requiredString(vueAttributeValue(node, "id", context), tag, "id");
+  const style = optionalString(vueAttributeValue(node, "class", context));
+  const assetPath = optionalString(vueAttributeValue(node, "data-asset", context));
+  if (assetPath && isUnsafeAssetPath(assetPath)) {
+    throw new Error("vue.asset.path-invalid: Vue asset references must use workspace-relative paths.");
+  }
+  const key = optionalString(vueAttributeValue(node, "key", context)) ?? id;
+  const spec: HawkElementSpec = {
+    id,
+    kind: kindForTag(tag),
+    key,
+    refs: optionalString(vueAttributeValue(node, "ref", context))
+      ? [optionalString(vueAttributeValue(node, "ref", context)) as string]
+      : [],
+    styleRefs: style ? [style] : [],
+    assetRefs: assetPath ? [{ name: "vue.asset", path: assetPath }] : [],
+    events: vueEvents(node),
+    lifecycle: vueLifecycle(node),
+    children: vueChildSpecs(node, context),
+  };
+  const text = vueTextContent(node, context);
+  return text ? { ...spec, props: { text } } : spec;
+}
+
+function vueChildSpecs(node: AstNode, context: VueLoweringContext): readonly HawkElementSpec[] {
+  const children: HawkElementSpec[] = [];
+  for (const child of arrayField(node, "children")) {
+    if (!isVueHawkElement(child)) continue;
+    const forDirective = vueDirective(child, "for");
+    if (forDirective) {
+      children.push(...expandVueFor(child, forDirective, context));
+    } else {
+      children.push(vueElementToSpec(child, context));
+    }
+  }
+  return children;
+}
+
+function expandVueFor(
+  template: AstNode,
+  directive: AstNode,
+  context: VueLoweringContext,
+): readonly HawkElementSpec[] {
+  const parseResult = directive.forParseResult as AstNode | undefined;
+  const source = stringField(parseResult?.source as AstNode | undefined, "content");
+  const itemName = stringField(parseResult?.value as AstNode | undefined, "content");
+  if (!source || !itemName) {
+    throw new Error("vue.for.unsupported: Vue v-for must use `item in items` style bindings.");
+  }
+  const items = context.arrays.get(source);
+  if (!items) {
+    throw new Error(`vue.for.source-unresolved: Vue v-for source \`${source}\` must be a literal array.`);
+  }
+  return items.map((item) =>
+    vueElementToSpec(template, {
+      ...context,
+      locals: new Map([...context.locals, [itemName, item]]),
+    }),
+  );
+}
+
+function vueEvents(node: AstNode): readonly HawkEventSpec[] {
+  const events: HawkEventSpec[] = [];
+  for (const directive of vueDirectives(node, "on")) {
+    const event = stringField(directive.arg as AstNode | undefined, "content");
+    if (event === "pointerdown") {
+      events.push({ kind: "pointer.press", handler: vueHandlerName(directive) });
+    } else if (event !== "mounted" && event !== "unmounted") {
+      throw new Error(`vue.event.unsupported: Vue event \`${event}\` is not part of the native event contract.`);
+    }
+  }
+  return events;
+}
+
+function vueLifecycle(node: AstNode): readonly HawkLifecycleSpec[] {
+  const lifecycle: HawkLifecycleSpec[] = [];
+  for (const directive of vueDirectives(node, "on")) {
+    const event = stringField(directive.arg as AstNode | undefined, "content");
+    if (event === "mounted") lifecycle.push({ phase: "mounted", handler: vueHandlerName(directive) });
+    if (event === "unmounted") lifecycle.push({ phase: "unmounted", handler: vueHandlerName(directive) });
+  }
+  return lifecycle;
+}
+
+function vueAttributeValue(
+  node: AstNode,
+  name: string,
+  context: VueLoweringContext,
+): string | number | boolean | undefined {
+  const staticAttr = arrayField(node, "props").find((prop) => prop.type === 6 && prop.name === name);
+  const staticValue = staticAttr?.value as AstNode | undefined;
+  if (typeof staticValue?.content === "string") return staticValue.content;
+
+  const bound = vueDirectives(node, "bind").find(
+    (directive) => stringField(directive.arg as AstNode | undefined, "content") === name,
+  );
+  const expression = stringField(bound?.exp as AstNode | undefined, "content");
+  return expression ? evaluateVueExpression(expression, context) : undefined;
+}
+
+function vueTextContent(node: AstNode, context: VueLoweringContext): string | undefined {
+  const values = arrayField(node, "children")
+    .map((child) => {
+      if (child.type === 2) return String(child.content ?? "").trim();
+      if (child.type === 5) {
+        const expression = stringField((child.content as AstNode | undefined), "content");
+        return String(evaluateVueExpression(expression, context));
+      }
+      return "";
+    })
+    .filter((value) => value.length > 0);
+  return values.length > 0 ? values.join("") : undefined;
+}
+
+function vueHandlerName(directive: AstNode): string {
+  const handler = stringField(directive.exp as AstNode | undefined, "content");
+  if (!handler) throw new Error("vue.handler.unsupported: event handlers must be stable identifiers.");
+  return handler;
+}
+
+function vueDirective(node: AstNode, name: string): AstNode | undefined {
+  return vueDirectives(node, name)[0];
+}
+
+function vueDirectives(node: AstNode, name: string): readonly AstNode[] {
+  return arrayField(node, "props").filter((prop) => prop.type === 7 && prop.name === name);
+}
+
+function literalArraysFromScript(source: string): ReadonlyMap<string, readonly LiteralRecord[]> {
+  if (!source.trim()) return new Map();
+  const ast = parseScript(source, {
+    sourceType: "module",
+    plugins: ["typescript"],
+  }) as unknown as AstNode;
+  return literalArraysFromProgram(ast.program as AstNode);
+}
+
+function literalArraysFromProgram(program: AstNode): ReadonlyMap<string, readonly LiteralRecord[]> {
+  const arrays = new Map<string, readonly LiteralRecord[]>();
+  for (const statement of arrayField(program, "body")) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of arrayField(statement, "declarations")) {
+      const name = identifierName(declaration.id as AstNode | undefined);
+      const values = literalObjectArray(declaration.init as AstNode | undefined);
+      if (name && values) arrays.set(name, values);
+    }
+  }
+  return arrays;
+}
+
+function literalObjectArray(node: AstNode | undefined): readonly LiteralRecord[] | undefined {
+  if (!node || node.type !== "ArrayExpression") return undefined;
+  return arrayField(node, "elements").map((item) => {
+    if (item.type !== "ObjectExpression") {
+      throw new Error("vue.literal-array.unsupported: v-for sources must be arrays of literal objects.");
+    }
+    const record: Record<string, string | number | boolean> = {};
+    for (const property of arrayField(item, "properties")) {
+      const key = identifierName(property.key as AstNode | undefined) ?? literalString(property.key as AstNode | undefined);
+      const value = literalValue(property.value as AstNode | undefined);
+      if (!key || value === undefined) {
+        throw new Error("vue.literal-array.unsupported: literal object properties must be scalar values.");
+      }
+      record[key] = value;
+    }
+    return record;
+  });
+}
+
+function evaluateVueExpression(
+  expression: string | undefined,
+  context: VueLoweringContext,
+): string | number | boolean {
+  if (!expression) {
+    throw new Error("vue.expression.unsupported: empty expressions cannot be lowered into compiler artifacts.");
+  }
+  const literal = literalExpressionValue(expression);
+  if (literal !== undefined) return literal;
+  const [object, property] = expression.split(".");
+  const record = object ? context.locals.get(object) : undefined;
+  const value = property ? record?.[property] : undefined;
+  if (value !== undefined) return value;
+  throw new Error("vue.expression.unsupported: compiler artifact expressions must resolve to literal values.");
+}
+
+function literalExpressionValue(expression: string): string | number | boolean | undefined {
+  if ((expression.startsWith('"') && expression.endsWith('"')) || (expression.startsWith("'") && expression.endsWith("'"))) {
+    return expression.slice(1, -1);
+  }
+  if (expression === "true") return true;
+  if (expression === "false") return false;
+  const number = Number(expression);
+  return Number.isFinite(number) && expression.trim() !== "" ? number : undefined;
+}
+
+function literalValue(node: AstNode | undefined): string | number | boolean | undefined {
+  if (!node) return undefined;
+  if (node.type === "StringLiteral" || node.type === "NumericLiteral" || node.type === "BooleanLiteral") {
+    const value = node.value;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  }
+  return undefined;
+}
+
+function literalString(node: AstNode | undefined): string | undefined {
+  const value = literalValue(node);
+  return typeof value === "string" ? value : undefined;
+}
+
+function firstVueHawkElement(nodes: readonly AstNode[]): AstNode | undefined {
+  return nodes.find(isVueHawkElement);
+}
+
+function isVueHawkElement(node: AstNode): boolean {
+  return node.type === 1 && isHawkTag(stringField(node, "tag"));
+}
+
+function identifierName(node: AstNode | undefined): string | undefined {
+  return typeof node?.name === "string" ? node.name : undefined;
+}
+
+function optionalString(value: string | number | boolean | undefined): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function requiredString(value: string | number | boolean | undefined, tag: string, attribute: string): string {
+  if (typeof value === "string" && value.trim()) return value;
+  throw new Error(`vue.attribute.required: ${tag} requires a stable ${attribute} attribute.`);
+}
+
+function stringField(node: AstNode | undefined, field: string): string {
+  const value = node?.[field];
+  return typeof value === "string" ? value : "";
+}
+
+function arrayField(node: AstNode | undefined, field: string): AstNode[] {
+  const value = node?.[field];
+  return Array.isArray(value) ? (value.filter(Boolean) as AstNode[]) : [];
+}
+
+function kindForTag(tag: string): HawkElementSpec["kind"] {
+  if (tag === "hawk-view") return "view";
+  if (tag === "hawk-text") return "text";
+  if (tag === "hawk-button") return "button";
+  throw new Error(`vue.element.unsupported: unsupported Hawk element \`${tag}\`.`);
+}
+
+function isHawkTag(tag: string): boolean {
+  return tag.startsWith("hawk-");
+}
+
+function isUnsafeAssetPath(path: string): boolean {
+  return path.includes("://") || path.startsWith("/") || path.includes("..");
 }
 
 export function createHawkVueRenderer(): HawkVueRenderer {
@@ -56,12 +381,19 @@ function componentToNativeSpec(component: unknown, fallbackId: string): HawkElem
     events: readStringArray(props, "on").includes("pointer.press")
       ? [{ kind: "pointer.press", handler: "handlePress" }]
       : [],
-    children: readChildren(props).map((child, index) => ({
-      id: readString(child, "id") ?? `child-${index}`,
-      kind: "text",
-      key: readString(child, "key") ?? readString(child, "id"),
-      props: readTextProp(child),
-    })),
+    children: readChildren(props).map(runtimeChildSpec),
+  };
+}
+
+function runtimeChildSpec(child: Record<string, unknown>, index: number): HawkElementSpec {
+  const id = readString(child, "id") ?? `child-${index}`;
+  const key = readString(child, "key") ?? readString(child, "id");
+  const props = readTextProp(child);
+  return {
+    id,
+    kind: "text",
+    ...(key ? { key } : {}),
+    ...(props ? { props } : {}),
   };
 }
 

@@ -2,8 +2,8 @@ use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_authoring::{
     AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ChildList, ElementId, ElementKind,
     ElementNode, EventKind, EventPayloadField, FrameworkNativeNode, FrameworkNativeProgram,
-    FrameworkReactiveBinding, HandlerRef, KeyedChild, NativeLifecycleEvent, NativeRef,
-    PointerEventKind, PropValue, StyleRef,
+    FrameworkNativeProgramWire, FrameworkReactiveBinding, HandlerRef, KeyedChild,
+    NativeLifecycleEvent, NativeRef, PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_render::CustomSurfaceCategory;
 use hawk2ui_runtime::RuntimeVisual;
@@ -116,6 +116,93 @@ fn framework_native_program_records_explicit_compiler_boundary_without_source_sc
             "commit:root"
         ]
     );
+}
+
+#[test]
+fn framework_native_program_wire_round_trips_real_compiler_artifacts() {
+    let json = r#"
+{
+  "schema_version": 1,
+  "root": {
+    "id": "root",
+    "kind": "view",
+    "refs": ["root_ref"],
+    "style_refs": ["surface.card"],
+    "asset_refs": [{ "name": "react.asset", "path": "assets/logo.svg" }],
+    "events": [{
+      "kind": "pointer.press",
+      "handler": "handlePress",
+      "payload_fields": ["position"]
+    }],
+    "lifecycle": [
+      { "event": "mounted", "handler": "onMount" },
+      { "event": "unmounted", "handler": "onUnmount" }
+    ],
+    "children": [{
+      "key": "title",
+      "node": {
+        "id": "title",
+        "kind": "text",
+        "key": "title",
+        "props": [
+          { "name": "text", "value": { "type": "string", "value": "Compiled Title" } },
+          { "name": "font_size", "value": { "type": "number", "value": 18.0 } },
+          { "name": "selected", "value": { "type": "bool", "value": true } }
+        ]
+      }
+    }]
+  },
+  "reactivity": [
+    { "kind": "signal", "name": "params" },
+    { "kind": "keyed-for-each", "name": "params" },
+    { "kind": "effect", "name": "meter-paint" }
+  ]
+}
+"#;
+
+    let wire =
+        FrameworkNativeProgramWire::from_json(json).expect("compiler wire artifact must parse");
+    let program = FrameworkNativeProgram::try_from(wire.clone())
+        .expect("compiler wire artifact must validate into a native program");
+
+    assert_eq!(program.root().id().as_str(), "root");
+    assert_eq!(program.root().refs()[0].name(), "root_ref");
+    assert_eq!(program.root().style_refs()[0].name(), "surface.card");
+    assert_eq!(program.root().asset_refs()[0].path(), "assets/logo.svg");
+    assert_eq!(
+        program.root().events()[0].event().stable_key(),
+        "pointer.press"
+    );
+    assert_eq!(program.keyed_child_order(), ["title"]);
+    assert_eq!(
+        program.root().children()[0].1.props(),
+        &[
+            (
+                "text".to_string(),
+                PropValue::String("Compiled Title".to_string())
+            ),
+            ("font_size".to_string(), PropValue::Number(18.0)),
+            ("selected".to_string(), PropValue::Bool(true)),
+        ]
+    );
+    assert_eq!(
+        program
+            .reactivity()
+            .iter()
+            .map(FrameworkReactiveBinding::stable_key)
+            .collect::<Vec<_>>(),
+        [
+            "signal:params",
+            "for-each:keyed:params",
+            "effect:meter-paint"
+        ]
+    );
+
+    let encoded = wire.to_json().expect("compiler wire artifact serializes");
+    let decoded = FrameworkNativeProgramWire::from_json(&encoded)
+        .expect("serialized compiler wire artifact parses again");
+
+    assert_eq!(decoded, wire);
 }
 
 #[test]
