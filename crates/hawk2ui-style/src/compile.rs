@@ -9,6 +9,8 @@ use lightningcss::{
     traits::ToCss,
 };
 
+const DISALLOWED_CSS_FUNCTIONS: &[&str] = &["calc(", "var(", "min(", "max(", "clamp("];
+
 /// Style compiler diagnostic.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StyleCompileDiagnostic {
@@ -120,7 +122,16 @@ impl StyleSubsetReference {
     /// Returns supported CSS function forms.
     #[must_use]
     pub const fn functions(&self) -> &'static [&'static str] {
-        &["rgb()", "rgba()", "token()"]
+        &[
+            "rgb()",
+            "rgba()",
+            "token()",
+            "translateX()",
+            "translateY()",
+            "translate()",
+            "scale()",
+            "rotate()",
+        ]
     }
 
     /// Returns rejected syntax classes.
@@ -241,6 +252,14 @@ pub fn compile_style_source(source: &str) -> Result<CompiledStyleSheet, StyleCom
     let registry = PropertyRegistry::production();
     let mut rules = Vec::new();
     let mut diagnostics = Vec::new();
+
+    if let Some(function) = first_disallowed_source_function(source) {
+        diagnostics.push(StyleCompileDiagnostic::new(
+            "style.function.unsupported",
+            format!("style function `{function}` is not supported"),
+        ));
+        return Err(StyleCompileError::new(diagnostics));
+    }
 
     let stylesheet = match StyleSheet::parse(source, ParserOptions::default()) {
         Ok(stylesheet) => stylesheet,
@@ -382,6 +401,33 @@ fn is_unsupported_shorthand(property: &str) -> bool {
     )
 }
 
+fn first_disallowed_source_function(source: &str) -> Option<&'static str> {
+    let source_without_comments = strip_css_comments(source);
+    DISALLOWED_CSS_FUNCTIONS
+        .iter()
+        .find(|function| source_without_comments.contains(**function))
+        .map(|function| function.trim_end_matches('('))
+}
+
+fn strip_css_comments(source: &str) -> String {
+    let mut stripped = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '/' && chars.peek() == Some(&'*') {
+            let _ = chars.next();
+            while let Some(comment_ch) = chars.next() {
+                if comment_ch == '*' && chars.peek() == Some(&'/') {
+                    let _ = chars.next();
+                    break;
+                }
+            }
+        } else {
+            stripped.push(ch);
+        }
+    }
+    stripped
+}
+
 fn diagnostic_from_unsupported_value(
     raw_value: &str,
     value_type: ValueType,
@@ -405,13 +451,20 @@ fn diagnostic_from_unsupported_value(
 }
 
 fn contains_unsupported_function(raw_value: &str, value_type: ValueType) -> bool {
+    if contains_disallowed_nested_function(raw_value) {
+        return true;
+    }
     raw_value.contains('(')
-        && !matches!(
-            value_type,
-            ValueType::Shadow | ValueType::Transform | ValueType::TokenReference
-        )
+        && !matches!(value_type, ValueType::Shadow | ValueType::Transform)
         && !raw_value.starts_with("rgb(")
         && !raw_value.starts_with("rgba(")
+        && !raw_value.starts_with("token(")
+}
+
+fn contains_disallowed_nested_function(raw_value: &str) -> bool {
+    DISALLOWED_CSS_FUNCTIONS
+        .iter()
+        .any(|function| raw_value.contains(function))
 }
 
 fn has_unsupported_unit(raw_value: &str, value_type: ValueType) -> bool {
@@ -640,20 +693,25 @@ fn parse_shadow(raw_value: &str) -> Option<String> {
         [offset_x, offset_y, blur, color] => {
             parse_px(offset_x)?;
             parse_px(offset_y)?;
-            parse_px(blur)?;
+            parse_non_negative_px(blur)?;
             parse_color(color)?;
             Some(raw_value.to_string())
         }
         [offset_x, offset_y, blur, spread, color] => {
             parse_px(offset_x)?;
             parse_px(offset_y)?;
-            parse_px(blur)?;
-            parse_px(spread)?;
+            parse_non_negative_px(blur)?;
+            parse_non_negative_px(spread)?;
             parse_color(color)?;
             Some(raw_value.to_string())
         }
         _ => None,
     }
+}
+
+fn parse_non_negative_px(raw_value: &str) -> Option<f32> {
+    let value = parse_px(raw_value)?;
+    (value.is_finite() && value >= 0.0).then_some(value)
 }
 
 fn parse_transform(raw_value: &str) -> Option<String> {
@@ -670,7 +728,7 @@ fn parse_transform(raw_value: &str) -> Option<String> {
     }
     if let Some(argument) = function_argument(raw_value, "scale") {
         let scale = argument.parse::<f32>().ok()?;
-        return scale.is_finite().then(|| raw_value.to_string());
+        return (scale.is_finite() && scale > 0.0).then(|| raw_value.to_string());
     }
     if let Some(argument) = function_argument(raw_value, "rotate") {
         parse_degrees(argument)?;

@@ -121,7 +121,19 @@ fn style_subset_reference_lists_exact_supported_css_surface() {
         reference.units(),
         &["px", "fr", "unitless-zero", "unitless-number", "ms", "s"]
     );
-    assert_eq!(reference.functions(), &["rgb()", "rgba()", "token()"]);
+    assert_eq!(
+        reference.functions(),
+        &[
+            "rgb()",
+            "rgba()",
+            "token()",
+            "translateX()",
+            "translateY()",
+            "translate()",
+            "scale()",
+            "rotate()",
+        ]
+    );
     assert_eq!(
         reference.rejected_syntax(),
         &[
@@ -523,12 +535,30 @@ fn style_compile_rejects_values_outside_exact_keyword_and_effect_subsets() {
             "style.value.unsupported",
         ),
         (
+            ".card { box-shadow: 0px 8px -1px #000000; }",
+            "style.value.unsupported",
+        ),
+        (
+            ".card { box-shadow: 0px 8px 24px -2px #000000; }",
+            "style.value.unsupported",
+        ),
+        (
             ".card { box-shadow: 0px 8px 24px #000000, 0px 0px 4px #ffffff; }",
             "style.value.unsupported",
         ),
         (
+            ".card { box-shadow: 0px 8px calc(1px + 2px) #000000; }",
+            "style.function.unsupported",
+        ),
+        (
             ".card { transform: matrix(1, 0, 0, 1, 0, 0); }",
             "style.value.unsupported",
+        ),
+        (".card { transform: scale(0); }", "style.value.unsupported"),
+        (".card { transform: scale(-1); }", "style.value.unsupported"),
+        (
+            ".card { transform: translateX(calc(1px + 2px)); }",
+            "style.function.unsupported",
         ),
     ] {
         let error =
