@@ -1,4 +1,4 @@
-use hawk2ui_build::ArtifactSigningKey;
+use hawk2ui_build::{ArtifactSignatureStatus, ArtifactSigningKey, SealedArtifact};
 use hawk2ui_cli::{CliCommand, CliExitCode, CommandCatalog, WorkspaceCommandRunner};
 use std::{
     fs,
@@ -174,7 +174,7 @@ fn workspace_new_project_creates_buildable_desktop_and_plugin_scaffold() {
     assert!(build.stdout.contains("compiled-styles: 1"));
     assert!(build.stdout.contains("compiled-assets: 1"));
 
-    let package = WorkspaceCommandRunner::new(&root).execute(CliCommand::PackagePlugin);
+    let package = signed_runner(&root).execute(CliCommand::PackagePlugin);
     assert_eq!(package.exit_code, CliExitCode::Success);
     assert!(
         package
@@ -693,41 +693,9 @@ path = "assets/logo.svg"
 #[test]
 fn workspace_package_plugin_materializes_plugin_outputs() {
     let root = temp_cli_workspace("package-plugin");
-    write_file(
-        &root.join("manifest.hawk.toml"),
-        r#"
-[identity]
-id = "com.hawk2ui.cli-plugin"
-name = "CLI Plugin"
-version = "1.0.0"
+    write_plugin_project(&root, "com.hawk2ui.cli-plugin", "CLI Plugin");
 
-[source]
-entry = "src/main.ts"
-
-[capabilities]
-keys = ["sealed-artifacts"]
-
-[[targets]]
-kind = "plugin"
-name = "audio-plugin"
-
-[plugin]
-id = "com.hawk2ui.cli-plugin"
-name = "CLI Plugin"
-
-[editor]
-width = 960
-height = 540
-
-[[parameters]]
-id = "gain"
-name = "Gain"
-default = 0.5
-"#,
-    );
-    write_file(&root.join("src/main.ts"), "export const app = 'plugin';");
-
-    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::PackagePlugin);
+    let execution = signed_runner(&root).execute(CliCommand::PackagePlugin);
 
     assert_eq!(execution.exit_code, CliExitCode::Success);
     assert!(
@@ -766,7 +734,43 @@ default = 0.5
             "{} artifact descriptor should exist",
             package_root.display()
         );
+        let runtime_artifact_path =
+            package_root.join("Contents/Resources/hawk2ui-runtime-artifact.json");
+        assert!(
+            runtime_artifact_path.is_file(),
+            "{} runtime artifact should exist",
+            package_root.display()
+        );
+        assert!(
+            package_root
+                .join("Contents/Resources/hawk2ui-editor.toml")
+                .is_file(),
+            "{} editor descriptor should exist",
+            package_root.display()
+        );
+        let runtime_artifact: SealedArtifact = serde_json::from_str(
+            &fs::read_to_string(runtime_artifact_path).expect("runtime artifact reads"),
+        )
+        .expect("runtime artifact decodes as a sealed artifact");
+        assert_eq!(
+            runtime_artifact.signature.status,
+            ArtifactSignatureStatus::Verified
+        );
     }
+}
+
+#[test]
+fn workspace_package_plugin_requires_release_signing_key() {
+    let root = temp_cli_workspace("package-plugin-unsigned");
+    write_plugin_project(&root, "com.hawk2ui.cli-plugin-unsigned", "Unsigned Plugin");
+
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::PackagePlugin);
+
+    assert_eq!(execution.exit_code, CliExitCode::Verification);
+    assert_eq!(
+        execution.diagnostics[0].rule,
+        "artifact.signature.signing-key-missing"
+    );
 }
 
 #[test]
@@ -1007,4 +1011,42 @@ path = "assets/logo.svg"
         ".root { display: flex; font-size: 18px; background-color: token(color.surface); }",
     );
     write_file(&root.join("assets/logo.svg"), "<svg />");
+}
+
+fn write_plugin_project(root: &Path, id: &str, name: &str) {
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        &format!(
+            r#"
+[identity]
+id = "{id}"
+name = "{name}"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[capabilities]
+keys = ["sealed-artifacts"]
+
+[[targets]]
+kind = "plugin"
+name = "audio-plugin"
+
+[plugin]
+id = "{id}"
+name = "{name}"
+
+[editor]
+width = 960
+height = 540
+
+[[parameters]]
+id = "gain"
+name = "Gain"
+default = 0.5
+"#
+        ),
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'plugin';");
 }

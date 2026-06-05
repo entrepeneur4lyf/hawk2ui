@@ -67,6 +67,8 @@ HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
 cargo run -p hawk2ui-cli -- build-release  # produce a signed release artifact
 HAWK2UI_TRUSTED_RELEASE_KEYS=local-release:<64-hex-public-key> \
 cargo run -p hawk2ui-cli -- verify-artifact # verify release trust
+HAWK2UI_RELEASE_SIGNING_KEY_ID=local-release \
+HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
 cargo run -p hawk2ui-cli -- package-plugin # CLAP / VST3 / AU / standalone
 ```
 
@@ -116,7 +118,7 @@ than production-directed.
 
 | Area | Status | Required before production-ready |
 |---|---|---|
-| Security model enforcement | Partially remediated | Build-release now requires Ed25519 signing, sealed release artifacts require verified signature metadata, and verify-artifact runs package trust validation. Extend the same trust gate to every production artifact consumer and document release key management. |
+| Security model enforcement | Partially remediated | Build-release and package-plugin now require Ed25519 signing, sealed release artifacts require verified signature metadata, and verify-artifact runs package trust validation. Extend trusted-key validation into runtime/plugin artifact loaders and document release key management. |
 | CSS accepted-subset enforcement | Open blocker | Finalize supported keyword values and grammar for complex properties such as `box-shadow` and `transform`; reject unsupported syntax deterministically. |
 | Smoke-test realness | Open blocker | Ensure smoke tests exercise real build, style, script, rendering, and host-winit paths instead of recorder-only or metadata-only paths. |
 | Release evidence | Open blocker | Add a release gate that checks README/manual/product claims against the actual production crate registry and verification evidence. |

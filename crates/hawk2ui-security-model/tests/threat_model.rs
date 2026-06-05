@@ -403,6 +403,14 @@ name = "linux-wayland"
 }
 
 #[test]
+fn package_trust_accepts_signed_artifacts_without_declared_assets() {
+    let record = signed_trust_record_without_assets(VerificationReportStatus::Present);
+
+    assert_eq!(record.compiled_asset_hashes, Vec::<String>::new());
+    assert!(PackageTrustValidator::new(1).validate(&record).is_ok());
+}
+
+#[test]
 fn package_trust_rejects_tampered_artifact() {
     let record = PackageTrustRecord {
         artifact_schema_version: 2,
@@ -549,6 +557,37 @@ name = "linux-wayland"
             "assets/hero.pack",
             ArtifactHash::from_bytes(b"asset-payload"),
         ));
+    let (artifact, verifier) = sign_artifact(artifact, "release-key");
+    PackageTrustRecord::from_trusted_sealed_artifact(&artifact, &verifier, report)
+}
+
+fn signed_trust_record_without_assets(report: VerificationReportStatus) -> PackageTrustRecord {
+    let manifest = HawkManifest::parse(
+        r#"
+[identity]
+id = "com.hawk2ui.secure-no-assets"
+name = "Secure No Assets"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[[targets]]
+kind = "plugin"
+name = "audio-plugin"
+"#,
+    )
+    .expect("manifest parses");
+    let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(
+            CompiledScriptRecord::new(
+                "main",
+                "src/main.ts",
+                "scripts/main.hawk.js",
+                ArtifactHash::from_bytes(b"script-source"),
+            )
+            .with_compiled_source("compiled script"),
+        );
     let (artifact, verifier) = sign_artifact(artifact, "release-key");
     PackageTrustRecord::from_trusted_sealed_artifact(&artifact, &verifier, report)
 }

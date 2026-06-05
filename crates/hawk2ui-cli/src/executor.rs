@@ -22,7 +22,7 @@ use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
     WinitDesktopReload, WinitDesktopReloadKind, WinitDesktopRuntime, WinitDesktopRuntimeConfig,
 };
-use hawk2ui_plugin::{BundleOutput, FormatMetadata};
+use hawk2ui_plugin::{BundleOutput, FormatMetadata, PluginEditor, PluginEditorSize};
 use hawk2ui_plugin_adapters::{
     PackageAdapterSet, PackageFormat, PackageMaterializationError, PackageRequest,
     VerificationStatus,
@@ -744,58 +744,14 @@ impl WorkspaceCommandRunner {
     }
 
     fn package_plugin(&self) -> CommandExecution {
-        let manifest = match self.validated_manifest() {
-            Ok(manifest) => manifest,
+        let build_output = match self.build_workspace() {
+            Ok(output) => output,
             Err(execution) => return execution,
         };
-        if !manifest.has_target(PackageTarget::Plugin) {
-            return CommandExecution::failure(
-                CliExitCode::Validation,
-                vec![CliDiagnostic::target_incompatibility(
-                    "plugin",
-                    "manifest does not declare a plugin target",
-                )],
-            );
-        }
-        let Some(plugin) = &manifest.plugin else {
-            return CommandExecution::failure(
-                CliExitCode::Validation,
-                vec![CliDiagnostic::error(
-                    "plugin.metadata.missing",
-                    "plugin target requires [plugin] metadata",
-                )],
-            );
+        let request = match self.package_plugin_request(build_output) {
+            Ok(request) => request,
+            Err(execution) => return execution,
         };
-        if manifest.editor.is_none() {
-            return CommandExecution::failure(
-                CliExitCode::Validation,
-                vec![CliDiagnostic::error(
-                    "plugin.editor.missing",
-                    "plugin target requires [editor] metadata",
-                )],
-            );
-        }
-
-        // The manifest is already validated, so its parameter model is valid by
-        // construction (kinds, ranges, units, and defaults all checked at parse).
-        let parameters = manifest.parameter_model();
-        let metadata = FormatMetadata::new(&plugin.id, &plugin.name, "Hawk2UI")
-            .version(&manifest.identity.version);
-        let output = BundleOutput::new(
-            self.root.join("target/hawk2ui").to_string_lossy(),
-            bundle_name(&manifest.identity.id),
-        );
-        let request = [
-            PackageFormat::Clap,
-            PackageFormat::Vst3,
-            PackageFormat::Au,
-            PackageFormat::Standalone,
-        ]
-        .into_iter()
-        .fold(
-            PackageRequest::new(metadata, output, parameters),
-            PackageRequest::with_format,
-        );
         let plan = match PackageAdapterSet::new().plan(&request) {
             Ok(plan) => plan,
             Err(error) => {
@@ -837,6 +793,56 @@ impl WorkspaceCommandRunner {
         stdout.push_str("layout-verification-status: passed\n");
         stdout.push_str("host-loadable-binaries: not-produced-by-this-command\n");
         CommandExecution::success(stdout)
+    }
+
+    fn package_plugin_request(
+        &self,
+        build_output: BuildWorkspaceOutput,
+    ) -> Result<PackageRequest, CommandExecution> {
+        let BuildWorkspaceOutput {
+            manifest, artifact, ..
+        } = build_output;
+        if !manifest.has_target(PackageTarget::Plugin) {
+            return Err(CommandExecution::failure(
+                CliExitCode::Validation,
+                vec![CliDiagnostic::target_incompatibility(
+                    "plugin",
+                    "manifest does not declare a plugin target",
+                )],
+            ));
+        }
+        let Some(plugin) = &manifest.plugin else {
+            return Err(CommandExecution::failure(
+                CliExitCode::Validation,
+                vec![CliDiagnostic::error(
+                    "plugin.metadata.missing",
+                    "plugin target requires [plugin] metadata",
+                )],
+            ));
+        };
+        if manifest.editor.is_none() {
+            return Err(CommandExecution::failure(
+                CliExitCode::Validation,
+                vec![CliDiagnostic::error(
+                    "plugin.editor.missing",
+                    "plugin target requires [editor] metadata",
+                )],
+            ));
+        }
+
+        let artifact = self.artifact_for_profile(&artifact, BuildProfile::Production)?;
+        let metadata = FormatMetadata::new(&plugin.id, &plugin.name, "Hawk2UI")
+            .version(&manifest.identity.version);
+        let output = BundleOutput::new(
+            self.root.join("target/hawk2ui").to_string_lossy(),
+            bundle_name(&manifest.identity.id),
+        );
+        Ok(plugin_package_formats().fold(
+            PackageRequest::new(metadata, output, manifest.parameter_model())
+                .with_editor(plugin_editor_from_manifest(&manifest))
+                .with_runtime_artifact(signed_runtime_artifact_value(&artifact)?),
+            PackageRequest::with_format,
+        ))
     }
 
     fn diagnostics(&self) -> CommandExecution {
@@ -1474,6 +1480,41 @@ fn bundle_name(identity_id: &str) -> String {
             }
         })
         .collect()
+}
+
+fn plugin_editor_from_manifest(manifest: &HawkManifest) -> PluginEditor {
+    let editor = manifest
+        .editor
+        .as_ref()
+        .expect("plugin editor metadata was checked before package planning");
+    PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(f64::from(editor.width), f64::from(editor.height), 1.0),
+    )
+}
+
+fn plugin_package_formats() -> impl Iterator<Item = PackageFormat> {
+    [
+        PackageFormat::Clap,
+        PackageFormat::Vst3,
+        PackageFormat::Au,
+        PackageFormat::Standalone,
+    ]
+    .into_iter()
+}
+
+fn signed_runtime_artifact_value(
+    artifact: &SealedArtifact,
+) -> Result<serde_json::Value, CommandExecution> {
+    serde_json::to_value(artifact).map_err(|error| {
+        CommandExecution::failure(
+            CliExitCode::Verification,
+            vec![CliDiagnostic::error(
+                "artifact.runtime.serialize-failed",
+                format!("signed runtime artifact could not be serialized: {error}"),
+            )],
+        )
+    })
 }
 
 fn event_debug(event: &crate::DevLoopEvent) -> String {

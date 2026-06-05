@@ -657,9 +657,6 @@ impl PackageTrustValidator {
             PackageTrustViolation::MissingManifestSnapshotHash,
         )?;
 
-        if record.compiled_asset_hashes.is_empty() {
-            return Err(PackageTrustViolation::MissingCompiledAssetHashes);
-        }
         for hash in &record.compiled_asset_hashes {
             require_hash(
                 "compiled_asset_hashes",
