@@ -93,6 +93,24 @@ fn production_source(source: &str) -> String {
     output
 }
 
+fn panic_style_forbidden_tokens() -> &'static [&'static str] {
+    &[
+        ".expect(",
+        ".unwrap(",
+        ".unwrap_err(",
+        "panic!(",
+        "unreachable!(",
+        "assert!(",
+        "assert_eq!(",
+        "assert_ne!(",
+        "debug_assert!(",
+        "debug_assert_eq!(",
+        "debug_assert_ne!(",
+        "todo!(",
+        "unimplemented!(",
+    ]
+}
+
 fn matching_brace(source: &str, open_brace: usize) -> Option<usize> {
     let mut depth = 0_usize;
     for (offset, byte) in source[open_brace..].bytes().enumerate() {
@@ -117,23 +135,30 @@ fn production_source_does_not_use_panic_style_fallible_assumptions() {
         let source = read_source(&source_path);
         let production_source = production_source(&source);
 
-        for forbidden in [
-            ".expect(",
-            ".unwrap(",
-            ".unwrap_err(",
-            "panic!(",
-            "unreachable!(",
-            "assert!(",
-            "debug_assert!(",
-            "todo!(",
-            "unimplemented!(",
-        ] {
+        for forbidden in panic_style_forbidden_tokens() {
             assert!(
                 !production_source.contains(forbidden),
                 "`{}` must not contain `{forbidden}` in production code",
                 source_path.display()
             );
         }
+    }
+}
+
+#[test]
+fn panic_style_gate_covers_assertion_macro_variants() {
+    for token in [
+        "assert!(",
+        "assert_eq!(",
+        "assert_ne!(",
+        "debug_assert!(",
+        "debug_assert_eq!(",
+        "debug_assert_ne!(",
+    ] {
+        assert!(
+            panic_style_forbidden_tokens().contains(&token),
+            "panic-style gate must reject {token}"
+        );
     }
 }
 

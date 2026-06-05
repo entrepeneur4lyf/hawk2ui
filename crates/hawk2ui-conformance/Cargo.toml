@@ -24,6 +24,7 @@ hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
 hawk2ui-security = { version = "0.1.0", path = "../hawk2ui-security" }
+hawk2ui-script = { version = "0.1.0", path = "../hawk2ui-script" }
 hawk2ui-style = { version = "0.1.0", path = "../hawk2ui-style" }
 
 [lints]

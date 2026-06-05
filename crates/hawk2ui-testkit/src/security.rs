@@ -102,7 +102,7 @@ impl SecurityRejectionFixtureSet {
             SecurityFixture::new(
                 InvalidManifest,
                 "fixtures/security/malformed-manifest.toml",
-                "manifest.invalid",
+                "manifest.malformed",
             ),
             SecurityFixture::new(
                 MissingAsset,
@@ -112,7 +112,7 @@ impl SecurityRejectionFixtureSet {
             SecurityFixture::new(
                 UnsafeAsset,
                 "fixtures/security/unsafe-vector.svg",
-                "asset.unsafe",
+                "asset.vector.unsafe-content",
             ),
             SecurityFixture::new(
                 AssetHashMismatch,
@@ -122,17 +122,17 @@ impl SecurityRejectionFixtureSet {
             SecurityFixture::new(
                 OversizedAsset,
                 "fixtures/security/oversized-asset.manifest",
-                "asset.too-large",
+                "asset.limit.bytes-exceeded",
             ),
             SecurityFixture::new(
                 UnsupportedScript,
                 "fixtures/security/unsupported-script.ts",
-                "script.unsupported",
+                "script.eval.failed",
             ),
             SecurityFixture::new(
                 UnsupportedStyle,
                 "fixtures/security/unsupported-style.css",
-                "style.unsupported",
+                "style.property.unknown",
             ),
         ])
     }

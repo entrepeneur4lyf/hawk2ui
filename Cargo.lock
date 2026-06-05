@@ -1666,6 +1666,7 @@ dependencies = [
  "hawk2ui-plugin",
  "hawk2ui-render",
  "hawk2ui-runtime",
+ "hawk2ui-script",
  "hawk2ui-security",
  "hawk2ui-style",
 ]

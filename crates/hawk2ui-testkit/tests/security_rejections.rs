@@ -26,6 +26,36 @@ fn security_rejections_cover_required_fixture_families() {
 }
 
 #[test]
+fn security_rejections_catalog_uses_real_validator_diagnostics() {
+    let fixtures = SecurityRejectionFixtureSet::production_baseline();
+
+    for (kind, expected_rule) in [
+        (SecurityFixtureKind::InvalidManifest, "manifest.malformed"),
+        (SecurityFixtureKind::MissingAsset, "asset.missing"),
+        (
+            SecurityFixtureKind::UnsafeAsset,
+            "asset.vector.unsafe-content",
+        ),
+        (
+            SecurityFixtureKind::AssetHashMismatch,
+            "asset.hash.mismatch",
+        ),
+        (
+            SecurityFixtureKind::OversizedAsset,
+            "asset.limit.bytes-exceeded",
+        ),
+        (SecurityFixtureKind::UnsupportedScript, "script.eval.failed"),
+        (
+            SecurityFixtureKind::UnsupportedStyle,
+            "style.property.unknown",
+        ),
+    ] {
+        let fixture = fixtures.fixture(kind).expect("fixture kind exists");
+        assert_eq!(fixture.diagnostic_rule(), expected_rule);
+    }
+}
+
+#[test]
 fn security_rejections_report_missing_fixture_paths() {
     let fixtures = SecurityRejectionFixtureSet::new([hawk2ui_testkit::SecurityFixture::new(
         SecurityFixtureKind::InvalidManifest,

@@ -8,6 +8,7 @@ use hawk2ui_compat::{
     CompatibilityMatrix, GraphicsCompatibilityMatrix, HostCompatibilityMatrix,
     PackageCompatibilityMatrix,
 };
+use hawk2ui_script::{HostCallPolicy, ScriptBackend, ScriptModule, TimerPolicy};
 use hawk2ui_security::{SourceValidationPolicy, SourceValidationRecord, SourceValidationRule};
 use hawk2ui_style::{PropertyId, PropertyRegistry, compile_style_source};
 
@@ -44,6 +45,16 @@ fn assert_rejection_record(
         record.diagnostic_label(),
         format!("source.{expected_diagnostic}:{expected_path}")
     );
+}
+
+fn assert_script_fixture_validator_rejects(script_fixture: &str) {
+    let script_error = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic())
+        .execute_module(ScriptModule::for_source_path(
+            script_fixture,
+            read_workspace_file(script_fixture),
+        ))
+        .expect_err("unsupported script fixture must be rejected by the script backend");
+    assert_eq!(script_error.diagnostic().rule(), "script.eval.failed");
 }
 
 fn assert_security_fixture_validators_reject_adversarial_inputs() {
@@ -140,10 +151,7 @@ fn assert_security_fixture_validators_reject_adversarial_inputs() {
     );
 
     let script_fixture = "fixtures/security/unsupported-script.ts";
-    assert!(
-        read_workspace_file(script_fixture).contains("Function(\"return process.env\")"),
-        "unsupported script fixture must retain the privileged host-access pattern"
-    );
+    assert_script_fixture_validator_rejects(script_fixture);
     assert_rejection_record(
         &SourceValidationPolicy::reject(
             SourceValidationRule::UnsupportedScriptSyntax,
