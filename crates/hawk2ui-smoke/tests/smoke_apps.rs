@@ -10,10 +10,32 @@ fn desktop_basic_builds_verifies_exports_scene_first_frame_and_window_lifecycle(
         .expect("desktop smoke app should run");
 
     assert_eq!(result.fixture_name, "desktop-basic");
+    assert!(result.build.built);
     assert!(result.build.artifact_verified);
+    assert_eq!(result.build.compiled_script_count, 1);
+    assert_eq!(result.build.compiled_style_count, 1);
+    assert_eq!(result.build.target_count, 1);
+    assert_eq!(result.build.generator, "hawk2ui-build");
+    assert_eq!(result.build.profile, "production");
     assert_eq!(result.scene.root_id, "desktop-basic-root");
     assert_eq!(result.first_frame.frame_id, 1);
     assert_eq!(result.first_frame.snapshot_id, "desktop-basic:first-frame");
+    assert_eq!(result.software_frame.physical_size, [320, 180]);
+    assert!(result.software_frame.visible_pixel);
+    assert_eq!(result.host_winit.platform, "wayland");
+    assert_eq!(result.host_winit.repaint_requests, 1);
+    assert!(result.host_winit.close_requested);
+    assert_eq!(
+        result.host_winit.events,
+        vec![
+            "window-created",
+            "focus-changed:true",
+            "renderer-target-recreate-requested",
+            "dpi-changed:1.5",
+            "renderer-target-recreate-requested",
+            "close-requested:smoke complete",
+        ]
+    );
     assert_eq!(
         result.window_events,
         vec!["created", "focused", "repainted", "closed"]
@@ -31,6 +53,12 @@ fn desktop_dashboard_builds_compiles_style_renders_and_checks_recorded_interacti
         .expect("dashboard smoke app should run");
 
     assert_eq!(result.fixture_name, "desktop-dashboard");
+    assert!(result.build.artifact_verified);
+    assert_eq!(result.build.compiled_script_count, 1);
+    assert_eq!(result.build.compiled_style_count, 1);
+    assert_eq!(result.build.target_count, 1);
+    assert_eq!(result.software_frame.physical_size, [640, 360]);
+    assert!(result.software_frame.visible_pixel);
     assert_eq!(result.layout_nodes, 18);
     assert_eq!(result.style_rules, 4);
     assert_eq!(result.visual_snapshot_id, "desktop-dashboard:visual");
@@ -56,6 +84,10 @@ fn plugin_synth_editor_exercises_baseview_lifecycle_resize_dpi_render_and_destro
         .expect("plugin synth editor smoke fixture should run");
 
     assert_eq!(result.fixture_name, "plugin-synth-editor");
+    assert!(result.build.artifact_verified);
+    assert_eq!(result.build.compiled_script_count, 1);
+    assert_eq!(result.build.compiled_style_count, 0);
+    assert_eq!(result.build.target_count, 1);
     assert_eq!(
         result.editor_events,
         vec!["created", "attached", "resized", "dpi", "destroyed"]

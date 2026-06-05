@@ -11,16 +11,23 @@ use hawk2ui_authoring::{
     NativeAuthoringRuntime, NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge,
     PointerEventKind, PropValue, StyleRef,
 };
-use hawk2ui_build::{ArtifactSchemaVersion, BuildWorkspace, BuildWorkspaceError};
+use hawk2ui_build::{
+    ArtifactSchemaVersion, BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput,
+};
 use hawk2ui_framework_react::{ReactElementTree, ReactIntegration};
 use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
 use hawk2ui_framework_svelte::{SvelteComponentSource, SvelteIntegration};
 use hawk2ui_framework_vue::{VueIntegration, VueSingleFileComponent};
-use hawk2ui_host::{PluginEditorConfig, PluginHostAdapter, PluginParentHandle, SurfaceMetrics};
+use hawk2ui_host::{
+    DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig, LinuxWindowSystem,
+    PluginEditorConfig, PluginHostAdapter, PluginParentHandle, SurfaceMetrics,
+};
 use hawk2ui_host_baseview::{
     BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
 };
-use hawk2ui_host_winit::{SoftwareFrame, SoftwareFrameRenderer};
+use hawk2ui_host_winit::{
+    SoftwareFrame, SoftwareFrameRenderer, WinitDesktopAdapter, WinitPlatformFixture,
+};
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_platform::{
     CapabilityRecord, CapabilityTable, ClipboardDataType, ClipboardManifest, ClipboardPolicy,
@@ -86,6 +93,18 @@ pub struct SmokeBuildResult {
     pub built: bool,
     /// Whether the artifact verification step passed.
     pub artifact_verified: bool,
+    /// Number of script payloads compiled into the sealed artifact.
+    pub compiled_script_count: usize,
+    /// Number of style payloads compiled into the sealed artifact.
+    pub compiled_style_count: usize,
+    /// Number of asset payloads compiled into the sealed artifact.
+    pub compiled_asset_count: usize,
+    /// Number of package targets verified for the sealed artifact.
+    pub target_count: usize,
+    /// Build generator recorded in the sealed artifact.
+    pub generator: String,
+    /// Build profile recorded in the sealed artifact.
+    pub profile: String,
 }
 
 /// Smoke scene export.
@@ -104,6 +123,28 @@ pub struct SmokeFirstFrame {
     pub snapshot_id: String,
 }
 
+/// Real software-frame evidence produced by the Skia-backed desktop renderer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SmokeSoftwareFrameEvidence {
+    /// Physical frame size rendered by the software renderer.
+    pub physical_size: [u32; 2],
+    /// Whether the rendered frame contained the expected visible scene pixel.
+    pub visible_pixel: bool,
+}
+
+/// Real Winit host lifecycle evidence collected from the desktop adapter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SmokeWinitHostEvidence {
+    /// Native platform exercised by the Winit fixture.
+    pub platform: String,
+    /// Normalized Winit desktop host events observed during the smoke lifecycle.
+    pub events: Vec<String>,
+    /// Number of repaint requests queued by the Winit adapter.
+    pub repaint_requests: usize,
+    /// Whether the Winit adapter reached a close-requested state.
+    pub close_requested: bool,
+}
+
 /// Smoke run result for a desktop fixture.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DesktopSmokeResult {
@@ -115,6 +156,10 @@ pub struct DesktopSmokeResult {
     pub scene: SmokeSceneExport,
     /// First-frame export.
     pub first_frame: SmokeFirstFrame,
+    /// Real software-rendered frame evidence.
+    pub software_frame: SmokeSoftwareFrameEvidence,
+    /// Real Winit host lifecycle evidence.
+    pub host_winit: SmokeWinitHostEvidence,
     /// Recorded window lifecycle events.
     pub window_events: Vec<String>,
 }
@@ -124,6 +169,10 @@ pub struct DesktopSmokeResult {
 pub struct DashboardSmokeResult {
     /// Fixture name.
     pub fixture_name: String,
+    /// Build result.
+    pub build: SmokeBuildResult,
+    /// Real software-rendered frame evidence.
+    pub software_frame: SmokeSoftwareFrameEvidence,
     /// Number of exported layout nodes.
     pub layout_nodes: usize,
     /// Number of style rules applied.
@@ -143,6 +192,8 @@ pub struct DashboardSmokeResult {
 pub struct PluginEditorSmokeResult {
     /// Fixture name.
     pub fixture_name: String,
+    /// Build result.
+    pub build: SmokeBuildResult,
     /// Editor lifecycle trace.
     pub editor_events: Vec<String>,
     /// Parameter update trace.
@@ -261,9 +312,16 @@ impl SmokeRunner {
         require_file(&root.join("styles/main.hawk.css"))?;
         require_file(&root.join("assets/logo.svg"))?;
         require_file(&root.join("assets/mark.ppm"))?;
-        let artifact_verified = build_workspace_verified(&root)?;
+        let build = build_workspace_verified(&root)?;
         let frame = render_colored_scene(320, 180, Color::rgba(8, 10, 14, 255))?;
-        require_visible_pixel(&frame, 0x0008_0a0e, "desktop-basic software frame")?;
+        let software_frame =
+            software_frame_evidence(&frame, 0x0008_0a0e, "desktop-basic software frame")?;
+        let host_winit = exercise_winit_host_lifecycle(
+            "desktop-basic",
+            SurfaceMetrics::new(320.0, 180.0, 1.0),
+            SurfaceMetrics::new(640.0, 360.0, 1.5),
+            1.5,
+        )?;
 
         let scene = fs::read_to_string(root.join("artifacts/scene.json"))
             .map_err(|error| error.to_string())?;
@@ -278,10 +336,7 @@ impl SmokeRunner {
 
         Ok(DesktopSmokeResult {
             fixture_name: fixture.name(),
-            build: SmokeBuildResult {
-                built: true,
-                artifact_verified,
-            },
+            build,
             scene: SmokeSceneExport {
                 root_id: "desktop-basic-root".into(),
             },
@@ -289,6 +344,8 @@ impl SmokeRunner {
                 frame_id: 1,
                 snapshot_id: "desktop-basic:first-frame".into(),
             },
+            software_frame,
+            host_winit,
             window_events: vec![
                 "created".into(),
                 "focused".into(),
@@ -314,10 +371,11 @@ impl SmokeRunner {
         require_file(&root.join("manifest.hawk.toml"))?;
         require_file(&root.join("src/main.ts"))?;
         require_file(&root.join("styles/main.hawk.css"))?;
-        build_workspace_verified(&root)?;
+        let build = build_workspace_verified(&root)?;
         let stylesheet = compile_fixture_style(&root.join("styles/main.hawk.css"))?;
         let frame = render_colored_scene(640, 360, Color::rgba(15, 23, 34, 255))?;
-        require_visible_pixel(&frame, 0x000f_1722, "desktop-dashboard software frame")?;
+        let software_frame =
+            software_frame_evidence(&frame, 0x000f_1722, "desktop-dashboard software frame")?;
         let snapshot = fs::read_to_string(root.join("artifacts/visual.snap"))
             .map_err(|error| error.to_string())?;
         for required in [
@@ -334,6 +392,8 @@ impl SmokeRunner {
         }
         Ok(DashboardSmokeResult {
             fixture_name: fixture.name(),
+            build,
+            software_frame,
             layout_nodes: 18,
             style_rules: stylesheet.rules().len(),
             visual_snapshot_id: "desktop-dashboard:visual".into(),
@@ -358,6 +418,7 @@ impl SmokeRunner {
         let root = fixture.absolute_path();
         require_file(&root.join("manifest.hawk.toml"))?;
         require_file(&root.join("src/editor.ts"))?;
+        let build = build_workspace_verified(&root)?;
         let trace = fs::read_to_string(root.join("artifacts/editor.trace"))
             .map_err(|error| error.to_string())?;
         for required in [
@@ -400,6 +461,7 @@ impl SmokeRunner {
         adapter.destroy_editor("plugin smoke complete");
         Ok(PluginEditorSmokeResult {
             fixture_name: fixture.name(),
+            build,
             editor_events: vec![
                 "created".into(),
                 "attached".into(),
@@ -512,7 +574,7 @@ impl SmokeRunner {
         require_file(&root.join("src/main.ts"))?;
         require_file(&root.join("styles/gallery.hawk.css"))?;
         require_file(&root.join("assets/vector.svg"))?;
-        build_workspace_verified(&root)?;
+        let _build = build_workspace_verified(&root)?;
         let _stylesheet = compile_fixture_style(&root.join("styles/gallery.hawk.css"))?;
         let first = render_colored_scene(480, 270, Color::rgba(18, 24, 36, 255))?;
         let second = render_colored_scene(480, 270, Color::rgba(18, 24, 36, 255))?;
@@ -659,11 +721,24 @@ fn require_file(path: &Path) -> Result<(), String> {
     }
 }
 
-fn build_workspace_verified(root: &Path) -> Result<bool, String> {
+fn build_workspace_verified(root: &Path) -> Result<SmokeBuildResult, String> {
     let output = BuildWorkspace::load(root)
         .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
         .map_err(|error| format!("smoke build failed: {error:?}"))?;
-    Ok(output.verification.is_release_ready())
+    Ok(smoke_build_result(&output))
+}
+
+fn smoke_build_result(output: &BuildWorkspaceOutput) -> SmokeBuildResult {
+    SmokeBuildResult {
+        built: true,
+        artifact_verified: output.verification.is_release_ready(),
+        compiled_script_count: output.artifact.compiled_scripts.len(),
+        compiled_style_count: output.artifact.compiled_styles.len(),
+        compiled_asset_count: output.artifact.compiled_assets.len(),
+        target_count: output.artifact.target_metadata.len(),
+        generator: output.artifact.build_metadata.generator.clone(),
+        profile: output.artifact.build_metadata.profile.clone(),
+    }
 }
 
 fn compile_fixture_style(path: &Path) -> Result<hawk2ui_style::CompiledStyleSheet, String> {
@@ -703,6 +778,103 @@ fn require_visible_pixel(frame: &SoftwareFrame, pixel: u32, label: &str) -> Resu
         Ok(())
     } else {
         Err(format!("{label} did not contain expected visible pixel"))
+    }
+}
+
+fn software_frame_evidence(
+    frame: &SoftwareFrame,
+    pixel: u32,
+    label: &str,
+) -> Result<SmokeSoftwareFrameEvidence, String> {
+    require_visible_pixel(frame, pixel, label)?;
+    Ok(SmokeSoftwareFrameEvidence {
+        physical_size: [frame.width(), frame.height()],
+        visible_pixel: true,
+    })
+}
+
+fn exercise_winit_host_lifecycle(
+    title: &str,
+    initial_metrics: SurfaceMetrics,
+    resize_metrics: SurfaceMetrics,
+    dpi_scale_factor: f64,
+) -> Result<SmokeWinitHostEvidence, String> {
+    let mut adapter = WinitDesktopAdapter::create_window(
+        DesktopWindowConfig::new(title, initial_metrics),
+        WinitPlatformFixture::linux(LinuxWindowSystem::Wayland),
+    )
+    .map_err(|error| format!("winit smoke create failed: {}", error.rule()))?;
+
+    adapter.set_focus(true);
+    adapter
+        .try_handle_resize(resize_metrics)
+        .map_err(|error| format!("winit smoke resize failed: {}", error.rule()))?;
+    adapter
+        .try_dpi_changed(dpi_scale_factor)
+        .map_err(|error| format!("winit smoke dpi failed: {}", error.rule()))?;
+    adapter.request_repaint("first-frame");
+    adapter.request_close("smoke complete");
+
+    let platform = adapter
+        .platform_handle()
+        .linux_window_system()
+        .map_or("unknown", linux_window_system_label)
+        .to_string();
+    let repaint_requests = adapter.repaint_requests().len();
+    let close_requested = adapter.close_requested();
+    let events = adapter
+        .drain_events()
+        .iter()
+        .map(desktop_host_event_label)
+        .collect();
+
+    Ok(SmokeWinitHostEvidence {
+        platform,
+        events,
+        repaint_requests,
+        close_requested,
+    })
+}
+
+fn desktop_host_event_label(event: &DesktopHostEvent) -> String {
+    match event {
+        DesktopHostEvent::WindowCreated(_) => "window-created".into(),
+        DesktopHostEvent::CloseRequested(reason) => format!("close-requested:{reason}"),
+        DesktopHostEvent::ModeChanged(mode) => format!("mode-changed:{mode:?}"),
+        DesktopHostEvent::FocusChanged(focused) => format!("focus-changed:{focused}"),
+        DesktopHostEvent::KeyboardInput(input) => format!("keyboard-input:{}", input.key),
+        DesktopHostEvent::PointerInput(input) => format!("pointer-input:{}", input.button),
+        DesktopHostEvent::ImeInput(_) => "ime-input".into(),
+        DesktopHostEvent::FileDragDrop(_) => "file-drag-drop".into(),
+        DesktopHostEvent::WindowOcclusionChanged(occluded) => {
+            format!("window-occlusion-changed:{occluded}")
+        }
+        DesktopHostEvent::ClipboardCapabilityChanged(capability) => {
+            format!("clipboard-capability-changed:{capability:?}")
+        }
+        DesktopHostEvent::DpiChanged(scale_factor) => format!("dpi-changed:{scale_factor}"),
+        DesktopHostEvent::RendererTargetRecreateRequested => {
+            "renderer-target-recreate-requested".into()
+        }
+        DesktopHostEvent::RepaintRequested(_) => "repaint-requested".into(),
+        DesktopHostEvent::Resized(metrics) => {
+            format!(
+                "resized:{}x{}@{}",
+                metrics.logical_width, metrics.logical_height, metrics.scale_factor
+            )
+        }
+        DesktopHostEvent::ClipboardRequested(_) => "clipboard-requested".into(),
+        DesktopHostEvent::DialogRequested(_) => "dialog-requested".into(),
+        DesktopHostEvent::FramePresented { frame_id, .. } => format!("frame-presented:{frame_id}"),
+    }
+}
+
+const fn linux_window_system_label(window_system: LinuxWindowSystem) -> &'static str {
+    match window_system {
+        LinuxWindowSystem::Wayland => "wayland",
+        LinuxWindowSystem::X11 => "x11",
+        LinuxWindowSystem::Xcb => "xcb",
+        LinuxWindowSystem::XWayland => "xwayland",
     }
 }
 

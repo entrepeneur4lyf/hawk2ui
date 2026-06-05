@@ -120,7 +120,7 @@ than production-directed.
 |---|---|---|
 | Security model enforcement | Enforcement remediated; docs pending | Build-release and package-plugin require Ed25519 signing, sealed release artifacts require verified signature metadata, verify-artifact runs package trust validation, and CLAP runtime/Baseview plugin loaders validate artifacts against trusted release keys. Document release key management before production-ready release. |
 | CSS accepted-subset enforcement | Remediated | Supported keywords, units, functions, grid longhands, `box-shadow`, and `transform` grammar are enforced by `hawk2ui-style`; unsupported functions and out-of-subset effect syntax are rejected before runtime lowering. |
-| Smoke-test realness | Open blocker | Ensure smoke tests exercise real build, style, script, rendering, and host-winit paths instead of recorder-only or metadata-only paths. |
+| Smoke-test realness | Core path enforcement remediated | Smoke tests now require real `BuildWorkspace` script/style/target artifact evidence, production style compilation, Skia-backed software-frame pixels, Baseview rendering evidence, and Winit host lifecycle events. Remaining static domain assertions are tracked by the framework/plugin/effects blockers below. |
 | Release evidence | Open blocker | Add a release gate that checks README/manual/product claims against the actual production crate registry and verification evidence. |
 | Framework source fidelity | Open blocker | Keep framework adapters honest by making native-program lowering the source of truth and removing fabricated source-scan metadata. |
 | Effects pipeline | Open blocker | Wire effects end-to-end from style to runtime to render commands to Skia output for gradients, shadows, glow, and related layer effects. |
