@@ -8,9 +8,10 @@ use hawk2ui_layout::{
 };
 use hawk2ui_render::{
     BackendError, Color, CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory,
-    CustomSurfaceDataSnapshot, Geometry, InvalidationReason, LayerKind, LayerStack,
-    LayerValidationError, PaintCommandList, PaintLayer, RendererCacheInvalidator, SceneGraph,
-    SceneGraphDiff, SceneGraphError, SceneNode, SceneNodeId, TextLayer, export_paint_commands,
+    CustomSurfaceDataSnapshot, Geometry, GlowLayer, GradientLayer, InvalidationReason, LayerKind,
+    LayerStack, LayerValidationError, PaintCommandList, PaintLayer, RendererCacheInvalidator,
+    RoundedRect, SceneGraph, SceneGraphDiff, SceneGraphError, SceneNode, SceneNodeId, ShadowLayer,
+    TextLayer, Transform, export_paint_commands,
 };
 
 /// Stable runtime view identifier.
@@ -160,6 +161,231 @@ impl RuntimeCustomSurfaceVisual {
     }
 }
 
+/// Linear gradient visual data for a runtime-styled box.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeLinearGradient {
+    start: Color,
+    end: Color,
+}
+
+impl RuntimeLinearGradient {
+    /// Creates a left-to-right linear gradient.
+    #[must_use]
+    pub const fn new(start: Color, end: Color) -> Self {
+        Self { start, end }
+    }
+
+    /// Returns the gradient start color.
+    #[must_use]
+    pub const fn start(self) -> Color {
+        self.start
+    }
+
+    /// Returns the gradient end color.
+    #[must_use]
+    pub const fn end(self) -> Color {
+        self.end
+    }
+}
+
+/// Shadow visual data for a runtime-styled box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RuntimeShadowEffect {
+    offset_x: f32,
+    offset_y: f32,
+    blur_radius: f32,
+    color: Color,
+}
+
+impl RuntimeShadowEffect {
+    /// Creates a shadow effect.
+    #[must_use]
+    pub const fn new(offset_x: f32, offset_y: f32, blur_radius: f32, color: Color) -> Self {
+        Self {
+            offset_x,
+            offset_y,
+            blur_radius,
+            color,
+        }
+    }
+
+    /// Returns the horizontal shadow offset.
+    #[must_use]
+    pub const fn offset_x(self) -> f32 {
+        self.offset_x
+    }
+
+    /// Returns the vertical shadow offset.
+    #[must_use]
+    pub const fn offset_y(self) -> f32 {
+        self.offset_y
+    }
+
+    /// Returns the blur radius.
+    #[must_use]
+    pub const fn blur_radius(self) -> f32 {
+        self.blur_radius
+    }
+
+    /// Returns the shadow color.
+    #[must_use]
+    pub const fn color(self) -> Color {
+        self.color
+    }
+}
+
+/// Glow visual data for a runtime-styled box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RuntimeGlowEffect {
+    blur_radius: f32,
+    color: Color,
+}
+
+impl RuntimeGlowEffect {
+    /// Creates a glow effect.
+    #[must_use]
+    pub const fn new(blur_radius: f32, color: Color) -> Self {
+        Self { blur_radius, color }
+    }
+
+    /// Returns the glow blur radius.
+    #[must_use]
+    pub const fn blur_radius(self) -> f32 {
+        self.blur_radius
+    }
+
+    /// Returns the glow color.
+    #[must_use]
+    pub const fn color(self) -> Color {
+        self.color
+    }
+}
+
+/// Renderer-ready box visual with fills, gradients, and layer effects.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RuntimeStyledBoxVisual {
+    fill: Option<Color>,
+    gradient: Option<RuntimeLinearGradient>,
+    border_radius: f32,
+    shadow: Option<RuntimeShadowEffect>,
+    glow: Option<RuntimeGlowEffect>,
+    opacity: f32,
+    transform: Transform,
+}
+
+impl RuntimeStyledBoxVisual {
+    /// Creates a styled box visual with no fill or effects.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            fill: None,
+            gradient: None,
+            border_radius: 0.0,
+            shadow: None,
+            glow: None,
+            opacity: 1.0,
+            transform: Transform::identity(),
+        }
+    }
+
+    /// Sets the solid fill color.
+    #[must_use]
+    pub const fn with_fill(mut self, fill: Color) -> Self {
+        self.fill = Some(fill);
+        self
+    }
+
+    /// Sets the linear gradient.
+    #[must_use]
+    pub const fn with_gradient(mut self, gradient: RuntimeLinearGradient) -> Self {
+        self.gradient = Some(gradient);
+        self
+    }
+
+    /// Sets the border radius.
+    #[must_use]
+    pub const fn with_border_radius(mut self, border_radius: f32) -> Self {
+        self.border_radius = border_radius;
+        self
+    }
+
+    /// Sets the shadow effect.
+    #[must_use]
+    pub const fn with_shadow(mut self, shadow: RuntimeShadowEffect) -> Self {
+        self.shadow = Some(shadow);
+        self
+    }
+
+    /// Sets the glow effect.
+    #[must_use]
+    pub const fn with_glow(mut self, glow: RuntimeGlowEffect) -> Self {
+        self.glow = Some(glow);
+        self
+    }
+
+    /// Sets the box opacity.
+    #[must_use]
+    pub const fn with_opacity(mut self, opacity: f32) -> Self {
+        self.opacity = opacity;
+        self
+    }
+
+    /// Sets the local transform.
+    #[must_use]
+    pub const fn with_transform(mut self, transform: Transform) -> Self {
+        self.transform = transform;
+        self
+    }
+
+    /// Returns the solid fill color.
+    #[must_use]
+    pub const fn fill(&self) -> Option<Color> {
+        self.fill
+    }
+
+    /// Returns the linear gradient.
+    #[must_use]
+    pub const fn gradient(&self) -> Option<RuntimeLinearGradient> {
+        self.gradient
+    }
+
+    /// Returns the border radius.
+    #[must_use]
+    pub const fn border_radius(&self) -> f32 {
+        self.border_radius
+    }
+
+    /// Returns the shadow effect.
+    #[must_use]
+    pub const fn shadow(&self) -> Option<RuntimeShadowEffect> {
+        self.shadow
+    }
+
+    /// Returns the glow effect.
+    #[must_use]
+    pub const fn glow(&self) -> Option<RuntimeGlowEffect> {
+        self.glow
+    }
+
+    /// Returns the opacity.
+    #[must_use]
+    pub const fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    /// Returns the local transform.
+    #[must_use]
+    pub const fn transform(&self) -> Transform {
+        self.transform
+    }
+}
+
+impl Default for RuntimeStyledBoxVisual {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Visual payload attached to a runtime view node.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeVisual {
@@ -167,6 +393,8 @@ pub enum RuntimeVisual {
     None,
     /// Solid fill visual.
     Fill(Color),
+    /// Box visual with renderer-ready layer effects.
+    StyledBox(RuntimeStyledBoxVisual),
     /// Text visual.
     Text(RuntimeTextVisual),
     /// Compiled image asset visual.
@@ -280,6 +508,15 @@ pub enum RuntimeDrawCommand {
         /// Fill color.
         color: Color,
     },
+    /// Styled box command.
+    StyledBox {
+        /// View node that produced this command.
+        id: RuntimeViewId,
+        /// Resolved layout geometry.
+        geometry: Geometry,
+        /// Renderer-ready styled box visual.
+        visual: RuntimeStyledBoxVisual,
+    },
     /// Text draw command.
     Text {
         /// View node that produced this command.
@@ -330,6 +567,7 @@ impl RuntimeDrawCommand {
     pub const fn id(&self) -> &RuntimeViewId {
         match self {
             Self::Fill { id, .. }
+            | Self::StyledBox { id, .. }
             | Self::Text { id, .. }
             | Self::ImageAsset { id, .. }
             | Self::VectorAsset { id, .. }
@@ -342,6 +580,7 @@ impl RuntimeDrawCommand {
     pub const fn geometry(&self) -> Geometry {
         match self {
             Self::Fill { geometry, .. }
+            | Self::StyledBox { geometry, .. }
             | Self::Text { geometry, .. }
             | Self::ImageAsset { geometry, .. }
             | Self::VectorAsset { geometry, .. }
@@ -757,6 +996,19 @@ impl RuntimeViewTree {
                         color: *color,
                     });
                 }
+                RuntimeVisual::StyledBox(visual) => {
+                    layers = add_styled_box_layers(
+                        layers,
+                        entry.node.id(),
+                        checked_order_base(order),
+                        visual,
+                    );
+                    draw_commands.push(RuntimeDrawCommand::StyledBox {
+                        id: entry.node.id().clone(),
+                        geometry,
+                        visual: visual.clone(),
+                    });
+                }
                 RuntimeVisual::Text(text) => {
                     layers = layers.with_layer(PaintLayer::new(
                         entry.node.id().as_str(),
@@ -981,6 +1233,13 @@ fn validate_runtime_node(node: &RuntimeViewNode) -> Result<(), RuntimeSceneError
         ));
     }
     match node.visual() {
+        RuntimeVisual::StyledBox(visual) => {
+            if !is_valid_styled_box_visual(visual) {
+                return Err(RuntimeSceneError::InvalidNode(
+                    node.id().as_str().to_string(),
+                ));
+            }
+        }
         RuntimeVisual::ImageAsset(asset_id) | RuntimeVisual::VectorAsset(asset_id) => {
             if !is_valid_asset_id(asset_id) {
                 return Err(RuntimeSceneError::InvalidNode(
@@ -994,6 +1253,91 @@ fn validate_runtime_node(node: &RuntimeViewNode) -> Result<(), RuntimeSceneError
         | RuntimeVisual::CustomSurface(_) => {}
     }
     Ok(())
+}
+
+fn add_styled_box_layers(
+    mut layers: LayerStack,
+    id: &RuntimeViewId,
+    order_base: usize,
+    visual: &RuntimeStyledBoxVisual,
+) -> LayerStack {
+    let mut step = 0usize;
+    if visual.opacity() < 1.0 {
+        layers = layers.with_layer(PaintLayer::new(
+            id.as_str(),
+            checked_order(order_base.saturating_add(step)),
+            LayerKind::OpacityGroup(visual.opacity()),
+        ));
+        step = step.saturating_add(1);
+    }
+    if visual.transform() != Transform::identity() {
+        layers = layers.with_layer(PaintLayer::new(
+            id.as_str(),
+            checked_order(order_base.saturating_add(step)),
+            LayerKind::Transform(visual.transform()),
+        ));
+        step = step.saturating_add(1);
+    }
+    if let Some(shadow) = visual.shadow() {
+        layers = layers.with_layer(PaintLayer::new(
+            id.as_str(),
+            checked_order(order_base.saturating_add(step)),
+            LayerKind::Shadow(ShadowLayer::new(shadow.blur_radius())),
+        ));
+        step = step.saturating_add(1);
+    }
+    if visual.border_radius() > 0.0 {
+        layers = layers.with_layer(PaintLayer::new(
+            id.as_str(),
+            checked_order(order_base.saturating_add(step)),
+            LayerKind::RoundedRect(RoundedRect::new(visual.border_radius())),
+        ));
+        step = step.saturating_add(1);
+    }
+    if visual.gradient().is_some() {
+        layers = layers.with_layer(PaintLayer::new(
+            id.as_str(),
+            checked_order(order_base.saturating_add(step)),
+            LayerKind::Gradient(GradientLayer::linear()),
+        ));
+        step = step.saturating_add(1);
+    } else if let Some(fill) = visual.fill() {
+        layers = layers.with_layer(PaintLayer::new(
+            id.as_str(),
+            checked_order(order_base.saturating_add(step)),
+            LayerKind::Fill(fill),
+        ));
+        step = step.saturating_add(1);
+    }
+    if let Some(glow) = visual.glow() {
+        layers = layers.with_layer(PaintLayer::new(
+            id.as_str(),
+            checked_order(order_base.saturating_add(step)),
+            LayerKind::Glow(GlowLayer::new(glow.blur_radius())),
+        ));
+    }
+    layers
+}
+
+fn checked_order_base(order: usize) -> usize {
+    order.saturating_mul(10)
+}
+
+fn is_valid_styled_box_visual(visual: &RuntimeStyledBoxVisual) -> bool {
+    visual.border_radius().is_finite()
+        && visual.border_radius() >= 0.0
+        && visual.opacity().is_finite()
+        && (0.0..=1.0).contains(&visual.opacity())
+        && visual.transform().is_finite()
+        && visual.shadow().is_none_or(|shadow| {
+            shadow.offset_x().is_finite()
+                && shadow.offset_y().is_finite()
+                && shadow.blur_radius().is_finite()
+                && shadow.blur_radius() >= 0.0
+        })
+        && visual
+            .glow()
+            .is_none_or(|glow| glow.blur_radius().is_finite() && glow.blur_radius() >= 0.0)
 }
 
 fn is_valid_runtime_id(value: &str) -> bool {

@@ -123,7 +123,7 @@ than production-directed.
 | Smoke-test realness | Core path enforcement remediated | Smoke tests now require real `BuildWorkspace` script/style/target artifact evidence, production style compilation, Skia-backed software-frame pixels, Baseview rendering evidence, and Winit host lifecycle events. Remaining static domain assertions are tracked by the framework/plugin/effects blockers below. |
 | Release evidence | Open blocker | Add a release gate that checks README/manual/product claims against the actual production crate registry and verification evidence. |
 | Framework source fidelity | Open blocker | Keep framework adapters honest by making native-program lowering the source of truth and removing fabricated source-scan metadata. |
-| Effects pipeline | Open blocker | Wire effects end-to-end from style to runtime to render commands to Skia output for gradients, shadows, glow, and related layer effects. |
+| Effects pipeline | Remediated | Compiled styles now lower gradients, border radius, shadows, glow, opacity, and transforms into typed runtime visuals, deterministic paint commands, and Skia pixels via the production runtime-scene replay path. |
 | Performance measurement | Open blocker | Add deterministic performance gates for artifact size, allocations, and render/runtime hot paths; keep wall-clock timings advisory. |
 | Plugin parameter fidelity | Open blocker | Preserve `Choice` and `Bool` parameter type/default/state semantics across plugin metadata, host bridges, and package outputs. |
 | VST3 implementation | Open blocker | Replace scaffold/null-factory behavior with a real VST3 factory and COM-compatible class exposure. |

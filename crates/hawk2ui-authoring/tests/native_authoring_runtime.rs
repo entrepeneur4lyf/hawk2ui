@@ -386,6 +386,75 @@ fn native_runtime_bridge_applies_compiled_style_refs_to_runtime_visuals() {
 }
 
 #[test]
+fn native_runtime_bridge_lowers_style_effects_to_runtime_commands_and_skia_pixels() {
+    let sheet = compile_style_source(
+        r"
+.surface-effects {
+  background-color: token(color.surface);
+  background-gradient-start: #ff4040;
+  background-gradient-end: #4080ff;
+  border-radius: 10px;
+  box-shadow: 4px 6px 8px rgba(0,0,0,0.75);
+  glow-radius: 6px;
+  glow-color: rgba(80,220,255,0.70);
+  opacity: 0.85;
+}
+",
+    )
+    .expect("effect style source compiles");
+    let tokens = TokenSet::production().with_color("color.surface", 8, 10, 14, 255);
+    let mut runtime = NativeAuthoringRuntime::new("native-effect-runtime");
+    runtime.mount(
+        NativeAuthoringElement::new("root", ElementKind::View).with_child(NativeChild::keyed(
+            "panel",
+            NativeAuthoringElement::new("panel", ElementKind::View)
+                .with_style(StyleRef::new("surface-effects"))
+                .with_prop("width", PropValue::Number(112.0))
+                .with_prop("height", PropValue::Number(48.0)),
+        )),
+    );
+    let artifact = runtime.finish().expect("authoring finalizes");
+
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact_with_styles(&artifact, &sheet, &tokens)
+        .expect("effect-styled artifact bridges");
+    let frame = RuntimeSceneBridge::new(Viewport::new(160.0, 110.0))
+        .build(bridged.runtime_tree())
+        .expect("runtime scene builds");
+
+    let paint_commands = frame.paint_commands().serialize_stable();
+    assert!(paint_commands.contains("draw-shadow:panel:8"));
+    assert!(paint_commands.contains("draw-gradient:panel:linear"));
+    assert!(paint_commands.contains("draw-glow:panel:6"));
+    assert!(paint_commands.contains("draw-opacity-group:panel:0.85"));
+
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 160, 110).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(8, 10, 14, 255)).unwrap();
+    backend.draw_runtime_scene_frame(&frame, 3, 1.0).unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+    assert_ne!(
+        snapshot.pixel_at(6, 6),
+        snapshot.pixel_at(106, 6),
+        "runtime gradient must survive style lowering and Skia replay"
+    );
+    assert!(
+        count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(8.0, 8.0, 120.0, 64.0)) > 0,
+        "styled shadow/glow/box must produce visible pixels outside the background"
+    );
+    assert!(backend.command_keys().iter().any(|key| {
+        key.starts_with("runtime-styled-box:panel")
+            && key.contains(":shadow=true")
+            && key.contains(":gradient=true")
+            && key.contains(":glow=true")
+            && key.contains(":opacity=0.85")
+    }));
+}
+
+#[test]
 fn native_runtime_bridge_applies_theme_style_token_overrides() {
     let sheet = compile_style_source(".surface { background-color: token(color.surface); }")
         .expect("style source compiles");
@@ -530,33 +599,9 @@ fn native_runtime_bridge_renders_authoring_artifact_to_visible_skia_pixels() {
 }
 
 fn render_runtime_frame_with_skia(frame: &RuntimeSceneFrame, backend: &mut SkiaRendererBackend) {
-    for command in frame.draw_commands() {
-        match command {
-            RuntimeDrawCommand::Fill {
-                geometry, color, ..
-            } => backend
-                .fill(*geometry, *color)
-                .expect("fill command renders"),
-            RuntimeDrawCommand::Text {
-                geometry,
-                text,
-                font_size,
-                color,
-                ..
-            } => backend
-                .draw_text_at(
-                    text,
-                    geometry.x,
-                    geometry.y + geometry.height,
-                    *font_size,
-                    *color,
-                )
-                .expect("text command renders"),
-            RuntimeDrawCommand::ImageAsset { .. }
-            | RuntimeDrawCommand::VectorAsset { .. }
-            | RuntimeDrawCommand::CustomSurface { .. } => {}
-        }
-    }
+    backend
+        .draw_runtime_scene_frame(frame, 0, 1.0)
+        .expect("runtime scene frame renders");
 }
 
 #[allow(

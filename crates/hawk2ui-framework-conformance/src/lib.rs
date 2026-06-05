@@ -12,11 +12,9 @@ use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
 use hawk2ui_framework_svelte::{SvelteComponentSource, SvelteIntegration};
 use hawk2ui_framework_vue::{VueIntegration, VueSingleFileComponent};
 use hawk2ui_layout::Viewport;
-use hawk2ui_render::{
-    Color, CustomSurfaceDrawRequest, CustomSurfaceFrameContext, Geometry, RendererBackend,
-};
-use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend};
-use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId};
+use hawk2ui_render::{Color, Geometry, RendererBackend};
+use hawk2ui_render_skia::{RuntimeSceneReplayOptions, SkiaFrameSnapshot, SkiaRendererBackend};
+use hawk2ui_runtime::{RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-framework-conformance";
@@ -869,49 +867,9 @@ fn render_runtime_frame_with_skia(
     frame: &RuntimeSceneFrame,
     backend: &mut SkiaRendererBackend,
 ) -> Result<(), String> {
-    for command in frame.draw_commands() {
-        match command {
-            RuntimeDrawCommand::Fill {
-                geometry, color, ..
-            } => backend
-                .fill(*geometry, *color)
-                .map_err(|error| format!("{error:?}"))?,
-            RuntimeDrawCommand::Text {
-                geometry,
-                text,
-                font_size,
-                color,
-                ..
-            } => backend
-                .draw_text_at(
-                    text,
-                    geometry.x,
-                    geometry.y + geometry.height,
-                    *font_size,
-                    *color,
-                )
-                .map_err(|error| format!("{error:?}"))?,
-            RuntimeDrawCommand::ImageAsset { .. } | RuntimeDrawCommand::VectorAsset { .. } => {
-                return Err(
-                    "asset draw commands require registered compiled asset payloads".to_string(),
-                );
-            }
-            RuntimeDrawCommand::CustomSurface { surface, data, .. } => {
-                let request = CustomSurfaceDrawRequest::new(
-                    surface.clone(),
-                    CustomSurfaceFrameContext::new(0, 1.0).map_err(|error| {
-                        format!("custom surface frame context failed: {}", error.rule())
-                    })?,
-                    data.clone(),
-                )
-                .map_err(|error| format!("custom surface request failed: {}", error.rule()))?;
-                backend
-                    .draw_custom_surface(&request)
-                    .map_err(|error| format!("{error:?}"))?;
-            }
-        }
-    }
-    Ok(())
+    backend
+        .draw_runtime_scene_frame_with_options(frame, RuntimeSceneReplayOptions::new(0, 1.0))
+        .map_err(|error| format!("{error:?}"))
 }
 
 fn count_changed_pixels(

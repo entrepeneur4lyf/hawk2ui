@@ -2,10 +2,11 @@
 
 use hawk2ui_api::Diagnostic;
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle};
-use hawk2ui_render::{Color, CustomSurfaceCategory};
+use hawk2ui_render::{Color, CustomSurfaceCategory, Transform};
 use hawk2ui_runtime::{
-    RuntimeCustomSurfaceVisual, RuntimeSceneError, RuntimeTextVisual, RuntimeViewId,
-    RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
+    RuntimeCustomSurfaceVisual, RuntimeGlowEffect, RuntimeLinearGradient, RuntimeSceneError,
+    RuntimeShadowEffect, RuntimeStyledBoxVisual, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode,
+    RuntimeViewTree, RuntimeVisual,
 };
 use hawk2ui_style::{
     CompiledStyleSheet, PropertyId, RuntimeStyleError, RuntimeStyleTable, StyleValue, TokenSet,
@@ -511,13 +512,64 @@ fn visual(
                 .or_else(|| styled_color(element, styles, "color"))
                 .unwrap_or(Color::rgba(255, 255, 255, 255)),
         ))),
-        ElementKind::View | ElementKind::Button => Ok(color_prop(element, "background")?
-            .or_else(|| styled_color(element, styles, "background-color"))
-            .map_or(RuntimeVisual::None, RuntimeVisual::Fill)),
+        ElementKind::View | ElementKind::Button => {
+            Ok(styled_box_visual(element, styles)?.unwrap_or(RuntimeVisual::None))
+        }
         ElementKind::CustomSurface => Ok(RuntimeVisual::CustomSurface(
             RuntimeCustomSurfaceVisual::new(custom_surface_category(element)?),
         )),
     }
+}
+
+fn styled_box_visual(
+    element: &NativeAuthoringElement,
+    styles: Option<&RuntimeStyleTable>,
+) -> Result<Option<RuntimeVisual>, NativeRuntimeBridgeError> {
+    let fill = color_prop(element, "background")?
+        .or_else(|| styled_color(element, styles, "background-color"));
+    let gradient = match (
+        styled_color(element, styles, "background-gradient-start"),
+        styled_color(element, styles, "background-gradient-end"),
+    ) {
+        (Some(start), Some(end)) if has_alpha(start) || has_alpha(end) => {
+            Some(RuntimeLinearGradient::new(start, end))
+        }
+        _ => None,
+    };
+    let border_radius =
+        styled_non_negative_length(element, styles, "border-radius")?.unwrap_or(0.0);
+    let shadow = styled_shadow_effect(element, styles)?;
+    let glow = styled_glow_effect(element, styles)?;
+    let opacity = styled_opacity(element, styles)?;
+    let transform = styled_transform(element, styles)?;
+
+    let has_effects = gradient.is_some()
+        || border_radius > 0.0
+        || shadow.is_some()
+        || glow.is_some()
+        || opacity < 1.0
+        || transform != Transform::identity();
+    if !has_effects {
+        return Ok(fill.map(RuntimeVisual::Fill));
+    }
+
+    let mut visual = RuntimeStyledBoxVisual::new()
+        .with_border_radius(border_radius)
+        .with_opacity(opacity)
+        .with_transform(transform);
+    if let Some(fill) = fill {
+        visual = visual.with_fill(fill);
+    }
+    if let Some(gradient) = gradient {
+        visual = visual.with_gradient(gradient);
+    }
+    if let Some(shadow) = shadow {
+        visual = visual.with_shadow(shadow);
+    }
+    if let Some(glow) = glow {
+        visual = visual.with_glow(glow);
+    }
+    Ok(Some(RuntimeVisual::StyledBox(visual)))
 }
 
 fn styled_positive_length(
@@ -536,6 +588,20 @@ fn styled_positive_length(
     }
 }
 
+fn styled_non_negative_length(
+    element: &NativeAuthoringElement,
+    styles: Option<&RuntimeStyleTable>,
+    property: &str,
+) -> Result<Option<f32>, NativeRuntimeBridgeError> {
+    let Some(value) = typed_style_value(element, styles, property) else {
+        return Ok(None);
+    };
+    match value {
+        StyleValue::LengthPx(value) if *value >= 0.0 && value.is_finite() => Ok(Some(*value)),
+        _ => Err(invalid_number(property, NumberDomain::NonNegative)),
+    }
+}
+
 fn styled_color(
     element: &NativeAuthoringElement,
     styles: Option<&RuntimeStyleTable>,
@@ -546,6 +612,423 @@ fn styled_color(
         StyleValue::ColorRgba(r, g, b, a) => Some(Color::rgba(*r, *g, *b, *a)),
         _ => None,
     }
+}
+
+fn typed_style_value<'a>(
+    element: &NativeAuthoringElement,
+    styles: Option<&'a RuntimeStyleTable>,
+    property: &str,
+) -> Option<&'a StyleValue> {
+    styles?.typed_value(element.id().as_str(), &PropertyId::new(property))
+}
+
+fn styled_shadow_effect(
+    element: &NativeAuthoringElement,
+    styles: Option<&RuntimeStyleTable>,
+) -> Result<Option<RuntimeShadowEffect>, NativeRuntimeBridgeError> {
+    let Some(value) = typed_style_value(element, styles, "box-shadow") else {
+        return Ok(None);
+    };
+    match value {
+        StyleValue::Shadow(value) if value.trim().eq_ignore_ascii_case("none") => Ok(None),
+        StyleValue::Shadow(value) => parse_shadow_effect("box-shadow", value).map(Some),
+        _ => Err(invalid_effect("box-shadow")),
+    }
+}
+
+fn styled_glow_effect(
+    element: &NativeAuthoringElement,
+    styles: Option<&RuntimeStyleTable>,
+) -> Result<Option<RuntimeGlowEffect>, NativeRuntimeBridgeError> {
+    let Some(radius) = styled_non_negative_length(element, styles, "glow-radius")? else {
+        return Ok(None);
+    };
+    let color = styled_color(element, styles, "glow-color").unwrap_or(Color::rgba(0, 0, 0, 0));
+    if radius == 0.0 || !has_alpha(color) {
+        return Ok(None);
+    }
+    Ok(Some(RuntimeGlowEffect::new(radius, color)))
+}
+
+fn styled_opacity(
+    element: &NativeAuthoringElement,
+    styles: Option<&RuntimeStyleTable>,
+) -> Result<f32, NativeRuntimeBridgeError> {
+    let Some(value) = typed_style_value(element, styles, "opacity") else {
+        return Ok(1.0);
+    };
+    match value {
+        StyleValue::Number(value) if value.is_finite() && (0.0..=1.0).contains(value) => Ok(*value),
+        _ => Err(invalid_number("opacity", NumberDomain::NonNegative)),
+    }
+}
+
+fn styled_transform(
+    element: &NativeAuthoringElement,
+    styles: Option<&RuntimeStyleTable>,
+) -> Result<Transform, NativeRuntimeBridgeError> {
+    let Some(value) = typed_style_value(element, styles, "transform") else {
+        return Ok(Transform::identity());
+    };
+    match value {
+        StyleValue::Transform(value) if value.trim().eq_ignore_ascii_case("none") => {
+            Ok(Transform::identity())
+        }
+        StyleValue::Transform(value) => parse_transform_effect("transform", value),
+        _ => Err(invalid_effect("transform")),
+    }
+}
+
+fn parse_shadow_effect(
+    property: &str,
+    value: &str,
+) -> Result<RuntimeShadowEffect, NativeRuntimeBridgeError> {
+    let mut lengths = Vec::new();
+    let mut color = None;
+    for token in split_top_level_whitespace(value) {
+        if token.eq_ignore_ascii_case("inset") {
+            continue;
+        }
+        if let Ok(parsed_color) = parse_effect_color(property, &token) {
+            color = Some(parsed_color);
+            continue;
+        }
+        if let Some(length) = parse_px_or_zero(&token) {
+            lengths.push(length);
+            continue;
+        }
+        return Err(invalid_effect(property));
+    }
+    if lengths.len() < 2 || lengths.len() > 4 {
+        return Err(invalid_effect(property));
+    }
+    let blur_radius = lengths.get(2).copied().unwrap_or(0.0);
+    if blur_radius < 0.0 || lengths.get(3).is_some_and(|spread| *spread < 0.0) {
+        return Err(invalid_effect(property));
+    }
+    Ok(RuntimeShadowEffect::new(
+        lengths[0],
+        lengths[1],
+        blur_radius,
+        color.unwrap_or(Color::rgba(0, 0, 0, 255)),
+    ))
+}
+
+fn parse_transform_effect(
+    property: &str,
+    value: &str,
+) -> Result<Transform, NativeRuntimeBridgeError> {
+    let mut transform = Transform::identity();
+    let functions = split_transform_functions(value);
+    if functions.is_empty() {
+        return Err(invalid_effect(property));
+    }
+    for (name, args) in functions {
+        let next = parse_transform_function(property, &name, &args)?;
+        transform = multiply_transform(transform, next);
+    }
+    if transform.is_finite() {
+        Ok(transform)
+    } else {
+        Err(invalid_effect(property))
+    }
+}
+
+fn parse_transform_function(
+    property: &str,
+    name: &str,
+    args: &str,
+) -> Result<Transform, NativeRuntimeBridgeError> {
+    let args = split_function_arguments(args);
+    match name.to_ascii_lowercase().as_str() {
+        "translatex" if args.len() == 1 => Ok(Transform::translate(
+            parse_transform_length(property, &args[0])?,
+            0.0,
+        )),
+        "translatey" if args.len() == 1 => Ok(Transform::translate(
+            0.0,
+            parse_transform_length(property, &args[0])?,
+        )),
+        "translate" if (1..=2).contains(&args.len()) => Ok(Transform::translate(
+            parse_transform_length(property, &args[0])?,
+            args.get(1)
+                .map_or(Ok(0.0), |arg| parse_transform_length(property, arg))?,
+        )),
+        "scale" if (1..=2).contains(&args.len()) => {
+            let scale_x = parse_unitless_number(property, &args[0])?;
+            let scale_y = args
+                .get(1)
+                .map_or(Ok(scale_x), |arg| parse_unitless_number(property, arg))?;
+            Ok(Transform::affine(scale_x, 0.0, 0.0, scale_y, 0.0, 0.0))
+        }
+        "rotate" if args.len() == 1 => {
+            let radians = parse_angle_radians(property, &args[0])?;
+            let (sin, cos) = radians.sin_cos();
+            Ok(Transform::affine(cos, -sin, sin, cos, 0.0, 0.0))
+        }
+        "matrix" if args.len() == 6 => Ok(Transform::affine(
+            parse_unitless_number(property, &args[0])?,
+            parse_unitless_number(property, &args[2])?,
+            parse_unitless_number(property, &args[1])?,
+            parse_unitless_number(property, &args[3])?,
+            parse_unitless_number(property, &args[4])?,
+            parse_unitless_number(property, &args[5])?,
+        )),
+        _ => Err(invalid_effect(property)),
+    }
+}
+
+fn split_transform_functions(value: &str) -> Vec<(String, String)> {
+    let mut functions = Vec::new();
+    let mut input = value.trim();
+    while !input.is_empty() {
+        let Some(open) = input.find('(') else {
+            return Vec::new();
+        };
+        let name = input[..open].trim();
+        if name.is_empty() {
+            return Vec::new();
+        }
+        let mut depth = 0i32;
+        let mut close = None;
+        for (index, character) in input.char_indices().skip(open) {
+            match character {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(index);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            return Vec::new();
+        };
+        functions.push((name.to_string(), input[open + 1..close].trim().to_string()));
+        input = input[close + 1..].trim_start();
+    }
+    functions
+}
+
+fn split_top_level_whitespace(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut depth = 0i32;
+    for character in value.chars() {
+        match character {
+            '(' => {
+                depth += 1;
+                token.push(character);
+            }
+            ')' => {
+                depth -= 1;
+                token.push(character);
+            }
+            character if character.is_whitespace() && depth == 0 => {
+                if !token.trim().is_empty() {
+                    tokens.push(token.trim().to_string());
+                    token.clear();
+                }
+            }
+            _ => token.push(character),
+        }
+    }
+    if !token.trim().is_empty() {
+        tokens.push(token.trim().to_string());
+    }
+    tokens
+}
+
+fn split_function_arguments(value: &str) -> Vec<String> {
+    let value = value.replace('/', " ");
+    if value.contains(',') {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(ToString::to_string)
+            .collect()
+    } else {
+        value
+            .split_whitespace()
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(ToString::to_string)
+            .collect()
+    }
+}
+
+fn parse_transform_length(property: &str, value: &str) -> Result<f32, NativeRuntimeBridgeError> {
+    parse_px_or_zero(value).ok_or_else(|| invalid_effect(property))
+}
+
+fn parse_px_or_zero(value: &str) -> Option<f32> {
+    let parsed = if value == "0" {
+        0.0
+    } else {
+        value.strip_suffix("px")?.parse::<f32>().ok()?
+    };
+    parsed.is_finite().then_some(parsed)
+}
+
+fn parse_unitless_number(property: &str, value: &str) -> Result<f32, NativeRuntimeBridgeError> {
+    let value = value.parse::<f32>().map_err(|_| invalid_effect(property))?;
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or_else(|| invalid_effect(property))
+}
+
+fn parse_angle_radians(property: &str, value: &str) -> Result<f32, NativeRuntimeBridgeError> {
+    if let Some(degrees) = value.strip_suffix("deg") {
+        return Ok(parse_unitless_number(property, degrees)?.to_radians());
+    }
+    if let Some(radians) = value.strip_suffix("rad") {
+        return parse_unitless_number(property, radians);
+    }
+    Err(invalid_effect(property))
+}
+
+fn multiply_transform(lhs: Transform, rhs: Transform) -> Transform {
+    Transform::affine(
+        lhs.scale_x.mul_add(rhs.scale_x, lhs.skew_x * rhs.skew_y),
+        lhs.scale_x.mul_add(rhs.skew_x, lhs.skew_x * rhs.scale_y),
+        lhs.skew_y.mul_add(rhs.scale_x, lhs.scale_y * rhs.skew_y),
+        lhs.skew_y.mul_add(rhs.skew_x, lhs.scale_y * rhs.scale_y),
+        lhs.scale_x.mul_add(
+            rhs.translate_x,
+            lhs.skew_x.mul_add(rhs.translate_y, lhs.translate_x),
+        ),
+        lhs.skew_y.mul_add(
+            rhs.translate_x,
+            lhs.scale_y.mul_add(rhs.translate_y, lhs.translate_y),
+        ),
+    )
+}
+
+fn parse_effect_color(property: &str, value: &str) -> Result<Color, NativeRuntimeBridgeError> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("transparent") {
+        return Ok(Color::rgba(0, 0, 0, 0));
+    }
+    if value.eq_ignore_ascii_case("black") {
+        return Ok(Color::rgba(0, 0, 0, 255));
+    }
+    if value.eq_ignore_ascii_case("white") {
+        return Ok(Color::rgba(255, 255, 255, 255));
+    }
+    if value.starts_with('#') {
+        return parse_effect_hex_color(property, value);
+    }
+    if value.starts_with("rgb(") || value.starts_with("rgba(") {
+        return parse_effect_rgb_color(property, value);
+    }
+    Err(invalid_effect(property))
+}
+
+fn parse_effect_hex_color(property: &str, value: &str) -> Result<Color, NativeRuntimeBridgeError> {
+    let hex = value
+        .strip_prefix('#')
+        .ok_or_else(|| invalid_effect(property))?;
+    if !hex.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return Err(invalid_effect(property));
+    }
+    match hex.len() {
+        3 | 4 => {
+            let r = parse_short_hex_channel(property, &hex[0..1])?;
+            let g = parse_short_hex_channel(property, &hex[1..2])?;
+            let b = parse_short_hex_channel(property, &hex[2..3])?;
+            let a = if hex.len() == 4 {
+                parse_short_hex_channel(property, &hex[3..4])?
+            } else {
+                255
+            };
+            Ok(Color::rgba(r, g, b, a))
+        }
+        6 | 8 => {
+            let r = parse_hex_channel(property, &hex[0..2])?;
+            let g = parse_hex_channel(property, &hex[2..4])?;
+            let b = parse_hex_channel(property, &hex[4..6])?;
+            let a = if hex.len() == 8 {
+                parse_hex_channel(property, &hex[6..8])?
+            } else {
+                255
+            };
+            Ok(Color::rgba(r, g, b, a))
+        }
+        _ => Err(invalid_effect(property)),
+    }
+}
+
+fn parse_short_hex_channel(property: &str, value: &str) -> Result<u8, NativeRuntimeBridgeError> {
+    let expanded = format!("{value}{value}");
+    parse_hex_channel(property, &expanded)
+}
+
+fn parse_effect_rgb_color(property: &str, value: &str) -> Result<Color, NativeRuntimeBridgeError> {
+    let open = value.find('(').ok_or_else(|| invalid_effect(property))?;
+    let inner = value[open + 1..]
+        .strip_suffix(')')
+        .ok_or_else(|| invalid_effect(property))?;
+    let args = split_function_arguments(inner);
+    if args.len() != 3 && args.len() != 4 {
+        return Err(invalid_effect(property));
+    }
+    Ok(Color::rgba(
+        parse_rgb_channel(property, &args[0])?,
+        parse_rgb_channel(property, &args[1])?,
+        parse_rgb_channel(property, &args[2])?,
+        args.get(3)
+            .map_or(Ok(255), |alpha| parse_alpha_channel(property, alpha))?,
+    ))
+}
+
+fn parse_rgb_channel(property: &str, value: &str) -> Result<u8, NativeRuntimeBridgeError> {
+    if let Some(percent) = value.strip_suffix('%') {
+        let value = parse_unitless_number(property, percent)?;
+        if !(0.0..=100.0).contains(&value) {
+            return Err(invalid_effect(property));
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        return Ok(((value / 100.0) * 255.0).round() as u8);
+    }
+    let value = parse_unitless_number(property, value)?;
+    if !(0.0..=255.0).contains(&value) {
+        return Err(invalid_effect(property));
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Ok(value.round() as u8)
+}
+
+fn parse_alpha_channel(property: &str, value: &str) -> Result<u8, NativeRuntimeBridgeError> {
+    if let Some(percent) = value.strip_suffix('%') {
+        let value = parse_unitless_number(property, percent)?;
+        if !(0.0..=100.0).contains(&value) {
+            return Err(invalid_effect(property));
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        return Ok(((value / 100.0) * 255.0).round() as u8);
+    }
+    let value = parse_unitless_number(property, value)?;
+    if !(0.0..=1.0).contains(&value) {
+        return Err(invalid_effect(property));
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Ok((value * 255.0).round() as u8)
+}
+
+const fn has_alpha(color: Color) -> bool {
+    color.a > 0
+}
+
+fn invalid_effect(name: &str) -> NativeRuntimeBridgeError {
+    NativeRuntimeBridgeError::new(
+        "native-runtime.effect.invalid",
+        format!("property `{name}` contains an unsupported renderer effect value"),
+    )
 }
 
 fn metadata_for(element: &NativeAuthoringElement) -> NativeRuntimeNodeMetadata {

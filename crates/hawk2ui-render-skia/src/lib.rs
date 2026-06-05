@@ -9,7 +9,7 @@ use hawk2ui_render::{
     CustomSurfaceCategory, CustomSurfaceDrawRequest, CustomSurfaceError, CustomSurfaceFrameContext,
     Geometry, RendererBackend, RendererCacheInvalidator, Stroke, Transform,
 };
-use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneFrame};
+use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneFrame, RuntimeStyledBoxVisual};
 use hawk2ui_text::TextLayout;
 use skia_safe::{
     AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
@@ -1464,6 +1464,11 @@ impl SkiaRendererBackend {
             RuntimeDrawCommand::Fill {
                 geometry, color, ..
             } => self.fill(*geometry, *color),
+            RuntimeDrawCommand::StyledBox {
+                id,
+                geometry,
+                visual,
+            } => self.draw_runtime_styled_box(id.as_str(), *geometry, visual),
             RuntimeDrawCommand::Text {
                 geometry,
                 text,
@@ -1528,6 +1533,105 @@ impl SkiaRendererBackend {
             }
             Err(error) => Err(error),
         }
+    }
+
+    fn draw_runtime_styled_box(
+        &mut self,
+        id: &str,
+        geometry: Geometry,
+        visual: &RuntimeStyledBoxVisual,
+    ) -> Result<(), BackendError> {
+        validate_surface_id(id).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        validate_geometry("skia.runtime-styled-box.invalid-geometry", geometry).inspect_err(
+            |error| {
+                self.diagnostics.push(error.diagnostic().clone());
+            },
+        )?;
+        validate_runtime_styled_box_visual(visual).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        self.with_active_surface(|surface| {
+            let canvas = surface.canvas();
+            canvas.save();
+            if visual.transform() != Transform::identity() {
+                canvas.concat(&matrix_from_transform(visual.transform()));
+            }
+            if visual.opacity() < 1.0 {
+                canvas.save_layer_alpha_f(None, visual.opacity());
+            }
+
+            if let Some(shadow) = visual.shadow() {
+                let shadow_geometry = Geometry::new(
+                    geometry.x + shadow.offset_x(),
+                    geometry.y + shadow.offset_y(),
+                    geometry.width,
+                    geometry.height,
+                );
+                let mut paint = paint(shadow.color(), PaintStyle::Fill);
+                paint.set_anti_alias(true);
+                if shadow.blur_radius() > 0.0 {
+                    paint.set_mask_filter(MaskFilter::blur(
+                        BlurStyle::Normal,
+                        shadow.blur_radius(),
+                        Some(false),
+                    ));
+                }
+                draw_box_shape(canvas, shadow_geometry, visual.border_radius(), &paint);
+            }
+
+            if let Some(glow) = visual.glow() {
+                let mut paint = paint(glow.color(), PaintStyle::Fill);
+                paint.set_anti_alias(true);
+                paint.set_mask_filter(MaskFilter::blur(
+                    BlurStyle::Normal,
+                    glow.blur_radius(),
+                    Some(false),
+                ));
+                draw_box_shape(canvas, geometry, visual.border_radius(), &paint);
+            }
+
+            if let Some(gradient) = visual.gradient() {
+                let colors = [
+                    to_skia_color4f(gradient.start()),
+                    to_skia_color4f(gradient.end()),
+                ];
+                let gradient_colors =
+                    gradient::Colors::new_evenly_spaced(&colors, TileMode::Clamp, None);
+                let shader_gradient =
+                    gradient::Gradient::new(gradient_colors, gradient::Interpolation::default());
+                let shader = gradient::shaders::linear_gradient(
+                    (
+                        (geometry.x, geometry.y),
+                        (geometry.x + geometry.width, geometry.y),
+                    ),
+                    &shader_gradient,
+                    None::<&skia_safe::Matrix>,
+                );
+                let mut paint = Paint::default();
+                paint.set_anti_alias(true);
+                paint.set_shader(shader);
+                draw_box_shape(canvas, geometry, visual.border_radius(), &paint);
+            } else if let Some(fill) = visual.fill() {
+                let mut paint = paint(fill, PaintStyle::Fill);
+                paint.set_anti_alias(true);
+                draw_box_shape(canvas, geometry, visual.border_radius(), &paint);
+            }
+
+            if visual.opacity() < 1.0 {
+                canvas.restore();
+            }
+            canvas.restore();
+        })?;
+        self.commands.push(format!(
+            "runtime-styled-box:{id}:shadow={}:gradient={}:glow={}:opacity={}",
+            visual.shadow().is_some(),
+            visual.gradient().is_some(),
+            visual.glow().is_some(),
+            visual.opacity()
+        ));
+        Ok(())
     }
 
     fn draw_missing_asset_placeholder(
@@ -2315,6 +2419,37 @@ fn validate_opacity(opacity: f32) -> Result<(), BackendError> {
     }
 }
 
+fn validate_runtime_styled_box_visual(visual: &RuntimeStyledBoxVisual) -> Result<(), BackendError> {
+    if !visual.border_radius().is_finite() || visual.border_radius() < 0.0 {
+        return Err(BackendError::new(
+            "skia.runtime-styled-box.invalid-radius",
+            "styled box border radius must be finite and non-negative",
+        ));
+    }
+    validate_opacity(visual.opacity())?;
+    validate_transform(visual.transform())?;
+    if let Some(shadow) = visual.shadow()
+        && (!shadow.offset_x().is_finite()
+            || !shadow.offset_y().is_finite()
+            || !shadow.blur_radius().is_finite()
+            || shadow.blur_radius() < 0.0)
+    {
+        return Err(BackendError::new(
+            "skia.runtime-styled-box.invalid-shadow",
+            "styled box shadow offsets must be finite and blur must be finite and non-negative",
+        ));
+    }
+    if let Some(glow) = visual.glow()
+        && (!glow.blur_radius().is_finite() || glow.blur_radius() <= 0.0)
+    {
+        return Err(BackendError::new(
+            "skia.runtime-styled-box.invalid-glow",
+            "styled box glow blur must be finite and greater than zero",
+        ));
+    }
+    Ok(())
+}
+
 enum ParsedLayerEffect {
     ShadowRect {
         geometry: Geometry,
@@ -2682,6 +2817,28 @@ fn draw_curve_surface(
 
 fn rect(geometry: Geometry) -> Rect {
     Rect::from_xywh(geometry.x, geometry.y, geometry.width, geometry.height)
+}
+
+fn draw_box_shape(canvas: &Canvas, geometry: Geometry, radius: f32, paint: &Paint) {
+    if radius > 0.0 {
+        canvas.draw_round_rect(rect(geometry), radius, radius, paint);
+    } else {
+        canvas.draw_rect(rect(geometry), paint);
+    }
+}
+
+fn matrix_from_transform(transform: Transform) -> Matrix {
+    Matrix::new_all(
+        transform.scale_x,
+        transform.skew_x,
+        transform.translate_x,
+        transform.skew_y,
+        transform.scale_y,
+        transform.translate_y,
+        0.0,
+        0.0,
+        1.0,
+    )
 }
 
 fn to_skia_color(color: Color) -> SkiaColor {

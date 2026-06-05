@@ -46,8 +46,9 @@ pub use script::{
     StructuredValue,
 };
 pub use view::{
-    RuntimeCustomSurfaceVisual, RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneError,
-    RuntimeSceneFrame, RuntimeSceneUpdate, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode,
+    RuntimeCustomSurfaceVisual, RuntimeDrawCommand, RuntimeGlowEffect, RuntimeLinearGradient,
+    RuntimeSceneBridge, RuntimeSceneError, RuntimeSceneFrame, RuntimeSceneUpdate,
+    RuntimeShadowEffect, RuntimeStyledBoxVisual, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode,
     RuntimeViewTree, RuntimeVisual,
 };
 

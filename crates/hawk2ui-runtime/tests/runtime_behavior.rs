@@ -1309,33 +1309,9 @@ fn runtime_scene_bridge_output_renders_visible_pixels_with_skia() {
 }
 
 fn render_frame_with_skia(frame: &RuntimeSceneFrame, backend: &mut SkiaRendererBackend) {
-    for command in frame.draw_commands() {
-        match command {
-            RuntimeDrawCommand::Fill {
-                geometry, color, ..
-            } => backend
-                .fill(*geometry, *color)
-                .expect("fill command renders"),
-            RuntimeDrawCommand::Text {
-                geometry,
-                text,
-                font_size,
-                color,
-                ..
-            } => backend
-                .draw_text_at(
-                    text,
-                    geometry.x,
-                    geometry.y + geometry.height,
-                    *font_size,
-                    *color,
-                )
-                .expect("text command renders"),
-            RuntimeDrawCommand::ImageAsset { .. }
-            | RuntimeDrawCommand::VectorAsset { .. }
-            | RuntimeDrawCommand::CustomSurface { .. } => {}
-        }
-    }
+    backend
+        .draw_runtime_scene_frame(frame, 0, 1.0)
+        .expect("runtime scene frame renders");
 }
 
 #[allow(
