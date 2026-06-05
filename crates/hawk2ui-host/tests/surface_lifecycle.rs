@@ -77,7 +77,7 @@ fn surface_contract_reports_repaint_resize_and_teardown_events() {
 
     surface.request_repaint(RepaintRequest::full_surface("initial paint"));
     surface.resize(SurfaceMetrics::new(800.0, 600.0, 1.5));
-    surface.teardown("window closed");
+    surface.teardown("window closed".to_owned());
 
     assert_eq!(surface.metrics().physical_size(), (1200, 900));
     assert_eq!(
@@ -167,6 +167,37 @@ fn desktop_and_plugin_adapters_implement_common_surface_contract() {
             PluginHostEvent::RepaintScheduled("meter update".into()),
             PluginHostEvent::EditorDestroyed("host closed editor".into()),
             PluginHostEvent::SafeTeardownComplete,
+        ]
+    );
+}
+
+#[test]
+fn host_surface_is_object_safe_and_routes_common_surface_commands() {
+    let mut desktop = RecordingDesktopAdapter::create_window(DesktopWindowConfig::new(
+        "Hawk2UI",
+        SurfaceMetrics::new(1024.0, 768.0, 1.0),
+    ));
+    desktop.drain_events();
+
+    let surface: &mut dyn HostSurface = &mut desktop;
+    surface.request_repaint(RepaintRequest::full_surface("dyn repaint"));
+    surface.resize(SurfaceMetrics::new(1280.0, 720.0, 2.0));
+    surface.request_window_command(SurfaceWindowCommand::SetMode(SurfaceWindowMode::Maximized));
+    surface.record_presented_frame(99);
+    surface.teardown("dyn close".to_owned());
+
+    assert_eq!(
+        desktop.drain_events(),
+        vec![
+            DesktopHostEvent::RepaintRequested(RepaintRequest::full_surface("dyn repaint")),
+            DesktopHostEvent::Resized(SurfaceMetrics::new(1280.0, 720.0, 2.0)),
+            DesktopHostEvent::RendererTargetRecreateRequested,
+            DesktopHostEvent::ModeChanged(WindowMode::Maximized),
+            DesktopHostEvent::FramePresented {
+                frame_id: 99,
+                metrics: SurfaceMetrics::new(1280.0, 720.0, 2.0),
+            },
+            DesktopHostEvent::CloseRequested("dyn close".into()),
         ]
     );
 }

@@ -128,7 +128,7 @@ than production-directed.
 | Plugin parameter fidelity | Remediated | `Choice` and `Bool` parameter defaults, pinned numeric ids, enum max ranges, host bridge/package metadata, and typed state envelopes now preserve parameter semantics across plugin metadata, host bridges, state, and package outputs. |
 | VST3 implementation | Remediated | Generated VST3 scaffolds now build against the local safe binding crate, export lifecycle entry points and `GetPluginFactory`, enumerate processor/controller classes, and instantiate COM-compatible processor/controller objects through `createInstance`. |
 | Font pipeline depth | Remediated | `hawk2ui-text` now loads app font bytes into the Parley font context, resolves fallbacks, shapes through Parley, and provides a generation-aware glyph/layout cache with hit/miss stats and explicit invalidation. |
-| Host surface abstraction | Open blocker | Unify real host adapters behind a production `HostSurface`/frame-presentation boundary or explicitly isolate test-only surfaces. |
+| Host surface abstraction | Remediated | `HostSurface` is now dyn-compatible, desktop and plugin adapters route through the common surface/frame-presentation boundary, and lifecycle tests prove repaint, resize, window commands, frame presentation, and teardown work through `&mut dyn HostSurface`. |
 | Platform backends | Open blocker | Implement concrete filesystem, network, clipboard, and secret-store backends behind the platform policy layer. |
 | Security evidence vocabulary | Needs decision | Either keep `hawk2ui-security` as evidence records backed by real validators, or reduce it to secret-redaction primitives until production consumers exist. |
 

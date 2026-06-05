@@ -229,7 +229,7 @@ pub trait HostSurface {
     fn record_presented_frame(&mut self, frame_id: u64);
 
     /// Requests teardown.
-    fn teardown(&mut self, reason: impl Into<String>);
+    fn teardown(&mut self, reason: String);
 }
 
 /// Recording host surface for deterministic tests.
@@ -302,9 +302,8 @@ impl HostSurface for RecordingHostSurface {
         });
     }
 
-    fn teardown(&mut self, reason: impl Into<String>) {
-        self.events
-            .push(SurfaceEvent::TeardownRequested(reason.into()));
+    fn teardown(&mut self, reason: String) {
+        self.events.push(SurfaceEvent::TeardownRequested(reason));
     }
 }
 

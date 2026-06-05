@@ -255,7 +255,7 @@ impl HostSurface for RecordingPluginAdapter {
         }
     }
 
-    fn teardown(&mut self, reason: impl Into<String>) {
+    fn teardown(&mut self, reason: String) {
         self.destroy_editor(reason);
     }
 }

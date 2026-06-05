@@ -376,7 +376,7 @@ impl HostSurface for RecordingDesktopAdapter {
         });
     }
 
-    fn teardown(&mut self, reason: impl Into<String>) {
+    fn teardown(&mut self, reason: String) {
         DesktopHostAdapter::request_close(self, reason);
     }
 }
