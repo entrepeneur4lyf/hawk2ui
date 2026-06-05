@@ -32,7 +32,7 @@ pub use realtime::{
 };
 pub use state::{
     HostStateChunk, PluginPreset, PluginStateEnvelope, PresetKind, PresetMetadata, StateMigration,
-    StateMigrationError, StateValue, UiPreferences,
+    StateMigrationError, StateValidationError, StateValue, UiPreferences,
 };
 
 /// The canonical Cargo package name for this crate.

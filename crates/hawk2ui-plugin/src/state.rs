@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::parameter::{ParameterModel, ParameterValue};
+
 /// Serializable state value.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum StateValue {
@@ -88,6 +90,24 @@ pub struct PluginStateEnvelope {
     pub host_chunks: Vec<HostStateChunk>,
 }
 
+/// Parameter state validation error.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StateValidationError {
+    /// Stable validation error code.
+    pub code: String,
+    /// Human-readable message.
+    pub message: String,
+}
+
+impl StateValidationError {
+    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
 impl PluginStateEnvelope {
     /// Creates a state envelope.
     #[must_use]
@@ -127,6 +147,97 @@ impl PluginStateEnvelope {
     pub fn host_chunk(mut self, chunk: HostStateChunk) -> Self {
         self.host_chunks.push(chunk);
         self
+    }
+
+    /// Validates parameter state values against a parameter model.
+    ///
+    /// # Errors
+    ///
+    /// Returns all state validation errors when the envelope references unknown
+    /// parameters, stores a value with the wrong kind, or persists a value that
+    /// falls outside the current parameter's valid domain.
+    pub fn validate_parameter_state(
+        &self,
+        model: &ParameterModel,
+    ) -> Result<(), Vec<StateValidationError>> {
+        let mut errors = Vec::new();
+        for (parameter_id, value) in &self.parameter_state {
+            let Some(parameter) = model
+                .parameters
+                .iter()
+                .find(|parameter| parameter.id == *parameter_id)
+            else {
+                errors.push(StateValidationError::new(
+                    "state.parameter.unknown",
+                    format!("state references unknown parameter `{parameter_id}`"),
+                ));
+                continue;
+            };
+
+            match (&parameter.default_value, value) {
+                (ParameterValue::Float(_), StateValue::Float(value)) => {
+                    if !value.is_finite() {
+                        errors.push(StateValidationError::new(
+                            "state.parameter.non-finite",
+                            format!("float state for parameter `{parameter_id}` must be finite"),
+                        ));
+                        continue;
+                    }
+                    if let Some(range) = parameter.range
+                        && (value < &range.min || value > &range.max)
+                    {
+                        errors.push(StateValidationError::new(
+                            "state.parameter.float-out-of-range",
+                            format!(
+                                "float state {value} for parameter `{parameter_id}` is outside {}..={}",
+                                range.min, range.max
+                            ),
+                        ));
+                    }
+                }
+                (ParameterValue::Int(_), StateValue::Int(value)) => {
+                    if let Some(range) = parameter.range {
+                        #[allow(clippy::cast_precision_loss)]
+                        let value = *value as f64;
+                        if value < range.min || value > range.max {
+                            errors.push(StateValidationError::new(
+                                "state.parameter.int-out-of-range",
+                                format!(
+                                    "integer state {value} for parameter `{parameter_id}` is outside {}..={}",
+                                    range.min, range.max
+                                ),
+                            ));
+                        }
+                    }
+                }
+                (ParameterValue::Bool(_), StateValue::Bool(_)) => {}
+                (ParameterValue::Choice(_), StateValue::Choice(index)) => {
+                    if usize::try_from(*index)
+                        .ok()
+                        .is_none_or(|index| index >= parameter.variants.len())
+                    {
+                        errors.push(StateValidationError::new(
+                            "state.parameter.choice-out-of-range",
+                            format!(
+                                "choice state index {index} is outside parameter `{parameter_id}` variant range"
+                            ),
+                        ));
+                    }
+                }
+                _ => errors.push(StateValidationError::new(
+                    "state.parameter.type-mismatch",
+                    format!(
+                        "state value for parameter `{parameter_id}` does not match parameter kind"
+                    ),
+                )),
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 
     /// Applies state migrations in order.

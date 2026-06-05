@@ -821,6 +821,9 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
 #[test]
 fn plugin_adapters_preserve_choice_defaults_and_stepped_flags_in_clap_scaffold() {
     let metadata = FormatMetadata::new("com.hawk2ui.choice", "Choice", "Hawk2UI").version("1.0.0");
+    let bypass = ParameterRecord::boolean("bypass", "Bypass", true)
+        .flags(ParameterFlags::automatable())
+        .param_id(7);
     let mut mode = ParameterRecord::enumerated(
         "mode",
         "Mode",
@@ -831,9 +834,10 @@ fn plugin_adapters_preserve_choice_defaults_and_stepped_flags_in_clap_scaffold()
             EnumVariant::new("wide", "Wide"),
         ],
     )
-    .flags(ParameterFlags::automatable());
+    .flags(ParameterFlags::automatable())
+    .param_id(42);
     mode.steps = None;
-    let parameters = ParameterModel::new([mode]);
+    let parameters = ParameterModel::new([bypass, mode]);
     let output_root = std::env::temp_dir().join(format!(
         "hawk2ui-clap-choice-{}",
         SystemTime::now()
@@ -849,6 +853,22 @@ fn plugin_adapters_preserve_choice_defaults_and_stepped_flags_in_clap_scaffold()
     let source = std::fs::read_to_string(&output.lib_rs_path).expect("generated source reads");
     let expected_flags = CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_AUTOMATABLE;
 
+    assert!(
+        source.contains("GeneratedParameter { id: 7, name: b\"Bypass\\x00\""),
+        "pinned bool parameter id should be emitted"
+    );
+    assert!(
+        source.contains("default_value: 1.0"),
+        "bool true default should be emitted as the CLAP scalar default"
+    );
+    assert!(
+        source.contains("GeneratedParameter { id: 42, name: b\"Mode\\x00\""),
+        "pinned choice parameter id should be emitted"
+    );
+    assert!(
+        source.contains("max_value: 2.0"),
+        "three-choice parameter should expose max variant index as the CLAP max value"
+    );
     assert!(
         source.contains("name: b\"Mode\\x00\""),
         "choice parameter name should be emitted"
@@ -1233,20 +1253,20 @@ fn main() {
             std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::zeroed()
                 .assume_init();
         assert!((params.get_info.expect("param info"))(plugin, 0, &mut info));
-        assert_eq!(info.id, 1);
+        assert_eq!(info.id, 0);
         assert_eq!(CStr::from_ptr(info.name.as_ptr()).to_string_lossy(), "Gain");
         assert_eq!(info.min_value, -60.0);
         assert_eq!(info.max_value, 6.0);
         assert_eq!(info.default_value, 0.0);
           let mut value = f64::NAN;
-          assert!((params.get_value.expect("param value"))(plugin, 1, &mut value));
+          assert!((params.get_value.expect("param value"))(plugin, 0, &mut value));
         assert_eq!(value, 0.0);
         let mut second_value = f64::NAN;
         assert!((second_params
             .get_value
             .expect("second initial param value"))(
             second_plugin,
-            1,
+            0,
             &mut second_value
         ));
         assert_eq!(second_value, 0.0);
@@ -1258,7 +1278,7 @@ fn main() {
                   type_: clap_sys::events::CLAP_EVENT_PARAM_VALUE,
                   flags: 0,
               },
-              param_id: 1,
+              param_id: 0,
               cookie: ptr::null_mut(),
               note_id: -1,
               port_index: -1,
@@ -1278,7 +1298,7 @@ fn main() {
           let mut automated_value = f64::NAN;
           assert!((params.get_value.expect("automated param value"))(
               plugin,
-              1,
+              0,
               &mut automated_value,
         ));
         assert_eq!(automated_value, 2.25);
@@ -1287,7 +1307,7 @@ fn main() {
             .get_value
             .expect("second param remains isolated"))(
             second_plugin,
-            1,
+            0,
             &mut second_after_automation
         ));
         assert_eq!(second_after_automation, 0.0);
@@ -1306,8 +1326,8 @@ fn main() {
           assert!((state.save.expect("state save"))(plugin, &ostream));
           let saved_state = std::str::from_utf8(&saved).expect("state is utf8");
           assert!(saved_state.starts_with("hawk2ui-state-v1\n"));
-          assert!(saved_state.contains("param 1 "));
-          let loaded_payload = format!("hawk2ui-state-v1\nparam 1 {}\n", 3.5f64.to_bits());
+          assert!(saved_state.contains("param 0 "));
+          let loaded_payload = format!("hawk2ui-state-v1\nparam 0 {}\n", 3.5f64.to_bits());
           let mut read_cursor = ReadCursor {
               bytes: loaded_payload.into_bytes(),
               offset: 0,
@@ -1320,20 +1340,20 @@ fn main() {
           let mut loaded_value = f64::NAN;
           assert!((params.get_value.expect("loaded param value"))(
               plugin,
-              1,
+              0,
               &mut loaded_value,
           ));
             assert_eq!(loaded_value, 3.5);
             let applied_response = dispatch_editor(
                 *editor_dispatch,
                 plugin,
-                "command=apply_parameter\nparameter_id=1\nvalue=4.25\n",
+                "command=apply_parameter\nparameter_id=0\nvalue=4.25\n",
             );
             assert!(applied_response.contains("response=parameter_applied"));
             let mut dispatched_value = f64::NAN;
             assert!((params.get_value.expect("dispatched param value"))(
                 plugin,
-                1,
+                0,
                 &mut dispatched_value,
             ));
             assert_eq!(dispatched_value, 4.25);
@@ -1342,15 +1362,15 @@ fn main() {
                 .get_value
                 .expect("second param remains isolated after dispatch"))(
                 second_plugin,
-                1,
+                0,
                 &mut second_after_dispatch
             ));
             assert_eq!(second_after_dispatch, 0.0);
             let saved_response = dispatch_editor(*editor_dispatch, plugin, "command=save_state\n");
             assert!(saved_response.contains("response=state_saved"));
-            assert!(saved_response.contains("param.1.bits="));
+            assert!(saved_response.contains("param.0.bits="));
             let load_command = format!(
-                "command=load_state\nparam.1.bits={}\n",
+                "command=load_state\nparam.0.bits={}\n",
                 1.75f64.to_bits()
             );
             let loaded_response = dispatch_editor(*editor_dispatch, plugin, &load_command);
@@ -1358,7 +1378,7 @@ fn main() {
             let mut c_abi_loaded_value = f64::NAN;
             assert!((params.get_value.expect("c abi loaded param value"))(
                 plugin,
-                1,
+                0,
                 &mut c_abi_loaded_value,
             ));
             assert_eq!(c_abi_loaded_value, 1.75);

@@ -478,6 +478,65 @@ fn state_presets_separate_parameter_non_parameter_and_ui_state() {
 }
 
 #[test]
+fn state_envelope_validates_parameter_state_against_model() {
+    let model = ParameterModel::new([
+        ParameterRecord::boolean("bypass", "Bypass", true),
+        ParameterRecord::enumerated(
+            "mode",
+            "Mode",
+            1,
+            [
+                EnumVariant::new("clean", "Clean"),
+                EnumVariant::new("drive", "Drive"),
+                EnumVariant::new("wide", "Wide"),
+            ],
+        ),
+        ParameterRecord::numeric("gain", "Gain", "dB", ParameterRange::new(-60.0, 12.0, 0.0)),
+    ]);
+    model.validate().expect("model validates");
+
+    PluginStateEnvelope::new(1)
+        .parameter("bypass", StateValue::Bool(false))
+        .parameter("mode", StateValue::Choice(2))
+        .parameter("gain", StateValue::Float(-12.0))
+        .validate_parameter_state(&model)
+        .expect("typed parameter state validates");
+
+    let wrong_bool = PluginStateEnvelope::new(1).parameter("bypass", StateValue::Float(1.0));
+    let errors = wrong_bool
+        .validate_parameter_state(&model)
+        .expect_err("wrong bool state type must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.code == "state.parameter.type-mismatch"),
+        "expected state.parameter.type-mismatch, got {errors:?}"
+    );
+
+    let stale_choice = PluginStateEnvelope::new(1).parameter("mode", StateValue::Choice(3));
+    let errors = stale_choice
+        .validate_parameter_state(&model)
+        .expect_err("stale choice state must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.code == "state.parameter.choice-out-of-range"),
+        "expected state.parameter.choice-out-of-range, got {errors:?}"
+    );
+
+    let unknown = PluginStateEnvelope::new(1).parameter("missing", StateValue::Bool(true));
+    let errors = unknown
+        .validate_parameter_state(&model)
+        .expect_err("unknown parameter state must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.code == "state.parameter.unknown"),
+        "expected state.parameter.unknown, got {errors:?}"
+    );
+}
+
+#[test]
 fn state_presets_apply_migrations_in_order() {
     let state = PluginStateEnvelope::new(1).parameter("old_gain", StateValue::Float(0.25));
     let migrated = state

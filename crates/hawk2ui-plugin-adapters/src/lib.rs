@@ -3414,11 +3414,15 @@ fn clap_parameter_source(parameters: &ParameterModel) -> String {
     }
 
     let mut source = String::from("&[\n");
-    for (index, parameter) in parameters.parameters.iter().enumerate() {
+    for (id, parameter) in parameters
+        .resolved_param_ids()
+        .into_iter()
+        .zip(parameters.parameters.iter())
+    {
         let _ = writeln!(
             source,
             "    GeneratedParameter {{ id: {}, name: {}, module: {}, min_value: {}, max_value: {}, default_value: {}, flags: {} }},",
-            index + 1,
+            id,
             rust_nul_terminated_byte_string(&parameter.display_name),
             rust_nul_terminated_byte_string(parameter.group_id.as_deref().unwrap_or("")),
             rust_f64_literal(parameter_min_value(parameter)),
@@ -3453,6 +3457,12 @@ fn parameter_min_value(parameter: &ParameterRecord) -> f64 {
 }
 
 fn parameter_max_value(parameter: &ParameterRecord) -> f64 {
+    if let ParameterValue::Choice(_) = parameter.default_value {
+        return u32::try_from(parameter.variants.len())
+            .ok()
+            .and_then(|count| count.checked_sub(1))
+            .map_or(0.0, f64::from);
+    }
     parameter.range.map_or(1.0, |range| range.max)
 }
 
