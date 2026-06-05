@@ -2266,10 +2266,14 @@ impl Vst3CdylibScaffold {
     }
 
     fn cargo_toml(&self) -> String {
+        let hawk2ui_vst3_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("hawk2ui-vst3");
         format!(
-            "[package]\nname = {}\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\nname = {}\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nhawk2ui-vst3 = \"0.1.0\"\nvst3 = \"0.3.0\"\n",
+            "[package]\nname = {}\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\nname = {}\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nhawk2ui-vst3 = {{ path = {} }}\nvst3 = \"0.3.0\"\n",
             quoted_metadata_string(&self.package_name),
-            quoted_metadata_string(&self.library_file_stem)
+            quoted_metadata_string(&self.library_file_stem),
+            quoted_metadata_string(&hawk2ui_vst3_path.to_string_lossy())
         )
     }
 
@@ -2298,7 +2302,10 @@ const VST3_CDYLIB_SOURCE_TEMPLATE: &str = r#"//! Generated Hawk2UI VST3 entry li
 #![allow(non_snake_case)]
 #![allow(unsafe_code)]
 
-use std::ffi::{c_char, c_void};
+use std::{
+    ffi::{c_char, c_void},
+    ptr,
+};
 
 use hawk2ui_vst3::{
     Vst3ClassCategory, Vst3ClassId, Vst3FactoryInfo, Vst3PluginClassInfo, Vst3String,
@@ -2337,6 +2344,263 @@ fn controller_class_info() -> Option<Vst3PluginClassInfo> {
         return None;
     };
     Vst3PluginClassInfo::new(class_id, Vst3ClassCategory::ComponentController, name).ok()
+}
+
+struct Hawk2uiVst3Processor;
+
+impl Class for Hawk2uiVst3Processor {
+    type Interfaces = (IComponent, IAudioProcessor, IProcessContextRequirements);
+}
+
+impl IPluginBaseTrait for Hawk2uiVst3Processor {
+    unsafe fn initialize(&self, _context: *mut FUnknown) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn terminate(&self) -> tresult {
+        kResultOk
+    }
+}
+
+impl IComponentTrait for Hawk2uiVst3Processor {
+    unsafe fn getControllerClassId(&self, class_id: *mut TUID) -> tresult {
+        if class_id.is_null() {
+            return kInvalidArgument;
+        }
+        unsafe {
+            *class_id = class_id_tuid(CONTROLLER_CLASS_ID_HEX);
+        }
+        kResultOk
+    }
+
+    unsafe fn setIoMode(&self, _mode: IoMode) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn getBusCount(&self, media_type: MediaType, dir: BusDirection) -> i32 {
+        if media_type == MediaTypes_::kAudio as MediaType
+            && (dir == BusDirections_::kInput as BusDirection
+                || dir == BusDirections_::kOutput as BusDirection)
+        {
+            1
+        } else {
+            0
+        }
+    }
+
+    unsafe fn getBusInfo(
+        &self,
+        media_type: MediaType,
+        dir: BusDirection,
+        index: i32,
+        bus: *mut BusInfo,
+    ) -> tresult {
+        if bus.is_null() || media_type != MediaTypes_::kAudio as MediaType || index != 0 {
+            return kInvalidArgument;
+        }
+        let bus = unsafe { &mut *bus };
+        bus.mediaType = MediaTypes_::kAudio as MediaType;
+        bus.direction = dir;
+        bus.channelCount = 2;
+        bus.busType = BusTypes_::kMain as BusType;
+        bus.flags = BusInfo_::BusFlags_::kDefaultActive as u32;
+        match dir {
+            value if value == BusDirections_::kInput as BusDirection => {
+                copy_wstring("Input", &mut bus.name);
+                kResultOk
+            }
+            value if value == BusDirections_::kOutput as BusDirection => {
+                copy_wstring("Output", &mut bus.name);
+                kResultOk
+            }
+            _ => kInvalidArgument,
+        }
+    }
+
+    unsafe fn getRoutingInfo(
+        &self,
+        _in_info: *mut RoutingInfo,
+        _out_info: *mut RoutingInfo,
+    ) -> tresult {
+        kNotImplemented
+    }
+
+    unsafe fn activateBus(
+        &self,
+        _media_type: MediaType,
+        _dir: BusDirection,
+        _index: i32,
+        _state: TBool,
+    ) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn setActive(&self, _state: TBool) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn setState(&self, _state: *mut IBStream) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn getState(&self, _state: *mut IBStream) -> tresult {
+        kResultOk
+    }
+}
+
+impl IAudioProcessorTrait for Hawk2uiVst3Processor {
+    unsafe fn setBusArrangements(
+        &self,
+        _inputs: *mut SpeakerArrangement,
+        num_ins: i32,
+        _outputs: *mut SpeakerArrangement,
+        num_outs: i32,
+    ) -> tresult {
+        if num_ins == 1 && num_outs == 1 {
+            kResultTrue
+        } else {
+            kResultFalse
+        }
+    }
+
+    unsafe fn getBusArrangement(
+        &self,
+        dir: BusDirection,
+        index: i32,
+        arr: *mut SpeakerArrangement,
+    ) -> tresult {
+        if arr.is_null() || index != 0 {
+            return kInvalidArgument;
+        }
+        if dir == BusDirections_::kInput as BusDirection
+            || dir == BusDirections_::kOutput as BusDirection
+        {
+            unsafe {
+                *arr = SpeakerArr::kStereo;
+            }
+            kResultOk
+        } else {
+            kInvalidArgument
+        }
+    }
+
+    unsafe fn canProcessSampleSize(&self, symbolic_sample_size: i32) -> tresult {
+        if symbolic_sample_size == SymbolicSampleSizes_::kSample32 as i32 {
+            kResultOk
+        } else {
+            kNotImplemented
+        }
+    }
+
+    unsafe fn getLatencySamples(&self) -> u32 {
+        0
+    }
+
+    unsafe fn setupProcessing(&self, _setup: *mut ProcessSetup) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn setProcessing(&self, _state: TBool) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn process(&self, data: *mut ProcessData) -> tresult {
+        if data.is_null() {
+            kInvalidArgument
+        } else {
+            kResultOk
+        }
+    }
+
+    unsafe fn getTailSamples(&self) -> u32 {
+        0
+    }
+}
+
+impl IProcessContextRequirementsTrait for Hawk2uiVst3Processor {
+    unsafe fn getProcessContextRequirements(&self) -> u32 {
+        0
+    }
+}
+
+struct Hawk2uiVst3Controller;
+
+impl Class for Hawk2uiVst3Controller {
+    type Interfaces = (IEditController,);
+}
+
+impl IPluginBaseTrait for Hawk2uiVst3Controller {
+    unsafe fn initialize(&self, _context: *mut FUnknown) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn terminate(&self) -> tresult {
+        kResultOk
+    }
+}
+
+impl IEditControllerTrait for Hawk2uiVst3Controller {
+    unsafe fn setComponentState(&self, _state: *mut IBStream) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn setState(&self, _state: *mut IBStream) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn getState(&self, _state: *mut IBStream) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn getParameterCount(&self) -> i32 {
+        0
+    }
+
+    unsafe fn getParameterInfo(&self, _param_index: i32, _info: *mut ParameterInfo) -> tresult {
+        kInvalidArgument
+    }
+
+    unsafe fn getParamStringByValue(
+        &self,
+        _id: ParamID,
+        _value_normalized: ParamValue,
+        _string: *mut String128,
+    ) -> tresult {
+        kInvalidArgument
+    }
+
+    unsafe fn getParamValueByString(
+        &self,
+        _id: ParamID,
+        _string: *mut TChar,
+        _value_normalized: *mut ParamValue,
+    ) -> tresult {
+        kInvalidArgument
+    }
+
+    unsafe fn normalizedParamToPlain(&self, _id: ParamID, value_normalized: ParamValue) -> ParamValue {
+        value_normalized
+    }
+
+    unsafe fn plainParamToNormalized(&self, _id: ParamID, plain_value: ParamValue) -> ParamValue {
+        plain_value
+    }
+
+    unsafe fn getParamNormalized(&self, _id: ParamID) -> ParamValue {
+        0.0
+    }
+
+    unsafe fn setParamNormalized(&self, _id: ParamID, _value: ParamValue) -> tresult {
+        kInvalidArgument
+    }
+
+    unsafe fn setComponentHandler(&self, _handler: *mut IComponentHandler) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn createView(&self, _name: FIDString) -> *mut IPlugView {
+        ptr::null_mut()
+    }
 }
 
 struct Hawk2uiVst3Factory;
@@ -2391,16 +2655,31 @@ impl IPluginFactoryTrait for Hawk2uiVst3Factory {
 
     unsafe fn createInstance(
         &self,
-        _cid: FIDString,
-        _iid: FIDString,
+        cid: FIDString,
+        iid: FIDString,
         obj: *mut *mut c_void,
     ) -> tresult {
-        if !obj.is_null() {
-            unsafe {
-                *obj = std::ptr::null_mut();
-            }
+        if obj.is_null() || cid.is_null() || iid.is_null() {
+            return kInvalidArgument;
         }
-        kInvalidArgument
+        unsafe {
+            *obj = ptr::null_mut();
+        }
+
+        let requested_class = unsafe { *(cid as *const TUID) };
+        let instance = if requested_class == class_id_tuid(PROCESSOR_CLASS_ID_HEX) {
+            ComWrapper::new(Hawk2uiVst3Processor).to_com_ptr::<FUnknown>()
+        } else if requested_class == class_id_tuid(CONTROLLER_CLASS_ID_HEX) {
+            ComWrapper::new(Hawk2uiVst3Controller).to_com_ptr::<FUnknown>()
+        } else {
+            None
+        };
+
+        let Some(instance) = instance else {
+            return kInvalidArgument;
+        };
+        let instance_ptr = instance.as_ptr();
+        unsafe { ((*(*instance_ptr).vtbl).queryInterface)(instance_ptr, iid.cast(), obj) }
     }
 }
 
@@ -2413,6 +2692,21 @@ fn copy_cstring(source: &str, target: &mut [c_char]) {
         target[index] = *byte as c_char;
     }
     target[write_len] = 0;
+}
+
+fn copy_wstring(source: &str, target: &mut [TChar]) {
+    let mut written = 0;
+    for (index, code_unit) in source
+        .encode_utf16()
+        .take(target.len().saturating_sub(1))
+        .enumerate()
+    {
+        target[index] = code_unit as TChar;
+        written = index + 1;
+    }
+    if let Some(slot) = target.get_mut(written) {
+        *slot = 0;
+    }
 }
 
 fn class_id_tuid(hex: &str) -> TUID {

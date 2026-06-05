@@ -819,6 +819,78 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
 }
 
 #[test]
+fn plugin_adapters_generate_loadable_vst3_cdylib_factory() {
+    let metadata = FormatMetadata::new("com.hawk2ui.vst3-loadable", "VST3 Loadable", "Hawk2UI")
+        .version("1.0.0")
+        .feature("audio-effect");
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-vst3-cdylib-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Vst3Loadable"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Vst3);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+    let vst3_output = outputs
+        .iter()
+        .find(|output| output.format == PackageFormat::Vst3)
+        .expect("VST3 output exists");
+    let package_root = Path::new(&vst3_output.output_path);
+    let generated_root = package_root.join("Contents/Resources/generated-vst3");
+    let generated_manifest = generated_root.join("Cargo.toml");
+    assert!(generated_manifest.is_file());
+
+    let target_dir = output_root.join("target");
+    let status = std::process::Command::new("cargo")
+        .arg("build")
+        .arg("--release")
+        .arg("--manifest-path")
+        .arg(&generated_manifest)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .status()
+        .expect("cargo build should launch for generated VST3 scaffold");
+    assert!(status.success(), "generated VST3 scaffold should compile");
+
+    let library_path = target_dir
+        .join("release")
+        .join(format!(
+            "{}{}",
+            std::env::consts::DLL_PREFIX,
+            "hawk2ui_generated_vst3"
+        ))
+        .with_extension(std::env::consts::DLL_EXTENSION);
+    assert!(library_path.is_file());
+
+    let host_check_root = output_root.join("vst3-host-check");
+    write_generated_vst3_host_check(&host_check_root, &library_path);
+    let host_target_dir = output_root.join("vst3-host-check-target");
+    let status = std::process::Command::new("cargo")
+        .arg("run")
+        .arg("--release")
+        .arg("--manifest-path")
+        .arg(host_check_root.join("Cargo.toml"))
+        .arg("--")
+        .arg(&library_path)
+        .env("CARGO_TARGET_DIR", &host_target_dir)
+        .status()
+        .expect("generated VST3 host check should launch");
+    assert!(
+        status.success(),
+        "generated VST3 host check should load factory and instantiate classes"
+    );
+}
+
+#[test]
 fn plugin_adapters_preserve_choice_defaults_and_stepped_flags_in_clap_scaffold() {
     let metadata = FormatMetadata::new("com.hawk2ui.choice", "Choice", "Hawk2UI").version("1.0.0");
     let bypass = ParameterRecord::boolean("bypass", "Bypass", true)
@@ -911,6 +983,126 @@ publish = false
 [dependencies]
 clap-sys = "0.5.0"
 libloading = "0.8.9"
+"#
+}
+
+fn write_generated_vst3_host_check(root: &Path, library_path: &Path) {
+    assert!(
+        library_path.is_file(),
+        "host checker requires an already-built VST3 library"
+    );
+    std::fs::create_dir_all(root.join("src")).expect("VST3 host checker src directory writes");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        generated_vst3_host_check_manifest(),
+    )
+    .expect("VST3 host checker manifest writes");
+    std::fs::write(
+        root.join("src").join("main.rs"),
+        generated_vst3_host_check_source(),
+    )
+    .expect("VST3 host checker source writes");
+}
+
+fn generated_vst3_host_check_manifest() -> &'static str {
+    r#"[package]
+name = "hawk2ui-vst3-host-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+libloading = "0.8"
+vst3 = "0.3.0"
+"#
+}
+
+fn generated_vst3_host_check_source() -> &'static str {
+    r#"use std::{
+    env,
+    ffi::{c_char, c_void},
+    ptr,
+};
+
+use libloading::{Library, Symbol};
+use vst3::Steinberg::Vst::*;
+use vst3::Steinberg::*;
+
+type GetPluginFactory = unsafe extern "system" fn() -> *mut IPluginFactory;
+
+#[cfg(target_os = "linux")]
+type ModuleEntry = unsafe extern "system" fn(*mut c_void) -> bool;
+
+fn main() {
+    let library_path = env::args().nth(1).expect("library path argument is required");
+    unsafe {
+        let library = Library::new(library_path).expect("VST3 library loads");
+
+        #[cfg(target_os = "linux")]
+        {
+            let module_entry: Symbol<ModuleEntry> =
+                library.get(b"ModuleEntry").expect("ModuleEntry exports");
+            assert!(module_entry(ptr::null_mut()));
+        }
+
+        let get_plugin_factory: Symbol<GetPluginFactory> = library
+            .get(b"GetPluginFactory")
+            .expect("GetPluginFactory exports");
+        let factory = get_plugin_factory();
+        assert!(!factory.is_null());
+
+        let factory_vtbl = &*(*factory).vtbl;
+        assert_eq!((factory_vtbl.countClasses)(factory), 2);
+
+        let mut processor = std::mem::MaybeUninit::<PClassInfo>::zeroed().assume_init();
+        assert_eq!(
+            (factory_vtbl.getClassInfo)(factory, 0, &mut processor),
+            kResultOk
+        );
+        assert_eq!(c_chars_to_string(&processor.category), "Audio Module Class");
+        assert_eq!(c_chars_to_string(&processor.name), "VST3 Loadable");
+        instantiate_class(factory, processor.cid);
+
+        let mut controller = std::mem::MaybeUninit::<PClassInfo>::zeroed().assume_init();
+        assert_eq!(
+            (factory_vtbl.getClassInfo)(factory, 1, &mut controller),
+            kResultOk
+        );
+        assert_eq!(
+            c_chars_to_string(&controller.category),
+            "Component Controller Class"
+        );
+        assert_eq!(c_chars_to_string(&controller.name), "VST3 Loadable");
+        instantiate_class(factory, controller.cid);
+
+        let factory_unknown = factory.cast::<FUnknown>();
+        ((*(*factory_unknown).vtbl).release)(factory_unknown);
+    }
+}
+
+unsafe fn instantiate_class(factory: *mut IPluginFactory, cid: TUID) {
+    let mut object = ptr::null_mut::<c_void>();
+    let result = ((*(*factory).vtbl).createInstance)(
+        factory,
+        cid.as_ptr(),
+        FUnknown_iid.as_ptr(),
+        &mut object,
+    );
+    assert_eq!(result, kResultOk);
+    assert!(!object.is_null());
+    let unknown = object.cast::<FUnknown>();
+    ((*(*unknown).vtbl).release)(unknown);
+}
+
+fn c_chars_to_string<const N: usize>(source: &[c_char; N]) -> String {
+    let bytes: Vec<u8> = source
+        .iter()
+        .copied()
+        .take_while(|byte| *byte != 0)
+        .map(|byte| byte as u8)
+        .collect();
+    String::from_utf8(bytes).expect("VST3 class strings are UTF-8")
+}
 "#
 }
 

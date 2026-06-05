@@ -126,7 +126,7 @@ than production-directed.
 | Effects pipeline | Remediated | Compiled styles now lower gradients, border radius, shadows, glow, opacity, and transforms into typed runtime visuals, deterministic paint commands, and Skia pixels via the production runtime-scene replay path. |
 | Performance measurement | Remediated | Performance evidence now distinguishes deterministic release gates from advisory wall-clock timings; release gates use byte/count measurements for package size, memory proxy, render/runtime hot-path counts, and realtime allocation attempts. |
 | Plugin parameter fidelity | Remediated | `Choice` and `Bool` parameter defaults, pinned numeric ids, enum max ranges, host bridge/package metadata, and typed state envelopes now preserve parameter semantics across plugin metadata, host bridges, state, and package outputs. |
-| VST3 implementation | Open blocker | Replace scaffold/null-factory behavior with a real VST3 factory and COM-compatible class exposure. |
+| VST3 implementation | Remediated | Generated VST3 scaffolds now build against the local safe binding crate, export lifecycle entry points and `GetPluginFactory`, enumerate processor/controller classes, and instantiate COM-compatible processor/controller objects through `createInstance`. |
 | Font pipeline depth | Open blocker | Complete deeper app-font/glyph-cache behavior beyond the current text-shaping and Skia font-size fixes. |
 | Host surface abstraction | Open blocker | Unify real host adapters behind a production `HostSurface`/frame-presentation boundary or explicitly isolate test-only surfaces. |
 | Platform backends | Open blocker | Implement concrete filesystem, network, clipboard, and secret-store backends behind the platform policy layer. |
