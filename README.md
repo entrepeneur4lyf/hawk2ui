@@ -129,7 +129,7 @@ than production-directed.
 | VST3 implementation | Remediated | Generated VST3 scaffolds now build against the local safe binding crate, export lifecycle entry points and `GetPluginFactory`, enumerate processor/controller classes, and instantiate COM-compatible processor/controller objects through `createInstance`. |
 | Font pipeline depth | Remediated | `hawk2ui-text` now loads app font bytes into the Parley font context, resolves fallbacks, shapes through Parley, and provides a generation-aware glyph/layout cache with hit/miss stats and explicit invalidation. |
 | Host surface abstraction | Remediated | `HostSurface` is now dyn-compatible, desktop and plugin adapters route through the common surface/frame-presentation boundary, and lifecycle tests prove repaint, resize, window commands, frame presentation, and teardown work through `&mut dyn HostSurface`. |
-| Platform backends | Open blocker | Implement concrete filesystem, network, clipboard, and secret-store backends behind the platform policy layer. |
+| Platform backends | Remediated | `hawk2ui-platform` now provides executable backends for scoped filesystem reads/writes, policy-approved HTTP(S) GET requests through bounded `ureq`, text clipboard storage, and declared secret-store lookup/redaction, with a deterministic static network backend for offline verification. |
 | Security evidence vocabulary | Needs decision | Either keep `hawk2ui-security` as evidence records backed by real validators, or reduce it to secret-redaction primitives until production consumers exist. |
 
 Recently closed hardening items include CLAP multi-instance state isolation,

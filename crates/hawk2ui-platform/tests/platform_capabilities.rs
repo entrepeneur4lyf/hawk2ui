@@ -3,9 +3,10 @@ use hawk2ui_platform::{
     CapabilityTable, ClipboardDataType, ClipboardManifest, ClipboardPolicy, DatabaseMigration,
     DatabasePolicy, DialogKind, DialogManifest, DialogPolicy, FilesystemGrant, FilesystemPolicy,
     FilesystemScope, LocalizationManifest, LocalizationPolicy, McpManifest, McpPolicy,
-    NetworkManifest, NetworkPolicy, NotificationManifest, NotificationPolicy, PlatformContext,
-    PlatformDiagnostic, PlatformOperation, PlatformSecretManifest, PlatformSecretPolicy,
-    RuntimeAvailability, ShortcutManifest, ShortcutPolicy,
+    NetworkManifest, NetworkPolicy, NetworkResponsePayload, NotificationManifest,
+    NotificationPolicy, PlatformBackends, PlatformContext, PlatformDiagnostic, PlatformOperation,
+    PlatformSecretManifest, PlatformSecretPolicy, RuntimeAvailability, ShortcutManifest,
+    ShortcutPolicy, StaticNetworkBackend,
 };
 use std::{
     fs,
@@ -439,6 +440,104 @@ fn temp_platform_dir(label: &str) -> PathBuf {
 
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+#[test]
+fn platform_backends_execute_policy_checked_io_network_clipboard_and_secret_store() {
+    let root = temp_platform_dir("backend");
+    fs::write(root.join("config.txt"), b"cached-config").expect("test config file is written");
+
+    let mut backend = PlatformBackends::new(StaticNetworkBackend::new([(
+        "https://api.hawk2ui.dev/v1/config",
+        NetworkResponsePayload::text(200, "application/json", r#"{"ok":true}"#),
+    )]))
+    .with_secret("api-token", "super-secret-value");
+    let grant = FilesystemGrant::new(FilesystemScope::AppData, path_string(&root));
+
+    let read = backend
+        .read_file(&grant, "config.txt")
+        .expect("scoped filesystem read is executed");
+    let write = backend
+        .write_file(&grant, "cache/output.txt", b"render-cache")
+        .expect("scoped filesystem write is executed");
+
+    assert_eq!(read.bytes, b"cached-config");
+    assert_eq!(write.bytes_written, b"render-cache".len());
+    assert_eq!(
+        fs::read(root.join("cache/output.txt")).expect("written file is readable"),
+        b"render-cache"
+    );
+
+    let capabilities = CapabilityTable::new([
+        CapabilityRecord::new("network.fetch")
+            .allow(PlatformOperation::NetworkRequest)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("clipboard.text")
+            .allow(PlatformOperation::ClipboardRead)
+            .allow(PlatformOperation::ClipboardWrite)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(true),
+    ]);
+    let network_manifest = NetworkManifest::new("network.fetch", ["api.hawk2ui.dev"]);
+    let response = backend
+        .network_get(
+            &capabilities,
+            &network_manifest,
+            "https://api.hawk2ui.dev/v1/config",
+            PlatformContext::Desktop,
+        )
+        .expect("declared network request is executed");
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, br#"{"ok":true}"#);
+    assert_eq!(
+        backend.network().requested_urls(),
+        &["https://api.hawk2ui.dev/v1/config".to_owned()]
+    );
+
+    let denied_network = backend
+        .network_get(
+            &capabilities,
+            &network_manifest,
+            "https://evil.example/v1/config",
+            PlatformContext::Desktop,
+        )
+        .expect_err("denied network request must not reach the transport");
+
+    assert_eq!(denied_network.diagnostic.rule, "network.host.denied");
+    assert_eq!(
+        backend.network().requested_urls(),
+        &["https://api.hawk2ui.dev/v1/config".to_owned()]
+    );
+
+    let clipboard_manifest =
+        ClipboardManifest::new("clipboard.text", [ClipboardDataType::Text]).plugin(true);
+    backend
+        .write_clipboard(
+            &capabilities,
+            &clipboard_manifest,
+            PlatformContext::Desktop,
+            "copied text",
+        )
+        .expect("clipboard write is policy checked and stored");
+    let clipboard = backend
+        .read_clipboard(&capabilities, &clipboard_manifest, PlatformContext::Desktop)
+        .expect("clipboard read is policy checked and returned");
+
+    assert_eq!(clipboard.text.as_deref(), Some("copied text"));
+
+    let secret_manifest = PlatformSecretManifest::new(["api-token"]);
+    let handle = backend
+        .read_secret(&secret_manifest, "api-token")
+        .expect("declared secret is loaded from the secret store");
+
+    assert_eq!(handle.redacted(), "[REDACTED:api-token]");
+    assert!(!format!("{handle:?}").contains("super-secret-value"));
+    assert!(handle.is_absent_from("no raw secret here"));
+    assert!(!handle.is_absent_from("super-secret-value"));
 }
 
 #[test]

@@ -3,6 +3,7 @@
 
 pub mod ai;
 pub mod audio;
+pub mod backend;
 pub mod capability;
 pub mod clipboard;
 pub mod database;
@@ -17,6 +18,11 @@ pub mod shortcuts;
 
 pub use ai::{AiDenied, AiManifest, AiPolicy, AiProviderRequest};
 pub use audio::{AudioDenied, AudioManifest, AudioPlaybackRequest, AudioPolicy};
+pub use backend::{
+    ClipboardReadResult, FilesystemReadResult, FilesystemWriteResult, NetworkBackend,
+    NetworkResponse, NetworkResponsePayload, PlatformBackendError, PlatformBackends,
+    StaticNetworkBackend, UreqNetworkBackend,
+};
 pub use capability::{
     CapabilityDenied, CapabilityRecord, CapabilitySchema, CapabilityTable, PlatformContext,
     PlatformDiagnostic, PlatformOperation, RuntimeAvailability,
