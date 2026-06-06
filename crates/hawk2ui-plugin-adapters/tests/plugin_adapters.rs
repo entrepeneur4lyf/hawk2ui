@@ -833,7 +833,14 @@ fn plugin_adapters_generate_loadable_vst3_cdylib_factory() {
     let request = PackageRequest::new(
         metadata,
         BundleOutput::new(output_root.to_string_lossy(), "Vst3Loadable"),
-        ParameterModel::new([]),
+        ParameterModel::new([ParameterRecord::numeric(
+            "gain",
+            "Gain",
+            "dB",
+            ParameterRange::new(-60.0, 12.0, -24.0),
+        )
+        .flags(ParameterFlags::automatable())
+        .param_id(7)]),
     )
     .with_format(PackageFormat::Vst3);
 
@@ -955,6 +962,69 @@ fn plugin_adapters_preserve_choice_defaults_and_stepped_flags_in_clap_scaffold()
     );
 }
 
+#[test]
+fn plugin_adapters_preserve_parameter_metadata_in_vst3_scaffold() {
+    let metadata =
+        FormatMetadata::new("com.hawk2ui.vst3-params", "Vst3Params", "Hawk2UI").version("1.0.0");
+    let bypass = ParameterRecord::boolean("bypass", "Bypass", true)
+        .flags(ParameterFlags::automatable())
+        .param_id(7);
+    let mode = ParameterRecord::enumerated(
+        "mode",
+        "Mode",
+        2,
+        [
+            EnumVariant::new("clean", "Clean"),
+            EnumVariant::new("drive", "Drive"),
+            EnumVariant::new("wide", "Wide"),
+        ],
+    )
+    .flags(ParameterFlags::automatable())
+    .param_id(42);
+    let parameters = ParameterModel::new([bypass, mode]);
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-vst3-params-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Vst3Params"),
+        parameters,
+    )
+    .with_format(PackageFormat::Vst3);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+    let vst3_output = outputs
+        .iter()
+        .find(|output| output.format == PackageFormat::Vst3)
+        .expect("VST3 output exists");
+    let generated_lib =
+        Path::new(&vst3_output.output_path).join("Contents/Resources/generated-vst3/src/lib.rs");
+    let source = std::fs::read_to_string(generated_lib).expect("VST3 scaffold source reads");
+
+    assert!(source.contains("struct GeneratedVst3Parameter"));
+    assert!(source.contains("unsafe fn getParameterCount(&self) -> i32 {\n        2\n    }"));
+    assert!(
+        source.contains(
+            "GeneratedVst3Parameter { id: 7, title: \"Bypass\", short_title: \"Bypass\", units: \"\", min_value: 0.0, max_value: 1.0, default_plain_value: 1.0, default_normalized_value: 1.0, step_count: 1, flags: 1 }"
+        ),
+        "bool parameter should keep pinned ID, true default, one step, and automation flag"
+    );
+    assert!(
+        source.contains(
+            "GeneratedVst3Parameter { id: 42, title: \"Mode\", short_title: \"Mode\", units: \"\", min_value: 0.0, max_value: 2.0, default_plain_value: 2.0, default_normalized_value: 1.0, step_count: 2, flags: 9 }"
+        ),
+        "choice parameter should keep pinned ID, max variant index, normalized default, steps, and list flag"
+    );
+    assert!(source.contains("static PARAMETER_VALUES: [AtomicU64; 2] = ["));
+}
+
 fn write_generated_clap_host_check(root: &Path, library_path: &Path) {
     assert!(
         library_path.is_file(),
@@ -1017,6 +1087,7 @@ vst3 = "0.3.0"
 "#
 }
 
+#[allow(clippy::too_many_lines)]
 fn generated_vst3_host_check_source() -> &'static str {
     r#"use std::{
     env,
@@ -1073,7 +1144,7 @@ fn main() {
             "Component Controller Class"
         );
         assert_eq!(c_chars_to_string(&controller.name), "VST3 Loadable");
-        instantiate_class(factory, controller.cid);
+        instantiate_controller_with_parameters(factory, controller.cid);
 
         let factory_unknown = factory.cast::<FUnknown>();
         ((*(*factory_unknown).vtbl).release)(factory_unknown);
@@ -1094,6 +1165,51 @@ unsafe fn instantiate_class(factory: *mut IPluginFactory, cid: TUID) {
     ((*(*unknown).vtbl).release)(unknown);
 }
 
+unsafe fn instantiate_controller_with_parameters(factory: *mut IPluginFactory, cid: TUID) {
+    let mut object = ptr::null_mut::<c_void>();
+    let result = ((*(*factory).vtbl).createInstance)(
+        factory,
+        cid.as_ptr(),
+        IEditController_iid.as_ptr(),
+        &mut object,
+    );
+    assert_eq!(result, kResultOk);
+    assert!(!object.is_null());
+    let controller = object.cast::<IEditController>();
+    let vtbl = &*(*controller).vtbl;
+    assert_eq!((vtbl.getParameterCount)(controller), 1);
+
+    let mut info = std::mem::MaybeUninit::<ParameterInfo>::zeroed().assume_init();
+    assert_eq!((vtbl.getParameterInfo)(controller, 0, &mut info), kResultOk);
+    assert_eq!(info.id, 7);
+    assert_eq!(wstring_to_string(&info.title), "Gain");
+    assert_eq!(wstring_to_string(&info.units), "dB");
+    assert!((info.defaultNormalizedValue - 0.5).abs() < f64::EPSILON);
+    assert_eq!(info.flags, ParameterInfo_::ParameterFlags_::kCanAutomate as i32);
+
+    assert!(((vtbl.normalizedParamToPlain)(controller, 7, 0.5) + 24.0).abs() < f64::EPSILON);
+    assert!(((vtbl.plainParamToNormalized)(controller, 7, -24.0) - 0.5).abs() < f64::EPSILON);
+    assert_eq!((vtbl.setParamNormalized)(controller, 7, 0.75), kResultOk);
+    assert!(((vtbl.getParamNormalized)(controller, 7) - 0.75).abs() < f64::EPSILON);
+
+    let mut display = [0_u16; 128];
+    assert_eq!(
+        (vtbl.getParamStringByValue)(controller, 7, 0.5, &mut display),
+        kResultOk
+    );
+    assert_eq!(wstring_to_string(&display), "-24");
+    let mut parsed = 0.0;
+    let parsed_input = utf16_with_nul("-24");
+    assert_eq!(
+        (vtbl.getParamValueByString)(controller, 7, parsed_input.as_ptr().cast_mut(), &mut parsed),
+        kResultOk
+    );
+    assert!((parsed - 0.5).abs() < f64::EPSILON);
+
+    let unknown = object.cast::<FUnknown>();
+    ((*(*unknown).vtbl).release)(unknown);
+}
+
 fn c_chars_to_string<const N: usize>(source: &[c_char; N]) -> String {
     let bytes: Vec<u8> = source
         .iter()
@@ -1102,6 +1218,15 @@ fn c_chars_to_string<const N: usize>(source: &[c_char; N]) -> String {
         .map(|byte| byte as u8)
         .collect();
     String::from_utf8(bytes).expect("VST3 class strings are UTF-8")
+}
+
+fn wstring_to_string<const N: usize>(source: &[u16; N]) -> String {
+    let units: Vec<u16> = source.iter().copied().take_while(|unit| *unit != 0).collect();
+    String::from_utf16(&units).expect("VST3 strings are UTF-16")
+}
+
+fn utf16_with_nul(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 "#
 }

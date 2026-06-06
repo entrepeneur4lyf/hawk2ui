@@ -2232,6 +2232,9 @@ struct Vst3CdylibScaffold {
     library_file_stem: String,
     processor_class_id: String,
     controller_class_id: String,
+    parameter_source: String,
+    parameter_value_source: String,
+    parameter_count: usize,
 }
 
 impl Vst3CdylibScaffold {
@@ -2242,7 +2245,22 @@ impl Vst3CdylibScaffold {
             library_file_stem: "hawk2ui_generated_vst3".into(),
             processor_class_id: vst3_class_id_hex(&metadata.id, "processor"),
             controller_class_id: vst3_class_id_hex(&metadata.id, "controller"),
+            parameter_source: "&[]".into(),
+            parameter_value_source: "[]".into(),
+            parameter_count: 0,
         }
+    }
+
+    fn with_parameter_sources(
+        mut self,
+        parameter_source: impl Into<String>,
+        parameter_value_source: impl Into<String>,
+        parameter_count: usize,
+    ) -> Self {
+        self.parameter_source = parameter_source.into();
+        self.parameter_value_source = parameter_value_source.into();
+        self.parameter_count = parameter_count;
+        self
     }
 
     fn write_to(
@@ -2294,6 +2312,9 @@ impl Vst3CdylibScaffold {
             )
             .replace("__PROCESSOR_CLASS_ID__", &self.processor_class_id)
             .replace("__CONTROLLER_CLASS_ID__", &self.controller_class_id)
+            .replace("__PARAMETERS__", &self.parameter_source)
+            .replace("__PARAMETER_VALUES__", &self.parameter_value_source)
+            .replace("__PARAMETER_COUNT__", &self.parameter_count.to_string())
     }
 }
 
@@ -2305,6 +2326,7 @@ const VST3_CDYLIB_SOURCE_TEMPLATE: &str = r#"//! Generated Hawk2UI VST3 entry li
 use std::{
     ffi::{c_char, c_void},
     ptr,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use hawk2ui_vst3::{
@@ -2523,6 +2545,22 @@ impl IProcessContextRequirementsTrait for Hawk2uiVst3Processor {
     }
 }
 
+struct GeneratedVst3Parameter {
+    id: ParamID,
+    title: &'static str,
+    short_title: &'static str,
+    units: &'static str,
+    min_value: ParamValue,
+    max_value: ParamValue,
+    default_plain_value: ParamValue,
+    default_normalized_value: ParamValue,
+    step_count: i32,
+    flags: i32,
+}
+
+static PARAMETERS: &[GeneratedVst3Parameter] = __PARAMETERS__;
+static PARAMETER_VALUES: [AtomicU64; __PARAMETER_COUNT__] = __PARAMETER_VALUES__;
+
 struct Hawk2uiVst3Controller;
 
 impl Class for Hawk2uiVst3Controller {
@@ -2553,45 +2591,89 @@ impl IEditControllerTrait for Hawk2uiVst3Controller {
     }
 
     unsafe fn getParameterCount(&self) -> i32 {
-        0
+        __PARAMETER_COUNT__
     }
 
-    unsafe fn getParameterInfo(&self, _param_index: i32, _info: *mut ParameterInfo) -> tresult {
-        kInvalidArgument
+    unsafe fn getParameterInfo(&self, param_index: i32, info: *mut ParameterInfo) -> tresult {
+        if info.is_null() || param_index < 0 {
+            return kInvalidArgument;
+        }
+        let Some(parameter) = PARAMETERS.get(param_index as usize) else {
+            return kInvalidArgument;
+        };
+        let info = unsafe { &mut *info };
+        info.id = parameter.id;
+        copy_wstring(parameter.title, &mut info.title);
+        copy_wstring(parameter.short_title, &mut info.shortTitle);
+        copy_wstring(parameter.units, &mut info.units);
+        info.stepCount = parameter.step_count;
+        info.defaultNormalizedValue = parameter.default_normalized_value;
+        info.unitId = 0;
+        info.flags = parameter.flags;
+        kResultOk
     }
 
     unsafe fn getParamStringByValue(
         &self,
-        _id: ParamID,
-        _value_normalized: ParamValue,
-        _string: *mut String128,
+        id: ParamID,
+        value_normalized: ParamValue,
+        string: *mut String128,
     ) -> tresult {
-        kInvalidArgument
+        if string.is_null() {
+            return kInvalidArgument;
+        }
+        let Some(parameter) = find_parameter(id) else {
+            return kInvalidArgument;
+        };
+        let display = parameter_plain_from_normalized(parameter, value_normalized).to_string();
+        copy_wstring(&display, unsafe { &mut *string });
+        kResultOk
     }
 
     unsafe fn getParamValueByString(
         &self,
-        _id: ParamID,
-        _string: *mut TChar,
-        _value_normalized: *mut ParamValue,
+        id: ParamID,
+        string: *mut TChar,
+        value_normalized: *mut ParamValue,
     ) -> tresult {
-        kInvalidArgument
+        if value_normalized.is_null() {
+            return kInvalidArgument;
+        }
+        let Some(parameter) = find_parameter(id) else {
+            return kInvalidArgument;
+        };
+        let Some(value) = read_wstring(string).and_then(|value| value.trim().parse::<f64>().ok())
+        else {
+            return kInvalidArgument;
+        };
+        unsafe {
+            *value_normalized = parameter_normalized_from_plain(parameter, value);
+        }
+        kResultOk
     }
 
-    unsafe fn normalizedParamToPlain(&self, _id: ParamID, value_normalized: ParamValue) -> ParamValue {
-        value_normalized
+    unsafe fn normalizedParamToPlain(&self, id: ParamID, value_normalized: ParamValue) -> ParamValue {
+        find_parameter(id).map_or(value_normalized, |parameter| {
+            parameter_plain_from_normalized(parameter, value_normalized)
+        })
     }
 
-    unsafe fn plainParamToNormalized(&self, _id: ParamID, plain_value: ParamValue) -> ParamValue {
-        plain_value
+    unsafe fn plainParamToNormalized(&self, id: ParamID, plain_value: ParamValue) -> ParamValue {
+        find_parameter(id).map_or(plain_value, |parameter| {
+            parameter_normalized_from_plain(parameter, plain_value)
+        })
     }
 
-    unsafe fn getParamNormalized(&self, _id: ParamID) -> ParamValue {
-        0.0
+    unsafe fn getParamNormalized(&self, id: ParamID) -> ParamValue {
+        find_parameter_index(id).map_or(0.0, current_parameter_value)
     }
 
-    unsafe fn setParamNormalized(&self, _id: ParamID, _value: ParamValue) -> tresult {
-        kInvalidArgument
+    unsafe fn setParamNormalized(&self, id: ParamID, value: ParamValue) -> tresult {
+        if store_parameter_value(id, value) {
+            kResultOk
+        } else {
+            kInvalidArgument
+        }
     }
 
     unsafe fn setComponentHandler(&self, _handler: *mut IComponentHandler) -> tresult {
@@ -2707,6 +2789,67 @@ fn copy_wstring(source: &str, target: &mut [TChar]) {
     if let Some(slot) = target.get_mut(written) {
         *slot = 0;
     }
+}
+
+fn read_wstring(source: *const TChar) -> Option<String> {
+    if source.is_null() {
+        return None;
+    }
+    let mut units = Vec::new();
+    for offset in 0..128 {
+        let unit = unsafe { *source.add(offset) };
+        if unit == 0 {
+            break;
+        }
+        units.push(unit as u16);
+    }
+    String::from_utf16(&units).ok()
+}
+
+fn find_parameter(param_id: ParamID) -> Option<&'static GeneratedVst3Parameter> {
+    find_parameter_index(param_id).map(|index| &PARAMETERS[index])
+}
+
+fn find_parameter_index(param_id: ParamID) -> Option<usize> {
+    PARAMETERS
+        .iter()
+        .position(|parameter| parameter.id == param_id)
+}
+
+fn parameter_plain_from_normalized(
+    parameter: &GeneratedVst3Parameter,
+    value_normalized: ParamValue,
+) -> ParamValue {
+    if !value_normalized.is_finite() || parameter.max_value <= parameter.min_value {
+        return parameter.default_plain_value;
+    }
+    let normalized = value_normalized.clamp(0.0, 1.0);
+    parameter.min_value + (parameter.max_value - parameter.min_value) * normalized
+}
+
+fn parameter_normalized_from_plain(
+    parameter: &GeneratedVst3Parameter,
+    plain_value: ParamValue,
+) -> ParamValue {
+    if !plain_value.is_finite() || parameter.max_value <= parameter.min_value {
+        return parameter.default_normalized_value;
+    }
+    ((plain_value - parameter.min_value) / (parameter.max_value - parameter.min_value)).clamp(0.0, 1.0)
+}
+
+fn current_parameter_value(index: usize) -> ParamValue {
+    f64::from_bits(PARAMETER_VALUES[index].load(Ordering::Acquire))
+}
+
+fn store_parameter_value(param_id: ParamID, value_normalized: ParamValue) -> bool {
+    if !value_normalized.is_finite() {
+        return false;
+    }
+    let Some(index) = find_parameter_index(param_id) else {
+        return false;
+    };
+    PARAMETER_VALUES[index].store(value_normalized.clamp(0.0, 1.0).to_bits(), Ordering::Release);
+    true
 }
 
 fn class_id_tuid(hex: &str) -> TUID {
@@ -2836,6 +2979,12 @@ pub struct PackageTargetPlan {
     #[serde(skip)]
     #[schemars(skip)]
     clap_parameter_value_source: String,
+    #[serde(skip)]
+    #[schemars(skip)]
+    vst3_parameter_source: String,
+    #[serde(skip)]
+    #[schemars(skip)]
+    vst3_parameter_value_source: String,
 }
 
 impl PackageTargetPlan {
@@ -3224,6 +3373,11 @@ impl PackageTargetPlan {
         resources_path: &Path,
     ) -> Result<Vst3CdylibScaffoldOutput, PackageMaterializationError> {
         Vst3CdylibScaffold::from_metadata(&self.metadata)
+            .with_parameter_sources(
+                self.vst3_parameter_source.clone(),
+                self.vst3_parameter_value_source.clone(),
+                self.parameter_count,
+            )
             .write_to(resources_path.join("generated-vst3"))
     }
 }
@@ -3408,6 +3562,8 @@ impl PackageAdapterSet {
                 editor: request.editor.clone().unwrap_or_else(default_plugin_editor),
                 clap_parameter_source: clap_parameter_source(&request.parameters),
                 clap_parameter_value_source: clap_parameter_value_source(&request.parameters),
+                vst3_parameter_source: vst3_parameter_source(&request.parameters),
+                vst3_parameter_value_source: vst3_parameter_value_source(&request.parameters),
             })
             .collect();
         Ok(PackagePlan { targets })
@@ -3746,6 +3902,53 @@ fn clap_parameter_value_source(parameters: &ParameterModel) -> String {
     source
 }
 
+fn vst3_parameter_source(parameters: &ParameterModel) -> String {
+    if parameters.parameters.is_empty() {
+        return "&[]".into();
+    }
+
+    let mut source = String::from("&[\n");
+    for (id, parameter) in parameters
+        .resolved_param_ids()
+        .into_iter()
+        .zip(parameters.parameters.iter())
+    {
+        let _ = writeln!(
+            source,
+            "    GeneratedVst3Parameter {{ id: {}, title: {}, short_title: {}, units: {}, min_value: {}, max_value: {}, default_plain_value: {}, default_normalized_value: {}, step_count: {}, flags: {} }},",
+            id,
+            quoted_metadata_string(&parameter.display_name),
+            quoted_metadata_string(&parameter.display_name),
+            quoted_metadata_string(&parameter.unit),
+            rust_f64_literal(parameter_min_value(parameter)),
+            rust_f64_literal(parameter_max_value(parameter)),
+            rust_f64_literal(parameter_default_value(parameter)),
+            rust_f64_literal(parameter_default_normalized_value(parameter)),
+            vst3_parameter_step_count(parameter),
+            vst3_parameter_flags(parameter),
+        );
+    }
+    source.push(']');
+    source
+}
+
+fn vst3_parameter_value_source(parameters: &ParameterModel) -> String {
+    if parameters.parameters.is_empty() {
+        return "[]".into();
+    }
+
+    let mut source = String::from("[\n");
+    for parameter in &parameters.parameters {
+        let _ = writeln!(
+            source,
+            "    AtomicU64::new({}),",
+            parameter_default_normalized_value(parameter).to_bits()
+        );
+    }
+    source.push(']');
+    source
+}
+
 fn parameter_min_value(parameter: &ParameterRecord) -> f64 {
     parameter.range.map_or(0.0, |range| range.min)
 }
@@ -3768,6 +3971,63 @@ fn parameter_default_value(parameter: &ParameterRecord) -> f64 {
         #[allow(clippy::cast_precision_loss)]
         ParameterValue::Int(value) => value as f64,
     }
+}
+
+fn parameter_default_normalized_value(parameter: &ParameterRecord) -> f64 {
+    let min = parameter_min_value(parameter);
+    let max = parameter_max_value(parameter);
+    let default = parameter_default_value(parameter);
+    if !min.is_finite() || !max.is_finite() || !default.is_finite() || max <= min {
+        return 0.0;
+    }
+    ((default - min) / (max - min)).clamp(0.0, 1.0)
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn vst3_parameter_step_count(parameter: &ParameterRecord) -> i32 {
+    if let Some(steps) = parameter.steps {
+        return i32::try_from(steps.saturating_sub(1)).unwrap_or(i32::MAX);
+    }
+    match parameter.default_value {
+        ParameterValue::Bool(_) => 1,
+        ParameterValue::Choice(_) => parameter
+            .variants
+            .len()
+            .checked_sub(1)
+            .and_then(|count| i32::try_from(count).ok())
+            .unwrap_or(0),
+        ParameterValue::Int(_) => {
+            let min = parameter_min_value(parameter);
+            let max = parameter_max_value(parameter);
+            if !min.is_finite() || !max.is_finite() || max <= min {
+                return 0;
+            }
+            let steps = (max - min).round();
+            if steps > f64::from(i32::MAX) {
+                i32::MAX
+            } else {
+                steps as i32
+            }
+        }
+        ParameterValue::Float(_) => 0,
+    }
+}
+
+fn vst3_parameter_flags(parameter: &ParameterRecord) -> i32 {
+    let mut flags = 0;
+    if parameter.flags.automatable {
+        flags |= 1;
+    }
+    if parameter.flags.readonly {
+        flags |= 2;
+    }
+    if matches!(parameter.default_value, ParameterValue::Choice(_)) {
+        flags |= 8;
+    }
+    if parameter.flags.hidden {
+        flags |= 16;
+    }
+    flags
 }
 
 fn clap_parameter_flags(parameter: &ParameterRecord) -> u32 {
