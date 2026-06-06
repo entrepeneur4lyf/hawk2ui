@@ -12,7 +12,8 @@ use std::{
 
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits, AssetRecord};
 use hawk2ui_authoring::{
-    FrameworkDynamicBinding, FrameworkNativeProgram, FrameworkNativeProgramWire,
+    FrameworkDynamicBinding, FrameworkDynamicValue, FrameworkInitialDynamicValue,
+    FrameworkInitialDynamicValueMode, FrameworkNativeProgram, FrameworkNativeProgramWire,
     NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
 };
 use hawk2ui_build::{
@@ -34,8 +35,8 @@ use hawk2ui_plugin_adapters::{
 use hawk2ui_runtime::{EntryNode, RuntimeSceneError, RuntimeViewTree};
 use hawk2ui_schema::schema_catalog_json;
 use hawk2ui_script::{
-    DynamicExpressionEnvironment, HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue,
-    TimerPolicy, entry_mount_bootstrap,
+    DynamicExpressionEnvironment, DynamicExpressionValue, HostCallPolicy, ScriptBackend,
+    ScriptModule, StructuredValue, TimerPolicy, entry_mount_bootstrap,
 };
 use hawk2ui_security_model::{PackageTrustRecord, PackageTrustValidator, VerificationReportStatus};
 
@@ -1806,12 +1807,13 @@ fn entry_framework_runtime_tree(
     let bridged = NativeRuntimeBridge::new()
         .bridge_artifact(&authoring)
         .map_err(|error| framework_artifact_diagnostic(framework, error.rule(), error.message()))?;
-    let bridged = apply_initial_framework_dynamic_bindings(framework, bridged)?;
+    let bridged = apply_initial_framework_dynamic_bindings(framework, &program, bridged)?;
     Ok(Some(bridged.runtime_tree().clone()))
 }
 
 fn apply_initial_framework_dynamic_bindings(
     framework: &CompiledFrameworkRecord,
+    program: &FrameworkNativeProgram,
     artifact: NativeRuntimeBridgeArtifact,
 ) -> Result<NativeRuntimeBridgeArtifact, Box<CliDiagnostic>> {
     let dependencies = artifact
@@ -1820,15 +1822,24 @@ fn apply_initial_framework_dynamic_bindings(
         .flat_map(FrameworkDynamicBinding::dependencies)
         .cloned()
         .collect::<BTreeSet<_>>();
-    if !dependencies.is_empty() {
+    let available_initial_values = program
+        .initial_dynamic_values()
+        .iter()
+        .map(|value| value.name().to_string())
+        .collect::<BTreeSet<_>>();
+    let missing_dependencies = dependencies
+        .difference(&available_initial_values)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing_dependencies.is_empty() {
         return Err(Box::new(
             CliDiagnostic::error(
                 "runtime.desktop.dynamic-environment-missing",
                 format!(
-                    "compiled {} framework artifact for {} declares dynamic dependencies [{}], but desktop initial framework state is not wired yet",
+                    "compiled {} framework artifact for {} declares dynamic dependencies [{}] without compiler-provided initial values",
                     source_framework_label(framework.framework),
                     framework.source_path,
-                    dependencies.into_iter().collect::<Vec<_>>().join(", ")
+                    missing_dependencies.join(", ")
                 ),
             )
             .file(framework.source_path.clone()),
@@ -1837,9 +1848,11 @@ fn apply_initial_framework_dynamic_bindings(
     if artifact.dynamic_bindings().is_empty() {
         return Ok(artifact);
     }
+    let environment =
+        framework_initial_dynamic_environment(program.initial_dynamic_values(), &dependencies);
     let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
     backend
-        .apply_dynamic_bindings(artifact, &DynamicExpressionEnvironment::new())
+        .apply_dynamic_bindings(artifact, &environment)
         .map_err(|error| {
             Box::new(
                 CliDiagnostic::error(
@@ -1855,6 +1868,45 @@ fn apply_initial_framework_dynamic_bindings(
                 .file(framework.source_path.clone()),
             )
         })
+}
+
+fn framework_initial_dynamic_environment(
+    values: &[FrameworkInitialDynamicValue],
+    required_dependencies: &BTreeSet<String>,
+) -> DynamicExpressionEnvironment {
+    let mut environment = DynamicExpressionEnvironment::new();
+    for value in values {
+        if !required_dependencies.contains(value.name()) {
+            continue;
+        }
+        let expression_value = framework_dynamic_value_to_script(value.value_ref());
+        environment = match value.mode() {
+            FrameworkInitialDynamicValueMode::Value => {
+                environment.with_value(value.name(), expression_value)
+            }
+            FrameworkInitialDynamicValueMode::Getter => {
+                environment.with_getter(value.name(), expression_value)
+            }
+        };
+    }
+    environment
+}
+
+fn framework_dynamic_value_to_script(value: &FrameworkDynamicValue) -> DynamicExpressionValue {
+    match value {
+        FrameworkDynamicValue::Null => DynamicExpressionValue::null(),
+        FrameworkDynamicValue::Bool(value) => DynamicExpressionValue::bool(*value),
+        FrameworkDynamicValue::Number(value) => DynamicExpressionValue::number(*value),
+        FrameworkDynamicValue::String(value) => DynamicExpressionValue::string(value),
+        FrameworkDynamicValue::Array(values) => {
+            DynamicExpressionValue::array(values.iter().map(framework_dynamic_value_to_script))
+        }
+        FrameworkDynamicValue::Object(values) => DynamicExpressionValue::object(
+            values
+                .iter()
+                .map(|(key, value)| (key.as_str(), framework_dynamic_value_to_script(value))),
+        ),
+    }
 }
 
 fn entry_script_mount_app_model(
@@ -2784,6 +2836,101 @@ name = "linux-wayland"
         assert!(!scene.draw_commands().iter().any(|command| matches!(
             command,
             hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Static Fallback"
+        )));
+    }
+
+    #[test]
+    fn desktop_runtime_config_applies_framework_initial_dynamic_environment() {
+        let manifest = HawkManifest::parse(
+            r#"[identity]
+id = "com.example.framework-initial-env"
+name = "Framework Initial Environment"
+version = "1.0.0"
+
+[source]
+entry = "src/App.tsx"
+framework = "react"
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+        )
+        .expect("manifest parses");
+        let compiler_artifact = r##"{
+  "schema_version": 1,
+  "root": { "id": "root", "kind": "view", "children": [
+    { "key": "panel", "node": { "id": "panel", "kind": "view", "props": [
+      { "name": "width", "value": { "type": "number", "value": 360 } },
+      { "name": "height", "value": { "type": "number", "value": 120 } },
+      { "name": "background", "value": { "type": "string", "value": "#101010" } }
+    ] } },
+    { "key": "title", "node": { "id": "title", "kind": "text", "props": [
+      { "name": "text", "value": { "type": "string", "value": "Static Fallback" } },
+      { "name": "font_size", "value": { "type": "number", "value": 16 } },
+      { "name": "color", "value": { "type": "string", "value": "#ffffff" } },
+      { "name": "width", "value": { "type": "number", "value": 360 } },
+      { "name": "height", "value": { "type": "number", "value": 48 } }
+    ] } }
+  ] },
+  "initial_dynamic_values": [
+    { "name": "label", "mode": "value", "value": { "type": "string", "value": "Live Title" } },
+    { "name": "titleSize", "mode": "value", "value": { "type": "number", "value": 24 } },
+    { "name": "titleColor", "mode": "value", "value": { "type": "string", "value": "#33ccff" } },
+    { "name": "panelBackground", "mode": "value", "value": { "type": "string", "value": "#ff8800" } }
+  ],
+  "dynamic_bindings": [
+    { "node_id": "title", "target": { "type": "prop", "name": "text" }, "expression": "label", "dependencies": ["label"] },
+    { "node_id": "title", "target": { "type": "prop", "name": "font_size" }, "expression": "titleSize", "dependencies": ["titleSize"] },
+    { "node_id": "title", "target": { "type": "prop", "name": "color" }, "expression": "titleColor", "dependencies": ["titleColor"] },
+    { "node_id": "panel", "target": { "type": "prop", "name": "background" }, "expression": "panelBackground", "dependencies": ["panelBackground"] }
+  ]
+}"##;
+        let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+            .with_compiled_framework(
+                CompiledFrameworkRecord::new(
+                    "entry",
+                    SourceFramework::React,
+                    "src/App.tsx",
+                    "frameworks/entry.hawk.framework.json",
+                    ArtifactHash::from_bytes(compiler_artifact.as_bytes()),
+                )
+                .with_compiler_artifact_json(compiler_artifact),
+            );
+        let output = BuildWorkspaceOutput {
+            manifest,
+            pipeline: BuildPipeline::production(),
+            artifact,
+            verification: VerificationReport::new("com.example.framework-initial-env"),
+        };
+
+        let config =
+            desktop_runtime_config_from_build_output(&output, true).expect("runtime config builds");
+        let scene = RuntimeSceneBridge::new(Viewport::new(960.0, 540.0))
+            .build(
+                config
+                    .runtime_tree()
+                    .expect("desktop config carries runtime tree"),
+            )
+            .expect("runtime scene builds");
+
+        assert!(scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Fill { id, color, .. }
+                if id.as_str() == "panel" && *color == Color::rgba(255, 136, 0, 255)
+        )));
+        assert!(scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Text {
+                id,
+                text,
+                font_size,
+                color,
+                ..
+            } if id.as_str() == "title"
+                && text == "Live Title"
+                && float_eq(*font_size, 24.0)
+                && *color == Color::rgba(51, 204, 255, 255)
         )));
     }
 

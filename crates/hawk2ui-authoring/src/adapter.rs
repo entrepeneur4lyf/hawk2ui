@@ -185,6 +185,7 @@ pub struct FrameworkNativeProgram {
     root: FrameworkNativeNode,
     reactivity: Vec<FrameworkReactiveBinding>,
     dynamic_bindings: Vec<FrameworkDynamicBinding>,
+    initial_dynamic_values: Vec<FrameworkInitialDynamicValue>,
 }
 
 /// Versioned native compiler artifact emitted by framework-specific compilers.
@@ -201,6 +202,9 @@ pub struct FrameworkNativeProgramWire {
     /// Runtime-evaluated property bindings emitted by the compiler.
     #[serde(default)]
     pub dynamic_bindings: Vec<FrameworkDynamicBindingWire>,
+    /// Initial dependency values available for first-frame dynamic binding evaluation.
+    #[serde(default)]
+    pub initial_dynamic_values: Vec<FrameworkInitialDynamicValueWire>,
 }
 
 impl FrameworkNativeProgramWire {
@@ -421,6 +425,48 @@ pub struct FrameworkDynamicBindingWire {
     pub dependencies: Vec<String>,
 }
 
+/// Wire initial value for a dynamic expression dependency.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkInitialDynamicValueWire {
+    /// Dependency name projected into the expression scope.
+    pub name: String,
+    /// Projection mode used by the framework expression syntax.
+    #[serde(default)]
+    pub mode: FrameworkInitialDynamicValueModeWire,
+    /// Literal dependency value.
+    pub value: FrameworkDynamicValueWire,
+}
+
+/// Wire initial dynamic value projection mode.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FrameworkInitialDynamicValueModeWire {
+    /// Plain `const name = value` binding.
+    #[default]
+    Value,
+    /// Getter `const name = () => value` binding.
+    Getter,
+}
+
+/// Wire literal value for initial dynamic expression dependencies.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum FrameworkDynamicValueWire {
+    /// Null literal.
+    Null,
+    /// Boolean literal.
+    Bool(bool),
+    /// Finite numeric literal.
+    Number(f64),
+    /// String literal.
+    String(String),
+    /// Ordered array literal.
+    Array(Vec<FrameworkDynamicValueWire>),
+    /// Object literal.
+    Object(BTreeMap<String, FrameworkDynamicValueWire>),
+}
+
 /// Wire target for a runtime binding.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -442,6 +488,7 @@ impl FrameworkNativeProgram {
             root,
             reactivity: Vec::new(),
             dynamic_bindings: Vec::new(),
+            initial_dynamic_values: Vec::new(),
         }
     }
 
@@ -465,6 +512,13 @@ impl FrameworkNativeProgram {
         self
     }
 
+    /// Adds an initial dependency value declared by the compiler boundary.
+    #[must_use]
+    pub fn with_initial_dynamic_value(mut self, value: FrameworkInitialDynamicValue) -> Self {
+        self.initial_dynamic_values.push(value);
+        self
+    }
+
     /// Returns declared reactivity bindings in compiler order.
     #[must_use]
     pub fn reactivity(&self) -> &[FrameworkReactiveBinding] {
@@ -475,6 +529,12 @@ impl FrameworkNativeProgram {
     #[must_use]
     pub fn dynamic_bindings(&self) -> &[FrameworkDynamicBinding] {
         &self.dynamic_bindings
+    }
+
+    /// Returns declared initial dynamic dependency values in compiler order.
+    #[must_use]
+    pub fn initial_dynamic_values(&self) -> &[FrameworkInitialDynamicValue] {
+        &self.initial_dynamic_values
     }
 
     /// Returns keyed direct children in compiler order.
@@ -548,6 +608,20 @@ impl TryFrom<FrameworkNativeProgramWire> for FrameworkNativeProgram {
         }
         for binding in wire.dynamic_bindings {
             program = program.with_dynamic_binding(framework_dynamic_binding_from_wire(binding)?);
+        }
+        let mut initial_names = BTreeSet::new();
+        for value in wire.initial_dynamic_values {
+            let value = framework_initial_dynamic_value_from_wire(value)?;
+            if !initial_names.insert(value.name().to_string()) {
+                return Err(AdapterError::with_rule(
+                    "framework-native-program.initial-dynamic-value.duplicate",
+                    format!(
+                        "initial dynamic value `{}` is declared more than once",
+                        value.name()
+                    ),
+                ));
+            }
+            program = program.with_initial_dynamic_value(value);
         }
         Ok(program)
     }
@@ -775,6 +849,52 @@ fn framework_dynamic_binding_from_wire(
     })
 }
 
+fn framework_initial_dynamic_value_from_wire(
+    value: FrameworkInitialDynamicValueWire,
+) -> Result<FrameworkInitialDynamicValue, AdapterError> {
+    validate_non_empty(
+        "framework-native-program.initial-dynamic-value.name-invalid",
+        "initial dynamic value name",
+        &value.name,
+    )?;
+    let dynamic_value = framework_dynamic_value_from_wire(value.value)?;
+    Ok(match value.mode {
+        FrameworkInitialDynamicValueModeWire::Value => {
+            FrameworkInitialDynamicValue::value(value.name, dynamic_value)
+        }
+        FrameworkInitialDynamicValueModeWire::Getter => {
+            FrameworkInitialDynamicValue::getter(value.name, dynamic_value)
+        }
+    })
+}
+
+fn framework_dynamic_value_from_wire(
+    value: FrameworkDynamicValueWire,
+) -> Result<FrameworkDynamicValue, AdapterError> {
+    match value {
+        FrameworkDynamicValueWire::Null => Ok(FrameworkDynamicValue::Null),
+        FrameworkDynamicValueWire::Bool(value) => Ok(FrameworkDynamicValue::Bool(value)),
+        FrameworkDynamicValueWire::Number(value) if value.is_finite() => {
+            Ok(FrameworkDynamicValue::Number(value))
+        }
+        FrameworkDynamicValueWire::Number(_) => Err(AdapterError::with_rule(
+            "framework-native-program.initial-dynamic-value.number-invalid",
+            "initial dynamic numeric value must be finite",
+        )),
+        FrameworkDynamicValueWire::String(value) => Ok(FrameworkDynamicValue::String(value)),
+        FrameworkDynamicValueWire::Array(values) => values
+            .into_iter()
+            .map(framework_dynamic_value_from_wire)
+            .collect::<Result<Vec<_>, _>>()
+            .map(FrameworkDynamicValue::Array),
+        FrameworkDynamicValueWire::Object(values) => values
+            .into_iter()
+            .map(|(key, value)| framework_dynamic_value_from_wire(value).map(|value| (key, value)))
+            .collect::<Result<BTreeMap<_, _>, _>>()
+            .map(FrameworkDynamicValue::Object),
+    }
+}
+
 fn validate_non_empty(
     rule: &'static str,
     label: &'static str,
@@ -879,6 +999,80 @@ pub enum FrameworkDynamicBindingTarget {
     },
     /// Bind the node text slot.
     Text,
+}
+
+/// Initial value for a dynamic expression dependency.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameworkInitialDynamicValue {
+    name: String,
+    mode: FrameworkInitialDynamicValueMode,
+    value: FrameworkDynamicValue,
+}
+
+impl FrameworkInitialDynamicValue {
+    /// Creates a plain value dependency.
+    #[must_use]
+    pub fn value(name: impl Into<String>, value: FrameworkDynamicValue) -> Self {
+        Self {
+            name: name.into(),
+            mode: FrameworkInitialDynamicValueMode::Value,
+            value,
+        }
+    }
+
+    /// Creates a getter dependency.
+    #[must_use]
+    pub fn getter(name: impl Into<String>, value: FrameworkDynamicValue) -> Self {
+        Self {
+            name: name.into(),
+            mode: FrameworkInitialDynamicValueMode::Getter,
+            value,
+        }
+    }
+
+    /// Returns the dependency name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the projection mode.
+    #[must_use]
+    pub const fn mode(&self) -> FrameworkInitialDynamicValueMode {
+        self.mode
+    }
+
+    /// Returns the dependency value.
+    #[must_use]
+    pub const fn value_ref(&self) -> &FrameworkDynamicValue {
+        &self.value
+    }
+}
+
+/// Initial dynamic dependency projection mode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameworkInitialDynamicValueMode {
+    /// Plain value binding.
+    Value,
+    /// Getter binding.
+    Getter,
+}
+
+/// Literal value for initial dynamic expression dependencies.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FrameworkDynamicValue {
+    /// Null literal.
+    Null,
+    /// Boolean literal.
+    Bool(bool),
+    /// Finite numeric literal.
+    Number(f64),
+    /// String literal.
+    String(String),
+    /// Ordered array literal.
+    Array(Vec<FrameworkDynamicValue>),
+    /// Object literal.
+    Object(BTreeMap<String, FrameworkDynamicValue>),
 }
 
 /// Reactive primitive declared by a framework compiler boundary.

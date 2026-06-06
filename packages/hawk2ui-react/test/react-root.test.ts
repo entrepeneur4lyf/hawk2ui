@@ -22,7 +22,7 @@ test("React compiler preserves dynamic text bindings from TSX expressions", () =
   const output = compileHawkReact({
     filename: "App.tsx",
     source:
-      'const label = getLabel(); export function App() { return <hawk-view id="root"><hawk-text id="title">{label}</hawk-text></hawk-view>; }',
+      'const label = "Live"; export function App() { return <hawk-view id="root"><hawk-text id="title">{label}</hawk-text></hawk-view>; }',
   });
 
   expect(output.compilerArtifact.dynamic_bindings).toEqual([
@@ -31,6 +31,13 @@ test("React compiler preserves dynamic text bindings from TSX expressions", () =
       target: { type: "prop", name: "text" },
       expression: "label",
       dependencies: ["label"],
+    },
+  ]);
+  expect(output.compilerArtifact.initial_dynamic_values).toEqual([
+    {
+      name: "label",
+      mode: "value",
+      value: { type: "string", value: "Live" },
     },
   ]);
 });

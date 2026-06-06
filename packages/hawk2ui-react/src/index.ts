@@ -6,6 +6,8 @@ import {
   recordsForApp,
   type HawkCompilerArtifact,
   type HawkCompilerDynamicBindingWire,
+  type HawkCompilerDynamicValueWire,
+  type HawkCompilerInitialDynamicValueWire,
   type HawkElementSpec,
   type HawkEventSpec,
   type HawkLifecycleSpec,
@@ -34,6 +36,7 @@ type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 
 interface ReactLoweringContext {
   readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
+  readonly initialDynamicValues: ReadonlyMap<string, HawkCompilerInitialDynamicValueWire>;
   readonly locals: ReadonlyMap<string, LiteralRecord>;
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
 }
@@ -71,6 +74,7 @@ export function compileHawkReact(input: HawkReactCompileInput): HawkReactCompile
 
   const context: ReactLoweringContext = {
     arrays: literalArraysFromProgram(program, returned.scope),
+    initialDynamicValues: initialDynamicValuesFromProgram(program, returned.scope),
     locals: new Map(),
     dynamicBindings: [],
   };
@@ -81,7 +85,12 @@ export function compileHawkReact(input: HawkReactCompileInput): HawkReactCompile
     framework: "react",
     filename: input.filename,
     records: recordsForApp(app),
-    compilerArtifact: compilerArtifactForApp(app, [], context.dynamicBindings),
+    compilerArtifact: compilerArtifactForApp(
+      app,
+      [],
+      context.dynamicBindings,
+      [...context.initialDynamicValues.values()],
+    ),
   };
 }
 
@@ -389,6 +398,30 @@ function literalArraysFromProgram(
   return arrays;
 }
 
+function initialDynamicValuesFromProgram(
+  program: AstNode,
+  componentScope: AstNode | undefined,
+): ReadonlyMap<string, HawkCompilerInitialDynamicValueWire> {
+  const values = new Map<string, HawkCompilerInitialDynamicValueWire>();
+  collectInitialDynamicValuesFromBody(arrayField(program, "body"), values);
+  collectInitialDynamicValuesFromBody(arrayField(componentScope, "body"), values);
+  return values;
+}
+
+function collectInitialDynamicValuesFromBody(
+  statements: readonly AstNode[],
+  values: Map<string, HawkCompilerInitialDynamicValueWire>,
+): void {
+  for (const statement of statements) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of arrayField(statement, "declarations")) {
+      const name = identifierName(declaration.id as AstNode | undefined);
+      const value = literalDynamicValue(declaration.init as AstNode | undefined);
+      if (name && value) values.set(name, { name, mode: "value", value });
+    }
+  }
+}
+
 function collectLiteralArraysFromBody(
   statements: readonly AstNode[],
   arrays: Map<string, readonly LiteralRecord[]>,
@@ -420,6 +453,35 @@ function literalObjectArray(node: AstNode | undefined): readonly LiteralRecord[]
     }
     return record;
   });
+}
+
+function literalDynamicValue(node: AstNode | undefined): HawkCompilerDynamicValueWire | undefined {
+  if (!node) return undefined;
+  if (node.type === "NullLiteral") return { type: "null" };
+  const literal = literalValue(node);
+  if (typeof literal === "string") return { type: "string", value: literal };
+  if (typeof literal === "boolean") return { type: "bool", value: literal };
+  if (typeof literal === "number" && Number.isFinite(literal)) return { type: "number", value: literal };
+  if (node.type === "ArrayExpression") {
+    const values: HawkCompilerDynamicValueWire[] = [];
+    for (const element of arrayField(node, "elements")) {
+      const value = literalDynamicValue(element);
+      if (!value) return undefined;
+      values.push(value);
+    }
+    return { type: "array", value: values };
+  }
+  if (node.type === "ObjectExpression") {
+    const values: Record<string, HawkCompilerDynamicValueWire> = {};
+    for (const property of arrayField(node, "properties")) {
+      const key = identifierName(property.key as AstNode | undefined) ?? literalString(property.key as AstNode | undefined);
+      const value = literalDynamicValue(property.value as AstNode | undefined);
+      if (!key || !value) return undefined;
+      values[key] = value;
+    }
+    return { type: "object", value: values };
+  }
+  return undefined;
 }
 
 function evaluateExpression(

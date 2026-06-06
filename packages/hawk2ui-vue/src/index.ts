@@ -6,6 +6,8 @@ import {
   recordsForApp,
   type HawkCompilerArtifact,
   type HawkCompilerDynamicBindingWire,
+  type HawkCompilerDynamicValueWire,
+  type HawkCompilerInitialDynamicValueWire,
   type HawkElementSpec,
   type HawkEventSpec,
   type HawkLifecycleSpec,
@@ -34,6 +36,7 @@ type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 
 interface VueLoweringContext {
   readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
+  readonly initialDynamicValues: ReadonlyMap<string, HawkCompilerInitialDynamicValueWire>;
   readonly locals: ReadonlyMap<string, LiteralRecord>;
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
 }
@@ -65,6 +68,7 @@ export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput
   const script = parsed.descriptor.scriptSetup?.content ?? parsed.descriptor.script?.content ?? "";
   const context: VueLoweringContext = {
     arrays: literalArraysFromScript(script),
+    initialDynamicValues: initialDynamicValuesFromScript(script),
     locals: new Map(),
     dynamicBindings: [],
   };
@@ -75,7 +79,12 @@ export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput
     framework: "vue",
     filename: input.filename,
     records: recordsForApp(app),
-    compilerArtifact: compilerArtifactForApp(app, [], context.dynamicBindings),
+    compilerArtifact: compilerArtifactForApp(
+      app,
+      [],
+      context.dynamicBindings,
+      [...context.initialDynamicValues.values()],
+    ),
   };
 }
 
@@ -374,6 +383,15 @@ function literalArraysFromScript(source: string): ReadonlyMap<string, readonly L
   return literalArraysFromProgram(ast.program as AstNode);
 }
 
+function initialDynamicValuesFromScript(source: string): ReadonlyMap<string, HawkCompilerInitialDynamicValueWire> {
+  if (!source.trim()) return new Map();
+  const ast = parseScript(source, {
+    sourceType: "module",
+    plugins: ["typescript"],
+  }) as unknown as AstNode;
+  return initialDynamicValuesFromProgram(ast.program as AstNode);
+}
+
 function literalArraysFromProgram(program: AstNode): ReadonlyMap<string, readonly LiteralRecord[]> {
   const arrays = new Map<string, readonly LiteralRecord[]>();
   for (const statement of arrayField(program, "body")) {
@@ -385,6 +403,42 @@ function literalArraysFromProgram(program: AstNode): ReadonlyMap<string, readonl
     }
   }
   return arrays;
+}
+
+function initialDynamicValuesFromProgram(program: AstNode): ReadonlyMap<string, HawkCompilerInitialDynamicValueWire> {
+  const values = new Map<string, HawkCompilerInitialDynamicValueWire>();
+  for (const statement of arrayField(program, "body")) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of arrayField(statement, "declarations")) {
+      const name = identifierName(declaration.id as AstNode | undefined);
+      const value = vueInitialDynamicValue(declaration.init as AstNode | undefined);
+      if (name && value) values.set(name, { name, mode: "value", value });
+    }
+  }
+  return values;
+}
+
+function vueInitialDynamicValue(node: AstNode | undefined): HawkCompilerDynamicValueWire | undefined {
+  const directValue = literalDynamicValue(node);
+  if (directValue) return directValue;
+  if (node?.type !== "CallExpression") return undefined;
+  const callee = identifierName(node.callee as AstNode | undefined);
+  const args = node.arguments as AstNode[] | undefined;
+  if (callee === "ref") return literalDynamicValue(args?.[0]);
+  if (callee !== "computed") return undefined;
+  const callback = args?.[0];
+  if (callback?.type !== "ArrowFunctionExpression" && callback?.type !== "FunctionExpression") {
+    return undefined;
+  }
+  if (callback.body && (callback.body as AstNode).type !== "BlockStatement") {
+    return literalDynamicValue(callback.body as AstNode);
+  }
+  for (const statement of arrayField(callback.body as AstNode | undefined, "body")) {
+    if (statement.type === "ReturnStatement") {
+      return literalDynamicValue(statement.argument as AstNode | undefined);
+    }
+  }
+  return undefined;
 }
 
 function literalObjectArray(node: AstNode | undefined): readonly LiteralRecord[] | undefined {
@@ -404,6 +458,35 @@ function literalObjectArray(node: AstNode | undefined): readonly LiteralRecord[]
     }
     return record;
   });
+}
+
+function literalDynamicValue(node: AstNode | undefined): HawkCompilerDynamicValueWire | undefined {
+  if (!node) return undefined;
+  if (node.type === "NullLiteral") return { type: "null" };
+  const literal = literalValue(node);
+  if (typeof literal === "string") return { type: "string", value: literal };
+  if (typeof literal === "boolean") return { type: "bool", value: literal };
+  if (typeof literal === "number" && Number.isFinite(literal)) return { type: "number", value: literal };
+  if (node.type === "ArrayExpression") {
+    const values: HawkCompilerDynamicValueWire[] = [];
+    for (const element of arrayField(node, "elements")) {
+      const value = literalDynamicValue(element);
+      if (!value) return undefined;
+      values.push(value);
+    }
+    return { type: "array", value: values };
+  }
+  if (node.type === "ObjectExpression") {
+    const values: Record<string, HawkCompilerDynamicValueWire> = {};
+    for (const property of arrayField(node, "properties")) {
+      const key = identifierName(property.key as AstNode | undefined) ?? literalString(property.key as AstNode | undefined);
+      const value = literalDynamicValue(property.value as AstNode | undefined);
+      if (!key || !value) return undefined;
+      values[key] = value;
+    }
+    return { type: "object", value: values };
+  }
+  return undefined;
 }
 
 function evaluateVueExpression(

@@ -88,11 +88,26 @@ export interface HawkCompilerDynamicBindingWire {
   readonly dependencies: readonly string[];
 }
 
+export type HawkCompilerDynamicValueWire =
+  | { readonly type: "null" }
+  | { readonly type: "bool"; readonly value: boolean }
+  | { readonly type: "number"; readonly value: number }
+  | { readonly type: "string"; readonly value: string }
+  | { readonly type: "array"; readonly value: readonly HawkCompilerDynamicValueWire[] }
+  | { readonly type: "object"; readonly value: Readonly<Record<string, HawkCompilerDynamicValueWire>> };
+
+export interface HawkCompilerInitialDynamicValueWire {
+  readonly name: string;
+  readonly mode: "value" | "getter";
+  readonly value: HawkCompilerDynamicValueWire;
+}
+
 export interface HawkCompilerArtifact {
   readonly schema_version: 1;
   readonly root: HawkCompilerNodeWire;
   readonly reactivity: readonly HawkCompilerReactiveBindingWire[];
   readonly dynamic_bindings: readonly HawkCompilerDynamicBindingWire[];
+  readonly initial_dynamic_values: readonly HawkCompilerInitialDynamicValueWire[];
 }
 
 export interface HawkCompiledApp extends HawkAppSpec {
@@ -116,12 +131,14 @@ export function compilerArtifactForApp(
   spec: HawkAppSpec,
   reactivity: readonly HawkCompilerReactiveBindingWire[] = [],
   dynamicBindings: readonly HawkCompilerDynamicBindingWire[] = [],
+  initialDynamicValues: readonly HawkCompilerInitialDynamicValueWire[] = [],
 ): HawkCompilerArtifact {
   if (!spec.name.trim()) {
     throw new Error("Hawk2UI native app requires a stable name.");
   }
   validateElement(spec.root);
   validateDynamicBindings(dynamicBindings, elementIds(spec.root));
+  validateInitialDynamicValues(initialDynamicValues);
   return {
     schema_version: 1,
     root: elementToWire(spec.root),
@@ -131,6 +148,11 @@ export function compilerArtifactForApp(
       target: { ...binding.target },
       expression: binding.expression,
       dependencies: [...binding.dependencies],
+    })),
+    initial_dynamic_values: initialDynamicValues.map((value) => ({
+      name: value.name,
+      mode: value.mode,
+      value: cloneDynamicValueWire(value.value),
     })),
   };
 }
@@ -267,6 +289,70 @@ function validateDynamicBindings(
       if (!dependency.trim()) {
         throw new Error("native.dynamic-binding.dependency-invalid: dynamic binding dependencies must be non-empty.");
       }
+    }
+  }
+}
+
+function validateInitialDynamicValues(values: readonly HawkCompilerInitialDynamicValueWire[]): void {
+  const names = new Set<string>();
+  for (const value of values) {
+    if (!value.name.trim()) {
+      throw new Error("native.initial-dynamic-value.name-invalid: initial dynamic values require stable names.");
+    }
+    if (names.has(value.name)) {
+      throw new Error(`native.initial-dynamic-value.duplicate: initial dynamic value \`${value.name}\` is declared more than once.`);
+    }
+    names.add(value.name);
+    if (value.mode !== "value" && value.mode !== "getter") {
+      throw new Error(`native.initial-dynamic-value.mode-invalid: initial dynamic value \`${value.name}\` has an unsupported mode.`);
+    }
+    validateDynamicValue(value.value, value.name);
+  }
+}
+
+function validateDynamicValue(value: HawkCompilerDynamicValueWire, name: string): void {
+  switch (value.type) {
+    case "null":
+    case "bool":
+    case "string":
+      return;
+    case "number":
+      if (!Number.isFinite(value.value)) {
+        throw new Error(`native.initial-dynamic-value.number-invalid: initial dynamic value \`${name}\` must be finite.`);
+      }
+      return;
+    case "array":
+      for (const item of value.value) validateDynamicValue(item, name);
+      return;
+    case "object":
+      for (const [key, item] of Object.entries(value.value)) {
+        if (!key.trim()) {
+          throw new Error(`native.initial-dynamic-value.object-key-invalid: initial dynamic value \`${name}\` has an empty object key.`);
+        }
+        validateDynamicValue(item, name);
+      }
+      return;
+  }
+}
+
+function cloneDynamicValueWire(value: HawkCompilerDynamicValueWire): HawkCompilerDynamicValueWire {
+  switch (value.type) {
+    case "null":
+      return { type: "null" };
+    case "bool":
+      return { type: "bool", value: value.value };
+    case "number":
+      return { type: "number", value: value.value };
+    case "string":
+      return { type: "string", value: value.value };
+    case "array":
+      return { type: "array", value: value.value.map(cloneDynamicValueWire) };
+    case "object": {
+      const cloned: Record<string, HawkCompilerDynamicValueWire> = {};
+      for (const [key, item] of Object.entries(value.value)) {
+        cloned[key] = cloneDynamicValueWire(item);
+      }
+      return { type: "object", value: cloned };
     }
   }
 }

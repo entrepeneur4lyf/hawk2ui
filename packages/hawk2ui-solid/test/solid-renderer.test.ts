@@ -34,6 +34,13 @@ test("Solid compiler preserves dynamic text bindings from signal expressions", (
       dependencies: ["label"],
     },
   ]);
+  expect(output.compilerArtifact.initial_dynamic_values).toEqual([
+    {
+      name: "label",
+      mode: "getter",
+      value: { type: "string", value: "Title" },
+    },
+  ]);
 });
 
 test("Solid compiler preserves dynamic layout prop bindings from signal expressions", () => {

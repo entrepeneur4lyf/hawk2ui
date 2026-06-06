@@ -4,6 +4,8 @@ import {
   recordsForApp,
   type HawkCompilerArtifact,
   type HawkCompilerDynamicBindingWire,
+  type HawkCompilerDynamicValueWire,
+  type HawkCompilerInitialDynamicValueWire,
   type HawkElementSpec,
   type HawkEventSpec,
   type HawkLifecycleSpec,
@@ -27,6 +29,7 @@ type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 interface SvelteLoweringContext {
   readonly source: string;
   readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
+  readonly initialDynamicValues: ReadonlyMap<string, HawkCompilerInitialDynamicValueWire>;
   readonly locals: ReadonlyMap<string, LiteralRecord>;
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
 }
@@ -49,6 +52,7 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
   const context: SvelteLoweringContext = {
     source: input.source,
     arrays: literalArraysFromProgram((ast.instance as AstNode | undefined)?.content as AstNode | undefined),
+    initialDynamicValues: initialDynamicValuesFromProgram((ast.instance as AstNode | undefined)?.content as AstNode | undefined),
     locals: new Map(),
     dynamicBindings: [],
   };
@@ -60,7 +64,12 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
     framework: "svelte",
     filename: input.filename,
     records: recordsForApp(app),
-    compilerArtifact: compilerArtifactForApp(app, [], context.dynamicBindings),
+    compilerArtifact: compilerArtifactForApp(
+      app,
+      [],
+      context.dynamicBindings,
+      [...context.initialDynamicValues.values()],
+    ),
   };
 }
 
@@ -351,6 +360,21 @@ function literalArraysFromProgram(program: AstNode | undefined): ReadonlyMap<str
   return arrays;
 }
 
+function initialDynamicValuesFromProgram(
+  program: AstNode | undefined,
+): ReadonlyMap<string, HawkCompilerInitialDynamicValueWire> {
+  const values = new Map<string, HawkCompilerInitialDynamicValueWire>();
+  for (const statement of Array.isArray(program?.body) ? (program.body as AstNode[]) : []) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of Array.isArray(statement.declarations) ? (statement.declarations as AstNode[]) : []) {
+      const name = identifierName(declaration.id as AstNode | undefined);
+      const value = literalDynamicValue(declaration.init as AstNode | undefined);
+      if (name && value) values.set(name, { name, mode: "value", value });
+    }
+  }
+  return values;
+}
+
 function literalObjectArray(node: AstNode | undefined): readonly LiteralRecord[] | undefined {
   if (!node || node.type !== "ArrayExpression" || !Array.isArray(node.elements)) return undefined;
   return node.elements.map((item) => {
@@ -368,6 +392,37 @@ function literalObjectArray(node: AstNode | undefined): readonly LiteralRecord[]
     }
     return record;
   });
+}
+
+function literalDynamicValue(node: AstNode | undefined): HawkCompilerDynamicValueWire | undefined {
+  if (!node) return undefined;
+  if (node.type === "Literal") {
+    const value = node.value;
+    if (value === null) return { type: "null" };
+    if (typeof value === "string") return { type: "string", value };
+    if (typeof value === "boolean") return { type: "bool", value };
+    if (typeof value === "number" && Number.isFinite(value)) return { type: "number", value };
+  }
+  if (node.type === "ArrayExpression") {
+    const values: HawkCompilerDynamicValueWire[] = [];
+    for (const element of Array.isArray(node.elements) ? (node.elements as AstNode[]) : []) {
+      const value = literalDynamicValue(element);
+      if (!value) return undefined;
+      values.push(value);
+    }
+    return { type: "array", value: values };
+  }
+  if (node.type === "ObjectExpression") {
+    const values: Record<string, HawkCompilerDynamicValueWire> = {};
+    for (const property of (node.properties as AstNode[] | undefined) ?? []) {
+      const key = identifierName(property.key as AstNode | undefined) ?? stringField(property.key as AstNode, "value");
+      const value = literalDynamicValue(property.value as AstNode | undefined);
+      if (!key || !value) return undefined;
+      values[key] = value;
+    }
+    return { type: "object", value: values };
+  }
+  return undefined;
 }
 
 function evaluateExpression(

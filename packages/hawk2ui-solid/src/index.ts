@@ -6,6 +6,8 @@ import {
   recordsForApp,
   type HawkCompilerArtifact,
   type HawkCompilerDynamicBindingWire,
+  type HawkCompilerDynamicValueWire,
+  type HawkCompilerInitialDynamicValueWire,
   type HawkCompilerReactiveBindingWire,
   type HawkElementSpec,
   type HawkEventSpec,
@@ -39,6 +41,7 @@ type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 
 interface SolidLoweringContext {
   readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
+  readonly initialDynamicValues: ReadonlyMap<string, HawkCompilerInitialDynamicValueWire>;
   readonly locals: ReadonlyMap<string, LiteralRecord>;
   readonly reactivity: HawkCompilerReactiveBindingWire[];
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
@@ -77,6 +80,7 @@ export function compileHawkSolid(input: HawkSolidCompileInput): HawkSolidCompile
   const signals = solidSignalsFromProgram(program, returned.scope);
   const context: SolidLoweringContext = {
     arrays: signals.arrays,
+    initialDynamicValues: signals.initialDynamicValues,
     locals: new Map(),
     reactivity: [...signals.reactivity],
     dynamicBindings: [],
@@ -89,7 +93,12 @@ export function compileHawkSolid(input: HawkSolidCompileInput): HawkSolidCompile
     framework: "solid",
     filename: input.filename,
     records: recordsForApp(app),
-    compilerArtifact: compilerArtifactForApp(app, uniqueReactivity(context.reactivity), context.dynamicBindings),
+    compilerArtifact: compilerArtifactForApp(
+      app,
+      uniqueReactivity(context.reactivity),
+      context.dynamicBindings,
+      [...context.initialDynamicValues.values()],
+    ),
   };
 }
 
@@ -373,18 +382,21 @@ function layoutNumber(
 
 function solidSignalsFromProgram(program: AstNode, componentScope: AstNode | undefined): {
   readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
+  readonly initialDynamicValues: ReadonlyMap<string, HawkCompilerInitialDynamicValueWire>;
   readonly reactivity: readonly HawkCompilerReactiveBindingWire[];
 } {
   const arrays = new Map<string, readonly LiteralRecord[]>();
+  const initialDynamicValues = new Map<string, HawkCompilerInitialDynamicValueWire>();
   const reactivity: HawkCompilerReactiveBindingWire[] = [];
-  collectSolidSignalsFromBody(arrayField(program, "body"), arrays, reactivity);
-  collectSolidSignalsFromBody(arrayField(componentScope, "body"), arrays, reactivity);
-  return { arrays, reactivity };
+  collectSolidSignalsFromBody(arrayField(program, "body"), arrays, initialDynamicValues, reactivity);
+  collectSolidSignalsFromBody(arrayField(componentScope, "body"), arrays, initialDynamicValues, reactivity);
+  return { arrays, initialDynamicValues, reactivity };
 }
 
 function collectSolidSignalsFromBody(
   statements: readonly AstNode[],
   arrays: Map<string, readonly LiteralRecord[]>,
+  initialDynamicValues: Map<string, HawkCompilerInitialDynamicValueWire>,
   reactivity: HawkCompilerReactiveBindingWire[],
 ): void {
   for (const statement of statements) {
@@ -392,12 +404,27 @@ function collectSolidSignalsFromBody(
     for (const declaration of arrayField(statement, "declarations")) {
       const signalName = signalBindingName(declaration.id as AstNode | undefined);
       const init = declaration.init as AstNode | undefined;
-      const values = init?.type === "CallExpression" && identifierName(init.callee as AstNode | undefined) === "createSignal"
-        ? literalObjectArray((init.arguments as AstNode[] | undefined)?.[0])
+      const signalValue = init?.type === "CallExpression" && identifierName(init.callee as AstNode | undefined) === "createSignal"
+        ? literalDynamicValue((init.arguments as AstNode[] | undefined)?.[0])
+        : undefined;
+      const values = signalValue?.type === "array"
+        ? literalObjectArray((init?.arguments as AstNode[] | undefined)?.[0])
         : literalObjectArray(init);
       if (signalName && values) {
         arrays.set(signalName, values);
         reactivity.push({ kind: "signal", name: signalName });
+      }
+      if (signalName && signalValue) {
+        initialDynamicValues.set(signalName, {
+          name: signalName,
+          mode: "getter",
+          value: signalValue,
+        });
+      }
+      const name = identifierName(declaration.id as AstNode | undefined);
+      const value = literalDynamicValue(init);
+      if (name && value) {
+        initialDynamicValues.set(name, { name, mode: "value", value });
       }
     }
   }
@@ -426,6 +453,35 @@ function literalObjectArray(node: AstNode | undefined): readonly LiteralRecord[]
     }
     return record;
   });
+}
+
+function literalDynamicValue(node: AstNode | undefined): HawkCompilerDynamicValueWire | undefined {
+  if (!node) return undefined;
+  if (node.type === "NullLiteral") return { type: "null" };
+  const literal = literalValue(node);
+  if (typeof literal === "string") return { type: "string", value: literal };
+  if (typeof literal === "boolean") return { type: "bool", value: literal };
+  if (typeof literal === "number" && Number.isFinite(literal)) return { type: "number", value: literal };
+  if (node.type === "ArrayExpression") {
+    const values: HawkCompilerDynamicValueWire[] = [];
+    for (const element of arrayField(node, "elements")) {
+      const value = literalDynamicValue(element);
+      if (!value) return undefined;
+      values.push(value);
+    }
+    return { type: "array", value: values };
+  }
+  if (node.type === "ObjectExpression") {
+    const values: Record<string, HawkCompilerDynamicValueWire> = {};
+    for (const property of arrayField(node, "properties")) {
+      const key = identifierName(property.key as AstNode | undefined) ?? literalString(property.key as AstNode | undefined);
+      const value = literalDynamicValue(property.value as AstNode | undefined);
+      if (!key || !value) return undefined;
+      values[key] = value;
+    }
+    return { type: "object", value: values };
+  }
+  return undefined;
 }
 
 function evaluateExpression(

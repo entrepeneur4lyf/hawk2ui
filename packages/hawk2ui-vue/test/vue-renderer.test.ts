@@ -33,6 +33,13 @@ test("Vue compiler preserves dynamic text bindings from template interpolations"
       dependencies: ["label"],
     },
   ]);
+  expect(output.compilerArtifact.initial_dynamic_values).toEqual([
+    {
+      name: "label",
+      mode: "value",
+      value: { type: "string", value: "Title" },
+    },
+  ]);
 });
 
 test("Vue compiler preserves dynamic layout prop bindings from template bindings", () => {
