@@ -77,5 +77,7 @@ jobs:
         run: cargo test -p hawk2ui-smoke --test smoke_apps
       - name: render baseline benchmark
         run: cargo bench --bench render_baseline -- --quick
+      - name: release gate benchmark
+        run: cargo bench --bench release_gates -- --quick
       - name: whitespace diff check
         run: git diff --check

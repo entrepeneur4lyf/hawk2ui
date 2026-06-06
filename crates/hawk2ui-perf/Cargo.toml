@@ -50,6 +50,10 @@ name = "render_baseline"
 harness = false
 
 [[bench]]
+name = "release_gates"
+harness = false
+
+[[bench]]
 name = "runtime"
 harness = false
 
