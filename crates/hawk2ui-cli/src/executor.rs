@@ -27,6 +27,7 @@ use hawk2ui_build::{
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
     WinitDesktopReload, WinitDesktopReloadKind, WinitDesktopRuntime, WinitDesktopRuntimeConfig,
+    WinitDesktopScriptEntry,
 };
 use hawk2ui_plugin::{BundleOutput, FormatMetadata, PluginEditor, PluginEditorSize};
 use hawk2ui_plugin_adapters::{
@@ -36,8 +37,8 @@ use hawk2ui_plugin_adapters::{
 use hawk2ui_runtime::{EntryNode, RuntimeSceneError, RuntimeViewTree};
 use hawk2ui_schema::schema_catalog_json;
 use hawk2ui_script::{
-    DynamicExpressionEnvironment, DynamicExpressionValue, HostCallPolicy, ScriptBackend,
-    ScriptModule, StructuredValue, TimerPolicy, entry_mount_bootstrap,
+    DynamicExpressionEnvironment, DynamicExpressionValue, HostCallPolicy, HostSnapshot,
+    ScriptBackend, ScriptModule, StructuredValue, TimerPolicy, entry_mount_bootstrap,
 };
 use hawk2ui_security_model::{PackageTrustRecord, PackageTrustValidator, VerificationReportStatus};
 
@@ -1600,9 +1601,31 @@ fn desktop_runtime_config_from_build_output(
             exit_after_first_frame,
         );
     }
-    let app_model = entry_script_app_model(output)?.unwrap_or_else(|| {
-        DesktopEntryAppModel::manifest_fallback(output.manifest.identity.name.clone())
-    });
+    let Some(script) = entry_script_record(output) else {
+        let app_model =
+            DesktopEntryAppModel::manifest_fallback(output.manifest.identity.name.clone());
+        return desktop_runtime_config_from_manifest_with_app_model(
+            &output.manifest,
+            &app_model,
+            exit_after_first_frame,
+        );
+    };
+    if let Some(app_model) = entry_script_mount_app_model(script)? {
+        let config = desktop_runtime_config_from_manifest_with_app_model(
+            &output.manifest,
+            &app_model,
+            exit_after_first_frame,
+        )?;
+        return Ok(config.with_script_entry(WinitDesktopScriptEntry::new(
+            script.source_path.clone(),
+            script.compiled_source.clone(),
+            HostSnapshot::default(),
+        )));
+    }
+    let app_model = entry_script_visible_title(script).map_or_else(
+        || DesktopEntryAppModel::manifest_fallback(output.manifest.identity.name.clone()),
+        DesktopEntryAppModel::manifest_fallback,
+    );
     desktop_runtime_config_from_manifest_with_app_model(
         &output.manifest,
         &app_model,
@@ -1763,22 +1786,12 @@ fn runtime_tree_from_manifest(
         .map_err(|error| runtime_scene_diagnostic(&error))
 }
 
-fn entry_script_app_model(
-    output: &BuildWorkspaceOutput,
-) -> Result<Option<DesktopEntryAppModel>, Box<CliDiagnostic>> {
-    let Some(script) = output
+fn entry_script_record(output: &BuildWorkspaceOutput) -> Option<&CompiledScriptRecord> {
+    output
         .artifact
         .compiled_scripts
         .iter()
         .find(|script| script.entrypoint_id == "entry")
-    else {
-        return Ok(None);
-    };
-
-    if let Some(app_model) = entry_script_mount_app_model(script)? {
-        return Ok(Some(app_model));
-    }
-    Ok(entry_script_visible_title(script).map(DesktopEntryAppModel::manifest_fallback))
 }
 
 fn entry_framework_runtime_tree(
@@ -2461,6 +2474,11 @@ export function mount(host: { on(name: string, handler: () => void): void; setSt
             .runtime_tree()
             .expect("desktop config carries runtime tree");
         assert_eq!(runtime_tree.root_id().as_str(), "desktop-basic-root");
+        let script_entry = config
+            .script_entry()
+            .expect("desktop config retains executable script entry");
+        assert_eq!(script_entry.source_path(), "src/main.ts");
+        assert!(script_entry.compiled_source().contains("Hello From Mount"));
 
         let scene = RuntimeSceneBridge::new(Viewport::new(640.0, 360.0))
             .build(runtime_tree)

@@ -10,7 +10,11 @@ use hawk2ui_assets::AssetRecord;
 use hawk2ui_host::{DesktopHostEvent, DesktopWindowConfig};
 use hawk2ui_layout::Viewport;
 use hawk2ui_runtime::{
-    AnimationCadencePolicy, AnimationFrameScheduler, RuntimeSceneBridge, RuntimeViewTree,
+    AnimationCadencePolicy, AnimationFrameScheduler, EntryNode, RuntimeSceneBridge, RuntimeViewTree,
+};
+use hawk2ui_script::{
+    FrameInput, HostCallPolicy, HostSnapshot, ScriptBackend, ScriptModule, StructuredValue,
+    TimerPolicy, entry_mount_bootstrap_with_host, parse_entry_envelope,
 };
 use softbuffer::{Context, Surface};
 use winit::{
@@ -34,6 +38,49 @@ pub struct WinitDesktopRuntimeConfig {
     runtime_tree: Option<RuntimeViewTree>,
     runtime_assets: Vec<AssetRecord>,
     animation_policy: AnimationCadencePolicy,
+    script_entry: Option<WinitDesktopScriptEntry>,
+}
+
+/// Executable desktop entry script retained by the native runtime for host-event rerenders.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WinitDesktopScriptEntry {
+    source_path: String,
+    compiled_source: String,
+    host_snapshot: HostSnapshot,
+}
+
+impl WinitDesktopScriptEntry {
+    /// Creates a desktop script entry.
+    #[must_use]
+    pub fn new(
+        source_path: impl Into<String>,
+        compiled_source: impl Into<String>,
+        host_snapshot: HostSnapshot,
+    ) -> Self {
+        Self {
+            source_path: source_path.into(),
+            compiled_source: compiled_source.into(),
+            host_snapshot,
+        }
+    }
+
+    /// Returns the source path used in diagnostics.
+    #[must_use]
+    pub fn source_path(&self) -> &str {
+        &self.source_path
+    }
+
+    /// Returns the compiled source.
+    #[must_use]
+    pub fn compiled_source(&self) -> &str {
+        &self.compiled_source
+    }
+
+    /// Returns the host snapshot projected into the script.
+    #[must_use]
+    pub const fn host_snapshot(&self) -> &HostSnapshot {
+        &self.host_snapshot
+    }
 }
 
 impl WinitDesktopRuntimeConfig {
@@ -46,6 +93,7 @@ impl WinitDesktopRuntimeConfig {
             runtime_tree: None,
             runtime_assets: Vec::new(),
             animation_policy: AnimationCadencePolicy::disabled(),
+            script_entry: None,
         }
     }
 
@@ -77,6 +125,13 @@ impl WinitDesktopRuntimeConfig {
         self
     }
 
+    /// Sets the executable entry script used to rerender script apps from host input.
+    #[must_use]
+    pub fn with_script_entry(mut self, script_entry: WinitDesktopScriptEntry) -> Self {
+        self.script_entry = Some(script_entry);
+        self
+    }
+
     /// Returns the desktop window configuration.
     #[must_use]
     pub const fn window(&self) -> &DesktopWindowConfig {
@@ -105,6 +160,12 @@ impl WinitDesktopRuntimeConfig {
     #[must_use]
     pub const fn animation_policy(&self) -> AnimationCadencePolicy {
         self.animation_policy
+    }
+
+    /// Returns the executable desktop entry script, when configured.
+    #[must_use]
+    pub const fn script_entry(&self) -> Option<&WinitDesktopScriptEntry> {
+        self.script_entry.as_ref()
     }
 
     /// Validates runtime configuration before entering the native event loop.
@@ -434,6 +495,7 @@ struct RuntimeApplication {
     lifecycle: RuntimeLifecycle,
     event_translator: WinitEventTranslator,
     animation: AnimationFrameScheduler,
+    script_ui_json: String,
     started_at: Instant,
     last_error: Option<WinitHostError>,
 }
@@ -452,6 +514,7 @@ impl RuntimeApplication {
             lifecycle: RuntimeLifecycle::default(),
             event_translator: WinitEventTranslator::new(metrics),
             animation,
+            script_ui_json: "null".to_string(),
             started_at: Instant::now(),
             last_error: None,
         }
@@ -630,6 +693,35 @@ impl RuntimeApplication {
         }
     }
 
+    fn apply_script_entry_events(
+        &mut self,
+        translated: &WinitTranslatedEvent,
+    ) -> Result<bool, WinitHostError> {
+        let inputs = desktop_frame_inputs_from_host_events(&translated.events);
+        if inputs.is_empty() {
+            return Ok(false);
+        }
+        let Some(entry) = self.config.script_entry() else {
+            return Ok(false);
+        };
+        let Some(window) = self.window.as_ref() else {
+            return Ok(false);
+        };
+        let size = window.inner_size();
+        let logical_width = logical_size_to_f32(f64::from(size.width) / window.scale_factor())?;
+        let logical_height = logical_size_to_f32(f64::from(size.height) / window.scale_factor())?;
+        let frame = run_script_entry_frame(
+            entry,
+            &inputs,
+            &self.script_ui_json,
+            logical_width,
+            logical_height,
+        )?;
+        self.config.runtime_tree = Some(frame.runtime_tree);
+        self.script_ui_json = frame.ui_json;
+        Ok(true)
+    }
+
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: WinitHostError) {
         self.last_error = Some(error);
         event_loop.exit();
@@ -649,6 +741,13 @@ impl RuntimeApplication {
         }
         let translated = self.event_translator.translate(event);
         self.lifecycle.record_translated_event(&translated);
+        let script_rerendered = match self.apply_script_entry_events(&translated) {
+            Ok(script_rerendered) => script_rerendered,
+            Err(error) => {
+                self.fail(event_loop, error);
+                return;
+            }
+        };
         let result = match event {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => {
                 self.lifecycle.request_close();
@@ -674,7 +773,7 @@ impl RuntimeApplication {
             | WindowEvent::HoveredFileCancelled
             | WindowEvent::Occluded(_)
             | WindowEvent::ModifiersChanged(_) => {
-                if translated.requires_redraw {
+                if translated.requires_redraw || script_rerendered {
                     self.request_redraw();
                 }
                 Ok(())
@@ -718,6 +817,129 @@ fn logical_size_to_f32(value: f64) -> Result<f32, WinitHostError> {
             "runtime scene viewport dimensions must be finite and greater than zero",
         ))
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ScriptEntryFrame {
+    runtime_tree: RuntimeViewTree,
+    ui_json: String,
+}
+
+fn desktop_frame_inputs_from_host_events(events: &[DesktopHostEvent]) -> Vec<FrameInput> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            DesktopHostEvent::PointerInput(pointer) => Some(FrameInput::Pointer {
+                x: pointer.x,
+                y: pointer.y,
+                button: pointer.button.clone(),
+            }),
+            DesktopHostEvent::KeyboardInput(keyboard) => Some(FrameInput::Key {
+                key: keyboard.key.clone(),
+                pressed: keyboard.pressed,
+            }),
+            DesktopHostEvent::FocusChanged(focused) => {
+                Some(FrameInput::Focus { focused: *focused })
+            }
+            DesktopHostEvent::WindowCreated(_)
+            | DesktopHostEvent::CloseRequested(_)
+            | DesktopHostEvent::ModeChanged(_)
+            | DesktopHostEvent::ImeInput(_)
+            | DesktopHostEvent::FileDragDrop(_)
+            | DesktopHostEvent::WindowOcclusionChanged(_)
+            | DesktopHostEvent::ClipboardCapabilityChanged(_)
+            | DesktopHostEvent::DpiChanged(_)
+            | DesktopHostEvent::RendererTargetRecreateRequested
+            | DesktopHostEvent::RepaintRequested(_)
+            | DesktopHostEvent::Resized(_)
+            | DesktopHostEvent::ClipboardRequested(_)
+            | DesktopHostEvent::DialogRequested(_)
+            | DesktopHostEvent::FramePresented { .. } => None,
+        })
+        .collect()
+}
+
+fn run_script_entry_frame(
+    entry: &WinitDesktopScriptEntry,
+    inputs: &[FrameInput],
+    incoming_ui: &str,
+    logical_width: f32,
+    logical_height: f32,
+) -> Result<ScriptEntryFrame, WinitHostError> {
+    let Some(bootstrap) = entry_mount_bootstrap_with_host(
+        entry.compiled_source(),
+        entry.host_snapshot(),
+        inputs,
+        incoming_ui,
+    ) else {
+        return Err(WinitHostError::new(
+            "desktop.entry-script.missing-mount",
+            format!(
+                "desktop entry script {} no longer exposes a mount(host) function",
+                entry.source_path()
+            ),
+        ));
+    };
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+    let execution = backend
+        .execute_module(ScriptModule::for_source_path(
+            entry.source_path(),
+            bootstrap.as_str(),
+        ))
+        .map_err(|error| {
+            WinitHostError::new(
+                "desktop.entry-script.execute-failed",
+                format!(
+                    "failed to execute desktop entry script {} for host input frame ({}): {}",
+                    entry.source_path(),
+                    error.rule(),
+                    error.diagnostic().message()
+                ),
+            )
+        })?;
+    let StructuredValue::String(envelope_json) = execution.value() else {
+        return Err(WinitHostError::new(
+            "desktop.entry-script.invalid-result",
+            format!(
+                "desktop entry script {} returned a non-envelope value for host input frame",
+                entry.source_path()
+            ),
+        ));
+    };
+    let envelope = parse_entry_envelope(envelope_json).map_err(|error| {
+        WinitHostError::new(
+            "desktop.entry-script.envelope-invalid",
+            format!(
+                "desktop entry script {} returned an invalid host envelope: {}",
+                entry.source_path(),
+                error.message()
+            ),
+        )
+    })?;
+    let entry_tree = EntryNode::from_tree_json(&envelope.tree_json).map_err(|message| {
+        WinitHostError::new(
+            "desktop.entry-script.tree-invalid",
+            format!(
+                "desktop entry script {} returned an invalid runtime tree: {message}",
+                entry.source_path()
+            ),
+        )
+    })?;
+    let runtime_tree = entry_tree
+        .to_view_tree(logical_width, logical_height)
+        .map_err(|error| {
+            WinitHostError::new(
+                "desktop.entry-script.tree-build-failed",
+                format!(
+                    "desktop entry script {} produced a tree that cannot be rendered: {error:?}",
+                    entry.source_path()
+                ),
+            )
+        })?;
+    Ok(ScriptEntryFrame {
+        runtime_tree,
+        ui_json: envelope.ui_json,
+    })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -875,7 +1097,15 @@ impl ApplicationHandler<WinitDesktopRuntimeUserEvent> for RuntimeApplication {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeLifecycle, logical_size_to_f32};
+    use hawk2ui_host::{DesktopHostEvent, KeyboardInput, PointerInput};
+    use hawk2ui_layout::Viewport;
+    use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge};
+    use hawk2ui_script::{FrameInput, HostSnapshot};
+
+    use super::{
+        RuntimeLifecycle, WinitDesktopScriptEntry, desktop_frame_inputs_from_host_events,
+        logical_size_to_f32, run_script_entry_frame,
+    };
 
     #[test]
     fn runtime_lifecycle_stops_presenting_frames_after_close() {
@@ -921,5 +1151,76 @@ mod tests {
         assert!(logical_size_to_f32(0.0).is_err());
         assert!(logical_size_to_f32(f64::INFINITY).is_err());
         assert!(logical_size_to_f32(f64::MAX).is_err());
+    }
+
+    #[test]
+    fn desktop_frame_inputs_project_pointer_keyboard_and_focus_events() {
+        let inputs = desktop_frame_inputs_from_host_events(&[
+            DesktopHostEvent::PointerInput(PointerInput::new(12.5, 34.0, "left-down")),
+            DesktopHostEvent::KeyboardInput(KeyboardInput::new("KeyA", true)),
+            DesktopHostEvent::FocusChanged(false),
+            DesktopHostEvent::Resized(hawk2ui_host::SurfaceMetrics::new(640.0, 480.0, 1.0)),
+        ]);
+
+        assert_eq!(
+            inputs,
+            vec![
+                FrameInput::Pointer {
+                    x: 12.5,
+                    y: 34.0,
+                    button: "left-down".to_string(),
+                },
+                FrameInput::Key {
+                    key: "KeyA".to_string(),
+                    pressed: true,
+                },
+                FrameInput::Focus { focused: false },
+            ]
+        );
+    }
+
+    #[test]
+    fn script_entry_frame_applies_current_host_events_and_threads_ui_state() {
+        let entry = WinitDesktopScriptEntry::new(
+            "src/entry.js",
+            r#"
+export function mount(host) {
+    const seen = [];
+    host.on("pointer", function (event) {
+        seen.push(event.button + "@" + event.x);
+    });
+    const prior = host.ui && host.ui.count ? host.ui.count : 0;
+    host.setUi({ count: prior + seen.length });
+    return {
+        id: "root",
+        type: "view",
+        children: [{ id: "title", type: "text", text: seen.length ? "event:" + seen[0] : "idle" }]
+    };
+}
+"#,
+            HostSnapshot::default(),
+        );
+
+        let frame = run_script_entry_frame(
+            &entry,
+            &[FrameInput::Pointer {
+                x: 12.5,
+                y: 34.0,
+                button: "left-down".to_string(),
+            }],
+            "null",
+            320.0,
+            200.0,
+        )
+        .expect("script entry frame runs");
+
+        assert_eq!(frame.ui_json, r#"{"count":1}"#);
+        let scene = RuntimeSceneBridge::new(Viewport::new(320.0, 200.0))
+            .build(&frame.runtime_tree)
+            .expect("script frame produces a runtime scene");
+        assert!(scene.draw_commands().iter().any(|command| matches!(
+            command,
+            RuntimeDrawCommand::Text { text, .. } if text == "event:left-down@12.5"
+        )));
     }
 }

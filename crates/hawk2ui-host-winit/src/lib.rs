@@ -19,6 +19,7 @@ use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, TouchPhase,
 pub use runtime::{
     WinitDesktopReload, WinitDesktopReloadKind, WinitDesktopReloadReport, WinitDesktopRuntime,
     WinitDesktopRuntimeConfig, WinitDesktopRuntimeSummary, WinitDesktopRuntimeSurfaceState,
+    WinitDesktopScriptEntry,
 };
 pub use software_frame::{
     DesktopErrorOverlay, SoftwareFrame, SoftwareFrameRenderer, physical_frame_size,
