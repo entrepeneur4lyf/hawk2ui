@@ -11,7 +11,10 @@ use std::{
 };
 
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits, AssetRecord};
-use hawk2ui_authoring::{FrameworkNativeProgram, FrameworkNativeProgramWire, NativeRuntimeBridge};
+use hawk2ui_authoring::{
+    FrameworkDynamicBinding, FrameworkNativeProgram, FrameworkNativeProgramWire,
+    NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
+};
 use hawk2ui_build::{
     ArtifactSchemaVersion, ArtifactSignaturePolicy, ArtifactSignatureVerificationKey,
     ArtifactSignatureVerifier, ArtifactSigningKey, AssetCompilationError, BuildDiagnostic,
@@ -31,8 +34,8 @@ use hawk2ui_plugin_adapters::{
 use hawk2ui_runtime::{EntryNode, RuntimeSceneError, RuntimeViewTree};
 use hawk2ui_schema::schema_catalog_json;
 use hawk2ui_script::{
-    HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue, TimerPolicy,
-    entry_mount_bootstrap,
+    DynamicExpressionEnvironment, HostCallPolicy, ScriptBackend, ScriptModule, StructuredValue,
+    TimerPolicy, entry_mount_bootstrap,
 };
 use hawk2ui_security_model::{PackageTrustRecord, PackageTrustValidator, VerificationReportStatus};
 
@@ -1803,7 +1806,55 @@ fn entry_framework_runtime_tree(
     let bridged = NativeRuntimeBridge::new()
         .bridge_artifact(&authoring)
         .map_err(|error| framework_artifact_diagnostic(framework, error.rule(), error.message()))?;
+    let bridged = apply_initial_framework_dynamic_bindings(framework, bridged)?;
     Ok(Some(bridged.runtime_tree().clone()))
+}
+
+fn apply_initial_framework_dynamic_bindings(
+    framework: &CompiledFrameworkRecord,
+    artifact: NativeRuntimeBridgeArtifact,
+) -> Result<NativeRuntimeBridgeArtifact, Box<CliDiagnostic>> {
+    let dependencies = artifact
+        .dynamic_bindings()
+        .iter()
+        .flat_map(FrameworkDynamicBinding::dependencies)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !dependencies.is_empty() {
+        return Err(Box::new(
+            CliDiagnostic::error(
+                "runtime.desktop.dynamic-environment-missing",
+                format!(
+                    "compiled {} framework artifact for {} declares dynamic dependencies [{}], but desktop initial framework state is not wired yet",
+                    source_framework_label(framework.framework),
+                    framework.source_path,
+                    dependencies.into_iter().collect::<Vec<_>>().join(", ")
+                ),
+            )
+            .file(framework.source_path.clone()),
+        ));
+    }
+    if artifact.dynamic_bindings().is_empty() {
+        return Ok(artifact);
+    }
+    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+    backend
+        .apply_dynamic_bindings(artifact, &DynamicExpressionEnvironment::new())
+        .map_err(|error| {
+            Box::new(
+                CliDiagnostic::error(
+                    "runtime.desktop.dynamic-binding-failed",
+                    format!(
+                        "compiled {} framework artifact for {} has an invalid initial dynamic binding ({}): {}",
+                        source_framework_label(framework.framework),
+                        framework.source_path,
+                        error.rule(),
+                        error.diagnostic().message()
+                    ),
+                )
+                .file(framework.source_path.clone()),
+            )
+        })
 }
 
 fn entry_script_mount_app_model(
@@ -2648,6 +2699,165 @@ name = "linux-wayland"
             command,
             hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Manifest Only Title"
         )));
+    }
+
+    #[test]
+    fn desktop_runtime_config_applies_dependency_free_framework_dynamic_bindings() {
+        let manifest = HawkManifest::parse(
+            r#"[identity]
+id = "com.example.framework-dynamic"
+name = "Framework Dynamic"
+version = "1.0.0"
+
+[source]
+entry = "src/App.tsx"
+framework = "react"
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+        )
+        .expect("manifest parses");
+        let compiler_artifact = r#"{
+  "schema_version": 1,
+  "root": {
+    "id": "root",
+    "kind": "view",
+    "children": [
+      {
+        "key": "title",
+        "node": {
+          "id": "title",
+          "kind": "text",
+          "props": [
+            { "name": "text", "value": { "type": "string", "value": "Static Fallback" } },
+            { "name": "width", "value": { "type": "number", "value": 360 } },
+            { "name": "height", "value": { "type": "number", "value": 48 } }
+          ]
+        }
+      }
+    ]
+  },
+  "dynamic_bindings": [
+    {
+      "node_id": "title",
+      "target": { "type": "text" },
+      "expression": "'Dynamic Initial Text'",
+      "dependencies": []
+    }
+  ]
+}"#;
+        let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+            .with_compiled_framework(
+                CompiledFrameworkRecord::new(
+                    "entry",
+                    SourceFramework::React,
+                    "src/App.tsx",
+                    "frameworks/entry.hawk.framework.json",
+                    ArtifactHash::from_bytes(compiler_artifact.as_bytes()),
+                )
+                .with_compiler_artifact_json(compiler_artifact),
+            );
+        let output = BuildWorkspaceOutput {
+            manifest,
+            pipeline: BuildPipeline::production(),
+            artifact,
+            verification: VerificationReport::new("com.example.framework-dynamic"),
+        };
+
+        let config =
+            desktop_runtime_config_from_build_output(&output, true).expect("runtime config builds");
+        let scene = RuntimeSceneBridge::new(Viewport::new(960.0, 540.0))
+            .build(
+                config
+                    .runtime_tree()
+                    .expect("desktop config carries runtime tree"),
+            )
+            .expect("runtime scene builds");
+
+        assert!(scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Text { id, text, .. }
+                if id.as_str() == "title" && text == "Dynamic Initial Text"
+        )));
+        assert!(!scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Static Fallback"
+        )));
+    }
+
+    #[test]
+    fn desktop_runtime_config_rejects_framework_dynamic_bindings_without_initial_environment() {
+        let manifest = HawkManifest::parse(
+            r#"[identity]
+id = "com.example.framework-dynamic-missing-env"
+name = "Framework Dynamic Missing Environment"
+version = "1.0.0"
+
+[source]
+entry = "src/App.tsx"
+framework = "react"
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+        )
+        .expect("manifest parses");
+        let compiler_artifact = r#"{
+  "schema_version": 1,
+  "root": {
+    "id": "root",
+    "kind": "view",
+    "children": [
+      {
+        "key": "title",
+        "node": {
+          "id": "title",
+          "kind": "text",
+          "props": [
+            { "name": "text", "value": { "type": "string", "value": "Static Fallback" } }
+          ]
+        }
+      }
+    ]
+  },
+  "dynamic_bindings": [
+    {
+      "node_id": "title",
+      "target": { "type": "text" },
+      "expression": "label",
+      "dependencies": ["label"]
+    }
+  ]
+}"#;
+        let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+            .with_compiled_framework(
+                CompiledFrameworkRecord::new(
+                    "entry",
+                    SourceFramework::React,
+                    "src/App.tsx",
+                    "frameworks/entry.hawk.framework.json",
+                    ArtifactHash::from_bytes(compiler_artifact.as_bytes()),
+                )
+                .with_compiler_artifact_json(compiler_artifact),
+            );
+        let output = BuildWorkspaceOutput {
+            manifest,
+            pipeline: BuildPipeline::production(),
+            artifact,
+            verification: VerificationReport::new("com.example.framework-dynamic-missing-env"),
+        };
+
+        let diagnostic = desktop_runtime_config_from_build_output(&output, true)
+            .expect_err("dependency-backed bindings need an explicit initial environment");
+
+        assert_eq!(
+            diagnostic.rule,
+            "runtime.desktop.dynamic-environment-missing"
+        );
+        assert!(diagnostic.message.contains("label"));
     }
 
     #[test]
