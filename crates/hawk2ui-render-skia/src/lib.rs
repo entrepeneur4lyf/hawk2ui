@@ -7,15 +7,19 @@ use hawk2ui_assets::{AssetKind as CompiledAssetKind, AssetRecord};
 use hawk2ui_render::{
     BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, Color,
     CustomSurfaceCategory, CustomSurfaceDrawRequest, CustomSurfaceError, CustomSurfaceFrameContext,
-    Geometry, RendererBackend, RendererCacheInvalidator, Stroke, Transform,
+    Geometry, RendererBackend, RendererCacheInvalidator, ShaderEffectChildInput,
+    ShaderEffectUniform, ShaderEffectUniformValue, Stroke, Transform,
 };
-use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneFrame, RuntimeStyledBoxVisual};
+use hawk2ui_runtime::{
+    RuntimeDrawCommand, RuntimeSceneFrame, RuntimeShaderEffectVisual, RuntimeStyledBoxVisual,
+};
 use hawk2ui_text::TextLayout;
 use skia_safe::{
-    AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
-    FontMgr, FontStyle, IRect, Image, ImageInfo, MaskFilter, Matrix, Paint, PaintStyle, Path,
-    PathBuilder, Rect, RuntimeEffect, SamplingOptions, Surface, TileMode, Typeface, gradient,
-    images, runtime_effect, surfaces,
+    AlphaType, BlendMode, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data,
+    FilterMode, Font, FontMgr, FontStyle, IRect, Image, ImageInfo, MaskFilter, Matrix, MipmapMode,
+    Paint, PaintStyle, Path, PathBuilder, Rect, RuntimeEffect, SamplingOptions, Surface, TileMode,
+    Typeface, canvas::SrcRectConstraint, gradient, image::RequiredProperties, images,
+    runtime_effect, surfaces,
 };
 
 const MAX_RUNTIME_EFFECT_SOURCE_BYTES: usize = 64 * 1024;
@@ -116,6 +120,268 @@ impl SkiaRendererCapabilities {
     }
 }
 
+/// Blend mode for explicit Skia compositing operations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SkiaBlendMode {
+    /// Source-over alpha compositing.
+    SrcOver,
+    /// Source replaces destination.
+    Src,
+    /// Destination is preserved where source is drawn.
+    Dst,
+    /// Adds source and destination channels with saturation.
+    Plus,
+    /// Multiplies source and destination channels.
+    Multiply,
+    /// Screens source and destination channels.
+    Screen,
+    /// Overlays source and destination channels.
+    Overlay,
+    /// Computes the absolute difference between source and destination channels.
+    Difference,
+}
+
+impl SkiaBlendMode {
+    fn to_blend_mode(self) -> BlendMode {
+        match self {
+            Self::SrcOver => BlendMode::SrcOver,
+            Self::Src => BlendMode::Src,
+            Self::Dst => BlendMode::Dst,
+            Self::Plus => BlendMode::Plus,
+            Self::Multiply => BlendMode::Multiply,
+            Self::Screen => BlendMode::Screen,
+            Self::Overlay => BlendMode::Overlay,
+            Self::Difference => BlendMode::Difference,
+        }
+    }
+}
+
+/// Image sampling mode used for explicit image draws.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SkiaImageSampling {
+    /// Nearest-neighbor sampling for crisp pixel-aligned UI assets.
+    Nearest,
+    /// Linear sampling for scaled photographic or soft-edge assets.
+    Linear,
+}
+
+impl SkiaImageSampling {
+    fn to_filter_mode(self) -> FilterMode {
+        match self {
+            Self::Nearest => FilterMode::Nearest,
+            Self::Linear => FilterMode::Linear,
+        }
+    }
+}
+
+/// Image mipmap sampling mode used for explicit image draws.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SkiaImageMipmapMode {
+    /// Disable mipmap sampling.
+    None,
+    /// Select the nearest mipmap level.
+    Nearest,
+    /// Blend between mipmap levels.
+    Linear,
+}
+
+impl SkiaImageMipmapMode {
+    fn to_mipmap_mode(self) -> MipmapMode {
+        match self {
+            Self::None => MipmapMode::None,
+            Self::Nearest => MipmapMode::Nearest,
+            Self::Linear => MipmapMode::Linear,
+        }
+    }
+}
+
+/// Image tile mode used for shader-backed image draws.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SkiaImageTileMode {
+    /// Clamp sampling to the nearest edge pixel.
+    Clamp,
+    /// Repeat the image periodically.
+    Repeat,
+    /// Mirror the image periodically.
+    Mirror,
+    /// Treat samples outside the image as transparent.
+    Decal,
+}
+
+impl SkiaImageTileMode {
+    fn to_tile_mode(self) -> TileMode {
+        match self {
+            Self::Clamp => TileMode::Clamp,
+            Self::Repeat => TileMode::Repeat,
+            Self::Mirror => TileMode::Mirror,
+            Self::Decal => TileMode::Decal,
+        }
+    }
+}
+
+/// Explicit image draw controls for Skia asset rendering.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SkiaImageDrawOptions {
+    source_rect: Option<Geometry>,
+    sampling: SkiaImageSampling,
+    mipmaps: SkiaImageMipmapMode,
+    tile_x: SkiaImageTileMode,
+    tile_y: SkiaImageTileMode,
+}
+
+impl SkiaImageDrawOptions {
+    /// Creates default image draw options: full source, nearest sampling, no mipmaps, clamp tiles.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            source_rect: None,
+            sampling: SkiaImageSampling::Nearest,
+            mipmaps: SkiaImageMipmapMode::None,
+            tile_x: SkiaImageTileMode::Clamp,
+            tile_y: SkiaImageTileMode::Clamp,
+        }
+    }
+
+    /// Sets the source rectangle in image pixel coordinates.
+    #[must_use]
+    pub const fn with_source_rect(mut self, source_rect: Geometry) -> Self {
+        self.source_rect = Some(source_rect);
+        self
+    }
+
+    /// Sets the image sampling mode.
+    #[must_use]
+    pub const fn with_sampling(mut self, sampling: SkiaImageSampling) -> Self {
+        self.sampling = sampling;
+        self
+    }
+
+    /// Sets the mipmap sampling mode.
+    #[must_use]
+    pub const fn with_mipmaps(mut self, mipmaps: SkiaImageMipmapMode) -> Self {
+        self.mipmaps = mipmaps;
+        self
+    }
+
+    /// Sets horizontal and vertical tile modes.
+    #[must_use]
+    pub const fn with_tile_modes(
+        mut self,
+        tile_x: SkiaImageTileMode,
+        tile_y: SkiaImageTileMode,
+    ) -> Self {
+        self.tile_x = tile_x;
+        self.tile_y = tile_y;
+        self
+    }
+
+    fn sampling_options(self) -> SamplingOptions {
+        SamplingOptions::new(
+            self.sampling.to_filter_mode(),
+            self.mipmaps.to_mipmap_mode(),
+        )
+    }
+
+    fn uses_tiling(self) -> bool {
+        self.tile_x != SkiaImageTileMode::Clamp || self.tile_y != SkiaImageTileMode::Clamp
+    }
+}
+
+impl Default for SkiaImageDrawOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Stroke options for explicit Skia text draws.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SkiaTextStroke {
+    color: Color,
+    width: f32,
+}
+
+impl SkiaTextStroke {
+    /// Creates a text stroke record.
+    #[must_use]
+    pub const fn new(color: Color, width: f32) -> Self {
+        Self { color, width }
+    }
+}
+
+/// Line decoration options for explicit Skia text draws.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SkiaTextDecoration {
+    color: Color,
+    thickness: f32,
+}
+
+impl SkiaTextDecoration {
+    /// Creates a text decoration record.
+    #[must_use]
+    pub const fn new(color: Color, thickness: f32) -> Self {
+        Self { color, thickness }
+    }
+}
+
+/// Explicit text drawing controls for Skia text rendering.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SkiaTextDrawOptions {
+    highlight: Option<Color>,
+    stroke: Option<SkiaTextStroke>,
+    underline: Option<SkiaTextDecoration>,
+    strikethrough: Option<SkiaTextDecoration>,
+    subpixel: bool,
+}
+
+impl SkiaTextDrawOptions {
+    /// Creates default text draw options with fill-only, anti-aliased text.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            highlight: None,
+            stroke: None,
+            underline: None,
+            strikethrough: None,
+            subpixel: false,
+        }
+    }
+
+    /// Adds a rectangular highlight behind the measured text run.
+    #[must_use]
+    pub const fn with_highlight(mut self, color: Color) -> Self {
+        self.highlight = Some(color);
+        self
+    }
+
+    /// Adds an outline stroke before the filled glyph pass.
+    #[must_use]
+    pub const fn with_stroke(mut self, color: Color, width: f32) -> Self {
+        self.stroke = Some(SkiaTextStroke::new(color, width));
+        self
+    }
+
+    /// Adds an underline decoration.
+    #[must_use]
+    pub const fn with_underline(mut self, color: Color, thickness: f32) -> Self {
+        self.underline = Some(SkiaTextDecoration::new(color, thickness));
+        self
+    }
+
+    /// Adds a strikethrough decoration.
+    #[must_use]
+    pub const fn with_strikethrough(mut self, color: Color, thickness: f32) -> Self {
+        self.strikethrough = Some(SkiaTextDecoration::new(color, thickness));
+        self
+    }
+
+    /// Enables or disables Skia subpixel positioning for this draw.
+    #[must_use]
+    pub const fn with_subpixel(mut self, subpixel: bool) -> Self {
+        self.subpixel = subpixel;
+        self
+    }
+}
+
 /// Numeric uniform binding for a Skia runtime shader effect.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkiaRuntimeEffectUniform {
@@ -207,6 +473,15 @@ impl SkiaRuntimeEffectUniform {
     }
 }
 
+impl From<&ShaderEffectUniform> for SkiaRuntimeEffectUniform {
+    fn from(uniform: &ShaderEffectUniform) -> Self {
+        match uniform.value() {
+            ShaderEffectUniformValue::Float(values) => Self::floats(uniform.name(), values.clone()),
+            ShaderEffectUniformValue::Int(values) => Self::ints(uniform.name(), values.clone()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum SkiaRuntimeEffectUniformValue {
     Float(Vec<f32>),
@@ -240,6 +515,12 @@ impl SkiaRuntimeEffectChildInput {
     #[must_use]
     pub fn asset_id(&self) -> &str {
         &self.asset_id
+    }
+}
+
+impl From<&ShaderEffectChildInput> for SkiaRuntimeEffectChildInput {
+    fn from(child: &ShaderEffectChildInput) -> Self {
+        Self::image(child.name(), child.asset_id())
     }
 }
 
@@ -720,7 +1001,8 @@ impl SkiaRendererBackend {
             capabilities: BackendCapabilities::new()
                 .with_gpu(false)
                 .with_text(true)
-                .with_images(true),
+                .with_images(true)
+                .with_runtime_effects(true),
             surfaces: BTreeMap::new(),
             active_surface: None,
             commands: Vec::new(),
@@ -1176,9 +1458,37 @@ impl SkiaRendererBackend {
         font_size: f32,
         color: Color,
     ) -> Result<(), BackendError> {
-        self.render_text_at(text, x, y, font_size, color)?;
+        self.render_text_at_with_options(text, x, y, font_size, color, SkiaTextDrawOptions::new())?;
         self.commands
             .push(format!("text-at:{text}:{x},{y}:{font_size}"));
+        Ok(())
+    }
+
+    /// Draws text at a concrete baseline position with explicit stroke, decoration, highlight,
+    /// and subpixel controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, text support is unavailable, font
+    /// size or option metrics are invalid, or a typeface cannot be resolved.
+    pub fn draw_text_at_with_options(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        color: Color,
+        options: SkiaTextDrawOptions,
+    ) -> Result<(), BackendError> {
+        self.render_text_at_with_options(text, x, y, font_size, color, options)?;
+        self.commands.push(format!(
+            "text-at-options:{text}:{x},{y}:{font_size}:stroke={}:underline={}:strike={}:highlight={}:subpixel={}",
+            options.stroke.is_some(),
+            options.underline.is_some(),
+            options.strikethrough.is_some(),
+            options.highlight.is_some(),
+            options.subpixel
+        ));
         Ok(())
     }
 
@@ -1208,6 +1518,57 @@ impl SkiaRendererBackend {
         Ok(())
     }
 
+    /// Pushes an SVG path clip onto the current Skia canvas.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame or the SVG path cannot be parsed.
+    pub fn push_clip_path(&mut self, path: &str) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        let Some(skia_path) = Path::from_svg(path) else {
+            return self.fail(
+                "skia.clip-path.invalid",
+                "clip path data is not valid SVG path syntax",
+            );
+        };
+        self.with_active_surface(|surface| {
+            surface
+                .canvas()
+                .clip_path(&skia_path, ClipOp::Intersect, true);
+        })?;
+        self.commands.push(format!("clip-path:{path}"));
+        Ok(())
+    }
+
+    /// Draws a filled rectangle with an explicit Skia blend mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame or the destination geometry is
+    /// invalid.
+    pub fn draw_blended_rect(
+        &mut self,
+        geometry: Geometry,
+        color: Color,
+        blend_mode: SkiaBlendMode,
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        validate_geometry("skia.blend.invalid-geometry", geometry).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        self.with_active_surface(|surface| {
+            let mut paint = paint(color, PaintStyle::Fill);
+            paint.set_anti_alias(true);
+            paint.set_blend_mode(blend_mode.to_blend_mode());
+            surface.canvas().draw_rect(rect(geometry), &paint);
+        })?;
+        self.commands.push(format!(
+            "blend-rect:{},{},{},{}:{blend_mode:?}",
+            geometry.x, geometry.y, geometry.width, geometry.height
+        ));
+        Ok(())
+    }
+
     /// Draws a registered image asset into a destination rectangle.
     ///
     /// # Errors
@@ -1215,6 +1576,22 @@ impl SkiaRendererBackend {
     /// Returns [`BackendError`] when there is no active frame, the image is missing, or the
     /// destination geometry is invalid.
     pub fn draw_image_rect(&mut self, image: &str, geometry: Geometry) -> Result<(), BackendError> {
+        self.draw_image_rect_with_options(image, geometry, SkiaImageDrawOptions::new())
+    }
+
+    /// Draws a registered image asset into a destination rectangle with explicit sampling,
+    /// source-rect, mipmap, and tiling controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, the image is missing, destination
+    /// or source geometry is invalid, or Skia cannot materialize a shader for tiled drawing.
+    pub fn draw_image_rect_with_options(
+        &mut self,
+        image: &str,
+        geometry: Geometry,
+        options: SkiaImageDrawOptions,
+    ) -> Result<(), BackendError> {
         self.require_active_frame()?;
         validate_geometry("skia.image.invalid-geometry", geometry).inspect_err(|error| {
             self.diagnostics.push(error.diagnostic().clone());
@@ -1231,16 +1608,51 @@ impl SkiaRendererBackend {
                 "compiled image asset is not registered with the renderer",
             );
         };
+        if let Some(source_rect) = options.source_rect {
+            validate_image_source_rect(&asset, source_rect).inspect_err(|error| {
+                self.diagnostics.push(error.diagnostic().clone());
+            })?;
+        }
         self.with_active_surface(|surface| {
             let mut paint = Paint::default();
             paint.set_anti_alias(true);
             let dst = rect(geometry);
-            surface.canvas().draw_image_rect(asset, None, dst, &paint);
-        })?;
-        self.commands.push(format!(
-            "image-rect:{image}:{},{},{},{}",
-            geometry.x, geometry.y, geometry.width, geometry.height
-        ));
+            if options.uses_tiling() {
+                draw_tiled_image_rect(surface.canvas(), &asset, geometry, options, &mut paint)
+            } else {
+                let source_rect = options.source_rect.map(rect);
+                let source = source_rect
+                    .as_ref()
+                    .map(|source| (source, SrcRectConstraint::Strict));
+                surface.canvas().draw_image_rect_with_sampling_options(
+                    asset,
+                    source,
+                    dst,
+                    options.sampling_options(),
+                    &paint,
+                );
+                Ok(())
+            }
+        })??;
+        if options == SkiaImageDrawOptions::new() {
+            self.commands.push(format!(
+                "image-rect:{image}:{},{},{},{}",
+                geometry.x, geometry.y, geometry.width, geometry.height
+            ));
+        } else {
+            self.commands.push(format!(
+                "image-rect:{image}:{},{},{},{}:source={}:sampling={:?}:mipmaps={:?}:tile={:?},{:?}",
+                geometry.x,
+                geometry.y,
+                geometry.width,
+                geometry.height,
+                options.source_rect.is_some(),
+                options.sampling,
+                options.mipmaps,
+                options.tile_x,
+                options.tile_y
+            ));
+        }
         Ok(())
     }
 
@@ -1793,6 +2205,9 @@ impl SkiaRendererBackend {
             RuntimeDrawCommand::VectorAsset {
                 geometry, asset_id, ..
             } => self.draw_runtime_vector_asset(asset_id, *geometry, options),
+            RuntimeDrawCommand::ShaderEffect {
+                geometry, effect, ..
+            } => self.draw_runtime_shader_effect(effect, *geometry),
             RuntimeDrawCommand::CustomSurface { surface, data, .. } => {
                 let context =
                     CustomSurfaceFrameContext::new(options.frame_index, options.dpi_scale)
@@ -1802,6 +2217,21 @@ impl SkiaRendererBackend {
                 self.draw_custom_surface(&request)
             }
         }
+    }
+
+    fn draw_runtime_shader_effect(
+        &mut self,
+        effect: &RuntimeShaderEffectVisual,
+        geometry: Geometry,
+    ) -> Result<(), BackendError> {
+        self.register_runtime_shader_effect(effect.effect_id(), effect.source())?;
+        <Self as RendererBackend>::draw_runtime_effect(
+            self,
+            effect.effect_id(),
+            geometry,
+            effect.uniforms(),
+            effect.children(),
+        )
     }
 
     fn draw_runtime_image_asset(
@@ -2018,6 +2448,18 @@ impl SkiaRendererBackend {
         font_size: f32,
         color: Color,
     ) -> Result<(), BackendError> {
+        self.render_text_at_with_options(text, x, y, font_size, color, SkiaTextDrawOptions::new())
+    }
+
+    fn render_text_at_with_options(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        color: Color,
+        options: SkiaTextDrawOptions,
+    ) -> Result<(), BackendError> {
         self.require_active_frame()?;
         if !self.capabilities.text {
             return self.fail(
@@ -2034,11 +2476,50 @@ impl SkiaRendererBackend {
                 "system font manager did not provide a default typeface",
             );
         };
-        let font = Font::new(typeface, font_size);
+        validate_text_draw_options(options).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        let mut font = Font::new(typeface, font_size);
+        font.set_subpixel(options.subpixel);
+        let mut fill_paint = paint(color, PaintStyle::Fill);
+        fill_paint.set_anti_alias(true);
+        let text_width = measured_text_width(&font, text, &fill_paint, font_size);
         self.with_active_surface(|surface| {
-            let mut paint = paint(color, PaintStyle::Fill);
-            paint.set_anti_alias(true);
-            surface.canvas().draw_str(text, (x, y), &font, &paint);
+            if let Some(highlight) = options.highlight {
+                let mut highlight_paint = paint(highlight, PaintStyle::Fill);
+                highlight_paint.set_anti_alias(false);
+                surface.canvas().draw_rect(
+                    Rect::from_xywh(x, y - font_size, text_width, font_size * 1.1),
+                    &highlight_paint,
+                );
+            }
+            if let Some(stroke) = options.stroke {
+                let mut stroke_paint = paint(stroke.color, PaintStyle::Stroke);
+                stroke_paint.set_anti_alias(true);
+                stroke_paint.set_stroke_width(stroke.width);
+                surface
+                    .canvas()
+                    .draw_str(text, (x, y), &font, &stroke_paint);
+            }
+            surface.canvas().draw_str(text, (x, y), &font, &fill_paint);
+            if let Some(underline) = options.underline {
+                draw_text_decoration(
+                    surface.canvas(),
+                    x,
+                    y + font_size * 0.1,
+                    text_width,
+                    underline,
+                );
+            }
+            if let Some(strikethrough) = options.strikethrough {
+                draw_text_decoration(
+                    surface.canvas(),
+                    x,
+                    y - font_size * 0.35,
+                    text_width,
+                    strikethrough,
+                );
+            }
         })?;
         Ok(())
     }
@@ -2354,6 +2835,32 @@ impl RendererBackend for SkiaRendererBackend {
         }
     }
 
+    fn register_runtime_shader_effect(
+        &mut self,
+        id: &str,
+        source: &str,
+    ) -> Result<(), BackendError> {
+        SkiaRendererBackend::register_runtime_shader_effect(self, id, source)
+    }
+
+    fn draw_runtime_effect(
+        &mut self,
+        effect_id: &str,
+        geometry: Geometry,
+        uniforms: &[ShaderEffectUniform],
+        children: &[ShaderEffectChildInput],
+    ) -> Result<(), BackendError> {
+        let skia_uniforms: Vec<_> = uniforms
+            .iter()
+            .map(SkiaRuntimeEffectUniform::from)
+            .collect();
+        let skia_children: Vec<_> = children
+            .iter()
+            .map(SkiaRuntimeEffectChildInput::from)
+            .collect();
+        self.draw_runtime_effect_rect(effect_id, geometry, &skia_uniforms, &skia_children)
+    }
+
     fn begin_opacity_group(&mut self, opacity: f32) -> Result<(), BackendError> {
         self.require_active_frame()?;
         validate_opacity(opacity).inspect_err(|error| {
@@ -2457,6 +2964,83 @@ fn validate_runtime_effect_id(id: &str) -> Result<(), BackendError> {
     } else {
         Ok(())
     }
+}
+
+fn validate_image_source_rect(image: &Image, source: Geometry) -> Result<(), BackendError> {
+    let image_width = f64::from(image.width());
+    let image_height = f64::from(image.height());
+    if [source.x, source.y, source.width, source.height]
+        .iter()
+        .any(|value| !value.is_finite())
+        || source.width <= 0.0
+        || source.height <= 0.0
+        || source.x < 0.0
+        || source.y < 0.0
+        || f64::from(source.x + source.width) > image_width
+        || f64::from(source.y + source.height) > image_height
+    {
+        Err(BackendError::new(
+            "skia.image.source-rect.invalid",
+            "image source rectangle must be finite, positive, and inside the image bounds",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn draw_tiled_image_rect(
+    canvas: &Canvas,
+    image: &Image,
+    geometry: Geometry,
+    options: SkiaImageDrawOptions,
+    paint: &mut Paint,
+) -> Result<(), BackendError> {
+    let tile_image = if let Some(source) = options.source_rect {
+        let subset = pixel_aligned_source_rect(source)?;
+        image
+            .make_subset(None, subset, RequiredProperties::default())
+            .ok_or_else(|| {
+                BackendError::new(
+                    "skia.image.subset-failed",
+                    "Skia failed to create a source subset for tiled image drawing",
+                )
+            })?
+    } else {
+        image.clone()
+    };
+    let local_matrix = Matrix::translate((-geometry.x, -geometry.y));
+    let Some(shader) = tile_image.to_shader(
+        Some((options.tile_x.to_tile_mode(), options.tile_y.to_tile_mode())),
+        options.sampling_options(),
+        Some(&local_matrix),
+    ) else {
+        return Err(BackendError::new(
+            "skia.image.shader-failed",
+            "Skia failed to create a shader for tiled image drawing",
+        ));
+    };
+    paint.set_shader(shader);
+    canvas.draw_rect(rect(geometry), paint);
+    Ok(())
+}
+
+fn pixel_aligned_source_rect(source: Geometry) -> Result<IRect, BackendError> {
+    if [source.x, source.y, source.width, source.height]
+        .iter()
+        .any(|value| value.fract() != 0.0)
+    {
+        return Err(BackendError::new(
+            "skia.image.source-rect.not-pixel-aligned",
+            "tiled image source rectangles must use whole pixel coordinates",
+        ));
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    Ok(IRect::from_xywh(
+        source.x as i32,
+        source.y as i32,
+        source.width as i32,
+        source.height as i32,
+    ))
 }
 
 fn validate_runtime_effect_source(source: &str) -> Result<(), BackendError> {
@@ -2913,6 +3497,51 @@ fn validate_text_placement(x: f32, y: f32, font_size: f32) -> Result<(), Backend
             "text position and font size must be finite and font size must be greater than zero",
         ))
     }
+}
+
+fn validate_text_draw_options(options: SkiaTextDrawOptions) -> Result<(), BackendError> {
+    for width in [
+        options.stroke.map(|stroke| stroke.width),
+        options.underline.map(|decoration| decoration.thickness),
+        options.strikethrough.map(|decoration| decoration.thickness),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !width.is_finite() || width <= 0.0 {
+            return Err(BackendError::new(
+                "skia.text.invalid-options",
+                "text stroke and decoration widths must be finite and greater than zero",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn measured_text_width(font: &Font, text: &str, paint: &Paint, font_size: f32) -> f32 {
+    let (advance, bounds) = font.measure_str(text, Some(paint));
+    let width = advance.max(bounds.width());
+    if width.is_finite() && width > 0.0 {
+        width
+    } else {
+        let char_count = u16::try_from(text.chars().count()).unwrap_or(u16::MAX);
+        (f32::from(char_count) * font_size * 0.5).max(1.0)
+    }
+}
+
+fn draw_text_decoration(
+    canvas: &Canvas,
+    x: f32,
+    y: f32,
+    width: f32,
+    decoration: SkiaTextDecoration,
+) {
+    let mut paint = paint(decoration.color, PaintStyle::Fill);
+    paint.set_anti_alias(false);
+    canvas.draw_rect(
+        Rect::from_xywh(x, y, width.max(1.0), decoration.thickness),
+        &paint,
+    );
 }
 
 fn validate_text_layout(

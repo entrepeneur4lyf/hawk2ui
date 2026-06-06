@@ -13,7 +13,8 @@ pub use assets::{
 };
 pub use backend::{
     BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, RecordingBackend,
-    RendererBackend, RendererCacheInvalidator,
+    RendererBackend, RendererCacheInvalidator, ShaderEffectChildInput, ShaderEffectUniform,
+    ShaderEffectUniformValue,
 };
 pub use custom_surface::{
     CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory, CustomSurfaceDataSnapshot,

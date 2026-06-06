@@ -10,9 +10,12 @@ use hawk2ui_render::{
     BackendError, Color, CustomDrawSurface, CustomSurfaceCapability, CustomSurfaceCategory,
     CustomSurfaceDataSnapshot, Geometry, GlowLayer, GradientLayer, InvalidationReason, LayerKind,
     LayerStack, LayerValidationError, PaintCommandList, PaintLayer, RendererCacheInvalidator,
-    RoundedRect, SceneGraph, SceneGraphDiff, SceneGraphError, SceneNode, SceneNodeId, ShadowLayer,
-    TextLayer, Transform, export_paint_commands,
+    RoundedRect, SceneGraph, SceneGraphDiff, SceneGraphError, SceneNode, SceneNodeId,
+    ShaderEffectChildInput, ShaderEffectUniform, ShadowLayer, TextLayer, Transform,
+    export_paint_commands,
 };
+
+const MAX_RUNTIME_SHADER_EFFECT_SOURCE_BYTES: usize = 64 * 1024;
 
 /// Stable runtime view identifier.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -393,6 +396,66 @@ impl Default for RuntimeStyledBoxVisual {
     }
 }
 
+/// Runtime shader effect visual attached to a retained view node.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RuntimeShaderEffectVisual {
+    effect_id: String,
+    source: String,
+    uniforms: Vec<ShaderEffectUniform>,
+    children: Vec<ShaderEffectChildInput>,
+}
+
+impl RuntimeShaderEffectVisual {
+    /// Creates a runtime shader effect visual from a stable effect ID and backend shader source.
+    #[must_use]
+    pub fn new(effect_id: impl Into<String>, source: impl Into<String>) -> Self {
+        Self {
+            effect_id: effect_id.into(),
+            source: source.into(),
+            uniforms: Vec::new(),
+            children: Vec::new(),
+        }
+    }
+
+    /// Adds a typed uniform binding.
+    #[must_use]
+    pub fn with_uniform(mut self, uniform: ShaderEffectUniform) -> Self {
+        self.uniforms.push(uniform);
+        self
+    }
+
+    /// Adds an image child binding.
+    #[must_use]
+    pub fn with_child(mut self, child: ShaderEffectChildInput) -> Self {
+        self.children.push(child);
+        self
+    }
+
+    /// Returns the stable effect ID.
+    #[must_use]
+    pub fn effect_id(&self) -> &str {
+        &self.effect_id
+    }
+
+    /// Returns the backend shader source.
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// Returns typed uniform bindings.
+    #[must_use]
+    pub fn uniforms(&self) -> &[ShaderEffectUniform] {
+        &self.uniforms
+    }
+
+    /// Returns image child bindings.
+    #[must_use]
+    pub fn children(&self) -> &[ShaderEffectChildInput] {
+        &self.children
+    }
+}
+
 /// Visual payload attached to a runtime view node.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeVisual {
@@ -408,6 +471,8 @@ pub enum RuntimeVisual {
     ImageAsset(String),
     /// Compiled vector asset visual.
     VectorAsset(String),
+    /// Runtime shader effect visual.
+    ShaderEffect(RuntimeShaderEffectVisual),
     /// Custom renderer-owned draw surface visual.
     CustomSurface(RuntimeCustomSurfaceVisual),
 }
@@ -555,6 +620,15 @@ pub enum RuntimeDrawCommand {
         /// Compiled asset identifier.
         asset_id: String,
     },
+    /// Runtime shader effect draw command.
+    ShaderEffect {
+        /// View node that produced this command.
+        id: RuntimeViewId,
+        /// Resolved layout geometry.
+        geometry: Geometry,
+        /// Runtime shader effect and bindings.
+        effect: RuntimeShaderEffectVisual,
+    },
     /// Custom renderer-owned draw surface command.
     CustomSurface {
         /// View node that produced this command.
@@ -578,6 +652,7 @@ impl RuntimeDrawCommand {
             | Self::Text { id, .. }
             | Self::ImageAsset { id, .. }
             | Self::VectorAsset { id, .. }
+            | Self::ShaderEffect { id, .. }
             | Self::CustomSurface { id, .. } => id,
         }
     }
@@ -591,6 +666,7 @@ impl RuntimeDrawCommand {
             | Self::Text { geometry, .. }
             | Self::ImageAsset { geometry, .. }
             | Self::VectorAsset { geometry, .. }
+            | Self::ShaderEffect { geometry, .. }
             | Self::CustomSurface { geometry, .. } => *geometry,
         }
     }
@@ -1062,6 +1138,13 @@ impl RuntimeViewTree {
                         asset_id: asset_id.clone(),
                     });
                 }
+                RuntimeVisual::ShaderEffect(effect) => {
+                    draw_commands.push(RuntimeDrawCommand::ShaderEffect {
+                        id: entry.node.id().clone(),
+                        geometry,
+                        effect: effect.clone(),
+                    });
+                }
                 RuntimeVisual::CustomSurface(surface) => {
                     draw_commands.push(RuntimeDrawCommand::CustomSurface {
                         id: entry.node.id().clone(),
@@ -1272,6 +1355,13 @@ fn validate_runtime_node(node: &RuntimeViewNode) -> Result<(), RuntimeSceneError
                 ));
             }
         }
+        RuntimeVisual::ShaderEffect(effect) => {
+            if !is_valid_shader_effect_visual(effect) {
+                return Err(RuntimeSceneError::InvalidNode(
+                    node.id().as_str().to_string(),
+                ));
+            }
+        }
         RuntimeVisual::None
         | RuntimeVisual::Fill(_)
         | RuntimeVisual::Text(_)
@@ -1363,6 +1453,54 @@ fn is_valid_styled_box_visual(visual: &RuntimeStyledBoxVisual) -> bool {
         && visual
             .glow()
             .is_none_or(|glow| glow.blur_radius().is_finite() && glow.blur_radius() >= 0.0)
+}
+
+fn is_valid_shader_effect_visual(visual: &RuntimeShaderEffectVisual) -> bool {
+    if !is_valid_runtime_id(visual.effect_id())
+        || visual.source().trim().is_empty()
+        || visual.source().len() > MAX_RUNTIME_SHADER_EFFECT_SOURCE_BYTES
+    {
+        return false;
+    }
+    let mut uniforms = BTreeSet::new();
+    for uniform in visual.uniforms() {
+        if !is_valid_shader_binding_id(uniform.name())
+            || !uniforms.insert(uniform.name().to_string())
+        {
+            return false;
+        }
+        match uniform.value() {
+            hawk2ui_render::ShaderEffectUniformValue::Float(values) => {
+                if values.is_empty() || values.iter().any(|value| !value.is_finite()) {
+                    return false;
+                }
+            }
+            hawk2ui_render::ShaderEffectUniformValue::Int(values) => {
+                if values.is_empty() {
+                    return false;
+                }
+            }
+        }
+    }
+    let mut children = BTreeSet::new();
+    for child in visual.children() {
+        if !is_valid_shader_binding_id(child.name())
+            || !is_valid_asset_id(child.asset_id())
+            || !children.insert(child.name().to_string())
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_valid_shader_binding_id(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 fn is_valid_runtime_id(value: &str) -> bool {

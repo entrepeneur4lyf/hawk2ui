@@ -1,10 +1,10 @@
 #![allow(clippy::float_cmp)]
 
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
-use hawk2ui_render::RendererBackend;
 use hawk2ui_render::{
     AccessibilityRef, BackendError, Geometry, HitTestGeometry, InvalidationReason, OpacityGroup,
-    OpacityGroupId, SceneEffectId, SceneGraph, SceneLayerId, SceneNode, SceneNodeId, Transform,
+    OpacityGroupId, RendererBackend, SceneEffectId, SceneGraph, SceneLayerId, SceneNode,
+    SceneNodeId, ShaderEffectChildInput, ShaderEffectUniform, Transform,
 };
 
 #[test]
@@ -494,6 +494,46 @@ fn backend_boundary_reports_diagnostics_for_missing_capabilities() {
         .expect_err("missing text capability must fail");
 
     assert_eq!(error.diagnostic().rule(), "backend.capability.text.missing");
+}
+
+#[test]
+fn backend_boundary_records_backend_neutral_runtime_shader_effect_commands() {
+    let capabilities = hawk2ui_render::BackendCapabilities::new().with_runtime_effects(true);
+    let mut backend = hawk2ui_render::RecordingBackend::new(capabilities);
+
+    backend
+        .register_runtime_shader_effect(
+            "solid-red",
+            "uniform float4 color; half4 main(float2 p) { return half4(color); }",
+        )
+        .expect("runtime shader effect registers");
+    backend
+        .draw_runtime_effect(
+            "solid-red",
+            Geometry::new(4.0, 6.0, 32.0, 18.0),
+            &[ShaderEffectUniform::float4("color", [1.0, 0.0, 0.0, 1.0])],
+            &[ShaderEffectChildInput::image("mask", "noise")],
+        )
+        .expect("runtime shader effect records");
+
+    assert_eq!(
+        backend.command_keys(),
+        [
+            "runtime-effect-register:solid-red:bytes=67",
+            "runtime-effect:solid-red:4,6,32,18:uniforms=1:children=1",
+        ]
+    );
+
+    let mut unsupported =
+        hawk2ui_render::RecordingBackend::new(hawk2ui_render::BackendCapabilities::new());
+    let error = unsupported
+        .draw_runtime_effect("solid-red", Geometry::new(4.0, 6.0, 32.0, 18.0), &[], &[])
+        .expect_err("runtime shader effects must require explicit backend support");
+
+    assert_eq!(
+        error.diagnostic().rule(),
+        "backend.capability.runtime-effect.missing"
+    );
 }
 
 #[test]

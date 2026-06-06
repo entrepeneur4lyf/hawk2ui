@@ -48,8 +48,8 @@ pub use script::{
 pub use view::{
     RuntimeCustomSurfaceVisual, RuntimeDrawCommand, RuntimeGlowEffect, RuntimeLinearGradient,
     RuntimeSceneBridge, RuntimeSceneError, RuntimeSceneFrame, RuntimeSceneUpdate,
-    RuntimeShadowEffect, RuntimeStyledBoxVisual, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode,
-    RuntimeViewTree, RuntimeVisual,
+    RuntimeShaderEffectVisual, RuntimeShadowEffect, RuntimeStyledBoxVisual, RuntimeTextVisual,
+    RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
 };
 
 /// The canonical Cargo package name for this crate.

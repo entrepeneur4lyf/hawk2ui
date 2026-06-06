@@ -2,11 +2,13 @@
 
 use hawk2ui_api::Diagnostic;
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, LayoutValue};
-use hawk2ui_render::{Color, CustomSurfaceCategory, Transform};
+use hawk2ui_render::{
+    Color, CustomSurfaceCategory, ShaderEffectChildInput, ShaderEffectUniform, Transform,
+};
 use hawk2ui_runtime::{
     RuntimeCustomSurfaceVisual, RuntimeGlowEffect, RuntimeLinearGradient, RuntimeSceneError,
-    RuntimeShadowEffect, RuntimeStyledBoxVisual, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode,
-    RuntimeViewTree, RuntimeVisual,
+    RuntimeShaderEffectVisual, RuntimeShadowEffect, RuntimeStyledBoxVisual, RuntimeTextVisual,
+    RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
 };
 use hawk2ui_style::{
     CompiledStyleSheet, PropertyId, RuntimeStyleError, RuntimeStyleTable, StyleValue, TokenSet,
@@ -791,13 +793,57 @@ fn visual(
                 .or_else(|| styled_color(element, styles, "color"))
                 .unwrap_or(Color::rgba(255, 255, 255, 255)),
         ))),
-        ElementKind::View | ElementKind::Button => {
-            Ok(styled_box_visual(element, styles)?.unwrap_or(RuntimeVisual::None))
-        }
+        ElementKind::View | ElementKind::Button => Ok(shader_effect_visual(element)?
+            .or(styled_box_visual(element, styles)?)
+            .unwrap_or(RuntimeVisual::None)),
         ElementKind::CustomSurface => Ok(RuntimeVisual::CustomSurface(
             RuntimeCustomSurfaceVisual::new(custom_surface_category(element)?),
         )),
     }
+}
+
+fn shader_effect_visual(
+    element: &NativeAuthoringElement,
+) -> Result<Option<RuntimeVisual>, NativeRuntimeBridgeError> {
+    let effect_id = string_prop(element, "shader_effect_id");
+    let source = string_prop(element, "shader_effect_source");
+    if effect_id.is_none() && source.is_none() {
+        return Ok(None);
+    }
+    let (Some(effect_id), Some(source)) = (effect_id, source) else {
+        return Err(NativeRuntimeBridgeError::new(
+            "native-runtime.shader-effect.missing",
+            "shader effects require both `shader_effect_id` and `shader_effect_source`",
+        ));
+    };
+    let color = color_prop(element, "shader_color")?.unwrap_or(Color::rgba(255, 255, 255, 255));
+    let mut visual = RuntimeShaderEffectVisual::new(effect_id, source).with_uniform(
+        ShaderEffectUniform::float4(
+            "color",
+            [
+                f32::from(color.r) / 255.0,
+                f32::from(color.g) / 255.0,
+                f32::from(color.b) / 255.0,
+                f32::from(color.a) / 255.0,
+            ],
+        ),
+    );
+    match (
+        string_prop(element, "shader_image_child_name"),
+        string_prop(element, "shader_image_asset"),
+    ) {
+        (Some(name), Some(asset_id)) => {
+            visual = visual.with_child(ShaderEffectChildInput::image(name, asset_id));
+        }
+        (None, None) => {}
+        _ => {
+            return Err(NativeRuntimeBridgeError::new(
+                "native-runtime.shader-effect.child-missing",
+                "shader image children require both `shader_image_child_name` and `shader_image_asset`",
+            ));
+        }
+    }
+    Ok(Some(RuntimeVisual::ShaderEffect(visual)))
 }
 
 fn styled_box_visual(

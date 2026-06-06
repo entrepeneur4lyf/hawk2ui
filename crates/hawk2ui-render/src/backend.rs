@@ -5,6 +5,7 @@ use hawk2ui_api::Diagnostic;
 use crate::{Color, Geometry, Stroke, Transform};
 
 /// Renderer backend capabilities.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BackendCapabilities {
     /// GPU acceleration support.
@@ -13,6 +14,8 @@ pub struct BackendCapabilities {
     pub text: bool,
     /// Image rendering support.
     pub images: bool,
+    /// Runtime shader effect support.
+    pub runtime_effects: bool,
 }
 
 impl BackendCapabilities {
@@ -23,6 +26,7 @@ impl BackendCapabilities {
             gpu: false,
             text: false,
             images: false,
+            runtime_effects: false,
         }
     }
 
@@ -44,6 +48,13 @@ impl BackendCapabilities {
     #[must_use]
     pub const fn with_images(mut self, images: bool) -> Self {
         self.images = images;
+        self
+    }
+
+    /// Sets runtime shader effect support.
+    #[must_use]
+    pub const fn with_runtime_effects(mut self, runtime_effects: bool) -> Self {
+        self.runtime_effects = runtime_effects;
         self
     }
 }
@@ -109,6 +120,138 @@ impl BackendError {
 impl From<BackendError> for Diagnostic {
     fn from(error: BackendError) -> Self {
         Self::error(error.diagnostic.rule, error.diagnostic.message)
+    }
+}
+
+/// Numeric uniform binding for a backend-neutral runtime shader effect.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShaderEffectUniform {
+    name: String,
+    value: ShaderEffectUniformValue,
+}
+
+impl ShaderEffectUniform {
+    /// Creates a scalar float uniform binding.
+    #[must_use]
+    pub fn float(name: impl Into<String>, value: f32) -> Self {
+        Self {
+            name: name.into(),
+            value: ShaderEffectUniformValue::Float(vec![value]),
+        }
+    }
+
+    /// Creates a `float2` uniform binding.
+    #[must_use]
+    pub fn float2(name: impl Into<String>, value: [f32; 2]) -> Self {
+        Self {
+            name: name.into(),
+            value: ShaderEffectUniformValue::Float(value.to_vec()),
+        }
+    }
+
+    /// Creates a `float3` uniform binding.
+    #[must_use]
+    pub fn float3(name: impl Into<String>, value: [f32; 3]) -> Self {
+        Self {
+            name: name.into(),
+            value: ShaderEffectUniformValue::Float(value.to_vec()),
+        }
+    }
+
+    /// Creates a `float4` uniform binding.
+    #[must_use]
+    pub fn float4(name: impl Into<String>, value: [f32; 4]) -> Self {
+        Self {
+            name: name.into(),
+            value: ShaderEffectUniformValue::Float(value.to_vec()),
+        }
+    }
+
+    /// Creates a float or float-array uniform binding with caller-supplied arity.
+    #[must_use]
+    pub fn floats(name: impl Into<String>, values: impl Into<Vec<f32>>) -> Self {
+        Self {
+            name: name.into(),
+            value: ShaderEffectUniformValue::Float(values.into()),
+        }
+    }
+
+    /// Creates a scalar int uniform binding.
+    #[must_use]
+    pub fn int(name: impl Into<String>, value: i32) -> Self {
+        Self {
+            name: name.into(),
+            value: ShaderEffectUniformValue::Int(vec![value]),
+        }
+    }
+
+    /// Creates an `int2` uniform binding.
+    #[must_use]
+    pub fn int2(name: impl Into<String>, value: [i32; 2]) -> Self {
+        Self {
+            name: name.into(),
+            value: ShaderEffectUniformValue::Int(value.to_vec()),
+        }
+    }
+
+    /// Creates an int or int-array uniform binding with caller-supplied arity.
+    #[must_use]
+    pub fn ints(name: impl Into<String>, values: impl Into<Vec<i32>>) -> Self {
+        Self {
+            name: name.into(),
+            value: ShaderEffectUniformValue::Int(values.into()),
+        }
+    }
+
+    /// Returns the shader uniform name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the typed uniform value.
+    #[must_use]
+    pub const fn value(&self) -> &ShaderEffectUniformValue {
+        &self.value
+    }
+}
+
+/// Backend-neutral runtime shader uniform value.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ShaderEffectUniformValue {
+    /// Floating-point scalar, vector, matrix, or array data.
+    Float(Vec<f32>),
+    /// Signed integer scalar, vector, or array data.
+    Int(Vec<i32>),
+}
+
+/// Image child binding for a backend-neutral runtime shader effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShaderEffectChildInput {
+    name: String,
+    asset_id: String,
+}
+
+impl ShaderEffectChildInput {
+    /// Creates an image child shader binding by child name and registered image asset ID.
+    #[must_use]
+    pub fn image(name: impl Into<String>, asset_id: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            asset_id: asset_id.into(),
+        }
+    }
+
+    /// Returns the shader child name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the registered image asset ID used as this child shader.
+    #[must_use]
+    pub fn asset_id(&self) -> &str {
+        &self.asset_id
     }
 }
 
@@ -222,6 +365,30 @@ pub trait RendererBackend {
     ///
     /// Returns [`BackendError`] when the layer effect cannot be applied.
     fn apply_layer_effect(&mut self, effect: &str) -> Result<(), BackendError>;
+    /// Registers a runtime shader effect with backend-neutral source.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when runtime shader effects are unsupported or the source cannot
+    /// be accepted by the backend.
+    fn register_runtime_shader_effect(
+        &mut self,
+        id: &str,
+        source: &str,
+    ) -> Result<(), BackendError>;
+    /// Draws geometry filled by a registered runtime shader effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when runtime shader effects are unsupported, geometry is invalid,
+    /// the effect is missing, or uniform/child bindings are invalid for the backend.
+    fn draw_runtime_effect(
+        &mut self,
+        effect_id: &str,
+        geometry: Geometry,
+        uniforms: &[ShaderEffectUniform],
+        children: &[ShaderEffectChildInput],
+    ) -> Result<(), BackendError>;
     /// Begins an opacity compositing group.
     ///
     /// # Errors
@@ -432,6 +599,65 @@ impl RendererBackend for RecordingBackend {
 
     fn apply_layer_effect(&mut self, effect: &str) -> Result<(), BackendError> {
         self.commands.push(format!("effect:{effect}"));
+        Ok(())
+    }
+
+    fn register_runtime_shader_effect(
+        &mut self,
+        id: &str,
+        source: &str,
+    ) -> Result<(), BackendError> {
+        if !self.capabilities.runtime_effects {
+            return Err(BackendError::new(
+                "backend.capability.runtime-effect.missing",
+                "backend does not support runtime shader effects",
+            ));
+        }
+        validate_surface_id(id)?;
+        if source.trim().is_empty() {
+            return Err(BackendError::new(
+                "backend.runtime-effect.source.invalid",
+                "runtime shader effect source must not be empty",
+            ));
+        }
+        self.commands.push(format!(
+            "runtime-effect-register:{id}:bytes={}",
+            source.len()
+        ));
+        Ok(())
+    }
+
+    fn draw_runtime_effect(
+        &mut self,
+        effect_id: &str,
+        geometry: Geometry,
+        uniforms: &[ShaderEffectUniform],
+        children: &[ShaderEffectChildInput],
+    ) -> Result<(), BackendError> {
+        if !self.capabilities.runtime_effects {
+            return Err(BackendError::new(
+                "backend.capability.runtime-effect.missing",
+                "backend does not support runtime shader effects",
+            ));
+        }
+        validate_surface_id(effect_id)?;
+        validate_geometry(geometry)?;
+        for uniform in uniforms {
+            validate_surface_id(uniform.name())?;
+        }
+        for child in children {
+            validate_surface_id(child.name())?;
+            validate_surface_id(child.asset_id())?;
+        }
+        self.commands.push(format!(
+            "runtime-effect:{effect_id}:{},{},{},{}:uniforms={}:children={}",
+            geometry.x,
+            geometry.y,
+            geometry.width,
+            geometry.height,
+            uniforms.len(),
+            children.len()
+        ));
         Ok(())
     }
 

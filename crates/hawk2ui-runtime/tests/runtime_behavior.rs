@@ -5,7 +5,8 @@ use hawk2ui_layout::{
     BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue, TestTextMeasurer, Viewport,
 };
 use hawk2ui_render::{
-    Color, CustomSurfaceCategory, CustomSurfaceDataSnapshot, Geometry, RendererBackend, SceneNodeId,
+    Color, CustomSurfaceCategory, CustomSurfaceDataSnapshot, Geometry, RendererBackend,
+    SceneNodeId, ShaderEffectChildInput, ShaderEffectUniform,
 };
 use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend};
 use hawk2ui_runtime::{
@@ -15,10 +16,11 @@ use hawk2ui_runtime::{
     RuntimeEvent, RuntimeEventDispatcher, RuntimeEventKind, RuntimeEventPayload,
     RuntimeEventPropagation, RuntimeExecutionContext, RuntimeGuardOperation,
     RuntimePersistenceStore, RuntimeSafetyGuard, RuntimeSceneBridge, RuntimeSceneError,
-    RuntimeSceneFrame, RuntimeScheduler, RuntimeStateEntry, RuntimeStateMigration,
-    RuntimeStateScope, RuntimeStateSnapshot, RuntimeStoragePath, RuntimeTextVisual, RuntimeViewId,
-    RuntimeViewNode, RuntimeViewTree, RuntimeVisual, ScriptEngine, ScriptEngineOperation,
-    ScriptModuleKind, ScriptModuleRecord, StructuredValue, TimerJob,
+    RuntimeSceneFrame, RuntimeScheduler, RuntimeShaderEffectVisual, RuntimeStateEntry,
+    RuntimeStateMigration, RuntimeStateScope, RuntimeStateSnapshot, RuntimeStoragePath,
+    RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
+    ScriptEngine, ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord, StructuredValue,
+    TimerJob,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -1109,6 +1111,58 @@ fn runtime_scene_bridge_emits_compiled_asset_draw_commands_and_rejects_raw_paths
     let error = RuntimeSceneBridge::new(Viewport::new(160.0, 96.0))
         .build(&raw_path_tree)
         .expect_err("raw asset paths must not cross runtime render boundary");
+
+    assert_eq!(error, RuntimeSceneError::InvalidNode("root".into()));
+}
+
+#[test]
+fn runtime_scene_bridge_emits_shader_effect_draw_commands() {
+    let effect = RuntimeShaderEffectVisual::new(
+        "solid-red",
+        "uniform float4 color; half4 main(float2 p) { return half4(color); }",
+    )
+    .with_uniform(ShaderEffectUniform::float4("color", [1.0, 0.0, 0.0, 1.0]))
+    .with_child(ShaderEffectChildInput::image("mask", "noise"));
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(48.0, 24.0)),
+        RuntimeVisual::ShaderEffect(effect),
+    ));
+
+    let frame = RuntimeSceneBridge::new(Viewport::new(80.0, 48.0))
+        .build(&tree)
+        .expect("shader effect visual bridges into a draw command");
+
+    let command = frame
+        .draw_commands()
+        .iter()
+        .find_map(|command| match command {
+            RuntimeDrawCommand::ShaderEffect {
+                id,
+                geometry,
+                effect,
+            } => Some((id, geometry, effect)),
+            _ => None,
+        })
+        .expect("shader effect command exists");
+
+    assert_eq!(command.0.as_str(), "root");
+    assert_eq!(*command.1, Geometry::new(0.0, 0.0, 48.0, 24.0));
+    assert_eq!(command.2.effect_id(), "solid-red");
+    assert_eq!(command.2.uniforms().len(), 1);
+    assert_eq!(command.2.children().len(), 1);
+
+    let invalid_tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(48.0, 24.0)),
+        RuntimeVisual::ShaderEffect(RuntimeShaderEffectVisual::new(
+            "",
+            "uniform float4 color; half4 main(float2 p) { return half4(color); }",
+        )),
+    ));
+    let error = RuntimeSceneBridge::new(Viewport::new(80.0, 48.0))
+        .build(&invalid_tree)
+        .expect_err("empty shader effect IDs must be rejected at runtime boundary");
 
     assert_eq!(error, RuntimeSceneError::InvalidNode("root".into()));
 }

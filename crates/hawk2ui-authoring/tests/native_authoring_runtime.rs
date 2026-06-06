@@ -822,6 +822,58 @@ fn native_runtime_bridge_rejects_zero_font_size_before_rendering() {
 }
 
 #[test]
+fn native_runtime_bridge_lowers_shader_effect_props_to_visible_skia_pixels() {
+    let mut runtime = NativeAuthoringRuntime::new("native-shader-effect");
+    runtime.mount(
+        NativeAuthoringElement::new("root", ElementKind::View).with_child(NativeChild::keyed(
+            "shader",
+            NativeAuthoringElement::new("shader", ElementKind::View)
+                .with_prop("width", PropValue::Number(40.0))
+                .with_prop("height", PropValue::Number(24.0))
+                .with_prop("shader_effect_id", PropValue::String("solid-blue".into()))
+                .with_prop(
+                    "shader_effect_source",
+                    PropValue::String(
+                        "uniform float4 color; half4 main(float2 p) { return half4(color); }"
+                            .into(),
+                    ),
+                )
+                .with_prop("shader_color", PropValue::String("#0048ff".into())),
+        )),
+    );
+    let artifact = runtime.finish().expect("authoring finalizes");
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact(&artifact)
+        .expect("shader effect props bridge into runtime");
+    let frame = RuntimeSceneBridge::new(Viewport::new(64.0, 40.0))
+        .build(bridged.runtime_tree())
+        .expect("shader effect runtime scene builds");
+
+    let shader_command = frame
+        .draw_commands()
+        .iter()
+        .find_map(|command| match command {
+            RuntimeDrawCommand::ShaderEffect { effect, .. } => Some(effect),
+            _ => None,
+        })
+        .expect("shader effect draw command exists");
+    assert_eq!(shader_command.effect_id(), "solid-blue");
+    assert_eq!(shader_command.uniforms().len(), 1);
+
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 64, 40).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(0, 0, 0, 255)).unwrap();
+    backend.draw_runtime_scene_frame(&frame, 0, 1.0).unwrap();
+    backend.end_frame("main").unwrap();
+
+    assert_eq!(
+        backend.frame_snapshot("main").unwrap().pixel_at(8, 8),
+        Some(0x0000_48ff)
+    );
+}
+
+#[test]
 fn native_runtime_bridge_renders_authoring_artifact_to_visible_skia_pixels() {
     let mut runtime = NativeAuthoringRuntime::new("native-pixels");
     runtime.mount(

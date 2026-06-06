@@ -3,14 +3,15 @@ use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_render::{
     BackendCapabilities, Color, CustomDrawSurface, CustomSurfaceCategory,
     CustomSurfaceDataSnapshot, CustomSurfaceDrawRequest, CustomSurfaceFrameContext, Geometry,
-    RendererBackend, Transform,
+    RendererBackend, ShaderEffectUniform, Transform,
 };
 use hawk2ui_render_skia::{
-    SkiaRendererBackend, SkiaRuntimeEffectChildInput, SkiaRuntimeEffectUniform, SkiaSurfaceConfig,
+    SkiaBlendMode, SkiaImageDrawOptions, SkiaImageSampling, SkiaImageTileMode, SkiaRendererBackend,
+    SkiaRuntimeEffectChildInput, SkiaRuntimeEffectUniform, SkiaSurfaceConfig, SkiaTextDrawOptions,
 };
 use hawk2ui_runtime::{
-    RuntimeCustomSurfaceVisual, RuntimeSceneBridge, RuntimeViewId, RuntimeViewNode,
-    RuntimeViewTree, RuntimeVisual,
+    RuntimeCustomSurfaceVisual, RuntimeSceneBridge, RuntimeShaderEffectVisual, RuntimeViewId,
+    RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
 };
 use hawk2ui_text::{FontCatalog, LineBreakMode, TextBackend, TextLayoutInput};
 use image::{ColorType, ImageEncoder};
@@ -20,7 +21,8 @@ fn skia_backend_matches_recording_backend_for_core_frame_commands() {
     let capabilities = BackendCapabilities::new()
         .with_gpu(false)
         .with_text(true)
-        .with_images(true);
+        .with_images(true)
+        .with_runtime_effects(true);
     let mut recording = hawk2ui_render::RecordingBackend::new(capabilities);
     let mut skia = SkiaRendererBackend::new();
     skia.register_image_asset("hero", ONE_BY_ONE_PNG).unwrap();
@@ -148,6 +150,59 @@ fn skia_backend_applies_full_affine_transforms() {
 }
 
 #[test]
+fn clip_path_restricts_subsequent_draws_to_vector_geometry() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 24, 24).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(0, 0, 0, 255)).unwrap();
+    backend
+        .push_clip_path("M0 0 L20 0 L0 20 Z")
+        .expect("clip path is accepted");
+    backend
+        .fill(
+            Geometry::new(0.0, 0.0, 24.0, 24.0),
+            Color::rgba(255, 0, 0, 255),
+        )
+        .unwrap();
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+    assert_eq!(snapshot.pixel_at(2, 2), Some(0x00ff_0000));
+    assert_eq!(snapshot.pixel_at(22, 22), Some(0x0000_0000));
+    assert!(
+        backend
+            .command_keys()
+            .contains(&"clip-path:M0 0 L20 0 L0 20 Z".to_string())
+    );
+}
+
+#[test]
+fn blend_mode_rect_composites_with_existing_pixels() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 8, 8).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(255, 0, 0, 255)).unwrap();
+    backend
+        .draw_blended_rect(
+            Geometry::new(0.0, 0.0, 8.0, 8.0),
+            Color::rgba(0, 0, 255, 255),
+            SkiaBlendMode::Plus,
+        )
+        .expect("blend draw succeeds");
+    backend.end_frame("main").unwrap();
+
+    assert_eq!(
+        backend.frame_snapshot("main").unwrap().pixel_at(4, 4),
+        Some(0x00ff_00ff)
+    );
+    assert!(
+        backend
+            .command_keys()
+            .contains(&"blend-rect:0,0,8,8:Plus".to_string())
+    );
+}
+
+#[test]
 fn placed_text_and_images_render_into_target_regions() {
     let mut backend = SkiaRendererBackend::new();
     backend.create_surface("main", 128, 72).unwrap();
@@ -190,6 +245,43 @@ fn placed_text_and_images_render_into_target_regions() {
 }
 
 #[test]
+fn image_draw_options_support_source_rect_sampling_and_tiling() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 8, 8).unwrap();
+    backend
+        .register_image_asset("stripe", &png_rgba(&[255, 0, 0, 255, 0, 0, 255, 255], 2, 1))
+        .unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(0, 0, 0, 255)).unwrap();
+    backend
+        .draw_image_rect_with_options(
+            "stripe",
+            Geometry::new(0.0, 0.0, 4.0, 4.0),
+            SkiaImageDrawOptions::new()
+                .with_source_rect(Geometry::new(1.0, 0.0, 1.0, 1.0))
+                .with_sampling(SkiaImageSampling::Nearest),
+        )
+        .expect("source rect image draw succeeds");
+    backend
+        .draw_image_rect_with_options(
+            "stripe",
+            Geometry::new(0.0, 6.0, 4.0, 1.0),
+            SkiaImageDrawOptions::new()
+                .with_sampling(SkiaImageSampling::Nearest)
+                .with_tile_modes(SkiaImageTileMode::Repeat, SkiaImageTileMode::Clamp),
+        )
+        .expect("tiled image draw succeeds");
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+    assert_eq!(snapshot.pixel_at(1, 1), Some(0x0000_00ff));
+    assert_eq!(snapshot.pixel_at(0, 6), Some(0x00ff_0000));
+    assert_eq!(snapshot.pixel_at(1, 6), Some(0x0000_00ff));
+    assert_eq!(snapshot.pixel_at(2, 6), Some(0x00ff_0000));
+    assert_eq!(snapshot.pixel_at(3, 6), Some(0x0000_00ff));
+}
+
+#[test]
 fn trait_draw_text_uses_configured_default_text_style() {
     let mut backend = SkiaRendererBackend::new();
     backend.create_surface("main", 128, 72).unwrap();
@@ -207,6 +299,45 @@ fn trait_draw_text_uses_configured_default_text_style() {
         count_changed_pixels(snapshot, 0x0008_0a0e, Geometry::new(16.0, 22.0, 72.0, 28.0)) > 0,
         "trait-level text draw must use configured visible placement and color"
     );
+}
+
+#[test]
+fn text_draw_options_render_highlight_decorations_stroke_and_subpixel_command() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 128, 48).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(0, 0, 0, 255)).unwrap();
+    backend
+        .draw_text_at_with_options(
+            "Hi",
+            8.0,
+            26.0,
+            20.0,
+            Color::rgba(255, 255, 255, 255),
+            SkiaTextDrawOptions::new()
+                .with_highlight(Color::rgba(32, 64, 160, 255))
+                .with_stroke(Color::rgba(0, 0, 0, 255), 1.0)
+                .with_underline(Color::rgba(0, 255, 0, 255), 2.0)
+                .with_strikethrough(Color::rgba(255, 0, 0, 255), 2.0)
+                .with_subpixel(true),
+        )
+        .expect("optioned text draw succeeds");
+    backend.end_frame("main").unwrap();
+
+    let snapshot = backend.frame_snapshot("main").unwrap();
+    assert!(
+        count_changed_pixels(snapshot, 0x0000_0000, Geometry::new(8.0, 6.0, 28.0, 20.0)) > 0,
+        "highlight must paint behind the text"
+    );
+    assert_eq!(snapshot.pixel_at(10, 28), Some(0x0000_ff00));
+    assert_eq!(snapshot.pixel_at(10, 19), Some(0x00ff_0000));
+    assert!(backend.command_keys().iter().any(|key| {
+        key.starts_with("text-at-options:Hi:8,26:20")
+            && key.contains("stroke=true")
+            && key.contains("underline=true")
+            && key.contains("strike=true")
+            && key.contains("subpixel=true")
+    }));
 }
 
 #[test]
@@ -609,6 +740,42 @@ fn runtime_shader_effect_draws_with_typed_uniforms_and_cache_stats() {
 }
 
 #[test]
+fn runtime_scene_replay_renders_shader_effect_draw_commands() {
+    let effect = RuntimeShaderEffectVisual::new(
+        "solid-green",
+        "uniform float4 color; half4 main(float2 p) { return half4(color); }",
+    )
+    .with_uniform(ShaderEffectUniform::float4("color", [0.0, 1.0, 0.0, 1.0]));
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(32.0, 24.0)),
+        RuntimeVisual::ShaderEffect(effect),
+    ));
+    let frame = RuntimeSceneBridge::new(Viewport::new(48.0, 32.0))
+        .build(&tree)
+        .expect("shader effect scene builds");
+
+    let mut backend = SkiaRendererBackend::new();
+    backend.create_surface("main", 48, 32).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(0, 0, 0, 255)).unwrap();
+    backend
+        .draw_runtime_scene_frame(&frame, 5, 1.0)
+        .expect("shader effect command replays through Skia");
+    backend.end_frame("main").unwrap();
+
+    assert_eq!(
+        backend.frame_snapshot("main").unwrap().pixel_at(8, 8),
+        Some(0x0000_ff00)
+    );
+    assert!(
+        backend
+            .command_keys()
+            .contains(&"runtime-effect:solid-green:uniforms=1:children=0".to_string())
+    );
+}
+
+#[test]
 fn runtime_shader_effect_binds_registered_image_child_shader() {
     let mut backend = SkiaRendererBackend::new();
     backend.register_image_asset("red", &png_1x1()).unwrap();
@@ -919,10 +1086,14 @@ const ONE_BY_ONE_PNG: &[u8] = &[
 ];
 
 fn png_1x1() -> Vec<u8> {
+    png_rgba(&[255, 0, 0, 255], 1, 1)
+}
+
+fn png_rgba(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
     let mut bytes = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new(&mut bytes);
     encoder
-        .write_image(&[255, 0, 0, 255], 1, 1, ColorType::Rgba8.into())
+        .write_image(pixels, width, height, ColorType::Rgba8.into())
         .expect("test PNG encodes");
     bytes
 }
