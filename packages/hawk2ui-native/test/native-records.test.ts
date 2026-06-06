@@ -66,6 +66,48 @@ test("createHawkApp rejects unsafe asset paths", () => {
   ).toThrow("native.asset.path-invalid");
 });
 
+test("createHawkApp rejects malformed runtime element records", () => {
+  expect(() =>
+    createHawkApp({
+      name: "bad-kind",
+      root: { id: "root", kind: "webview" } as never,
+    }),
+  ).toThrow("native.element.kind-invalid");
+
+  expect(() =>
+    createHawkApp({
+      name: "bad-events",
+      root: {
+        id: "root",
+        kind: "view",
+        events: [{ kind: "click", handler: "handleClick" }] as never,
+      },
+    }),
+  ).toThrow("native.event.kind-invalid");
+
+  expect(() =>
+    createHawkApp({
+      name: "bad-lifecycle",
+      root: {
+        id: "root",
+        kind: "view",
+        lifecycle: [{ phase: "created", handler: "onCreated" }] as never,
+      },
+    }),
+  ).toThrow("native.lifecycle.phase-invalid");
+
+  expect(() =>
+    createHawkApp({
+      name: "bad-children",
+      root: {
+        id: "root",
+        kind: "view",
+        children: { id: "child", kind: "text" } as never,
+      },
+    }),
+  ).toThrow("native.children.invalid");
+});
+
 test("compilerArtifactForApp rejects invalid initial dynamic values", () => {
   const spec = { name: "native-basic", root: { id: "root", kind: "view" as const } };
 
@@ -90,6 +132,63 @@ test("compilerArtifactForApp rejects invalid initial dynamic values", () => {
       },
     ]),
   ).toThrow("native.initial-dynamic-value.number-invalid");
+});
+
+test("compilerArtifactForApp rejects malformed runtime dynamic value records", () => {
+  const spec = { name: "native-basic", root: { id: "root", kind: "view" as const } };
+
+  expect(() =>
+    compilerArtifactForApp(spec, [], [], [
+      {
+        name: "bad",
+        mode: "value",
+        value: { type: "date", value: "2026-06-06" } as never,
+      },
+    ]),
+  ).toThrow("native.initial-dynamic-value.type-invalid");
+
+  expect(() =>
+    compilerArtifactForApp(spec, [], [], [
+      {
+        name: "nested",
+        mode: "value",
+        value: {
+          type: "array",
+          value: [{ type: "date", value: "2026-06-06" } as never],
+        },
+      },
+    ]),
+  ).toThrow("native.initial-dynamic-value.type-invalid");
+
+  expect(() =>
+    compilerArtifactForApp(spec, [], [], [
+      {
+        name: "bad-string",
+        mode: "value",
+        value: { type: "string", value: 12 } as never,
+      },
+    ]),
+  ).toThrow("native.initial-dynamic-value.string-invalid");
+
+  expect(() =>
+    compilerArtifactForApp(spec, [], [], [
+      {
+        name: "bad-array",
+        mode: "value",
+        value: { type: "array", value: "not-an-array" } as never,
+      },
+    ]),
+  ).toThrow("native.initial-dynamic-value.array-invalid");
+
+  expect(() =>
+    compilerArtifactForApp(spec, [], [], [
+      {
+        name: "bad-object",
+        mode: "value",
+        value: { type: "object", value: null } as never,
+      },
+    ]),
+  ).toThrow("native.initial-dynamic-value.object-invalid");
 });
 
 test("compilerArtifactForApp preserves explicit compiler source metadata", () => {

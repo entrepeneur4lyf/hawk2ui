@@ -297,22 +297,103 @@ function propValueToWire(
 }
 
 function validateElement(element: HawkElementSpec): void {
-  if (!element.id.trim()) {
+  const record = element as unknown;
+  if (!isObjectRecord(record)) {
+    throw new Error("native.element.record-invalid: native elements must be object records.");
+  }
+  if (typeof record.id !== "string" || !record.id.trim()) {
     throw new Error("native.element.id-invalid: native elements require stable ids.");
   }
+  if (!isElementKind(record.kind)) {
+    throw new Error(`native.element.kind-invalid: native element \`${record.id}\` has unsupported kind \`${String(record.kind)}\`.`);
+  }
+  validateStringArray(record.refs, "native.refs.invalid", `refs on \`${record.id}\` must be an array of stable strings.`);
+  validateStringArray(record.styleRefs, "native.style-refs.invalid", `style refs on \`${record.id}\` must be an array of stable strings.`);
+  validateProps(record.props, record.id);
+
+  for (const event of validateRecordArray(record.events, "native.events.invalid", `events on \`${record.id}\` must be an array of records.`)) {
+    if (event.kind !== "pointer.press") {
+      throw new Error(`native.event.kind-invalid: event on \`${record.id}\` has unsupported kind \`${String(event.kind)}\`.`);
+    }
+    if (typeof event.handler !== "string" || !event.handler.trim()) {
+      throw new Error(`native.event.handler-invalid: event on \`${record.id}\` requires a stable handler name.`);
+    }
+  }
+
+  for (const lifecycle of validateRecordArray(record.lifecycle, "native.lifecycle.invalid", `lifecycle on \`${record.id}\` must be an array of records.`)) {
+    if (lifecycle.phase !== "mounted" && lifecycle.phase !== "unmounted") {
+      throw new Error(`native.lifecycle.phase-invalid: lifecycle on \`${record.id}\` has unsupported phase \`${String(lifecycle.phase)}\`.`);
+    }
+    if (typeof lifecycle.handler !== "string" || !lifecycle.handler.trim()) {
+      throw new Error(`native.lifecycle.handler-invalid: lifecycle on \`${record.id}\` requires a stable handler name.`);
+    }
+  }
+
   const keys = new Set<string>();
-  for (const child of element.children ?? []) {
-    if (child.key) {
+  for (const child of validateRecordArray(record.children, "native.children.invalid", `children on \`${record.id}\` must be an array of records.`)) {
+    if (typeof child.key === "string" && child.key) {
       if (keys.has(child.key)) {
         throw new Error(`native.child-key.duplicate: duplicate native child key \`${child.key}\``);
       }
       keys.add(child.key);
     }
-    validateElement(child);
+    validateElement(child as unknown as HawkElementSpec);
   }
-  for (const asset of element.assetRefs ?? []) {
-    if (isUnsafeAssetPath(asset.path)) {
-      throw new Error(`native.asset.path-invalid: asset \`${asset.name}\` must use a workspace-relative safe path`);
+  for (const asset of validateRecordArray(record.assetRefs, "native.assets.invalid", `asset refs on \`${record.id}\` must be an array of records.`)) {
+    if (typeof asset.name !== "string" || !asset.name.trim()) {
+      throw new Error(`native.asset.name-invalid: asset ref on \`${record.id}\` requires a stable name.`);
+    }
+    if (typeof asset.path !== "string" || !asset.path.trim() || isUnsafeAssetPath(asset.path)) {
+      throw new Error(`native.asset.path-invalid: asset \`${String(asset.name)}\` must use a workspace-relative safe path`);
+    }
+  }
+}
+
+function isElementKind(value: unknown): value is HawkElementKind {
+  return value === "view" || value === "text" || value === "button" || value === "custom-surface";
+}
+
+function validateStringArray(value: unknown, rule: string, message: string): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    throw new Error(`${rule}: ${message}`);
+  }
+  for (const item of value) {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new Error(`${rule}: ${message}`);
+    }
+  }
+}
+
+function validateRecordArray(
+  value: unknown,
+  rule: string,
+  message: string,
+): readonly Readonly<Record<string, unknown>>[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`${rule}: ${message}`);
+  }
+  for (const item of value) {
+    if (!isObjectRecord(item)) {
+      throw new Error(`${rule}: ${message}`);
+    }
+  }
+  return value;
+}
+
+function validateProps(value: unknown, elementId: string): void {
+  if (value === undefined) return;
+  if (!isObjectRecord(value)) {
+    throw new Error(`native.props.invalid: props on \`${elementId}\` must be a record.`);
+  }
+  for (const [name, prop] of Object.entries(value)) {
+    if (!name.trim()) {
+      throw new Error(`native.prop.name-invalid: property names on \`${elementId}\` must be stable.`);
+    }
+    const valid = typeof prop === "string" || typeof prop === "boolean" || (typeof prop === "number" && Number.isFinite(prop));
+    if (!valid) {
+      throw new Error(`native.prop.value-invalid: property \`${name}\` on \`${elementId}\` must be a string, boolean, or finite number.`);
     }
   }
 }
@@ -359,21 +440,38 @@ function validateInitialDynamicValues(values: readonly HawkCompilerInitialDynami
   }
 }
 
-function validateDynamicValue(value: HawkCompilerDynamicValueWire, name: string): void {
+function validateDynamicValue(value: unknown, name: string): asserts value is HawkCompilerDynamicValueWire {
+  if (!isObjectRecord(value) || typeof value.type !== "string") {
+    throw new Error(`native.initial-dynamic-value.type-invalid: initial dynamic value \`${name}\` has an unsupported dynamic value record.`);
+  }
   switch (value.type) {
     case "null":
+      return;
     case "bool":
+      if (typeof value.value !== "boolean") {
+        throw new Error(`native.initial-dynamic-value.bool-invalid: initial dynamic value \`${name}\` bool payload must be boolean.`);
+      }
+      return;
     case "string":
+      if (typeof value.value !== "string") {
+        throw new Error(`native.initial-dynamic-value.string-invalid: initial dynamic value \`${name}\` string payload must be text.`);
+      }
       return;
     case "number":
-      if (!Number.isFinite(value.value)) {
+      if (typeof value.value !== "number" || !Number.isFinite(value.value)) {
         throw new Error(`native.initial-dynamic-value.number-invalid: initial dynamic value \`${name}\` must be finite.`);
       }
       return;
     case "array":
+      if (!Array.isArray(value.value)) {
+        throw new Error(`native.initial-dynamic-value.array-invalid: initial dynamic value \`${name}\` array payload must be an array.`);
+      }
       for (const item of value.value) validateDynamicValue(item, name);
       return;
     case "object":
+      if (!isObjectRecord(value.value)) {
+        throw new Error(`native.initial-dynamic-value.object-invalid: initial dynamic value \`${name}\` object payload must be a record.`);
+      }
       for (const [key, item] of Object.entries(value.value)) {
         if (!key.trim()) {
           throw new Error(`native.initial-dynamic-value.object-key-invalid: initial dynamic value \`${name}\` has an empty object key.`);
@@ -381,7 +479,13 @@ function validateDynamicValue(value: HawkCompilerDynamicValueWire, name: string)
         validateDynamicValue(item, name);
       }
       return;
+    default:
+      throw new Error(`native.initial-dynamic-value.type-invalid: initial dynamic value \`${name}\` has unsupported type \`${value.type}\`.`);
   }
+}
+
+function isObjectRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function cloneDynamicValueWire(value: HawkCompilerDynamicValueWire): HawkCompilerDynamicValueWire {
