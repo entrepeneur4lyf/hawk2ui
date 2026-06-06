@@ -159,6 +159,43 @@ impl BaseviewCapabilities {
     pub const fn embedded_parent_attachment(&self) -> bool {
         self.flags & BASEVIEW_CAP_PARENT_ATTACHMENT != 0
     }
+
+    /// Returns the CLAP parent-window APIs this Baseview bridge can attach.
+    #[must_use]
+    pub fn supported_clap_parent_apis(&self) -> &'static [ClapGuiWindowApi] {
+        if self.embedded_parent_attachment() {
+            &BASEVIEW_SUPPORTED_CLAP_PARENT_APIS
+        } else {
+            &[]
+        }
+    }
+
+    /// Returns whether this Baseview bridge can attach the requested CLAP parent API.
+    #[must_use]
+    pub const fn supports_clap_parent_api(&self, api: ClapGuiWindowApi) -> bool {
+        self.embedded_parent_attachment()
+            && matches!(
+                api,
+                ClapGuiWindowApi::Win32 | ClapGuiWindowApi::Cocoa | ClapGuiWindowApi::X11
+            )
+    }
+
+    /// Returns whether this Baseview bridge can attach a parent with the requested platform kind.
+    #[must_use]
+    pub const fn supports_platform_handle(&self, handle: HostPlatformHandle) -> bool {
+        self.embedded_parent_attachment()
+            && matches!(
+                handle,
+                HostPlatformHandle::WindowsHwnd { .. }
+                    | HostPlatformHandle::MacOsNsView { .. }
+                    | HostPlatformHandle::MacOsNsViewInWindow { .. }
+                    | HostPlatformHandle::MacOsNsWindow { .. }
+                    | HostPlatformHandle::LinuxX11 { .. }
+                    | HostPlatformHandle::LinuxX11Window { .. }
+                    | HostPlatformHandle::LinuxXcb { .. }
+                    | HostPlatformHandle::LinuxXWayland { .. }
+            )
+    }
 }
 
 const BASEVIEW_CAP_PARENT_ATTACHMENT: u16 = 1 << 0;
@@ -170,6 +207,11 @@ const BASEVIEW_CAP_FOCUS: u16 = 1 << 5;
 const BASEVIEW_CAP_KEYBOARD: u16 = 1 << 6;
 const BASEVIEW_CAP_POINTER: u16 = 1 << 7;
 const BASEVIEW_CAP_SAFE_TEARDOWN: u16 = 1 << 8;
+const BASEVIEW_SUPPORTED_CLAP_PARENT_APIS: [ClapGuiWindowApi; 3] = [
+    ClapGuiWindowApi::Win32,
+    ClapGuiWindowApi::Cocoa,
+    ClapGuiWindowApi::X11,
+];
 
 /// Baseview adapter error.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2554,19 +2596,13 @@ fn baseview_error_from_materialization_error(
 }
 
 fn validate_baseview_parent(handle: HostPlatformHandle) -> Result<(), BaseviewHostError> {
-    match handle {
-        HostPlatformHandle::LinuxWayland { .. } => Err(BaseviewHostError::new(
+    if BaseviewCapabilities::plugin_editor().supports_platform_handle(handle) {
+        Ok(())
+    } else {
+        Err(BaseviewHostError::new(
             "baseview.platform.unsupported",
             "baseview 0.1 Linux backend attaches through X11/XCB/XWayland parent handles, not native Wayland surfaces",
-        )),
-        HostPlatformHandle::WindowsHwnd { .. }
-        | HostPlatformHandle::MacOsNsView { .. }
-        | HostPlatformHandle::MacOsNsViewInWindow { .. }
-        | HostPlatformHandle::MacOsNsWindow { .. }
-        | HostPlatformHandle::LinuxX11 { .. }
-        | HostPlatformHandle::LinuxX11Window { .. }
-        | HostPlatformHandle::LinuxXcb { .. }
-        | HostPlatformHandle::LinuxXWayland { .. } => Ok(()),
+        ))
     }
 }
 

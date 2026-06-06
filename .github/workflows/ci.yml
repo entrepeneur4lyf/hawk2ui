@@ -67,6 +67,21 @@ jobs:
       - name: cargo doc
         run: cargo doc --workspace --no-deps
 
+  framework-packages:
+    name: framework packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: install package dependencies
+        run: bun install --frozen-lockfile
+      - name: framework package tests
+        run: bun run test:packages
+      - name: framework package typecheck
+        run: bun run typecheck:packages
+      - name: framework example builds
+        run: scripts/check-framework-examples.sh
+
   examples-and-smoke:
     name: examples and smoke fixtures
     runs-on: ubuntu-latest

@@ -7,7 +7,7 @@ use hawk2ui_host::{
     PluginParentHandle, PointerInput, RendererResizeBridge, SurfaceMetrics,
 };
 use hawk2ui_host_baseview::{
-    BaseviewClapRuntimeEditor, BaseviewClapRuntimeEditorHost,
+    BaseviewCapabilities, BaseviewClapRuntimeEditor, BaseviewClapRuntimeEditorHost,
     BaseviewClapRuntimeEditorHostAbiBridge, BaseviewClapRuntimeEditorHostCommand,
     BaseviewClapRuntimeEditorHostResponse, BaseviewEventTranslator, BaseviewNativeParent,
     BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
@@ -45,6 +45,30 @@ fn baseview_adapter_attaches_editor_to_daw_owned_parent() {
     assert_eq!(adapter.parent_fixture().id(), "linux-x11-parent");
     assert!(adapter.capabilities().embedded_parent_attachment());
     assert_eq!(adapter.drain_events().len(), 2);
+}
+
+#[test]
+fn baseview_capabilities_advertise_only_parent_apis_the_backend_can_attach() {
+    let capabilities = BaseviewCapabilities::plugin_editor();
+
+    assert_eq!(
+        capabilities.supported_clap_parent_apis(),
+        [
+            ClapGuiWindowApi::Win32,
+            ClapGuiWindowApi::Cocoa,
+            ClapGuiWindowApi::X11
+        ]
+    );
+    assert!(capabilities.supports_clap_parent_api(ClapGuiWindowApi::Win32));
+    assert!(capabilities.supports_clap_parent_api(ClapGuiWindowApi::Cocoa));
+    assert!(capabilities.supports_clap_parent_api(ClapGuiWindowApi::X11));
+    assert!(!capabilities.supports_clap_parent_api(ClapGuiWindowApi::Wayland));
+
+    assert!(capabilities.supports_platform_handle(HostPlatformHandle::linux_x11(100, 200)));
+    assert!(capabilities.supports_platform_handle(HostPlatformHandle::linux_x11_window(200)));
+    assert!(capabilities.supports_platform_handle(HostPlatformHandle::linux_xcb(100, 200)));
+    assert!(capabilities.supports_platform_handle(HostPlatformHandle::linux_xwayland(100, 200)));
+    assert!(!capabilities.supports_platform_handle(HostPlatformHandle::linux_wayland(100, 200)));
 }
 
 #[test]
