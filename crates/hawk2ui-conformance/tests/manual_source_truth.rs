@@ -163,6 +163,29 @@ fn assert_security_fixture_validators_reject_adversarial_inputs() {
     );
 }
 
+fn assert_security_manual_documents_release_and_evidence_boundaries(security: &str) {
+    for security_claim in [
+        "HAWK2UI_RELEASE_SIGNING_KEY_ID",
+        "HAWK2UI_RELEASE_SIGNING_KEY_HEX",
+        "HAWK2UI_TRUSTED_RELEASE_KEYS",
+        "build-release",
+        "package-plugin",
+        "verify-artifact",
+        "evidence vocabulary",
+        "concrete validators",
+        "hawk2ui-build",
+        "hawk2ui-assets",
+        "hawk2ui-script",
+        "hawk2ui-platform",
+        "hawk2ui-security-model",
+    ] {
+        assert!(
+            security.contains(security_claim),
+            "security manual missing release/security claim {security_claim}"
+        );
+    }
+}
+
 #[test]
 fn manual_links_summary_links_resolve() {
     let summary = manual("manual/SUMMARY.md");
@@ -436,6 +459,8 @@ fn manual_runtime_security_and_packaging_match_machine_readable_gates() {
             host.format
         );
     }
+
+    assert_security_manual_documents_release_and_evidence_boundaries(&security);
 
     for security_fixture in [
         "fixtures/security/unsupported-style.css",
