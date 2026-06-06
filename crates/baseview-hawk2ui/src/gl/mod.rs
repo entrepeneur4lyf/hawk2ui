@@ -12,6 +12,8 @@ use win as platform;
 
 // We need to use this directly within the X11 window creation to negotiate the correct visual
 #[cfg(target_os = "linux")]
+pub(crate) mod wayland;
+#[cfg(target_os = "linux")]
 pub(crate) mod x11;
 #[cfg(target_os = "linux")]
 pub(crate) use self::x11 as platform;
@@ -62,6 +64,50 @@ pub enum Profile {
     Core,
 }
 
+#[cfg(target_os = "linux")]
+enum LinuxGlContext {
+    X11(platform::GlContext),
+    Wayland(wayland::GlContext),
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxGlContext {
+    unsafe fn make_current(&self) {
+        match self {
+            Self::X11(context) => context.make_current(),
+            Self::Wayland(context) => context.make_current(),
+        }
+    }
+
+    unsafe fn make_not_current(&self) {
+        match self {
+            Self::X11(context) => context.make_not_current(),
+            Self::Wayland(context) => context.make_not_current(),
+        }
+    }
+
+    fn get_proc_address(&self, symbol: &str) -> *const c_void {
+        match self {
+            Self::X11(context) => context.get_proc_address(symbol),
+            Self::Wayland(context) => context.get_proc_address(symbol),
+        }
+    }
+
+    fn swap_buffers(&self) {
+        match self {
+            Self::X11(context) => context.swap_buffers(),
+            Self::Wayland(context) => context.swap_buffers(),
+        }
+    }
+
+    fn resize(&self, width: u32, height: u32) {
+        match self {
+            Self::X11(_) => {}
+            Self::Wayland(context) => context.resize(width, height),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum GlError {
     InvalidWindowHandle,
@@ -72,7 +118,10 @@ pub enum GlError {
 pub struct GlContext {
     // AssertUnwindSafe should *not* be here, but this is needed for now to keep semver compatibility
     // Remove this in 0.2
+    #[cfg(not(target_os = "linux"))]
     context: AssertUnwindSafe<platform::GlContext>,
+    #[cfg(target_os = "linux")]
+    context: AssertUnwindSafe<LinuxGlContext>,
     phantom: PhantomData<*mut ()>,
 }
 
@@ -90,7 +139,15 @@ impl GlContext {
     /// baseview, and then this object can be passed to the user.
     #[cfg(target_os = "linux")]
     pub(crate) fn new(context: platform::GlContext) -> GlContext {
-        GlContext { context: AssertUnwindSafe(context), phantom: PhantomData }
+        GlContext { context: AssertUnwindSafe(LinuxGlContext::X11(context)), phantom: PhantomData }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn new_wayland(context: wayland::GlContext) -> GlContext {
+        GlContext {
+            context: AssertUnwindSafe(LinuxGlContext::Wayland(context)),
+            phantom: PhantomData,
+        }
     }
 
     pub unsafe fn make_current(&self) {
@@ -107,6 +164,11 @@ impl GlContext {
 
     pub fn swap_buffers(&self) {
         self.context.swap_buffers();
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn resize_wayland(&self, width: u32, height: u32) {
+        self.context.resize(width, height);
     }
 
     /// On macOS the `NSOpenGLView` needs to be resized separtely from our main view.

@@ -132,6 +132,8 @@ impl Drop for ParentHandle {
 
 pub(crate) struct WindowInner {
     software_buffers: RefCell<Vec<SoftwareBuffer>>,
+    #[cfg(feature = "opengl")]
+    gl_context: Option<crate::gl::GlContext>,
     _subsurface: wl_subsurface::WlSubsurface,
     surface: wl_surface::WlSurface,
     shm: wl_shm::WlShm,
@@ -357,8 +359,23 @@ impl<'a> Window<'a> {
             WindowScalePolicy::ScaleFactor(scale) => scale,
         };
         let window_info = WindowInfo::from_logical_size(options.size, scaling);
+        #[cfg(feature = "opengl")]
+        let gl_context = options.gl_config.and_then(|config| {
+            let physical_size = window_info.physical_size();
+            crate::gl::wayland::GlContext::create(
+                parent.display as *mut c_void,
+                &surface,
+                physical_size.width,
+                physical_size.height,
+                config,
+            )
+            .map(crate::gl::GlContext::new_wayland)
+            .ok()
+        });
         let inner = WindowInner {
             software_buffers: RefCell::new(Vec::new()),
+            #[cfg(feature = "opengl")]
+            gl_context,
             _subsurface: subsurface,
             surface,
             shm,
@@ -397,7 +414,13 @@ impl<'a> Window<'a> {
 
     pub fn resize(&mut self, size: Size) {
         let scaling = self.inner.window_info.get().scale();
-        self.inner.window_info.set(WindowInfo::from_logical_size(size, scaling));
+        let window_info = WindowInfo::from_logical_size(size, scaling);
+        self.inner.window_info.set(window_info);
+        #[cfg(feature = "opengl")]
+        if let Some(context) = self.inner.gl_context.as_ref() {
+            let physical_size = window_info.physical_size();
+            context.resize_wayland(physical_size.width, physical_size.height);
+        }
     }
 
     pub fn hawk2ui_present_software_frame(
@@ -410,7 +433,7 @@ impl<'a> Window<'a> {
 
     #[cfg(feature = "opengl")]
     pub fn gl_context(&self) -> Option<&crate::gl::GlContext> {
-        None
+        self.inner.gl_context.as_ref()
     }
 }
 
