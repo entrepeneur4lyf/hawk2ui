@@ -1305,6 +1305,7 @@ const fn native_parent_backend_label(backend: BaseviewNativeParentBackend) -> &'
         BaseviewNativeParentBackend::MacOs => "macos",
         BaseviewNativeParentBackend::X11 => "x11",
         BaseviewNativeParentBackend::Xcb => "xcb",
+        BaseviewNativeParentBackend::Wayland => "wayland",
         BaseviewNativeParentBackend::XWayland => "xwayland",
     }
 }

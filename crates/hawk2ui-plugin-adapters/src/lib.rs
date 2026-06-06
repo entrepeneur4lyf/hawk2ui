@@ -186,8 +186,8 @@ impl ClapGuiParentHandle {
 
     /// Converts this CLAP GUI parent into a Baseview-compatible host handle when supported.
     ///
-    /// Baseview's current Linux backend attaches through X11/XCB/XWayland-compatible parent
-    /// handles, not native Wayland parent surfaces.
+    /// Baseview Linux attachment supports native Wayland when the caller supplies the host
+    /// `wl_display` alongside the CLAP-provided parent `wl_surface`.
     ///
     /// # Errors
     ///
@@ -197,12 +197,6 @@ impl ClapGuiParentHandle {
         &self,
         linux_display_handle: Option<u64>,
     ) -> Result<HostPlatformHandle, PackageDiagnostic> {
-        if self.api == ClapGuiWindowApi::Wayland {
-            return Err(PackageDiagnostic::new(
-                "package.clap-gui-parent.unsupported-api",
-                "Baseview plugin attachment does not support native Wayland CLAP GUI parents",
-            ));
-        }
         self.to_host_platform_handle(linux_display_handle)
     }
 }

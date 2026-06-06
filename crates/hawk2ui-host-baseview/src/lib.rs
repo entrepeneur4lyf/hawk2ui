@@ -28,8 +28,9 @@ use hawk2ui_runtime::RuntimeSceneFrame;
 use keyboard_types::{Key, KeyState, KeyboardEvent};
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasRawDisplayHandle, HasRawWindowHandle,
-    RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle, XcbDisplayHandle,
-    XcbWindowHandle, XlibDisplayHandle, XlibWindowHandle,
+    RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
+    Win32WindowHandle, WindowsDisplayHandle, XcbDisplayHandle, XcbWindowHandle, XlibDisplayHandle,
+    XlibWindowHandle,
 };
 #[cfg(target_os = "linux")]
 use skia_safe::{
@@ -179,7 +180,10 @@ impl BaseviewCapabilities {
         self.embedded_parent_attachment()
             && matches!(
                 api,
-                ClapGuiWindowApi::Win32 | ClapGuiWindowApi::Cocoa | ClapGuiWindowApi::X11
+                ClapGuiWindowApi::Win32
+                    | ClapGuiWindowApi::Cocoa
+                    | ClapGuiWindowApi::X11
+                    | ClapGuiWindowApi::Wayland
             )
     }
 
@@ -196,6 +200,7 @@ impl BaseviewCapabilities {
                     | HostPlatformHandle::LinuxX11 { .. }
                     | HostPlatformHandle::LinuxX11Window { .. }
                     | HostPlatformHandle::LinuxXcb { .. }
+                    | HostPlatformHandle::LinuxWayland { .. }
                     | HostPlatformHandle::LinuxXWayland { .. }
             )
     }
@@ -210,10 +215,11 @@ const BASEVIEW_CAP_FOCUS: u16 = 1 << 5;
 const BASEVIEW_CAP_KEYBOARD: u16 = 1 << 6;
 const BASEVIEW_CAP_POINTER: u16 = 1 << 7;
 const BASEVIEW_CAP_SAFE_TEARDOWN: u16 = 1 << 8;
-const BASEVIEW_SUPPORTED_CLAP_PARENT_APIS: [ClapGuiWindowApi; 3] = [
+const BASEVIEW_SUPPORTED_CLAP_PARENT_APIS: [ClapGuiWindowApi; 4] = [
     ClapGuiWindowApi::Win32,
     ClapGuiWindowApi::Cocoa,
     ClapGuiWindowApi::X11,
+    ClapGuiWindowApi::Wayland,
 ];
 
 /// Baseview adapter error.
@@ -251,6 +257,8 @@ pub enum BaseviewNativeParentBackend {
     X11,
     /// Linux XCB parent.
     Xcb,
+    /// Linux Wayland parent.
+    Wayland,
     /// `XWayland` parent exposed through `Xlib` handles.
     XWayland,
 }
@@ -269,6 +277,7 @@ enum BaseviewNativeParentHandle {
     LinuxX11 { display: u64, window: u64 },
     LinuxX11Window { window: u64 },
     LinuxXcb { connection: u64, window: u64 },
+    LinuxWayland { display: u64, surface: u64 },
     LinuxXWayland { display: u64, window: u64 },
 }
 
@@ -307,11 +316,13 @@ impl BaseviewNativeParent {
                     "baseview plugin editors must attach to a child NSView, not a top-level NSWindow",
                 ));
             }
-            HostPlatformHandle::LinuxWayland { .. } => {
-                return Err(BaseviewHostError::new(
-                    "baseview.platform.unsupported",
-                    "baseview 0.1 Linux backend attaches through X11/XCB/XWayland parent handles, not native Wayland surfaces",
-                ));
+            HostPlatformHandle::LinuxWayland { display, surface } => {
+                require_nonzero_handle(display)?;
+                require_nonzero_handle(surface)?;
+                (
+                    BaseviewNativeParentHandle::LinuxWayland { display, surface },
+                    BaseviewNativeParentBackend::Wayland,
+                )
             }
             HostPlatformHandle::LinuxX11 { display, window } => {
                 require_nonzero_handle(display)?;
@@ -367,6 +378,9 @@ impl BaseviewNativeParent {
             BaseviewNativeParentHandle::LinuxXcb { connection, window } => {
                 HostPlatformHandle::LinuxXcb { connection, window }
             }
+            BaseviewNativeParentHandle::LinuxWayland { display, surface } => {
+                HostPlatformHandle::LinuxWayland { display, surface }
+            }
             BaseviewNativeParentHandle::LinuxXWayland { display, window } => {
                 HostPlatformHandle::LinuxXWayland { display, window }
             }
@@ -384,6 +398,7 @@ impl BaseviewNativeParent {
             self.backend,
             BaseviewNativeParentBackend::X11
                 | BaseviewNativeParentBackend::Xcb
+                | BaseviewNativeParentBackend::Wayland
                 | BaseviewNativeParentBackend::XWayland
         ) && cfg!(target_os = "linux")
             || self.backend == BaseviewNativeParentBackend::MacOs && cfg!(target_os = "macos")
@@ -441,6 +456,11 @@ unsafe impl HasRawWindowHandle for BaseviewNativeParent {
                 }
                 RawWindowHandle::Xcb(handle)
             }
+            BaseviewNativeParentHandle::LinuxWayland { surface, .. } => {
+                let mut handle = WaylandWindowHandle::empty();
+                handle.surface = handle_to_ptr(surface);
+                RawWindowHandle::Wayland(handle)
+            }
         }
     }
 }
@@ -473,6 +493,11 @@ unsafe impl HasRawDisplayHandle for BaseviewNativeParent {
                 let mut handle = XcbDisplayHandle::empty();
                 handle.connection = handle_to_ptr(connection);
                 RawDisplayHandle::Xcb(handle)
+            }
+            BaseviewNativeParentHandle::LinuxWayland { display, .. } => {
+                let mut handle = WaylandDisplayHandle::empty();
+                handle.display = handle_to_ptr(display);
+                RawDisplayHandle::Wayland(handle)
             }
         }
     }
@@ -660,8 +685,8 @@ fn compact_f32(value: f32) -> String {
     }
 }
 
-/// Linux `X11`/`XWayland` Baseview handler that renders a runtime scene with Skia and presents it
-/// into the native child window during frame callbacks.
+/// Linux software Baseview handler that renders a runtime scene with Skia and presents it into the
+/// native child window during frame callbacks.
 #[cfg(target_os = "linux")]
 pub struct BaseviewX11SkiaFrameHandler {
     scene: RuntimeSceneFrame,
@@ -674,7 +699,7 @@ pub struct BaseviewX11SkiaFrameHandler {
 
 #[cfg(target_os = "linux")]
 impl BaseviewX11SkiaFrameHandler {
-    /// Creates a frame handler for an attached Baseview `X11`/`XWayland` child window.
+    /// Creates a frame handler for an attached Linux Baseview child window.
     #[must_use]
     pub fn new(
         scene: RuntimeSceneFrame,
@@ -728,7 +753,7 @@ impl WindowHandler for BaseviewX11SkiaFrameHandler {
         let frame_index = self.presented_frames.load(Ordering::SeqCst);
         let metrics = self.event_translator.metrics();
         match render_scene_to_skia_snapshot(&self.scene, metrics, frame_index)
-            .and_then(|snapshot| present_snapshot_to_x11_window(window, &snapshot))
+            .and_then(|snapshot| present_snapshot_to_native_window(window, &snapshot))
         {
             Ok(()) => {
                 self.presented_frames.fetch_add(1, Ordering::SeqCst);
@@ -1535,14 +1560,15 @@ impl BaseviewPluginAdapter {
     /// Opens a real Baseview child window that renders `scene` each frame and
     /// returns a [`Send`] owner of its native handle.
     ///
-    /// Linux/X11 software-presentation path: every frame is rendered to a CPU
-    /// Skia snapshot and presented into the child window via X11 `PutImage`
-    /// (see [`BaseviewX11SkiaFrameHandler`]). `presented_frames`, `last_error`,
-    /// and `event_sink` are shared with the frame handler so the caller can
-    /// observe rendering progress, surface errors, and drain host events while
-    /// the window lives. The returned [`BaseviewEditorWindowHandle`] is `Send`
-    /// so a truce `Editor` can own it, but must still be driven from the GUI
-    /// thread that opened it.
+    /// Linux software-presentation path: every frame is rendered to a CPU Skia
+    /// snapshot and presented into the child window through X11 `PutImage` or
+    /// Wayland `wl_shm`, depending on the native child handle (see
+    /// [`BaseviewX11SkiaFrameHandler`]). `presented_frames`, `last_error`, and
+    /// `event_sink` are shared with the frame handler so the caller can observe
+    /// rendering progress, surface errors, and drain host events while the
+    /// window lives. The returned [`BaseviewEditorWindowHandle`] is `Send` so a
+    /// truce `Editor` can own it, but must still be driven from the GUI thread
+    /// that opened it.
     ///
     /// # Errors
     ///
@@ -2607,7 +2633,7 @@ fn validate_baseview_parent(handle: HostPlatformHandle) -> Result<(), BaseviewHo
     } else {
         Err(BaseviewHostError::new(
             "baseview.platform.unsupported",
-            "baseview 0.1 Linux backend attaches through X11/XCB/XWayland parent handles, not native Wayland surfaces",
+            "baseview Linux backend attaches through X11/XCB/Wayland/XWayland parent handles",
         ))
     }
 }
@@ -2700,11 +2726,35 @@ const fn runtime_scene_replay_options(
 }
 
 #[cfg(target_os = "linux")]
-fn present_snapshot_to_x11_window(
-    window: &Window,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BaseviewSoftwarePresentationTarget {
+    X11 { drawable: u32 },
+    Wayland { display: usize, surface: usize },
+}
+
+#[cfg(target_os = "linux")]
+fn present_snapshot_to_native_window(
+    window: &mut Window,
     snapshot: &SkiaFrameSnapshot,
 ) -> Result<(), BaseviewHostError> {
-    let drawable = x11_drawable_from_window(window)?;
+    match baseview_software_presentation_target(
+        window.raw_display_handle(),
+        window.raw_window_handle(),
+    )? {
+        BaseviewSoftwarePresentationTarget::X11 { drawable } => {
+            present_snapshot_to_x11_drawable(drawable, snapshot)
+        }
+        BaseviewSoftwarePresentationTarget::Wayland { .. } => {
+            present_snapshot_to_wayland_window(window, snapshot)
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn present_snapshot_to_x11_drawable(
+    drawable: u32,
+    snapshot: &SkiaFrameSnapshot,
+) -> Result<(), BaseviewHostError> {
     let width = u16::try_from(snapshot.width()).map_err(|_| {
         BaseviewHostError::new(
             "baseview.x11-present.invalid-size",
@@ -2779,18 +2829,49 @@ fn present_snapshot_to_x11_window(
 }
 
 #[cfg(target_os = "linux")]
-fn x11_drawable_from_window(window: &Window) -> Result<u32, BaseviewHostError> {
-    match window.raw_window_handle() {
-        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).map_err(|_| {
+fn present_snapshot_to_wayland_window(
+    window: &mut Window,
+    snapshot: &SkiaFrameSnapshot,
+) -> Result<(), BaseviewHostError> {
+    let pixels = snapshot_to_wayland_xrgb8888(snapshot);
+    window
+        .hawk2ui_present_software_frame(snapshot.width(), snapshot.height(), &pixels)
+        .map_err(|error| {
             BaseviewHostError::new(
-                "baseview.x11-present.invalid-window",
-                "baseview Xlib child window handle must fit X11 window id",
+                "baseview.wayland-present.failed",
+                format!(
+                    "failed to present Baseview frame pixels into Wayland child surface: {error}"
+                ),
             )
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn baseview_software_presentation_target(
+    display: RawDisplayHandle,
+    window: RawWindowHandle,
+) -> Result<BaseviewSoftwarePresentationTarget, BaseviewHostError> {
+    match (display, window) {
+        (_, RawWindowHandle::Xlib(handle)) => {
+            let drawable = u32::try_from(handle.window).map_err(|_| {
+                BaseviewHostError::new(
+                    "baseview.x11-present.invalid-window",
+                    "baseview Xlib child window handle must fit X11 window id",
+                )
+            })?;
+            Ok(BaseviewSoftwarePresentationTarget::X11 { drawable })
+        }
+        (_, RawWindowHandle::Xcb(handle)) => Ok(BaseviewSoftwarePresentationTarget::X11 {
+            drawable: handle.window,
         }),
-        RawWindowHandle::Xcb(handle) => Ok(handle.window),
+        (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(window)) => {
+            let display = wayland_ptr_to_usize(display.display, "display")?;
+            let surface = wayland_ptr_to_usize(window.surface, "surface")?;
+            Ok(BaseviewSoftwarePresentationTarget::Wayland { display, surface })
+        }
         _ => Err(BaseviewHostError::new(
-            "baseview.x11-present.unsupported-window",
-            "baseview X11 software presentation requires an Xlib or XCB child window",
+            "baseview.software-present.unsupported-window",
+            "baseview Linux software presentation requires an Xlib, XCB, or Wayland child window",
         )),
     }
 }
@@ -2819,6 +2900,11 @@ fn snapshot_to_x11_bgrx(snapshot: &SkiaFrameSnapshot) -> Vec<u8> {
     pixels_to_x11_bgrx(snapshot.pixels())
 }
 
+#[cfg(target_os = "linux")]
+fn snapshot_to_wayland_xrgb8888(snapshot: &SkiaFrameSnapshot) -> Vec<u8> {
+    pixels_to_wayland_xrgb8888(snapshot.pixels())
+}
+
 /// Converts `0x00RRGGBB` snapshot pixels into X11 `Z_PIXMAP` 32-bpp bytes laid out `[B, G, R, 0]`.
 #[cfg(target_os = "linux")]
 fn pixels_to_x11_bgrx(pixels: &[u32]) -> Vec<u8> {
@@ -2830,6 +2916,29 @@ fn pixels_to_x11_bgrx(pixels: &[u32]) -> Vec<u8> {
         data.push(0);
     }
     data
+}
+
+/// Converts `0x00RRGGBB` snapshot pixels into native-endian Wayland `XRGB8888` words.
+#[cfg(target_os = "linux")]
+fn pixels_to_wayland_xrgb8888(pixels: &[u32]) -> Vec<u8> {
+    let mut data = Vec::with_capacity(pixels.len().saturating_mul(4));
+    for pixel in pixels {
+        data.extend_from_slice(&(pixel & 0x00ff_ffff).to_ne_bytes());
+    }
+    data
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_ptr_to_usize(ptr: *mut c_void, label: &str) -> Result<usize, BaseviewHostError> {
+    let value = ptr as usize;
+    if value == 0 {
+        Err(BaseviewHostError::new(
+            "baseview.wayland-present.invalid-handle",
+            format!("baseview Wayland {label} handle must be non-null"),
+        ))
+    } else {
+        Ok(value)
+    }
 }
 
 fn require_nonzero_handle(handle: u64) -> Result<(), BaseviewHostError> {
@@ -2930,6 +3039,26 @@ mod tests {
         assert_eq!(
             pixels_to_x11_bgrx(&[0x0012_3456, 0x00ff_8800]),
             vec![0x56, 0x34, 0x12, 0x00, 0x00, 0x88, 0xff, 0x00]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn software_presentation_target_routes_wayland_surfaces_to_wayland_presenter() {
+        let mut display = WaylandDisplayHandle::empty();
+        display.display = handle_to_ptr(0x100);
+        let mut window = WaylandWindowHandle::empty();
+        window.surface = handle_to_ptr(0x200);
+
+        assert_eq!(
+            baseview_software_presentation_target(
+                RawDisplayHandle::Wayland(display),
+                RawWindowHandle::Wayland(window),
+            ),
+            Ok(BaseviewSoftwarePresentationTarget::Wayland {
+                display: 0x100,
+                surface: 0x200,
+            })
         );
     }
 }

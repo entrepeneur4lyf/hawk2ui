@@ -56,19 +56,20 @@ fn baseview_capabilities_advertise_only_parent_apis_the_backend_can_attach() {
         [
             ClapGuiWindowApi::Win32,
             ClapGuiWindowApi::Cocoa,
-            ClapGuiWindowApi::X11
+            ClapGuiWindowApi::X11,
+            ClapGuiWindowApi::Wayland
         ]
     );
     assert!(capabilities.supports_clap_parent_api(ClapGuiWindowApi::Win32));
     assert!(capabilities.supports_clap_parent_api(ClapGuiWindowApi::Cocoa));
     assert!(capabilities.supports_clap_parent_api(ClapGuiWindowApi::X11));
-    assert!(!capabilities.supports_clap_parent_api(ClapGuiWindowApi::Wayland));
+    assert!(capabilities.supports_clap_parent_api(ClapGuiWindowApi::Wayland));
 
     assert!(capabilities.supports_platform_handle(HostPlatformHandle::linux_x11(100, 200)));
     assert!(capabilities.supports_platform_handle(HostPlatformHandle::linux_x11_window(200)));
     assert!(capabilities.supports_platform_handle(HostPlatformHandle::linux_xcb(100, 200)));
     assert!(capabilities.supports_platform_handle(HostPlatformHandle::linux_xwayland(100, 200)));
-    assert!(!capabilities.supports_platform_handle(HostPlatformHandle::linux_wayland(100, 200)));
+    assert!(capabilities.supports_platform_handle(HostPlatformHandle::linux_wayland(100, 200)));
 }
 
 #[test]
@@ -90,7 +91,7 @@ fn baseview_parent_fixture_can_wrap_real_host_platform_handle_records() {
 }
 
 #[test]
-fn baseview_native_parent_maps_x11_xcb_xwayland_and_windows_raw_handles() {
+fn baseview_native_parent_maps_x11_xcb_wayland_xwayland_and_windows_raw_handles() {
     let x11 = BaseviewNativeParent::try_from_handle(HostPlatformHandle::linux_x11(100, 200))
         .expect("x11 parent is supported");
     assert_eq!(x11.handle(), HostPlatformHandle::linux_x11(100, 200));
@@ -142,6 +143,19 @@ fn baseview_native_parent_maps_x11_xcb_xwayland_and_windows_raw_handles() {
         RawWindowHandle::Xlib(window) if window.window == 600
     ));
 
+    let wayland =
+        BaseviewNativeParent::try_from_handle(HostPlatformHandle::linux_wayland(700, 800))
+            .expect("wayland parent maps through native Wayland handles");
+    assert_eq!(wayland.backend(), BaseviewNativeParentBackend::Wayland);
+    assert!(matches!(
+        wayland.raw_display_handle(),
+        RawDisplayHandle::Wayland(display) if display.display as usize == 700
+    ));
+    assert!(matches!(
+        wayland.raw_window_handle(),
+        RawWindowHandle::Wayland(window) if window.surface as usize == 800
+    ));
+
     let windows = BaseviewNativeParent::try_from_handle(HostPlatformHandle::windows_hwnd(700))
         .expect("windows HWND parent is supported");
     assert_eq!(windows.backend(), BaseviewNativeParentBackend::Windows);
@@ -173,6 +187,8 @@ fn baseview_native_parent_requires_real_nonzero_supported_parent_handles() {
         HostPlatformHandle::linux_xcb(100, u64::from(u32::MAX) + 1),
         HostPlatformHandle::linux_xwayland(0, 200),
         HostPlatformHandle::linux_xwayland(100, 0),
+        HostPlatformHandle::linux_wayland(0, 200),
+        HostPlatformHandle::linux_wayland(100, 0),
         HostPlatformHandle::windows_hwnd(0),
         HostPlatformHandle::macos_ns_view(0),
         HostPlatformHandle::macos_ns_view(900),
@@ -186,9 +202,8 @@ fn baseview_native_parent_requires_real_nonzero_supported_parent_handles() {
         assert_eq!(error.rule(), "baseview.native-parent.invalid");
     }
 
-    let error = BaseviewNativeParent::try_from_handle(HostPlatformHandle::linux_wayland(100, 200))
-        .expect_err("baseview 0.1 does not support native Wayland parent handles");
-    assert_eq!(error.rule(), "baseview.platform.unsupported");
+    BaseviewNativeParent::try_from_handle(HostPlatformHandle::linux_wayland(100, 200))
+        .expect("native Wayland parent handles are supported");
 }
 
 #[test]
@@ -1422,8 +1437,8 @@ fn baseview_adapter_reports_fallible_host_events_after_destroy() {
 }
 
 #[test]
-fn baseview_adapter_rejects_native_wayland_parent_handles() {
-    let error = BaseviewPluginAdapter::attach(
+fn baseview_adapter_accepts_native_wayland_parent_handles() {
+    let adapter = BaseviewPluginAdapter::attach(
         PluginEditorConfig::new(
             "editor",
             PluginParentHandle::opaque("parent"),
@@ -1431,9 +1446,16 @@ fn baseview_adapter_rejects_native_wayland_parent_handles() {
         ),
         BaseviewParentFixture::wayland(),
     )
-    .expect_err("baseview 0.1 Linux backend cannot attach native Wayland parents");
+    .expect("baseview fork attaches native Wayland parents");
 
-    assert_eq!(error.rule(), "baseview.platform.unsupported");
+    assert_eq!(adapter.parent_fixture().id(), "linux-wayland-parent");
+    assert_eq!(
+        adapter
+            .native_parent()
+            .expect("adapter exposes native parent")
+            .backend(),
+        BaseviewNativeParentBackend::Wayland
+    );
 }
 
 fn runtime_scene_frame(width: f32, height: f32, color: Color) -> RuntimeSceneFrame {

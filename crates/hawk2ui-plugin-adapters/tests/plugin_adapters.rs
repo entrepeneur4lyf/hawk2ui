@@ -643,6 +643,15 @@ fn plugin_adapters_map_clap_gui_parent_handles_to_baseview_hosts() {
             .expect("macOS parent maps directly"),
         hawk2ui_host::HostPlatformHandle::macos_ns_view(123)
     );
+
+    let wayland_parent = ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::Wayland, 777)
+        .expect("nonzero Wayland surface maps");
+    assert_eq!(
+        wayland_parent
+            .to_baseview_host_handle(Some(888))
+            .expect("Wayland parent with display maps to host handle"),
+        hawk2ui_host::HostPlatformHandle::linux_wayland(888, 777)
+    );
 }
 
 #[test]
@@ -660,11 +669,15 @@ fn plugin_adapters_reject_invalid_clap_gui_parent_handles() {
         "package.clap-gui-parent.missing-display"
     );
 
-    let wayland = ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::Wayland, 42)
-        .expect("CLAP Wayland handle is structurally valid")
-        .to_baseview_host_handle(Some(7))
-        .expect_err("Baseview cannot attach native Wayland parents");
-    assert_eq!(wayland.rule(), "package.clap-gui-parent.unsupported-api");
+    let missing_wayland_display =
+        ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::Wayland, 42)
+            .expect("Wayland handle maps")
+            .to_baseview_host_handle(None)
+            .expect_err("Wayland Baseview attachment requires an explicit display handle");
+    assert_eq!(
+        missing_wayland_display.rule(),
+        "package.clap-gui-parent.missing-display"
+    );
 }
 
 #[test]
