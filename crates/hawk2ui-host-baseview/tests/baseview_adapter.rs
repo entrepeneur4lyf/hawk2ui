@@ -525,6 +525,36 @@ fn baseview_adapter_renders_runtime_scene_into_presented_skia_snapshot() {
 }
 
 #[test]
+fn baseview_adapter_renders_missing_runtime_assets_as_diagnostic_placeholders() {
+    let mut adapter = BaseviewPluginAdapter::attach(
+        PluginEditorConfig::new(
+            "editor",
+            PluginParentHandle::opaque("parent"),
+            SurfaceMetrics::new(160.0, 96.0, 1.0),
+        ),
+        BaseviewParentFixture::linux_xwayland(),
+    )
+    .expect("baseview editor attaches");
+    adapter.drain_events();
+
+    let frame = runtime_scene_frame_with_missing_assets();
+    let snapshot = adapter
+        .render_scene_frame(&frame)
+        .expect("missing runtime assets render diagnostic placeholders instead of aborting frame");
+
+    assert_eq!((snapshot.width(), snapshot.height()), (160, 96));
+    assert!(
+        snapshot.pixels().contains(&0x0050_b4ff),
+        "missing image asset should render a blue placeholder accent"
+    );
+    assert!(
+        snapshot.pixels().contains(&0x00ff_c64a),
+        "missing vector asset should render a yellow placeholder accent"
+    );
+    assert_eq!(adapter.presented_frame_count(), 1);
+}
+
+#[test]
 fn baseview_adapter_renders_verified_clap_runtime_editor_session_frame() {
     let sealed_artifact = SealedArtifact::from_manifest(
         ArtifactSchemaVersion::new(1, 0),
@@ -1416,6 +1446,38 @@ fn runtime_scene_frame(width: f32, height: f32, color: Color) -> RuntimeSceneFra
     RuntimeSceneBridge::new(Viewport::new(width, height))
         .build(&tree)
         .expect("runtime scene frame builds")
+}
+
+fn runtime_scene_frame_with_missing_assets() -> RuntimeSceneFrame {
+    let root_id = RuntimeViewId::new("root");
+    let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+        root_id.clone(),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(160.0, 96.0)),
+        RuntimeVisual::Fill(Color::rgba(8, 10, 14, 255)),
+    ))
+    .with_child(
+        &root_id,
+        RuntimeViewNode::new(
+            RuntimeViewId::new("hero"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(32.0, 24.0)),
+            RuntimeVisual::ImageAsset("missing-hero".to_string()),
+        ),
+    )
+    .expect("image asset visual attaches")
+    .with_child(
+        &root_id,
+        RuntimeViewNode::new(
+            RuntimeViewId::new("logo"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(32.0, 24.0)),
+            RuntimeVisual::VectorAsset("missing-logo".to_string()),
+        ),
+    )
+    .expect("vector asset visual attaches");
+
+    RuntimeSceneBridge::new(Viewport::new(160.0, 96.0))
+        .build(&tree)
+        .expect("runtime scene frame with missing assets builds")
 }
 
 fn temp_package_root(prefix: &str) -> std::path::PathBuf {

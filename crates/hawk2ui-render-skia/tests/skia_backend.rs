@@ -5,7 +5,9 @@ use hawk2ui_render::{
     CustomSurfaceDataSnapshot, CustomSurfaceDrawRequest, CustomSurfaceFrameContext, Geometry,
     RendererBackend, Transform,
 };
-use hawk2ui_render_skia::{SkiaRendererBackend, SkiaSurfaceConfig};
+use hawk2ui_render_skia::{
+    SkiaRendererBackend, SkiaRuntimeEffectChildInput, SkiaRuntimeEffectUniform, SkiaSurfaceConfig,
+};
 use hawk2ui_runtime::{
     RuntimeCustomSurfaceVisual, RuntimeSceneBridge, RuntimeViewId, RuntimeViewNode,
     RuntimeViewTree, RuntimeVisual,
@@ -557,6 +559,134 @@ fn apply_layer_effect_executes_supported_structured_effects() {
 }
 
 #[test]
+fn runtime_shader_effect_draws_with_typed_uniforms_and_cache_stats() {
+    let mut backend = SkiaRendererBackend::new();
+    backend
+        .register_runtime_shader_effect(
+            "solid-orange",
+            "uniform float4 color; half4 main(float2 p) { return half4(color); }",
+        )
+        .expect("runtime shader effect compiles");
+    backend
+        .register_runtime_shader_effect(
+            "solid-orange",
+            "uniform float4 color; half4 main(float2 p) { return half4(color); }",
+        )
+        .expect("duplicate effect registration is cache-stable");
+    assert_eq!(backend.runtime_effect_cache_stats().compiled_effects(), 1);
+
+    backend.create_surface("main", 64, 48).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(0, 0, 0, 255)).unwrap();
+    backend
+        .draw_runtime_effect_rect(
+            "solid-orange",
+            Geometry::new(8.0, 8.0, 24.0, 16.0),
+            &[SkiaRuntimeEffectUniform::float4(
+                "color",
+                [1.0, 0.35, 0.0, 1.0],
+            )],
+            &[],
+        )
+        .expect("runtime shader effect draws with bound uniform");
+    backend.end_frame("main").unwrap();
+
+    let pixel = backend
+        .frame_snapshot("main")
+        .unwrap()
+        .pixel_at(12, 12)
+        .unwrap();
+    assert!(
+        ((pixel >> 16) & 0xff) > 220 && ((pixel >> 8) & 0xff) > 60,
+        "runtime effect must paint using the supplied uniform color; pixel={pixel:#08x}"
+    );
+    assert_eq!(backend.runtime_effect_cache_stats().draw_calls(), 1);
+    assert!(
+        backend
+            .command_keys()
+            .contains(&"runtime-effect:solid-orange:uniforms=1:children=0".to_string())
+    );
+}
+
+#[test]
+fn runtime_shader_effect_binds_registered_image_child_shader() {
+    let mut backend = SkiaRendererBackend::new();
+    backend.register_image_asset("red", &png_1x1()).unwrap();
+    backend
+        .register_runtime_shader_effect(
+            "sample-image",
+            "uniform shader image; half4 main(float2 p) { return image.eval(p); }",
+        )
+        .expect("runtime shader with image child compiles");
+
+    backend.create_surface("main", 32, 32).unwrap();
+    backend.begin_frame("main").unwrap();
+    backend.clear(Color::rgba(0, 0, 0, 255)).unwrap();
+    backend
+        .draw_runtime_effect_rect(
+            "sample-image",
+            Geometry::new(0.0, 0.0, 24.0, 24.0),
+            &[],
+            &[SkiaRuntimeEffectChildInput::image("image", "red")],
+        )
+        .expect("runtime shader samples registered image child");
+    backend.end_frame("main").unwrap();
+
+    assert_eq!(
+        backend.frame_snapshot("main").unwrap().pixel_at(8, 8),
+        Some(0x00ff_0000)
+    );
+}
+
+#[test]
+fn runtime_shader_effect_rejects_invalid_source_uniforms_and_children() {
+    let mut backend = SkiaRendererBackend::new();
+    let compile_error = backend
+        .register_runtime_shader_effect("bad-source", "not sksl")
+        .expect_err("invalid SkSL source must be rejected at registration");
+    assert_eq!(
+        compile_error.diagnostic().rule(),
+        "skia.runtime-effect.compile"
+    );
+
+    backend
+        .register_runtime_shader_effect(
+            "needs-bindings",
+            "uniform float2 amount; uniform shader image; half4 main(float2 p) { return image.eval(p) * half4(amount.x, amount.y, 1.0, 1.0); }",
+        )
+        .expect("runtime shader compiles");
+    backend.register_image_asset("red", &png_1x1()).unwrap();
+    backend.create_surface("main", 32, 32).unwrap();
+    backend.begin_frame("main").unwrap();
+
+    let uniform_error = backend
+        .draw_runtime_effect_rect(
+            "needs-bindings",
+            Geometry::new(0.0, 0.0, 16.0, 16.0),
+            &[SkiaRuntimeEffectUniform::float("amount", 1.0)],
+            &[SkiaRuntimeEffectChildInput::image("image", "red")],
+        )
+        .expect_err("wrong uniform arity must be rejected before drawing");
+    assert_eq!(
+        uniform_error.diagnostic().rule(),
+        "skia.runtime-effect.uniform-invalid"
+    );
+
+    let child_error = backend
+        .draw_runtime_effect_rect(
+            "needs-bindings",
+            Geometry::new(0.0, 0.0, 16.0, 16.0),
+            &[SkiaRuntimeEffectUniform::float2("amount", [1.0, 1.0])],
+            &[],
+        )
+        .expect_err("declared child shader must be bound explicitly");
+    assert_eq!(
+        child_error.diagnostic().rule(),
+        "skia.runtime-effect.child-missing"
+    );
+}
+
+#[test]
 fn cache_lifecycle_tracks_generation_and_invalidation() {
     let mut backend = SkiaRendererBackend::new();
     backend.create_surface("main", 96, 64).unwrap();
@@ -768,6 +898,7 @@ fn skia_backend_reports_detailed_capabilities_and_vector_commands() {
     assert!(capabilities.images.is_supported());
     assert!(capabilities.vectors.is_supported());
     assert!(capabilities.effects.is_supported());
+    assert!(capabilities.runtime_effects.is_supported());
     assert!(capabilities.dirty_regions.is_supported());
 
     backend.create_surface("main", 320, 180).unwrap();

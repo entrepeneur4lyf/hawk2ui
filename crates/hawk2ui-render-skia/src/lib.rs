@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! `Skia`-backed production renderer backend for `Hawk2UI`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hawk2ui_assets::{AssetKind as CompiledAssetKind, AssetRecord};
 use hawk2ui_render::{
@@ -14,8 +14,13 @@ use hawk2ui_text::TextLayout;
 use skia_safe::{
     AlphaType, BlurStyle, Canvas, ClipOp, Color as SkiaColor, Color4f, ColorType, Data, Font,
     FontMgr, FontStyle, IRect, Image, ImageInfo, MaskFilter, Matrix, Paint, PaintStyle, Path,
-    PathBuilder, Rect, Surface, TileMode, Typeface, gradient, images, surfaces,
+    PathBuilder, Rect, RuntimeEffect, SamplingOptions, Surface, TileMode, Typeface, gradient,
+    images, runtime_effect, surfaces,
 };
+
+const MAX_RUNTIME_EFFECT_SOURCE_BYTES: usize = 64 * 1024;
+const MAX_RUNTIME_EFFECT_UNIFORMS: usize = 64;
+const MAX_RUNTIME_EFFECT_CHILDREN: usize = 16;
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-render-skia";
@@ -68,6 +73,8 @@ pub struct SkiaRendererCapabilities {
     pub vectors: SkiaCapabilitySupport,
     /// Layer effect command support.
     pub effects: SkiaCapabilitySupport,
+    /// Skia runtime shader effect support.
+    pub runtime_effects: SkiaCapabilitySupport,
     /// Dirty-region tracking support.
     pub dirty_regions: SkiaCapabilitySupport,
 }
@@ -103,8 +110,157 @@ impl SkiaRendererCapabilities {
             images: SkiaCapabilitySupport::Supported,
             vectors: SkiaCapabilitySupport::Supported,
             effects: SkiaCapabilitySupport::Supported,
+            runtime_effects: SkiaCapabilitySupport::Supported,
             dirty_regions: SkiaCapabilitySupport::Supported,
         }
+    }
+}
+
+/// Numeric uniform binding for a Skia runtime shader effect.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkiaRuntimeEffectUniform {
+    name: String,
+    value: SkiaRuntimeEffectUniformValue,
+}
+
+impl SkiaRuntimeEffectUniform {
+    /// Creates a scalar float uniform binding.
+    #[must_use]
+    pub fn float(name: impl Into<String>, value: f32) -> Self {
+        Self {
+            name: name.into(),
+            value: SkiaRuntimeEffectUniformValue::Float(vec![value]),
+        }
+    }
+
+    /// Creates a `float2` uniform binding.
+    #[must_use]
+    pub fn float2(name: impl Into<String>, value: [f32; 2]) -> Self {
+        Self {
+            name: name.into(),
+            value: SkiaRuntimeEffectUniformValue::Float(value.to_vec()),
+        }
+    }
+
+    /// Creates a `float3` uniform binding.
+    #[must_use]
+    pub fn float3(name: impl Into<String>, value: [f32; 3]) -> Self {
+        Self {
+            name: name.into(),
+            value: SkiaRuntimeEffectUniformValue::Float(value.to_vec()),
+        }
+    }
+
+    /// Creates a `float4` uniform binding.
+    #[must_use]
+    pub fn float4(name: impl Into<String>, value: [f32; 4]) -> Self {
+        Self {
+            name: name.into(),
+            value: SkiaRuntimeEffectUniformValue::Float(value.to_vec()),
+        }
+    }
+
+    /// Creates a float or float-array uniform binding with caller-supplied arity.
+    #[must_use]
+    pub fn floats(name: impl Into<String>, values: impl Into<Vec<f32>>) -> Self {
+        Self {
+            name: name.into(),
+            value: SkiaRuntimeEffectUniformValue::Float(values.into()),
+        }
+    }
+
+    /// Creates a scalar int uniform binding.
+    #[must_use]
+    pub fn int(name: impl Into<String>, value: i32) -> Self {
+        Self {
+            name: name.into(),
+            value: SkiaRuntimeEffectUniformValue::Int(vec![value]),
+        }
+    }
+
+    /// Creates an `int2` uniform binding.
+    #[must_use]
+    pub fn int2(name: impl Into<String>, value: [i32; 2]) -> Self {
+        Self {
+            name: name.into(),
+            value: SkiaRuntimeEffectUniformValue::Int(value.to_vec()),
+        }
+    }
+
+    /// Creates an int or int-array uniform binding with caller-supplied arity.
+    #[must_use]
+    pub fn ints(name: impl Into<String>, values: impl Into<Vec<i32>>) -> Self {
+        Self {
+            name: name.into(),
+            value: SkiaRuntimeEffectUniformValue::Int(values.into()),
+        }
+    }
+
+    /// Returns the `SkSL` uniform name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn value(&self) -> &SkiaRuntimeEffectUniformValue {
+        &self.value
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum SkiaRuntimeEffectUniformValue {
+    Float(Vec<f32>),
+    Int(Vec<i32>),
+}
+
+/// Image child binding for a Skia runtime shader effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SkiaRuntimeEffectChildInput {
+    name: String,
+    asset_id: String,
+}
+
+impl SkiaRuntimeEffectChildInput {
+    /// Creates an image child shader binding by `SkSL` child name and registered image asset ID.
+    #[must_use]
+    pub fn image(name: impl Into<String>, asset_id: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            asset_id: asset_id.into(),
+        }
+    }
+
+    /// Returns the `SkSL` child name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the registered image asset ID used as this child shader.
+    #[must_use]
+    pub fn asset_id(&self) -> &str {
+        &self.asset_id
+    }
+}
+
+/// Runtime shader effect cache statistics.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SkiaRuntimeEffectCacheStats {
+    compiled_effects: usize,
+    draw_calls: u64,
+}
+
+impl SkiaRuntimeEffectCacheStats {
+    /// Returns the number of compiled runtime shader effects held by this backend.
+    #[must_use]
+    pub const fn compiled_effects(self) -> usize {
+        self.compiled_effects
+    }
+
+    /// Returns the number of runtime shader draw calls executed by this backend.
+    #[must_use]
+    pub const fn draw_calls(self) -> u64 {
+        self.draw_calls
     }
 }
 
@@ -398,6 +554,20 @@ struct SkiaVectorAsset {
     paths: Vec<SkiaVectorPathRecord>,
 }
 
+struct SkiaRuntimeEffectRecord {
+    source: String,
+    effect: RuntimeEffect,
+}
+
+impl SkiaRuntimeEffectRecord {
+    fn new(source: impl Into<String>, effect: RuntimeEffect) -> Self {
+        Self {
+            source: source.into(),
+            effect,
+        }
+    }
+}
+
 struct SvgVectorPathRecord<P> {
     path: P,
     fill: Option<Color>,
@@ -533,6 +703,8 @@ pub struct SkiaRendererBackend {
     skia_capabilities: SkiaRendererCapabilities,
     image_assets: BTreeMap<String, Image>,
     vector_assets: BTreeMap<String, SkiaVectorAsset>,
+    runtime_effects: BTreeMap<String, SkiaRuntimeEffectRecord>,
+    runtime_effect_draw_calls: u64,
     layer_caches: BTreeMap<String, SkiaLayerCacheEntry>,
     cache_invalidation_keys: Vec<String>,
     opacity_group_depth: usize,
@@ -557,6 +729,8 @@ impl SkiaRendererBackend {
             skia_capabilities: SkiaRendererCapabilities::cpu_raster(),
             image_assets: BTreeMap::new(),
             vector_assets: BTreeMap::new(),
+            runtime_effects: BTreeMap::new(),
+            runtime_effect_draw_calls: 0,
             layer_caches: BTreeMap::new(),
             cache_invalidation_keys: Vec::new(),
             opacity_group_depth: 0,
@@ -767,6 +941,67 @@ impl SkiaRendererBackend {
         self.image_assets.insert(id.clone(), image);
         self.commands.push(format!("register-image:{id}"));
         Ok(())
+    }
+
+    /// Registers and compiles a Skia runtime shader effect by stable effect ID.
+    ///
+    /// Re-registering the same ID with identical source is a cache hit. Reusing an ID with
+    /// different source is rejected so callers cannot silently swap shader behavior under a stable
+    /// cache key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when the effect ID/source is invalid, the source exceeds the
+    /// bounded production limit, Skia rejects the `SkSL` program, or the ID already names different
+    /// source.
+    pub fn register_runtime_shader_effect(
+        &mut self,
+        id: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Result<(), BackendError> {
+        let id = id.into();
+        let source = source.into();
+        validate_runtime_effect_id(&id).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        validate_runtime_effect_source(&source).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        if let Some(existing) = self.runtime_effects.get(&id) {
+            if existing.source == source {
+                self.commands.push(format!("runtime-effect-cache-hit:{id}"));
+                return Ok(());
+            }
+            return self.fail(
+                "skia.runtime-effect.duplicate-id",
+                "runtime shader effect ID is already registered with different source",
+            );
+        }
+
+        let effect = RuntimeEffect::make_for_shader(&source, None).map_err(|message| {
+            let diagnostic = BackendDiagnostic::new(
+                "skia.runtime-effect.compile",
+                format!("SkSL runtime shader effect failed to compile: {message}"),
+            );
+            self.diagnostics.push(diagnostic.clone());
+            BackendError::new(
+                diagnostic.rule().to_string(),
+                diagnostic.message().to_string(),
+            )
+        })?;
+        self.runtime_effects
+            .insert(id.clone(), SkiaRuntimeEffectRecord::new(source, effect));
+        self.commands.push(format!("runtime-effect-compile:{id}"));
+        Ok(())
+    }
+
+    /// Returns runtime shader effect cache statistics.
+    #[must_use]
+    pub fn runtime_effect_cache_stats(&self) -> SkiaRuntimeEffectCacheStats {
+        SkiaRuntimeEffectCacheStats {
+            compiled_effects: self.runtime_effects.len(),
+            draw_calls: self.runtime_effect_draw_calls,
+        }
     }
 
     /// Registers a compiled asset payload from the production asset backend.
@@ -1005,6 +1240,76 @@ impl SkiaRendererBackend {
         self.commands.push(format!(
             "image-rect:{image}:{},{},{},{}",
             geometry.x, geometry.y, geometry.width, geometry.height
+        ));
+        Ok(())
+    }
+
+    /// Draws a rectangle filled by a registered Skia runtime shader effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when no frame is active, the effect is missing, geometry is
+    /// invalid, declared uniforms/children are missing or mismatched, image child assets are not
+    /// registered, or Skia cannot materialize the shader instance.
+    pub fn draw_runtime_effect_rect(
+        &mut self,
+        effect_id: &str,
+        geometry: Geometry,
+        uniforms: &[SkiaRuntimeEffectUniform],
+        children: &[SkiaRuntimeEffectChildInput],
+    ) -> Result<(), BackendError> {
+        self.require_active_frame()?;
+        validate_runtime_effect_id(effect_id).inspect_err(|error| {
+            self.diagnostics.push(error.diagnostic().clone());
+        })?;
+        validate_geometry("skia.runtime-effect.invalid-geometry", geometry).inspect_err(
+            |error| {
+                self.diagnostics.push(error.diagnostic().clone());
+            },
+        )?;
+        validate_runtime_effect_binding_limits(uniforms.len(), children.len()).inspect_err(
+            |error| {
+                self.diagnostics.push(error.diagnostic().clone());
+            },
+        )?;
+
+        let Some(record) = self.runtime_effects.get(effect_id) else {
+            return self.fail(
+                "skia.runtime-effect.missing",
+                "runtime shader effect is not registered with the renderer",
+            );
+        };
+        let uniform_data =
+            runtime_effect_uniform_data(&record.effect, uniforms).inspect_err(|error| {
+                self.diagnostics.push(error.diagnostic().clone());
+            })?;
+        let child_shaders =
+            runtime_effect_child_shaders(&record.effect, children, &self.image_assets)
+                .inspect_err(|error| {
+                    self.diagnostics.push(error.diagnostic().clone());
+                })?;
+        let Some(shader) =
+            record
+                .effect
+                .make_shader(uniform_data, &child_shaders, Option::<&Matrix>::None)
+        else {
+            return self.fail(
+                "skia.runtime-effect.shader-failed",
+                "Skia failed to materialize the runtime shader effect",
+            );
+        };
+
+        self.with_active_surface(|surface| {
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_shader(shader);
+            surface.canvas().draw_rect(rect(geometry), &paint);
+        })?;
+        self.runtime_effect_draw_calls = self.runtime_effect_draw_calls.saturating_add(1);
+        self.commands.push(format!(
+            "runtime-effect:{effect_id}:uniforms={}:children={}",
+            uniforms.len(),
+            children.len()
         ));
         Ok(())
     }
@@ -2141,6 +2446,252 @@ fn validate_asset_id(id: &str) -> Result<(), BackendError> {
     } else {
         Ok(())
     }
+}
+
+fn validate_runtime_effect_id(id: &str) -> Result<(), BackendError> {
+    if id.trim().is_empty() {
+        Err(BackendError::new(
+            "skia.runtime-effect.invalid-id",
+            "runtime shader effect ID must not be empty",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_runtime_effect_source(source: &str) -> Result<(), BackendError> {
+    if source.trim().is_empty() {
+        return Err(BackendError::new(
+            "skia.runtime-effect.invalid-source",
+            "runtime shader effect source must not be empty",
+        ));
+    }
+    if source.len() > MAX_RUNTIME_EFFECT_SOURCE_BYTES {
+        return Err(BackendError::new(
+            "skia.runtime-effect.source-too-large",
+            "runtime shader effect source exceeds the production byte limit",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_runtime_effect_binding_limits(
+    uniform_count: usize,
+    child_count: usize,
+) -> Result<(), BackendError> {
+    if uniform_count > MAX_RUNTIME_EFFECT_UNIFORMS {
+        return Err(BackendError::new(
+            "skia.runtime-effect.uniform-limit",
+            "runtime shader effect uniform binding count exceeds the production limit",
+        ));
+    }
+    if child_count > MAX_RUNTIME_EFFECT_CHILDREN {
+        return Err(BackendError::new(
+            "skia.runtime-effect.child-limit",
+            "runtime shader effect child binding count exceeds the production limit",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_runtime_effect_binding_name(name: &str) -> Result<(), BackendError> {
+    if name.trim().is_empty() {
+        Err(BackendError::new(
+            "skia.runtime-effect.binding-invalid",
+            "runtime shader effect binding names must not be empty",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn runtime_effect_uniform_data(
+    effect: &RuntimeEffect,
+    uniforms: &[SkiaRuntimeEffectUniform],
+) -> Result<Data, BackendError> {
+    let mut data = vec![0_u8; effect.uniform_size()];
+    let mut seen = BTreeSet::new();
+    for binding in uniforms {
+        validate_runtime_effect_binding_name(binding.name())?;
+        if !seen.insert(binding.name().to_string()) {
+            return Err(BackendError::new(
+                "skia.runtime-effect.uniform-duplicate",
+                "runtime shader effect uniform bindings must not contain duplicate names",
+            ));
+        }
+        let Some(uniform) = effect.find_uniform(binding.name()) else {
+            return Err(BackendError::new(
+                "skia.runtime-effect.uniform-unknown",
+                "runtime shader effect uniform binding does not match a declared uniform",
+            ));
+        };
+        write_runtime_effect_uniform(&mut data, uniform, binding.value())?;
+    }
+    for uniform in effect.uniforms() {
+        if !seen.contains(uniform.name()) {
+            return Err(BackendError::new(
+                "skia.runtime-effect.uniform-missing",
+                "runtime shader effect declared uniform was not bound",
+            ));
+        }
+    }
+    Ok(Data::new_copy(&data))
+}
+
+fn write_runtime_effect_uniform(
+    data: &mut [u8],
+    uniform: &runtime_effect::Uniform,
+    value: &SkiaRuntimeEffectUniformValue,
+) -> Result<(), BackendError> {
+    let (expected_kind, component_count) = runtime_effect_uniform_shape(uniform.ty());
+    let array_count = usize::try_from(uniform.count().max(1)).map_err(|_| {
+        BackendError::new(
+            "skia.runtime-effect.uniform-invalid",
+            "runtime shader effect uniform count is invalid",
+        )
+    })?;
+    let expected_values = component_count.saturating_mul(array_count);
+    match (expected_kind, value) {
+        (RuntimeEffectUniformKind::Float, SkiaRuntimeEffectUniformValue::Float(values)) => {
+            if values.len() != expected_values || values.iter().any(|value| !value.is_finite()) {
+                return Err(BackendError::new(
+                    "skia.runtime-effect.uniform-invalid",
+                    "runtime shader effect float uniform has invalid arity or non-finite values",
+                ));
+            }
+            copy_uniform_bytes(
+                data,
+                uniform,
+                values.iter().flat_map(|value| value.to_ne_bytes()),
+            )
+        }
+        (RuntimeEffectUniformKind::Int, SkiaRuntimeEffectUniformValue::Int(values)) => {
+            if values.len() != expected_values {
+                return Err(BackendError::new(
+                    "skia.runtime-effect.uniform-invalid",
+                    "runtime shader effect int uniform has invalid arity",
+                ));
+            }
+            copy_uniform_bytes(
+                data,
+                uniform,
+                values.iter().flat_map(|value| value.to_ne_bytes()),
+            )
+        }
+        _ => Err(BackendError::new(
+            "skia.runtime-effect.uniform-invalid",
+            "runtime shader effect uniform binding kind does not match the declared SkSL uniform",
+        )),
+    }
+}
+
+fn copy_uniform_bytes<I>(
+    data: &mut [u8],
+    uniform: &runtime_effect::Uniform,
+    bytes: I,
+) -> Result<(), BackendError>
+where
+    I: IntoIterator<Item = u8>,
+{
+    let offset = uniform.offset();
+    let bytes: Vec<_> = bytes.into_iter().collect();
+    let end = offset.checked_add(bytes.len()).ok_or_else(|| {
+        BackendError::new(
+            "skia.runtime-effect.uniform-invalid",
+            "runtime shader effect uniform byte range overflowed",
+        )
+    })?;
+    if end > data.len() || bytes.len() > uniform.size_in_bytes() {
+        return Err(BackendError::new(
+            "skia.runtime-effect.uniform-invalid",
+            "runtime shader effect uniform byte range does not fit Skia reflection metadata",
+        ));
+    }
+    data[offset..end].copy_from_slice(&bytes);
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeEffectUniformKind {
+    Float,
+    Int,
+}
+
+fn runtime_effect_uniform_shape(
+    uniform_type: runtime_effect::uniform::Type,
+) -> (RuntimeEffectUniformKind, usize) {
+    use runtime_effect::uniform::Type;
+    match uniform_type {
+        Type::Float => (RuntimeEffectUniformKind::Float, 1),
+        Type::Float2 => (RuntimeEffectUniformKind::Float, 2),
+        Type::Float3 => (RuntimeEffectUniformKind::Float, 3),
+        Type::Float4 | Type::Float2x2 => (RuntimeEffectUniformKind::Float, 4),
+        Type::Float3x3 => (RuntimeEffectUniformKind::Float, 9),
+        Type::Float4x4 => (RuntimeEffectUniformKind::Float, 16),
+        Type::Int => (RuntimeEffectUniformKind::Int, 1),
+        Type::Int2 => (RuntimeEffectUniformKind::Int, 2),
+        Type::Int3 => (RuntimeEffectUniformKind::Int, 3),
+        Type::Int4 => (RuntimeEffectUniformKind::Int, 4),
+    }
+}
+
+fn runtime_effect_child_shaders(
+    effect: &RuntimeEffect,
+    children: &[SkiaRuntimeEffectChildInput],
+    image_assets: &BTreeMap<String, Image>,
+) -> Result<Vec<runtime_effect::ChildPtr>, BackendError> {
+    let mut seen = BTreeSet::new();
+    for binding in children {
+        validate_runtime_effect_binding_name(binding.name())?;
+        validate_asset_id(binding.asset_id())?;
+        if !seen.insert(binding.name().to_string()) {
+            return Err(BackendError::new(
+                "skia.runtime-effect.child-duplicate",
+                "runtime shader effect child bindings must not contain duplicate names",
+            ));
+        }
+        if effect.find_child(binding.name()).is_none() {
+            return Err(BackendError::new(
+                "skia.runtime-effect.child-unknown",
+                "runtime shader effect child binding does not match a declared child",
+            ));
+        }
+    }
+
+    let mut resolved = Vec::with_capacity(effect.children().len());
+    for child in effect.children() {
+        if child.ty() != runtime_effect::ChildType::Shader {
+            return Err(BackendError::new(
+                "skia.runtime-effect.child-unsupported",
+                "runtime shader effect child declarations must be shader children",
+            ));
+        }
+        let Some(binding) = children
+            .iter()
+            .find(|binding| binding.name() == child.name())
+        else {
+            return Err(BackendError::new(
+                "skia.runtime-effect.child-missing",
+                "runtime shader effect declared child was not bound",
+            ));
+        };
+        let Some(image) = image_assets.get(binding.asset_id()) else {
+            return Err(BackendError::new(
+                "skia.runtime-effect.child-image-missing",
+                "runtime shader effect image child references an unregistered image asset",
+            ));
+        };
+        let Some(shader) =
+            image.to_shader(None, SamplingOptions::default(), Option::<&Matrix>::None)
+        else {
+            return Err(BackendError::new(
+                "skia.runtime-effect.child-image-shader-failed",
+                "Skia failed to create an image shader for a runtime effect child",
+            ));
+        };
+        resolved.push(runtime_effect::ChildPtr::from(shader));
+    }
+    Ok(resolved)
 }
 
 fn extract_svg_path_records(svg: &str) -> Vec<SvgVectorPathRecord<String>> {

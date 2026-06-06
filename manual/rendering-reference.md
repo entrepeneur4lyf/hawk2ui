@@ -15,7 +15,7 @@ The rendering pipeline consumes layout geometry and produces backend-neutral pai
 
 The graphics compatibility matrix names these backends:
 
-- `skia-cpu-raster`: supported; covers CPU raster, high DPI, text shaping, image layers, vector layers, effects, and dirty regions.
+- `skia-cpu-raster`: supported; covers CPU raster, high DPI, text shaping, image layers, vector layers, structured effects, `SkRuntimeEffect` shader effects, and dirty regions.
 - `skia-gpu-candidate`: not currently marked supported; candidate coverage includes high DPI, image layers, vector layers, and effects.
 
 The stable diagnostic rules for backend capability gaps are `backend.capability.unsupported` and `backend.capability.gpu-unavailable`.
@@ -23,3 +23,7 @@ The stable diagnostic rules for backend capability gaps are `backend.capability.
 ## Authoring Model
 
 Authors should describe UI structure, style, layout, assets, and custom draw hooks. The renderer owns command ordering, layers, backend selection, and diagnostics. If a backend cannot support a requested feature, it must report a `BackendDiagnostic` instead of producing silent visual drift.
+
+## Runtime Shader Effects
+
+`hawk2ui-render-skia` supports Skia runtime shader effects through a bounded, typed API. Applications register a stable effect ID with `SkSL` source, then draw effect-filled rectangles with typed float/int uniform bindings and optional registered image child shaders. The backend validates source size, duplicate effect IDs, uniform arity/type, missing declarations, child shader bindings, image registration, geometry, and active-frame lifecycle before presenting pixels.

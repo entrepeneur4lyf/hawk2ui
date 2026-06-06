@@ -20,7 +20,10 @@ use hawk2ui_plugin_adapters::{
 use hawk2ui_render::{Color, RendererBackend};
 #[cfg(target_os = "linux")]
 use hawk2ui_render_skia::SkiaSurfaceKind;
-use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend, SkiaSurfaceConfig};
+use hawk2ui_render_skia::{
+    RuntimeSceneAssetFallback, RuntimeSceneReplayOptions, SkiaFrameSnapshot, SkiaRendererBackend,
+    SkiaSurfaceConfig,
+};
 use hawk2ui_runtime::RuntimeSceneFrame;
 use keyboard_types::{Key, KeyState, KeyboardEvent};
 use raw_window_handle::{
@@ -1095,7 +1098,10 @@ impl BaseviewGlSkiaFrameHandler {
             .clear(Color::rgba(0, 0, 0, 0))
             .map_err(|error| map_backend_error(&error))?;
         self.backend
-            .draw_runtime_scene_frame(&self.scene, frame_index, self.dpi_scale)
+            .draw_runtime_scene_frame_with_options(
+                &self.scene,
+                runtime_scene_replay_options(frame_index, self.dpi_scale),
+            )
             .map_err(|error| map_backend_error(&error))?;
         self.backend
             .end_frame(GPU_EDITOR_SURFACE_ID)
@@ -2671,7 +2677,10 @@ fn render_scene_to_skia_snapshot(
         .clear(Color::rgba(0, 0, 0, 0))
         .map_err(|error| map_backend_error(&error))?;
     backend
-        .draw_runtime_scene_frame(scene, frame_index, dpi_scale)
+        .draw_runtime_scene_frame_with_options(
+            scene,
+            runtime_scene_replay_options(frame_index, dpi_scale),
+        )
         .map_err(|error| map_backend_error(&error))?;
     backend
         .end_frame("baseview-editor")
@@ -2680,6 +2689,14 @@ fn render_scene_to_skia_snapshot(
         .frame_snapshot("baseview-editor")
         .map_err(|error| map_backend_error(&error))
         .cloned()
+}
+
+const fn runtime_scene_replay_options(
+    frame_index: u64,
+    dpi_scale: f32,
+) -> RuntimeSceneReplayOptions {
+    RuntimeSceneReplayOptions::new(frame_index, dpi_scale)
+        .with_missing_asset_fallback(RuntimeSceneAssetFallback::Placeholder)
 }
 
 #[cfg(target_os = "linux")]
