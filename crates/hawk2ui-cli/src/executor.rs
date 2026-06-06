@@ -11,12 +11,13 @@ use std::{
 };
 
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits, AssetRecord};
+use hawk2ui_authoring::{FrameworkNativeProgram, FrameworkNativeProgramWire, NativeRuntimeBridge};
 use hawk2ui_build::{
     ArtifactSchemaVersion, ArtifactSignaturePolicy, ArtifactSignatureVerificationKey,
     ArtifactSignatureVerifier, ArtifactSigningKey, AssetCompilationError, BuildDiagnostic,
-    BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput, CompiledScriptRecord, HawkManifest,
-    ManifestError, PackageTarget, PinParamIds, SealedArtifact, SealedArtifactError,
-    emit_truce_params_struct, pin_param_ids,
+    BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput, CompiledFrameworkRecord,
+    CompiledScriptRecord, HawkManifest, ManifestError, PackageTarget, PinParamIds, SealedArtifact,
+    SealedArtifactError, SourceFramework, emit_truce_params_struct, pin_param_ids,
 };
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
@@ -1587,6 +1588,13 @@ fn desktop_runtime_config_from_build_output(
     output: &BuildWorkspaceOutput,
     exit_after_first_frame: bool,
 ) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
+    if let Some(runtime_tree) = entry_framework_runtime_tree(output)? {
+        return desktop_runtime_config_from_manifest_with_runtime_tree(
+            &output.manifest,
+            runtime_tree,
+            exit_after_first_frame,
+        );
+    }
     let app_model = entry_script_app_model(output)?.unwrap_or_else(|| {
         DesktopEntryAppModel::manifest_fallback(output.manifest.identity.name.clone())
     });
@@ -1595,6 +1603,24 @@ fn desktop_runtime_config_from_build_output(
         &app_model,
         exit_after_first_frame,
     )
+}
+
+fn desktop_runtime_config_from_manifest_with_runtime_tree(
+    manifest: &HawkManifest,
+    runtime_tree: RuntimeViewTree,
+    exit_after_first_frame: bool,
+) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
+    let (width, height) = manifest.editor.as_ref().map_or((960.0, 540.0), |editor| {
+        (f64::from(editor.width), f64::from(editor.height))
+    });
+    runtime_dimension_to_f32(width)?;
+    runtime_dimension_to_f32(height)?;
+    Ok(WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+        manifest.identity.name.clone(),
+        SurfaceMetrics::new(width, height, 1.0),
+    ))
+    .with_runtime_tree(runtime_tree)
+    .with_exit_after_first_frame(exit_after_first_frame))
 }
 
 fn desktop_runtime_config_with_assets(
@@ -1750,6 +1776,36 @@ fn entry_script_app_model(
     Ok(entry_script_visible_title(script).map(DesktopEntryAppModel::manifest_fallback))
 }
 
+fn entry_framework_runtime_tree(
+    output: &BuildWorkspaceOutput,
+) -> Result<Option<RuntimeViewTree>, Box<CliDiagnostic>> {
+    let Some(framework) = output
+        .artifact
+        .compiled_frameworks
+        .iter()
+        .find(|framework| framework.entrypoint_id == "entry")
+    else {
+        return Ok(None);
+    };
+    let wire = FrameworkNativeProgramWire::from_json(&framework.compiler_artifact_json)
+        .map_err(|error| framework_artifact_diagnostic(framework, error.rule(), error.message()))?;
+    let program = FrameworkNativeProgram::try_from(wire)
+        .map_err(|error| framework_artifact_diagnostic(framework, error.rule(), error.message()))?;
+    let authoring = program
+        .to_native_authoring_artifact(&framework.source_path, true)
+        .map_err(|error| {
+            let message = error.diagnostics().first().map_or_else(
+                || "native authoring rejected the framework program".to_string(),
+                |diagnostic| format!("{}: {}", diagnostic.rule, diagnostic.message),
+            );
+            framework_artifact_diagnostic(framework, "native.authoring.error", message)
+        })?;
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact(&authoring)
+        .map_err(|error| framework_artifact_diagnostic(framework, error.rule(), error.message()))?;
+    Ok(Some(bridged.runtime_tree().clone()))
+}
+
 fn entry_script_mount_app_model(
     script: &CompiledScriptRecord,
 ) -> Result<Option<DesktopEntryAppModel>, Box<CliDiagnostic>> {
@@ -1810,6 +1866,35 @@ fn invalid_entry_tree_diagnostic(
         CliDiagnostic::error("runtime.desktop.invalid-entry-tree", message.into())
             .file(script.source_path.clone()),
     )
+}
+
+fn framework_artifact_diagnostic(
+    framework: &CompiledFrameworkRecord,
+    underlying_rule: &str,
+    message: impl Into<String>,
+) -> Box<CliDiagnostic> {
+    Box::new(
+        CliDiagnostic::error(
+            "runtime.desktop.framework-artifact-invalid",
+            format!(
+                "compiled {} framework artifact for {} is invalid ({underlying_rule}): {}",
+                source_framework_label(framework.framework),
+                framework.source_path,
+                message.into()
+            ),
+        )
+        .file(framework.source_path.clone()),
+    )
+}
+
+const fn source_framework_label(framework: SourceFramework) -> &'static str {
+    match framework {
+        SourceFramework::Native => "native",
+        SourceFramework::React => "react",
+        SourceFramework::Solid => "solid",
+        SourceFramework::Svelte => "svelte",
+        SourceFramework::Vue => "vue",
+    }
 }
 
 fn runtime_dimension_to_f32(value: f64) -> Result<f32, Box<CliDiagnostic>> {
@@ -2037,7 +2122,8 @@ CSS, an SVG asset, plugin parameters, and an initial preset.
 mod tests {
     use super::*;
     use hawk2ui_build::{
-        ArtifactHash, BuildPipeline, CompiledScriptRecord, SealedArtifact, VerificationReport,
+        ArtifactHash, BuildPipeline, CompiledFrameworkRecord, CompiledScriptRecord, SealedArtifact,
+        SourceFramework, VerificationReport,
     };
     use hawk2ui_layout::Viewport;
     use hawk2ui_render::Color;
@@ -2459,5 +2545,154 @@ export function mount() {
                 && float_eq(*font_size, 18.0)
                 && *color == Color::rgba(170, 187, 204, 255)
         )));
+    }
+
+    #[test]
+    fn desktop_runtime_config_mounts_compiled_framework_artifact() {
+        let manifest = HawkManifest::parse(
+            r#"[identity]
+id = "com.example.framework-desktop"
+name = "Manifest Only Title"
+version = "1.0.0"
+
+[source]
+entry = "src/App.tsx"
+framework = "react"
+
+[editor]
+width = 640
+height = 360
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+        )
+        .expect("manifest parses");
+        let compiler_artifact = r##"{
+  "schema_version": 1,
+  "root": {
+    "id": "framework-root",
+    "kind": "view",
+    "props": [
+      { "name": "background", "value": { "type": "string", "value": "#102030" } }
+    ],
+    "children": [
+      {
+        "key": "title",
+        "node": {
+          "id": "framework-title",
+          "kind": "text",
+          "props": [
+            { "name": "text", "value": { "type": "string", "value": "Hello Framework Runtime" } },
+            { "name": "font_size", "value": { "type": "number", "value": 21 } },
+            { "name": "color", "value": { "type": "string", "value": "#aabbcc" } },
+            { "name": "width", "value": { "type": "number", "value": 360 } },
+            { "name": "height", "value": { "type": "number", "value": 48 } }
+          ]
+        }
+      }
+    ]
+  }
+}"##;
+        let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+            .with_compiled_framework(
+                CompiledFrameworkRecord::new(
+                    "entry",
+                    SourceFramework::React,
+                    "src/App.tsx",
+                    "frameworks/entry.hawk.framework.json",
+                    ArtifactHash::from_bytes(compiler_artifact.as_bytes()),
+                )
+                .with_compiler_artifact_json(compiler_artifact),
+            );
+        let output = BuildWorkspaceOutput {
+            manifest,
+            pipeline: BuildPipeline::production(),
+            artifact,
+            verification: VerificationReport::new("com.example.framework-desktop"),
+        };
+
+        let config =
+            desktop_runtime_config_from_build_output(&output, true).expect("runtime config builds");
+        let runtime_tree = config
+            .runtime_tree()
+            .expect("desktop config carries runtime tree");
+        assert_eq!(runtime_tree.root_id().as_str(), "framework-root");
+
+        let scene = RuntimeSceneBridge::new(Viewport::new(640.0, 360.0))
+            .build(runtime_tree)
+            .expect("runtime scene builds");
+
+        assert!(scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Fill { id, color, .. }
+                if id.as_str() == "framework-root" && *color == Color::rgba(16, 32, 48, 255)
+        )));
+        assert!(scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Text {
+                id,
+                geometry,
+                text,
+                font_size,
+                color
+            } if id.as_str() == "framework-title"
+                && text == "Hello Framework Runtime"
+                && float_eq(geometry.width, 360.0)
+                && float_eq(geometry.height, 48.0)
+                && float_eq(*font_size, 21.0)
+                && *color == Color::rgba(170, 187, 204, 255)
+        )));
+        assert!(!scene.draw_commands().iter().any(|command| matches!(
+            command,
+            hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Manifest Only Title"
+        )));
+    }
+
+    #[test]
+    fn desktop_runtime_config_rejects_invalid_compiled_framework_artifact() {
+        let manifest = HawkManifest::parse(
+            r#"[identity]
+id = "com.example.bad-framework-desktop"
+name = "Bad Framework"
+version = "1.0.0"
+
+[source]
+entry = "src/App.svelte"
+framework = "svelte"
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+        )
+        .expect("manifest parses");
+        let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+            .with_compiled_framework(
+                CompiledFrameworkRecord::new(
+                    "entry",
+                    SourceFramework::Svelte,
+                    "src/App.svelte",
+                    "frameworks/entry.hawk.framework.json",
+                    ArtifactHash::from_bytes(b"not json"),
+                )
+                .with_compiler_artifact_json("not json"),
+            );
+        let output = BuildWorkspaceOutput {
+            manifest,
+            pipeline: BuildPipeline::production(),
+            artifact,
+            verification: VerificationReport::new("com.example.bad-framework-desktop"),
+        };
+
+        let diagnostic = desktop_runtime_config_from_build_output(&output, true)
+            .expect_err("invalid framework artifact should fail before runtime");
+
+        assert_eq!(
+            diagnostic.rule,
+            "runtime.desktop.framework-artifact-invalid"
+        );
+        assert!(diagnostic.message.contains("src/App.svelte"));
     }
 }

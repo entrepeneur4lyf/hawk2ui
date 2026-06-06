@@ -1632,6 +1632,7 @@ version = "0.1.0"
 dependencies = [
  "hawk2ui-api",
  "hawk2ui-assets",
+ "hawk2ui-authoring",
  "hawk2ui-build",
  "hawk2ui-host",
  "hawk2ui-host-winit",
