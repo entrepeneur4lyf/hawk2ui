@@ -531,19 +531,37 @@ fn find_bundled_bun() -> Option<PathBuf> {
     bun_executable_candidates("bun")
         .into_iter()
         .map(|candidate| dir.join(candidate))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| is_executable_file(candidate))
 }
 
 fn find_executable_on_path(name: &str) -> Option<PathBuf> {
-    env::var_os("PATH").and_then(|path| {
-        env::split_paths(&path)
-            .flat_map(|dir| {
-                bun_executable_candidates(name)
-                    .into_iter()
-                    .map(move |candidate| dir.join(candidate))
-            })
-            .find(|candidate| candidate.is_file())
-    })
+    env::var_os("PATH").and_then(|path| find_executable_in_path(name, &path))
+}
+
+fn find_executable_in_path(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
+    env::split_paths(path)
+        .flat_map(|dir| {
+            bun_executable_candidates(name)
+                .into_iter()
+                .map(move |candidate| dir.join(candidate))
+        })
+        .find(|candidate| is_executable_file(candidate))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file() && has_executable_permission(path)
+}
+
+#[cfg(unix)]
+fn has_executable_permission(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn has_executable_permission(_path: &Path) -> bool {
+    true
 }
 
 fn bun_executable_candidates(name: &str) -> Vec<String> {
@@ -723,6 +741,31 @@ mod tests {
         assert!(error.contains("timed out"), "{error}");
         assert!(error.contains("starting compiler"), "{error}");
         assert!(error.contains("still compiling"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn framework_compiler_path_search_ignores_non_executable_unix_files() {
+        let root = temp_dir("compiler-path-non-executable");
+        let candidate = root.join("bun");
+        write_file(&candidate, "#!/bin/sh\n");
+
+        let found = find_executable_in_path("bun", root.as_os_str());
+
+        assert_eq!(found, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn framework_compiler_path_search_accepts_executable_unix_files() {
+        let root = temp_dir("compiler-path-executable");
+        let candidate = root.join("bun");
+        write_file(&candidate, "#!/bin/sh\n");
+        make_executable(&candidate);
+
+        let found = find_executable_in_path("bun", root.as_os_str());
+
+        assert_eq!(found, Some(candidate));
     }
 
     fn temp_dir(label: &str) -> PathBuf {
