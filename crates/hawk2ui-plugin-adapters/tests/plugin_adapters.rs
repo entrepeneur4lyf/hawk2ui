@@ -330,6 +330,12 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
         .join("lib.rs");
     assert!(generated_clap_cargo.is_file());
     assert!(generated_clap_source_path.is_file());
+    let generated_clap_manifest =
+        std::fs::read_to_string(&generated_clap_cargo).expect("generated CLAP manifest reads");
+    assert!(
+        generated_clap_manifest.contains("[workspace]"),
+        "generated CLAP cdylib must be buildable as a standalone Cargo workspace"
+    );
     let generated_clap_source =
         std::fs::read_to_string(&generated_clap_source_path).expect("generated CLAP source reads");
     assert!(generated_clap_source.contains("hawk2ui_editor_descriptor"));
@@ -815,7 +821,7 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
     let host_check_root = output_root.join("host-check");
     write_generated_clap_host_check(&host_check_root, &library_path);
     let host_target_dir = output_root.join("host-check-target");
-    let status = std::process::Command::new("cargo")
+    let host_check = std::process::Command::new("cargo")
         .arg("run")
         .arg("--release")
         .arg("--manifest-path")
@@ -823,11 +829,14 @@ fn plugin_adapters_generate_compilable_clap_cdylib_scaffold() {
         .arg("--")
         .arg(&library_path)
         .env("CARGO_TARGET_DIR", &host_target_dir)
-        .status()
+        .output()
         .expect("generated CLAP host check should launch");
     assert!(
-        status.success(),
-        "generated CLAP host check should load the compiled library"
+        host_check.status.success(),
+        "generated CLAP host check should load the compiled library\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        host_check.status,
+        String::from_utf8_lossy(&host_check.stdout),
+        String::from_utf8_lossy(&host_check.stderr)
     );
 }
 
@@ -1057,7 +1066,9 @@ fn write_generated_clap_host_check(root: &Path, library_path: &Path) {
 }
 
 fn generated_clap_host_check_manifest() -> &'static str {
-    r#"[package]
+    r#"[workspace]
+
+[package]
 name = "hawk2ui-clap-host-check"
 version = "0.1.0"
 edition = "2024"
@@ -1088,7 +1099,9 @@ fn write_generated_vst3_host_check(root: &Path, library_path: &Path) {
 }
 
 fn generated_vst3_host_check_manifest() -> &'static str {
-    r#"[package]
+    r#"[workspace]
+
+[package]
 name = "hawk2ui-vst3-host-check"
 version = "0.1.0"
 edition = "2024"
@@ -1363,11 +1376,11 @@ fn main() {
                   clap_sys::ext::gui::CLAP_WINDOW_API_X11.as_ptr(),
                   false,
               ));
-              assert!(!(gui.is_api_supported.expect("wayland unsupported for baseview"))(
-                  plugin,
-                  clap_sys::ext::gui::CLAP_WINDOW_API_WAYLAND.as_ptr(),
-                  false,
-              ));
+            assert!((gui.is_api_supported.expect("wayland supported for baseview"))(
+                plugin,
+                clap_sys::ext::gui::CLAP_WINDOW_API_WAYLAND.as_ptr(),
+                false,
+            ));
           }
             let editor_descriptor: libloading::Symbol<unsafe extern "C" fn(*mut usize) -> *const u8> =
                 library.get(b"hawk2ui_editor_descriptor\0").expect("editor descriptor export resolves");
@@ -1887,6 +1900,10 @@ fn plugin_adapters_materialize_format_specific_layouts_and_hash_manifest() {
                     std::fs::read_to_string(generated_cargo).expect("VST3 scaffold manifest reads");
                 let generated_lib =
                     std::fs::read_to_string(generated_lib).expect("VST3 scaffold source reads");
+                assert!(
+                    generated_cargo.contains("[workspace]"),
+                    "generated VST3 cdylib must be buildable as a standalone Cargo workspace"
+                );
                 assert!(generated_cargo.contains("hawk2ui-vst3"));
                 assert!(generated_cargo.contains("vst3 = \"0.3.0\""));
                 assert!(generated_lib.contains("Vst3ClassId"));

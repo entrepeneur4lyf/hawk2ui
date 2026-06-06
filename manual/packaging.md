@@ -36,7 +36,7 @@ The package compatibility matrix currently names these outputs and verification 
 - `desktop-windows`: `rtk cargo test -p hawk2ui-build package_desktop_windows`
 - `desktop-macos`: `rtk cargo test -p hawk2ui-build package_desktop_macos`
 - `plugin-clap`: `rtk cargo test -p hawk2ui-plugin-adapters package_clap`
-- `plugin-vst3`: `rtk cargo test -p hawk2ui-plugin-adapters package_vst3` (tracked package metadata only; not a release-gated output)
+- `plugin-vst3`: `rtk cargo test -p hawk2ui-plugin-adapters package_vst3`
 - `plugin-au`: `rtk cargo test -p hawk2ui-plugin-adapters package_au`
 - `sealed-artifact`: `rtk cargo test -p hawk2ui-build sealed_artifact`
 - `debug-package`: `rtk cargo test -p hawk2ui-build debug_package`
@@ -59,5 +59,7 @@ hawk2ui validate
 hawk2ui package-plugin
 hawk2ui verify-artifact
 ```
+
+`hawk2ui package-plugin` materializes CLAP, VST3, AU, and standalone bundle layouts. On supported desktop build hosts it also compiles the generated CLAP and VST3 `cdylib` crates, installs the host-loadable shared libraries into the package binary slots, and refreshes package hashes before verification.
 
 Use `hawk2ui diagnostics` whenever validation or verification returns a non-success exit code.

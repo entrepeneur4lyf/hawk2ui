@@ -6,6 +6,7 @@ use std::{
     fmt::Write as _,
     fs,
     path::{Component, Path, PathBuf},
+    process::Command,
     sync::mpsc,
     time::Duration,
 };
@@ -31,8 +32,8 @@ use hawk2ui_host_winit::{
 };
 use hawk2ui_plugin::{BundleOutput, FormatMetadata, PluginEditor, PluginEditorSize};
 use hawk2ui_plugin_adapters::{
-    PackageAdapterSet, PackageFormat, PackageMaterializationError, PackageRequest,
-    VerificationStatus,
+    MaterializedPackageOutput, PackageAdapterSet, PackageFormat, PackageMaterializationError,
+    PackageRequest, VerificationStatus,
 };
 use hawk2ui_runtime::{EntryNode, RuntimeSceneError, RuntimeViewTree};
 use hawk2ui_schema::schema_catalog_json;
@@ -784,6 +785,12 @@ impl WorkspaceCommandRunner {
                 );
             }
         };
+        let produced_binaries = match self.build_host_loadable_plugin_binaries(&outputs) {
+            Ok(produced_binaries) => produced_binaries,
+            Err(diagnostic) => {
+                return CommandExecution::failure(CliExitCode::Runtime, vec![*diagnostic]);
+            }
+        };
         let verification = plan.verify_materialized(&outputs);
         if verification.status() == VerificationStatus::Failed {
             return CommandExecution::failure(
@@ -798,8 +805,117 @@ impl WorkspaceCommandRunner {
             stdout.push('\n');
         }
         stdout.push_str("layout-verification-status: passed\n");
-        stdout.push_str("host-loadable-binaries: not-produced-by-this-command\n");
+        let _ = writeln!(
+            stdout,
+            "host-loadable-binaries: produced={produced_binaries}"
+        );
         CommandExecution::success(stdout)
+    }
+
+    fn build_host_loadable_plugin_binaries(
+        &self,
+        outputs: &[MaterializedPackageOutput],
+    ) -> Result<usize, Box<CliDiagnostic>> {
+        let mut produced = 0_usize;
+        for output in outputs {
+            if self.build_host_loadable_plugin_binary(output)? {
+                produced += 1;
+            }
+        }
+        Ok(produced)
+    }
+
+    fn build_host_loadable_plugin_binary(
+        &self,
+        output: &MaterializedPackageOutput,
+    ) -> Result<bool, Box<CliDiagnostic>> {
+        let Some(build) = generated_plugin_binary_build(output.format) else {
+            return Ok(false);
+        };
+        let package_root = Path::new(&output.output_path);
+        let generated_root = package_root
+            .join("Contents")
+            .join("Resources")
+            .join(build.generated_root);
+        let manifest_path = generated_root.join("Cargo.toml");
+        let target_dir = self.plugin_binary_target_dir(package_root, build);
+        let command_output = Command::new(cargo_executable())
+            .arg("build")
+            .arg("--release")
+            .arg("--manifest-path")
+            .arg(&manifest_path)
+            .arg("--target-dir")
+            .arg(&target_dir)
+            .current_dir(&generated_root)
+            .output()
+            .map_err(|error| {
+                Box::new(
+                    CliDiagnostic::error(
+                        "package.plugin-binary.build-launch-failed",
+                        format!(
+                            "failed to launch Cargo for generated {} plugin binary: {error}",
+                            build.label
+                        ),
+                    )
+                    .file(manifest_path.display().to_string()),
+                )
+            })?;
+        if !command_output.status.success() {
+            return Err(Box::new(
+                CliDiagnostic::error(
+                    "package.plugin-binary.build-failed",
+                    format!(
+                        "generated {} plugin binary build failed:{}",
+                        build.label,
+                        render_process_output(&command_output)
+                    ),
+                )
+                .file(manifest_path.display().to_string()),
+            ));
+        }
+
+        remove_generated_lockfile(&generated_root)?;
+        let compiled_library = target_dir
+            .join("release")
+            .join(dynamic_library_filename(build.library_file_stem));
+        let binary_slot = find_host_binary_slot(package_root, build.package_extension)?;
+        fs::copy(&compiled_library, &binary_slot).map_err(|error| {
+            Box::new(
+                CliDiagnostic::error(
+                    "package.plugin-binary.install-failed",
+                    format!(
+                        "failed to install generated {} plugin binary {} into {}: {error}",
+                        build.label,
+                        compiled_library.display(),
+                        binary_slot.display()
+                    ),
+                )
+                .file(binary_slot.display().to_string()),
+            )
+        })?;
+        refresh_package_hash_for_file(
+            package_root,
+            Path::new(&output.hash_manifest_path),
+            &binary_slot,
+        )?;
+        Ok(true)
+    }
+
+    fn plugin_binary_target_dir(
+        &self,
+        package_root: &Path,
+        build: GeneratedPluginBinaryBuild,
+    ) -> PathBuf {
+        let package_name = package_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("package");
+        self.root
+            .join("target")
+            .join("hawk2ui")
+            .join("plugin-binary-builds")
+            .join(package_name)
+            .join(build.generated_root)
     }
 
     fn package_plugin_request(
@@ -1388,6 +1504,261 @@ fn render_diagnostics(diagnostics: &[CliDiagnostic]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
         + "\n"
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GeneratedPluginBinaryBuild {
+    label: &'static str,
+    generated_root: &'static str,
+    library_file_stem: &'static str,
+    package_extension: &'static str,
+}
+
+const fn generated_plugin_binary_build(
+    format: PackageFormat,
+) -> Option<GeneratedPluginBinaryBuild> {
+    match format {
+        PackageFormat::Clap => Some(GeneratedPluginBinaryBuild {
+            label: "CLAP",
+            generated_root: "generated-clap",
+            library_file_stem: "hawk2ui_generated_clap",
+            package_extension: "clap",
+        }),
+        PackageFormat::Vst3 => Some(GeneratedPluginBinaryBuild {
+            label: "VST3",
+            generated_root: "generated-vst3",
+            library_file_stem: "hawk2ui_generated_vst3",
+            package_extension: "vst3",
+        }),
+        PackageFormat::Au
+        | PackageFormat::Standalone
+        | PackageFormat::DesktopBundle
+        | PackageFormat::SealedArtifact => None,
+    }
+}
+
+fn cargo_executable() -> std::ffi::OsString {
+    match env::var_os("CARGO") {
+        Some(path) => path,
+        None => "cargo".into(),
+    }
+}
+
+fn dynamic_library_filename(library_file_stem: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        format!("{library_file_stem}.dll")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        format!("lib{library_file_stem}.dylib")
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        format!("lib{library_file_stem}.so")
+    }
+}
+
+fn render_process_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    format!(
+        "\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status, stdout, stderr
+    )
+}
+
+fn remove_generated_lockfile(generated_root: &Path) -> Result<(), Box<CliDiagnostic>> {
+    let lockfile = generated_root.join("Cargo.lock");
+    if lockfile.is_file() {
+        fs::remove_file(&lockfile).map_err(|error| {
+            Box::new(
+                CliDiagnostic::error(
+                    "package.plugin-binary.lockfile-cleanup-failed",
+                    format!(
+                        "failed to remove generated plugin Cargo.lock {}: {error}",
+                        lockfile.display()
+                    ),
+                )
+                .file(lockfile.display().to_string()),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn find_host_binary_slot(
+    package_root: &Path,
+    package_extension: &str,
+) -> Result<PathBuf, Box<CliDiagnostic>> {
+    let mut stack = vec![package_root.to_path_buf()];
+    let mut matches = Vec::new();
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir).map_err(|error| {
+            Box::new(
+                CliDiagnostic::error(
+                    "package.plugin-binary.scan-failed",
+                    format!(
+                        "failed to scan package directory {}: {error}",
+                        dir.display()
+                    ),
+                )
+                .file(dir.display().to_string()),
+            )
+        })?;
+        for entry in entries {
+            let path = entry
+                .map_err(|error| {
+                    Box::new(
+                        CliDiagnostic::error(
+                            "package.plugin-binary.scan-failed",
+                            format!("failed to read package directory entry: {error}"),
+                        )
+                        .file(dir.display().to_string()),
+                    )
+                })?
+                .path();
+            if path.is_dir() {
+                if path.file_name().and_then(|name| name.to_str()) != Some("target") {
+                    stack.push(path);
+                }
+            } else if path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case(package_extension))
+            {
+                matches.push(path);
+            }
+        }
+    }
+    match matches.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => Err(Box::new(
+            CliDiagnostic::error(
+                "package.plugin-binary.slot-missing",
+                format!(
+                    "package {} does not contain a .{package_extension} host binary slot",
+                    package_root.display()
+                ),
+            )
+            .file(package_root.display().to_string()),
+        )),
+        _ => Err(Box::new(
+            CliDiagnostic::error(
+                "package.plugin-binary.slot-ambiguous",
+                format!(
+                    "package {} contains multiple .{package_extension} host binary slots",
+                    package_root.display()
+                ),
+            )
+            .file(package_root.display().to_string()),
+        )),
+    }
+}
+
+fn refresh_package_hash_for_file(
+    package_root: &Path,
+    hash_manifest_path: &Path,
+    file_path: &Path,
+) -> Result<(), Box<CliDiagnostic>> {
+    let bytes = fs::read(file_path).map_err(|error| {
+        Box::new(
+            CliDiagnostic::error(
+                "package.hash.file-read-failed",
+                format!(
+                    "failed to read package file {}: {error}",
+                    file_path.display()
+                ),
+            )
+            .file(file_path.display().to_string()),
+        )
+    })?;
+    let relative_path = normalized_package_relative_path(package_root, file_path)?;
+    let hash = AssetHash::sha256_bytes(&bytes);
+    let source = fs::read_to_string(hash_manifest_path).map_err(|error| {
+        Box::new(
+            CliDiagnostic::error(
+                "package.hash.manifest-read-failed",
+                format!(
+                    "failed to read package hash manifest {}: {error}",
+                    hash_manifest_path.display()
+                ),
+            )
+            .file(hash_manifest_path.display().to_string()),
+        )
+    })?;
+    let refreshed = refresh_hash_manifest_entry(&source, &relative_path, hash.as_str())?;
+    fs::write(hash_manifest_path, refreshed).map_err(|error| {
+        Box::new(
+            CliDiagnostic::error(
+                "package.hash.manifest-write-failed",
+                format!(
+                    "failed to write package hash manifest {}: {error}",
+                    hash_manifest_path.display()
+                ),
+            )
+            .file(hash_manifest_path.display().to_string()),
+        )
+    })
+}
+
+fn normalized_package_relative_path(
+    package_root: &Path,
+    file_path: &Path,
+) -> Result<String, Box<CliDiagnostic>> {
+    file_path
+        .strip_prefix(package_root)
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+        .map_err(|error| {
+            Box::new(
+                CliDiagnostic::error(
+                    "package.hash.path-outside-package",
+                    format!(
+                        "package file {} is not below package root {}: {error}",
+                        file_path.display(),
+                        package_root.display()
+                    ),
+                )
+                .file(file_path.display().to_string()),
+            )
+        })
+}
+
+fn refresh_hash_manifest_entry(
+    manifest: &str,
+    relative_path: &str,
+    replacement_hash: &str,
+) -> Result<String, Box<CliDiagnostic>> {
+    let mut output = String::with_capacity(manifest.len());
+    let mut awaiting_hash = false;
+    let mut replaced = false;
+    for line in manifest.lines() {
+        if awaiting_hash && line.trim_start().starts_with("hash = ") {
+            let _ = writeln!(output, "hash = {replacement_hash:?}");
+            awaiting_hash = false;
+            replaced = true;
+            continue;
+        }
+        if manifest_line_path(line) == Some(relative_path) {
+            awaiting_hash = true;
+        }
+        output.push_str(line);
+        output.push('\n');
+    }
+    if replaced {
+        Ok(output)
+    } else {
+        Err(Box::new(CliDiagnostic::error(
+            "package.hash.entry-missing",
+            format!("package hash manifest has no entry for {relative_path}"),
+        )))
+    }
+}
+
+fn manifest_line_path(line: &str) -> Option<&str> {
+    line.trim()
+        .strip_prefix("path = \"")
+        .and_then(|value| value.strip_suffix('"'))
 }
 
 /// Builds a non-fatal warning when any manifest parameter has no pinned

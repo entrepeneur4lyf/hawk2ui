@@ -927,11 +927,8 @@ compatibility_notes_required = true
             .targets
             .iter()
             .find(|target| target.id == "plugin-vst3")
-            .expect("VST3 remains a tracked non-gating target");
-        assert!(
-            !vst3.release_gate,
-            "VST3 must not be a release-gated target"
-        );
+            .expect("VST3 remains a tracked release-gated target");
+        assert!(vst3.release_gate, "VST3 must be a release-gated target");
         assert!(targets.release_blockers().all(|target| target.release_gate));
     }
 

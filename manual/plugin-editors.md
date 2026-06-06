@@ -67,3 +67,4 @@ hawk2ui diagnostics
 ```
 
 The command catalog reserves `hawk2ui package-plugin` for CLAP, VST3, AU, and standalone targets.
+For CLAP and VST3 targets, the command compiles the generated `cdylib` crates and installs host-loadable shared libraries into the package before final hash verification.

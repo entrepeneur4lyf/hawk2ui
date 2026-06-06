@@ -326,6 +326,11 @@ fn manual_plugin_examples_reference_code_backed_plugin_fixtures() {
                 "plugin guide missing parameter id {} from {path}",
                 parameter.id
             );
+            assert!(
+                parameter.param_id.is_some(),
+                "plugin fixture `{path}` parameter `{}` must pin param_id for stable automation/state",
+                parameter.id
+            );
         }
     }
 }
@@ -559,6 +564,17 @@ fn manual_examples_index_tracks_repository_examples() {
         assert!(
             workspace_path(path).is_file(),
             "example fixture missing: {path}"
+        );
+        let manifest = HawkManifest::parse(&read_workspace_file(path))
+            .unwrap_or_else(|error| panic!("example manifest `{path}` must parse: {error:?}"));
+        let entry_path = workspace_path(path)
+            .parent()
+            .expect("example manifest path should have a parent")
+            .join(manifest.source.entry);
+        assert!(
+            entry_path.is_file(),
+            "example manifest `{path}` declares missing source entry `{}`",
+            entry_path.display()
         );
         assert!(examples.contains(path), "examples manual missing {path}");
     }

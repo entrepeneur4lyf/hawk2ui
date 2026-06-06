@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 //! Plugin and package adapters for `Hawk2UI`.
 //!
-//! The current production path emits a buildable `CLAP` runtime scaffold plus deterministic package
-//! metadata. `VST3` output emits a real factory/class metadata scaffold; AU, standalone, and desktop
-//! outputs currently materialize deterministic bundle layouts and launch metadata rather than final
-//! host-loadable binaries.
+//! The package adapter layer emits deterministic package layouts and buildable `CLAP`/`VST3`
+//! `cdylib` scaffolds; the CLI release path compiles those scaffolds into host-loadable package
+//! binaries. AU, standalone, and desktop outputs currently materialize deterministic bundle layouts
+//! and launch metadata.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -930,7 +930,7 @@ impl ClapCdylibScaffold {
 
     fn cargo_toml(&self) -> String {
         format!(
-            "[package]\nname = {}\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\nname = {}\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nclap-sys = \"0.5.0\"\n",
+            "[workspace]\n\n[package]\nname = {}\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\nname = {}\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nclap-sys = \"0.5.0\"\n",
             quoted_metadata_string(&self.package_name),
             quoted_metadata_string(&self.library_file_stem)
         )
@@ -1854,7 +1854,8 @@ unsafe extern "C" fn gui_hide(plugin: *const clap_plugin) -> bool {
 
     fn is_supported_window_api(api: *const c_char) -> bool {
         if descriptor_declares_baseview_host_adapter() {
-            return cstr_matches(api, CLAP_WINDOW_API_X11)
+            return cstr_matches(api, CLAP_WINDOW_API_WAYLAND)
+                || cstr_matches(api, CLAP_WINDOW_API_X11)
                 || cstr_matches(api, CLAP_WINDOW_API_COCOA)
                 || cstr_matches(api, CLAP_WINDOW_API_WIN32);
         }
@@ -2282,7 +2283,7 @@ impl Vst3CdylibScaffold {
             .join("..")
             .join("hawk2ui-vst3");
         format!(
-            "[package]\nname = {}\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\nname = {}\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nhawk2ui-vst3 = {{ path = {} }}\nvst3 = \"0.3.0\"\n",
+            "[workspace]\n\n[package]\nname = {}\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\nname = {}\ncrate-type = [\"cdylib\"]\n\n[dependencies]\nhawk2ui-vst3 = {{ path = {} }}\nvst3 = \"0.3.0\"\n",
             quoted_metadata_string(&self.package_name),
             quoted_metadata_string(&self.library_file_stem),
             quoted_metadata_string(&hawk2ui_vst3_path.to_string_lossy())

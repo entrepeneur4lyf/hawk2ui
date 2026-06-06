@@ -23,10 +23,12 @@ height = 540
 
 [[parameters]]
 id = "osc.mix"
+param_id = 2001
 name = "Osc Mix"
 default = 0.4
 
 [[parameters]]
 id = "filter.cutoff"
+param_id = 2002
 name = "Cutoff"
 default = 0.8

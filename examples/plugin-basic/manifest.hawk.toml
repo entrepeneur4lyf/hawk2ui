@@ -23,10 +23,12 @@ height = 540
 
 [[parameters]]
 id = "gain"
+param_id = 1001
 name = "Gain"
 default = 0.5
 
 [[parameters]]
 id = "mix"
+param_id = 1002
 name = "Mix"
 default = 1.0

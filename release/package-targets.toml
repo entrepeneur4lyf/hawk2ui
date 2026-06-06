@@ -36,7 +36,7 @@ kind = "plugin-bundle"
 platform = "cross-platform"
 command = "rtk cargo test -p hawk2ui-plugin-adapters package_vst3"
 evidence = "target/release-evidence/plugin-vst3.txt"
-release_gate = false
+release_gate = true
 
 [[targets]]
 id = "plugin-au"

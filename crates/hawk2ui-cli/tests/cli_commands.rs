@@ -740,7 +740,7 @@ fn workspace_package_plugin_materializes_plugin_outputs() {
     assert!(
         execution
             .stdout
-            .contains("host-loadable-binaries: not-produced-by-this-command")
+            .contains("host-loadable-binaries: produced=2")
     );
     for extension in ["clap", "vst3", "component", "app"] {
         let package_root = root
@@ -785,6 +785,29 @@ fn workspace_package_plugin_materializes_plugin_outputs() {
             runtime_artifact.signature.status,
             ArtifactSignatureStatus::Verified
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let clap_binary = root
+            .join("target/hawk2ui/com-hawk2ui-cli-plugin.clap")
+            .join("CLI Plugin.clap");
+        let vst3_binary = root
+            .join("target/hawk2ui/com-hawk2ui-cli-plugin.vst3")
+            .join("Contents/x86_64-linux/CLI Plugin.vst3");
+        for binary in [clap_binary, vst3_binary] {
+            let bytes = fs::read(&binary).unwrap_or_else(|error| {
+                panic!(
+                    "host-loadable binary `{}` should read: {error}",
+                    binary.display()
+                )
+            });
+            assert!(
+                bytes.starts_with(b"\x7fELF"),
+                "{} must be an ELF shared library, not a text placeholder",
+                binary.display()
+            );
+        }
     }
 }
 
