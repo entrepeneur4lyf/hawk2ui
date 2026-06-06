@@ -222,6 +222,32 @@ fn framework_native_program_wire_round_trips_real_compiler_artifacts() {
 }
 
 #[test]
+fn framework_native_program_wire_rejects_duplicate_initial_dynamic_values() {
+    let json = r#"
+{
+  "schema_version": 1,
+  "root": {
+    "id": "root",
+    "kind": "view"
+  },
+  "initial_dynamic_values": [
+    { "name": "label", "mode": "value", "value": { "type": "string", "value": "A" } },
+    { "name": "label", "mode": "getter", "value": { "type": "string", "value": "B" } }
+  ]
+}
+"#;
+
+    let wire = FrameworkNativeProgramWire::from_json(json).expect("wire parses");
+    let error = FrameworkNativeProgram::try_from(wire)
+        .expect_err("duplicate initial dynamic names are rejected");
+
+    assert_eq!(
+        error.rule(),
+        "framework-native-program.initial-dynamic-value.duplicate"
+    );
+}
+
+#[test]
 fn component_records_preserve_props_references_and_slots() {
     let slot = ChildList::ordered([ElementNode::new(ElementId::new("label"), ElementKind::Text)])
         .expect("slot children should be accepted");

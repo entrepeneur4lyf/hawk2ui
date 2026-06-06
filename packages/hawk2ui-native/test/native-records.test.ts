@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createHawkApp } from "../src/index.ts";
+import { compilerArtifactForApp, createHawkApp } from "../src/index.ts";
 
 test("createHawkApp emits deterministic records for native element trees", () => {
   const app = createHawkApp({
@@ -64,4 +64,30 @@ test("createHawkApp rejects unsafe asset paths", () => {
       },
     }),
   ).toThrow("native.asset.path-invalid");
+});
+
+test("compilerArtifactForApp rejects invalid initial dynamic values", () => {
+  const spec = { name: "native-basic", root: { id: "root", kind: "view" as const } };
+
+  expect(() =>
+    compilerArtifactForApp(spec, [], [], [
+      { name: "label", mode: "value", value: { type: "string", value: "A" } },
+      { name: "label", mode: "getter", value: { type: "string", value: "B" } },
+    ]),
+  ).toThrow("native.initial-dynamic-value.duplicate");
+
+  expect(() =>
+    compilerArtifactForApp(spec, [], [], [
+      {
+        name: "meter",
+        mode: "value",
+        value: {
+          type: "object",
+          value: {
+            gain: { type: "number", value: Number.POSITIVE_INFINITY },
+          },
+        },
+      },
+    ]),
+  ).toThrow("native.initial-dynamic-value.number-invalid");
 });
