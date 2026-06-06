@@ -568,50 +568,25 @@ impl WinitEventTranslator {
                     ),
                 )])
             }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                WinitTranslatedEvent::new(vec![DesktopHostEvent::KeyboardInput(
+                    KeyboardInput::new(modifiers_label(*modifiers), modifiers_pressed(*modifiers)),
+                )])
+            }
             WindowEvent::Ime(event) => {
                 WinitTranslatedEvent::new(vec![DesktopHostEvent::ImeInput(ime_event_label(event))])
             }
-            WindowEvent::CursorMoved { position, .. } => {
-                let x = position.x / self.metrics.scale_factor;
-                let y = position.y / self.metrics.scale_factor;
-                self.last_pointer_position = (x, y);
-                WinitTranslatedEvent::new(vec![DesktopHostEvent::PointerInput(PointerInput::new(
-                    x, y, "move",
-                ))])
-            }
-            WindowEvent::CursorEntered { .. } => {
-                let (x, y) = self.last_pointer_position;
-                WinitTranslatedEvent::new(vec![DesktopHostEvent::PointerInput(PointerInput::new(
-                    x, y, "enter",
-                ))])
-            }
-            WindowEvent::CursorLeft { .. } => {
-                let (x, y) = self.last_pointer_position;
-                WinitTranslatedEvent::new(vec![DesktopHostEvent::PointerInput(PointerInput::new(
-                    x, y, "leave",
-                ))])
-            }
-            WindowEvent::MouseWheel { delta, phase, .. } => {
-                let (x, y) = self.last_pointer_position;
-                WinitTranslatedEvent::new(vec![DesktopHostEvent::PointerInput(PointerInput::new(
-                    x,
-                    y,
-                    mouse_wheel_label(*delta, *phase),
-                ))])
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
-                let (x, y) = self.last_pointer_position;
-                let suffix = if *state == ElementState::Pressed {
-                    "down"
-                } else {
-                    "up"
-                };
-                WinitTranslatedEvent::new(vec![DesktopHostEvent::PointerInput(PointerInput::new(
-                    x,
-                    y,
-                    format!("{}-{suffix}", mouse_button_label(*button)),
-                ))])
-            }
+            WindowEvent::CursorMoved { .. }
+            | WindowEvent::CursorEntered { .. }
+            | WindowEvent::CursorLeft { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::PinchGesture { .. }
+            | WindowEvent::PanGesture { .. }
+            | WindowEvent::RotationGesture { .. }
+            | WindowEvent::TouchpadPressure { .. }
+            | WindowEvent::AxisMotion { .. }
+            | WindowEvent::Touch(_) => self.translate_pointer_event(event),
             WindowEvent::Occluded(occluded) => {
                 WinitTranslatedEvent::new(vec![DesktopHostEvent::WindowOcclusionChanged(*occluded)])
             }
@@ -644,6 +619,70 @@ impl WinitEventTranslator {
             DesktopHostEvent::RendererTargetRecreateRequested,
         ])
         .redraw()
+    }
+
+    fn translate_pointer_event(&mut self, event: &WindowEvent) -> WinitTranslatedEvent {
+        let pointer = match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                let x = position.x / self.metrics.scale_factor;
+                let y = position.y / self.metrics.scale_factor;
+                self.last_pointer_position = (x, y);
+                PointerInput::new(x, y, "move")
+            }
+            WindowEvent::CursorEntered { .. } => self.pointer_at_last_position("enter"),
+            WindowEvent::CursorLeft { .. } => self.pointer_at_last_position("leave"),
+            WindowEvent::MouseWheel { delta, phase, .. } => {
+                self.pointer_at_last_position(mouse_wheel_label(*delta, *phase))
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let suffix = if *state == ElementState::Pressed {
+                    "down"
+                } else {
+                    "up"
+                };
+                self.pointer_at_last_position(format!("{}-{suffix}", mouse_button_label(*button)))
+            }
+            WindowEvent::PinchGesture { delta, phase, .. } => {
+                self.pointer_at_last_position(format!(
+                    "pinch-{}:{}",
+                    touch_phase_label(*phase),
+                    compact_f64(*delta)
+                ))
+            }
+            WindowEvent::PanGesture { delta, phase, .. } => self.pointer_at_last_position(format!(
+                "pan-{}:{}:{}",
+                touch_phase_label(*phase),
+                compact_f32(delta.x),
+                compact_f32(delta.y)
+            )),
+            WindowEvent::RotationGesture { delta, phase, .. } => {
+                self.pointer_at_last_position(format!(
+                    "rotation-{}:{}",
+                    touch_phase_label(*phase),
+                    compact_f32(*delta)
+                ))
+            }
+            WindowEvent::TouchpadPressure {
+                pressure, stage, ..
+            } => self
+                .pointer_at_last_position(format!("pressure:{}:{stage}", compact_f32(*pressure))),
+            WindowEvent::AxisMotion { axis, value, .. } => {
+                self.pointer_at_last_position(format!("axis:{axis}:{}", compact_f64(*value)))
+            }
+            WindowEvent::Touch(touch) => {
+                let x = touch.location.x / self.metrics.scale_factor;
+                let y = touch.location.y / self.metrics.scale_factor;
+                self.last_pointer_position = (x, y);
+                PointerInput::new(x, y, touch_label(touch))
+            }
+            _ => return WinitTranslatedEvent::new(Vec::new()),
+        };
+        WinitTranslatedEvent::new(vec![DesktopHostEvent::PointerInput(pointer)])
+    }
+
+    fn pointer_at_last_position(&self, button: impl Into<String>) -> PointerInput {
+        let (x, y) = self.last_pointer_position;
+        PointerInput::new(x, y, button)
     }
 }
 
@@ -681,6 +720,55 @@ fn mouse_wheel_label(delta: MouseScrollDelta, _phase: TouchPhase) -> String {
             )
         }
     }
+}
+
+fn touch_label(touch: &winit::event::Touch) -> String {
+    let force = touch
+        .force
+        .map(|force| format!(":{}", compact_f64(force.normalized())))
+        .unwrap_or_default();
+    format!(
+        "touch-{}:{}{}",
+        touch_phase_label(touch.phase),
+        touch.id,
+        force
+    )
+}
+
+fn touch_phase_label(phase: TouchPhase) -> &'static str {
+    match phase {
+        TouchPhase::Started => "started",
+        TouchPhase::Moved => "moved",
+        TouchPhase::Ended => "ended",
+        TouchPhase::Cancelled => "cancelled",
+    }
+}
+
+fn modifiers_label(modifiers: winit::event::Modifiers) -> String {
+    let state = modifiers.state();
+    let mut labels = Vec::new();
+    if state.shift_key() {
+        labels.push("shift");
+    }
+    if state.control_key() {
+        labels.push("control");
+    }
+    if state.alt_key() {
+        labels.push("alt");
+    }
+    if state.super_key() {
+        labels.push("super");
+    }
+    if labels.is_empty() {
+        "modifiers:none".to_string()
+    } else {
+        format!("modifiers:{}", labels.join("+"))
+    }
+}
+
+fn modifiers_pressed(modifiers: winit::event::Modifiers) -> bool {
+    let state = modifiers.state();
+    state.shift_key() || state.control_key() || state.alt_key() || state.super_key()
 }
 
 fn compact_f32(value: f32) -> String {
@@ -1133,5 +1221,122 @@ mod tests {
     #[test]
     fn exposes_crate_identity() {
         assert_eq!(crate_name(), "hawk2ui-host-winit");
+    }
+
+    #[test]
+    fn winit_translator_projects_touch_events_to_logical_pointer_inputs() {
+        let device_id = winit::event::DeviceId::dummy();
+        let mut translator = WinitEventTranslator::new(SurfaceMetrics::new(320.0, 200.0, 2.0));
+
+        let translated = translator.translate(&WindowEvent::Touch(winit::event::Touch {
+            device_id,
+            phase: TouchPhase::Started,
+            location: winit::dpi::PhysicalPosition::new(24.0, 48.0),
+            force: Some(winit::event::Force::Normalized(0.5)),
+            id: 7,
+        }));
+
+        assert_eq!(
+            translated.events,
+            vec![DesktopHostEvent::PointerInput(PointerInput::new(
+                12.0,
+                24.0,
+                "touch-started:7:0.5"
+            ))]
+        );
+    }
+
+    #[test]
+    fn winit_translator_projects_gestures_and_axis_motion_to_pointer_inputs() {
+        let device_id = winit::event::DeviceId::dummy();
+        let mut translator = WinitEventTranslator::new(SurfaceMetrics::new(320.0, 200.0, 2.0));
+        let _ = translator.translate(&WindowEvent::CursorMoved {
+            device_id,
+            position: winit::dpi::PhysicalPosition::new(20.0, 40.0),
+        });
+
+        let pinch = translator.translate(&WindowEvent::PinchGesture {
+            device_id,
+            delta: 1.25,
+            phase: TouchPhase::Moved,
+        });
+        let pan = translator.translate(&WindowEvent::PanGesture {
+            device_id,
+            delta: winit::dpi::PhysicalPosition::new(6.0, -4.0),
+            phase: TouchPhase::Moved,
+        });
+        let rotation = translator.translate(&WindowEvent::RotationGesture {
+            device_id,
+            delta: 45.0,
+            phase: TouchPhase::Ended,
+        });
+        let pressure = translator.translate(&WindowEvent::TouchpadPressure {
+            device_id,
+            pressure: 0.75,
+            stage: 2,
+        });
+        let axis = translator.translate(&WindowEvent::AxisMotion {
+            device_id,
+            axis: 3,
+            value: -0.25,
+        });
+
+        assert_eq!(
+            pinch.events,
+            vec![DesktopHostEvent::PointerInput(PointerInput::new(
+                10.0,
+                20.0,
+                "pinch-moved:1.25"
+            ))]
+        );
+        assert_eq!(
+            pan.events,
+            vec![DesktopHostEvent::PointerInput(PointerInput::new(
+                10.0,
+                20.0,
+                "pan-moved:6:-4"
+            ))]
+        );
+        assert_eq!(
+            rotation.events,
+            vec![DesktopHostEvent::PointerInput(PointerInput::new(
+                10.0,
+                20.0,
+                "rotation-ended:45"
+            ))]
+        );
+        assert_eq!(
+            pressure.events,
+            vec![DesktopHostEvent::PointerInput(PointerInput::new(
+                10.0,
+                20.0,
+                "pressure:0.75:2"
+            ))]
+        );
+        assert_eq!(
+            axis.events,
+            vec![DesktopHostEvent::PointerInput(PointerInput::new(
+                10.0,
+                20.0,
+                "axis:3:-0.25"
+            ))]
+        );
+    }
+
+    #[test]
+    fn winit_translator_projects_modifier_changes_to_keyboard_inputs() {
+        let mut translator = WinitEventTranslator::new(SurfaceMetrics::new(320.0, 200.0, 1.0));
+
+        let translated = translator.translate(&WindowEvent::ModifiersChanged(
+            winit::event::Modifiers::default(),
+        ));
+
+        assert_eq!(
+            translated.events,
+            vec![DesktopHostEvent::KeyboardInput(KeyboardInput::new(
+                "modifiers:none",
+                false
+            ))]
+        );
     }
 }

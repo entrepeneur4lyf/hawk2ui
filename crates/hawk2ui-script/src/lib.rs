@@ -794,6 +794,21 @@ impl FrameworkRuntimeController {
             .is_some_and(|handler| self.event_handlers.contains_key(handler))
     }
 
+    /// Returns targets that have an executable handler for the given framework event name.
+    #[must_use]
+    pub fn event_targets(&self, event_name: &str) -> Vec<String> {
+        self.event_bindings
+            .iter()
+            .filter_map(|((target, bound_event), handler)| {
+                if bound_event == event_name && self.event_handlers.contains_key(handler) {
+                    Some(target.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Dispatches one runtime event through framework handler actions.
     ///
     /// # Errors
@@ -2330,6 +2345,11 @@ export function mount(host) {
 
         let mut controller =
             FrameworkRuntimeController::from_program(&program, runtime).expect("controller builds");
+        assert_eq!(
+            controller.event_targets("pointer.press"),
+            vec!["root".to_string()]
+        );
+        assert!(controller.event_targets("lifecycle.unmounted").is_empty());
         let title = controller
             .runtime_tree()
             .node(&RuntimeViewId::new("title"))

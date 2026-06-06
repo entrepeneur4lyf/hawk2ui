@@ -853,6 +853,99 @@ fn baseview_clap_runtime_editor_host_accepts_native_wayland_callback_lifecycle()
 }
 
 #[test]
+fn baseview_clap_runtime_editor_host_routes_wayland_resize_focus_and_input() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": []
+        }
+    }));
+    let (runtime_artifact, verifier) = signed_runtime_artifact_value(sealed_artifact);
+    let output_root = temp_package_root("hawk2ui-baseview-clap-host-wayland-input");
+    let request = PackageRequest::new(
+        FormatMetadata::new(
+            "com.hawk2ui.host-wayland-input",
+            "Host Wayland Input",
+            "Hawk2UI",
+        ),
+        BundleOutput::new(output_root.to_string_lossy(), "HostWaylandInput"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds")
+        .materialize()
+        .expect("materialization succeeds");
+    let clap_plugin_path =
+        std::path::Path::new(&outputs[0].output_path).join("HostWaylandInput.clap");
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
+        .with_release_verifier(verifier);
+
+    host.create(ClapGuiWindowApi::Wayland, false)
+        .expect("native Wayland create resolves verified runtime session");
+    host.set_parent(
+        ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::Wayland, 42)
+            .expect("Wayland CLAP parent handle validates"),
+        "clap-host-wayland-parent",
+    )
+    .expect("native Wayland set-parent attaches live Baseview editor");
+    host.show()
+        .expect("native Wayland host show presents runtime frame");
+    host.drain_events()
+        .expect("attached Wayland editor events drain");
+
+    let resized = SurfaceMetrics::new(480.0, 240.0, 1.25);
+    host.host_resize(resized)
+        .expect("attached Wayland editor accepts resize");
+    host.route_focus(true)
+        .expect("attached Wayland editor accepts focus");
+    host.route_keyboard(KeyboardInput::new("Space", true))
+        .expect("attached Wayland editor accepts keyboard input");
+    host.route_pointer(PointerInput::new(16.0, 20.0, "left-down"))
+        .expect("attached Wayland editor accepts pointer input");
+
+    let events = host
+        .drain_events()
+        .expect("attached Wayland editor events drain after routed input");
+    assert!(
+        events.iter().any(
+            |event| matches!(event, PluginHostEvent::HostResize(metrics) if metrics == &resized)
+        )
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, PluginHostEvent::FocusRouted(true)))
+    );
+    assert!(events.iter().any(|event| {
+        matches!(event, PluginHostEvent::KeyboardRouted(input) if input.key == "Space" && input.pressed)
+    }));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            PluginHostEvent::PointerRouted(input)
+                if (input.x - 16.0).abs() < f64::EPSILON
+                    && (input.y - 20.0).abs() < f64::EPSILON
+                    && input.button == "left-down"
+        )
+    }));
+}
+
+#[test]
 fn baseview_clap_runtime_editor_host_requires_trusted_release_key() {
     let sealed_artifact = SealedArtifact::from_manifest(
         ArtifactSchemaVersion::new(1, 0),

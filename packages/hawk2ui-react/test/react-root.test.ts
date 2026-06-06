@@ -69,6 +69,34 @@ test("React compiler emits executable pointer handler actions", () => {
   ]);
 });
 
+test("React compiler lowers useState setter handler actions", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'import { useState } from "react"; export function App() { const [label, setLabel] = useState("Idle"); function handlePress() { setLabel("Pressed"); } return <hawk-view id="root" onPointerDown={handlePress}><hawk-text id="title">{label}</hawk-text></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.initial_dynamic_values).toEqual([
+    {
+      name: "label",
+      mode: "value",
+      value: { type: "string", value: "Idle" },
+    },
+  ]);
+  expect(output.compilerArtifact.event_handlers).toEqual([
+    {
+      name: "handlePress",
+      actions: [
+        {
+          type: "set_dynamic_value",
+          name: "label",
+          value: { type: "string", value: "Pressed" },
+        },
+      ],
+    },
+  ]);
+});
+
 test("React compiler preserves dynamic layout prop bindings from TSX expressions", () => {
   const output = compileHawkReact({
     filename: "App.tsx",

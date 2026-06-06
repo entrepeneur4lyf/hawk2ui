@@ -1739,6 +1739,21 @@ impl BaseviewClapRuntimeEditor {
         self.adapter.try_host_resize(metrics)
     }
 
+    /// Routes host focus into the attached live editor.
+    pub fn route_focus(&mut self, focused: bool) {
+        self.adapter.route_focus(focused);
+    }
+
+    /// Routes host keyboard input into the attached live editor.
+    pub fn route_keyboard(&mut self, input: KeyboardInput) {
+        self.adapter.route_keyboard(input);
+    }
+
+    /// Routes host pointer input into the attached live editor.
+    pub fn route_pointer(&mut self, input: PointerInput) {
+        self.adapter.route_pointer(input);
+    }
+
     /// Records a host-driven show request.
     pub fn show_editor(&mut self, reason: impl Into<String>) {
         self.adapter.show_editor(reason);
@@ -2190,6 +2205,54 @@ impl BaseviewClapRuntimeEditorHost {
             .present_runtime_frame()
     }
 
+    /// Routes a host resize into the attached live editor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when no live editor is attached or metrics are invalid.
+    pub fn host_resize(&mut self, metrics: SurfaceMetrics) -> Result<(), BaseviewHostError> {
+        self.editor_mut()?.try_host_resize(metrics)
+    }
+
+    /// Routes host focus into the attached live editor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when no live editor is attached.
+    pub fn route_focus(&mut self, focused: bool) -> Result<(), BaseviewHostError> {
+        self.editor_mut()?.route_focus(focused);
+        Ok(())
+    }
+
+    /// Routes host keyboard input into the attached live editor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when no live editor is attached.
+    pub fn route_keyboard(&mut self, input: KeyboardInput) -> Result<(), BaseviewHostError> {
+        self.editor_mut()?.route_keyboard(input);
+        Ok(())
+    }
+
+    /// Routes host pointer input into the attached live editor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when no live editor is attached.
+    pub fn route_pointer(&mut self, input: PointerInput) -> Result<(), BaseviewHostError> {
+        self.editor_mut()?.route_pointer(input);
+        Ok(())
+    }
+
+    /// Drains host events emitted by the attached live editor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when no live editor is attached.
+    pub fn drain_events(&mut self) -> Result<Vec<PluginHostEvent>, BaseviewHostError> {
+        Ok(self.editor_mut()?.drain_events())
+    }
+
     /// Handles the CLAP GUI hide callback.
     ///
     /// # Errors
@@ -2308,6 +2371,10 @@ impl BaseviewClapRuntimeEditorHost {
         } else {
             Err(not_created_error())
         }
+    }
+
+    fn editor_mut(&mut self) -> Result<&mut BaseviewClapRuntimeEditor, BaseviewHostError> {
+        self.editor.as_mut().ok_or_else(not_attached_error)
     }
 }
 

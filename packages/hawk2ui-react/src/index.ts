@@ -84,7 +84,12 @@ export function compileHawkReact(input: HawkReactCompileInput): HawkReactCompile
   const root = jsxElementToSpec(returned.element, context);
   validateUniqueChildKeys(root);
   const app = { name: input.filename, root };
-  const eventHandlers = eventHandlersForSpec(root, program, returned.scope);
+  const eventHandlers = eventHandlersForSpec(
+    root,
+    program,
+    returned.scope,
+    reactStateSetterBindingsFromProgram(program, returned.scope),
+  );
   return {
     framework: "react",
     filename: input.filename,
@@ -228,6 +233,7 @@ function eventHandlersForSpec(
   root: HawkElementSpec,
   program: AstNode,
   componentScope: AstNode | undefined,
+  setterBindings: ReadonlyMap<string, string>,
 ): readonly HawkCompilerEventHandlerWire[] {
   const declarations = handlerDeclarationsFromBody([
     ...arrayField(program, "body"),
@@ -240,7 +246,7 @@ function eventHandlersForSpec(
     }
     return {
       name,
-      actions: handlerActions(name, declaration, "react"),
+      actions: handlerActions(name, declaration, setterBindings, "react"),
     };
   });
 }
@@ -290,6 +296,7 @@ function handlerDeclarationsFromBody(statements: readonly AstNode[]): ReadonlyMa
 function handlerActions(
   handler: string,
   declaration: AstNode,
+  setterBindings: ReadonlyMap<string, string>,
   framework: string,
 ): readonly HawkCompilerEventHandlerActionWire[] {
   const body = declaration.body as AstNode | undefined;
@@ -297,13 +304,13 @@ function handlerActions(
     throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must have an executable body.`);
   }
   if (body.type !== "BlockStatement") {
-    return [handlerActionFromExpression(handler, body, framework)];
+    return [handlerActionFromExpression(handler, body, setterBindings, framework)];
   }
   const actions = arrayField(body, "body").map((statement) => {
     if (statement.type !== "ExpressionStatement") {
       throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` contains unsupported statements.`);
     }
-    return handlerActionFromExpression(handler, statement.expression as AstNode | undefined, framework);
+    return handlerActionFromExpression(handler, statement.expression as AstNode | undefined, setterBindings, framework);
   });
   if (actions.length === 0) {
     throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must contain at least one action.`);
@@ -314,6 +321,7 @@ function handlerActions(
 function handlerActionFromExpression(
   handler: string,
   expression: AstNode | undefined,
+  setterBindings: ReadonlyMap<string, string>,
   framework: string,
 ): HawkCompilerEventHandlerActionWire {
   if (expression?.type === "AssignmentExpression" && expression.operator === "=") {
@@ -323,7 +331,15 @@ function handlerActionFromExpression(
     }
     return dynamicUpdateAction(name, expression.right as AstNode | undefined, framework);
   }
-  throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must assign a dynamic value.`);
+  if (expression?.type === "CallExpression") {
+    const setter = identifierName(expression.callee as AstNode | undefined);
+    const name = setter ? setterBindings.get(setter) : undefined;
+    const argument = (expression.arguments as AstNode[] | undefined)?.[0];
+    if (name && argument) {
+      return dynamicUpdateAction(name, argument, framework);
+    }
+  }
+  throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must assign a dynamic value or call a state setter.`);
 }
 
 function dynamicUpdateAction(
@@ -544,6 +560,25 @@ function initialDynamicValuesFromProgram(
   return values;
 }
 
+function reactStateSetterBindingsFromProgram(program: AstNode, componentScope: AstNode | undefined): ReadonlyMap<string, string> {
+  const bindings = new Map<string, string>();
+  collectReactStateSetterBindings(arrayField(program, "body"), bindings);
+  collectReactStateSetterBindings(arrayField(componentScope, "body"), bindings);
+  return bindings;
+}
+
+function collectReactStateSetterBindings(statements: readonly AstNode[], bindings: Map<string, string>): void {
+  for (const statement of statements) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of arrayField(statement, "declarations")) {
+      const init = declaration.init as AstNode | undefined;
+      if (!isUseStateCall(init)) continue;
+      const pair = reactStateBindingPair(declaration.id as AstNode | undefined);
+      if (pair) bindings.set(pair.setter, pair.state);
+    }
+  }
+}
+
 function collectInitialDynamicValuesFromBody(
   statements: readonly AstNode[],
   values: Map<string, HawkCompilerInitialDynamicValueWire>,
@@ -551,8 +586,14 @@ function collectInitialDynamicValuesFromBody(
   for (const statement of statements) {
     if (statement.type !== "VariableDeclaration") continue;
     for (const declaration of arrayField(statement, "declarations")) {
+      const init = declaration.init as AstNode | undefined;
+      const stateName = reactStateBindingName(declaration.id as AstNode | undefined);
+      const stateValue = isUseStateCall(init)
+        ? literalDynamicValue((init.arguments as AstNode[] | undefined)?.[0])
+        : undefined;
+      if (stateName && stateValue) values.set(stateName, { name: stateName, mode: "value", value: stateValue });
       const name = identifierName(declaration.id as AstNode | undefined);
-      const value = literalDynamicValue(declaration.init as AstNode | undefined);
+      const value = literalDynamicValue(init);
       if (name && value) values.set(name, { name, mode: "value", value });
     }
   }
@@ -565,11 +606,35 @@ function collectLiteralArraysFromBody(
   for (const statement of statements) {
     if (statement.type !== "VariableDeclaration") continue;
     for (const declaration of arrayField(statement, "declarations")) {
-      const name = identifierName(declaration.id as AstNode | undefined);
-      const values = literalObjectArray(declaration.init as AstNode | undefined);
+      const init = declaration.init as AstNode | undefined;
+      const stateName = reactStateBindingName(declaration.id as AstNode | undefined);
+      const name = stateName ?? identifierName(declaration.id as AstNode | undefined);
+      const values = literalObjectArray(isUseStateCall(init) ? (init.arguments as AstNode[] | undefined)?.[0] : init);
       if (name && values) arrays.set(name, values);
     }
   }
+}
+
+function isUseStateCall(node: AstNode | undefined): node is AstNode & { arguments?: AstNode[] } {
+  if (node?.type !== "CallExpression") return false;
+  const callee = node.callee as AstNode | undefined;
+  if (identifierName(callee) === "useState") return true;
+  if (callee?.type !== "MemberExpression") return false;
+  return identifierName(callee.property as AstNode | undefined) === "useState";
+}
+
+function reactStateBindingName(node: AstNode | undefined): string | undefined {
+  if (node?.type === "Identifier") return identifierName(node);
+  if (node?.type !== "ArrayPattern") return undefined;
+  return identifierName((node.elements as AstNode[] | undefined)?.[0]);
+}
+
+function reactStateBindingPair(node: AstNode | undefined): { readonly state: string; readonly setter: string } | undefined {
+  if (node?.type !== "ArrayPattern") return undefined;
+  const elements = node.elements as AstNode[] | undefined;
+  const state = identifierName(elements?.[0]);
+  const setter = identifierName(elements?.[1]);
+  return state && setter ? { state, setter } : undefined;
 }
 
 function literalObjectArray(node: AstNode | undefined): readonly LiteralRecord[] | undefined {

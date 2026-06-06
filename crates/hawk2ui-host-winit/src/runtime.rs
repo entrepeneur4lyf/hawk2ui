@@ -632,6 +632,14 @@ struct RuntimeApplication {
     last_error: Option<WinitHostError>,
 }
 
+const FRAMEWORK_LIFECYCLE_MOUNTED: &str = "lifecycle.mounted";
+const FRAMEWORK_LIFECYCLE_SUSPENDED: &str = "lifecycle.suspended";
+const FRAMEWORK_LIFECYCLE_RESUMED: &str = "lifecycle.resumed";
+const FRAMEWORK_LIFECYCLE_HOT_RELOADED: &str = "lifecycle.hot-reloaded";
+const FRAMEWORK_LIFECYCLE_ERROR_BOUNDARY: &str = "lifecycle.error-boundary";
+const FRAMEWORK_LIFECYCLE_SHUTDOWN: &str = "lifecycle.shutdown";
+const FRAMEWORK_LIFECYCLE_UNMOUNTED: &str = "lifecycle.unmounted";
+
 impl RuntimeApplication {
     fn new(config: WinitDesktopRuntimeConfig, renderer: SoftwareFrameRenderer) -> Self {
         let animation = AnimationFrameScheduler::new(config.animation_policy());
@@ -679,6 +687,7 @@ impl RuntimeApplication {
         self.event_translator = WinitEventTranslator::new(self.config.window.metrics);
         self.animation = AnimationFrameScheduler::new(self.config.animation_policy());
         self.lifecycle.record_native_reload();
+        self.dispatch_framework_lifecycle_event(FRAMEWORK_LIFECYCLE_HOT_RELOADED)?;
         self.request_redraw();
         Ok(report)
     }
@@ -946,6 +955,50 @@ impl RuntimeApplication {
             .or_else(|| self.config.runtime_tree())
     }
 
+    fn dispatch_framework_lifecycle_events(
+        &mut self,
+        event_names: &[&str],
+    ) -> Result<bool, WinitHostError> {
+        let mut changed = false;
+        for event_name in event_names {
+            changed |= self.dispatch_framework_lifecycle_event(event_name)?;
+        }
+        Ok(changed)
+    }
+
+    fn dispatch_framework_lifecycle_event(
+        &mut self,
+        event_name: &str,
+    ) -> Result<bool, WinitHostError> {
+        let mut changed = false;
+        let mut rebound_tree = None;
+        if let Some(controller) = self.config.framework_controller.as_mut() {
+            let targets = controller.event_targets(event_name);
+            for target in targets {
+                let event = RuntimeEvent::lifecycle(target.as_str(), event_name);
+                let handled = controller.dispatch_runtime_event(&event).map_err(|error| {
+                    WinitHostError::new(
+                        "desktop.framework-lifecycle.execute-failed",
+                        format!(
+                            "failed to execute desktop framework lifecycle event {event_name} for target {target} ({}): {}",
+                            error.rule(),
+                            error.message()
+                        ),
+                    )
+                })?;
+                changed |= handled;
+            }
+            if changed {
+                rebound_tree = Some(controller.runtime_tree().clone());
+            }
+        }
+        if let Some(tree) = rebound_tree {
+            self.config.runtime_tree = Some(tree);
+            self.request_redraw();
+        }
+        Ok(changed)
+    }
+
     fn apply_script_entry_events(
         &mut self,
         translated: &WinitTranslatedEvent,
@@ -1032,14 +1085,36 @@ impl RuntimeApplication {
     }
 
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: WinitHostError) {
-        self.last_error = Some(error);
+        if let Err(boundary_error) =
+            self.dispatch_framework_lifecycle_event(FRAMEWORK_LIFECYCLE_ERROR_BOUNDARY)
+        {
+            self.last_error = Some(WinitHostError::new(
+                "desktop.framework-lifecycle.error-boundary-failed",
+                format!(
+                    "desktop failure ({}): {}; framework error boundary failure ({}): {}",
+                    error.rule(),
+                    error.message(),
+                    boundary_error.rule(),
+                    boundary_error.message()
+                ),
+            ));
+        } else {
+            self.last_error = Some(error);
+        }
         event_loop.exit();
     }
 
     fn handle_resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_none()
-            && let Err(error) = self.create_window(event_loop)
-        {
+        let event_name = if self.window.is_none() {
+            if let Err(error) = self.create_window(event_loop) {
+                self.fail(event_loop, error);
+                return;
+            }
+            FRAMEWORK_LIFECYCLE_MOUNTED
+        } else {
+            FRAMEWORK_LIFECYCLE_RESUMED
+        };
+        if let Err(error) = self.dispatch_framework_lifecycle_event(event_name) {
             self.fail(event_loop, error);
         }
     }
@@ -1109,7 +1184,20 @@ impl RuntimeApplication {
         }
     }
 
+    fn handle_suspended(&mut self, event_loop: &ActiveEventLoop) {
+        if let Err(error) = self.dispatch_framework_lifecycle_event(FRAMEWORK_LIFECYCLE_SUSPENDED) {
+            self.fail(event_loop, error);
+        }
+    }
+
     fn handle_exiting(&mut self) {
+        if let Err(error) = self.dispatch_framework_lifecycle_events(&[
+            FRAMEWORK_LIFECYCLE_SHUTDOWN,
+            FRAMEWORK_LIFECYCLE_UNMOUNTED,
+        ]) && self.last_error.is_none()
+        {
+            self.last_error = Some(error);
+        }
         self.gpu_presenter = None;
         self.surface = None;
         self.context = None;
@@ -1462,6 +1550,10 @@ impl ApplicationHandler for RuntimeApplication {
         self.handle_resumed(event_loop);
     }
 
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        self.handle_suspended(event_loop);
+    }
+
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -1483,6 +1575,10 @@ impl ApplicationHandler for RuntimeApplication {
 impl ApplicationHandler<WinitDesktopRuntimeUserEvent> for RuntimeApplication {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.handle_resumed(event_loop);
+    }
+
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        self.handle_suspended(event_loop);
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WinitDesktopRuntimeUserEvent) {
@@ -1520,18 +1616,20 @@ mod tests {
     use hawk2ui_authoring::{
         ElementKind, EventKind, EventPayloadField, FrameworkDynamicBinding, FrameworkDynamicValue,
         FrameworkEventHandler, FrameworkEventHandlerAction, FrameworkInitialDynamicValue,
-        FrameworkNativeNode, FrameworkNativeProgram, HandlerRef, NativeRuntimeBridge,
-        PointerEventKind, PropValue,
+        FrameworkNativeNode, FrameworkNativeProgram, HandlerRef, NativeLifecycleEvent,
+        NativeRuntimeBridge, PointerEventKind, PropValue,
     };
-    use hawk2ui_host::{DesktopHostEvent, KeyboardInput, PointerInput};
+    use hawk2ui_host::{
+        DesktopHostEvent, DesktopWindowConfig, KeyboardInput, PointerInput, SurfaceMetrics,
+    };
     use hawk2ui_layout::Viewport;
     use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeViewId, RuntimeVisual};
     use hawk2ui_script::{FrameInput, FrameworkRuntimeController, HostSnapshot};
 
     use super::{
-        RuntimeLifecycle, WinitDesktopScriptEntry, WinitHostError,
-        desktop_frame_inputs_from_host_events, framework_event_from_pointer_input,
-        logical_size_to_f32, run_script_entry_frame,
+        RuntimeApplication, RuntimeLifecycle, SoftwareFrameRenderer, WinitDesktopRuntimeConfig,
+        WinitDesktopScriptEntry, WinitHostError, desktop_frame_inputs_from_host_events,
+        framework_event_from_pointer_input, logical_size_to_f32, run_script_entry_frame,
     };
 
     #[test]
@@ -1773,5 +1871,68 @@ export function mount(host) {
             &controller,
         );
         assert!(outside.is_none());
+    }
+
+    #[test]
+    fn runtime_application_dispatches_framework_unmounted_lifecycle_before_teardown() {
+        let program = FrameworkNativeProgram::new(
+            FrameworkNativeNode::new("root", ElementKind::View)
+                .with_prop("width", PropValue::Number(320.0))
+                .with_prop("height", PropValue::Number(200.0))
+                .with_lifecycle(
+                    NativeLifecycleEvent::Unmounted,
+                    HandlerRef::new("handleUnmount"),
+                )
+                .with_child(
+                    "label",
+                    FrameworkNativeNode::new("label", ElementKind::Text)
+                        .with_prop("width", PropValue::Number(120.0))
+                        .with_prop("height", PropValue::Number(32.0)),
+                ),
+        )
+        .with_initial_dynamic_value(FrameworkInitialDynamicValue::value(
+            "label",
+            FrameworkDynamicValue::String("Mounted".to_string()),
+        ))
+        .with_dynamic_binding(FrameworkDynamicBinding::prop(
+            "label",
+            "text",
+            "label",
+            vec!["label".to_string()],
+        ))
+        .with_event_handler(FrameworkEventHandler::new("handleUnmount").with_action(
+            FrameworkEventHandlerAction::set_dynamic_value(
+                "label",
+                FrameworkDynamicValue::String("Unmounted".to_string()),
+            ),
+        ));
+        let native = program
+            .to_native_authoring_artifact("App.tsx", true)
+            .unwrap_or_else(|error| panic!("program finalizes: {error:?}"));
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact(&native)
+            .unwrap_or_else(|error| panic!("program bridges: {error:?}"));
+        let controller = FrameworkRuntimeController::from_program(&program, runtime)
+            .unwrap_or_else(|error| panic!("controller builds: {error:?}"));
+        let config = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+            "Lifecycle",
+            SurfaceMetrics::new(320.0, 200.0, 1.0),
+        ))
+        .with_framework_controller(controller);
+        let mut app = RuntimeApplication::new(config, SoftwareFrameRenderer::new());
+
+        app.handle_exiting();
+
+        let label = app
+            .config
+            .framework_controller()
+            .unwrap_or_else(|| panic!("framework controller remains inspectable after teardown"))
+            .runtime_tree()
+            .node(&RuntimeViewId::new("label"))
+            .unwrap_or_else(|| panic!("label node exists"));
+        assert!(matches!(
+            label.visual(),
+            RuntimeVisual::Text(text) if text.text() == "Unmounted"
+        ));
     }
 }
