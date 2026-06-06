@@ -27,6 +27,7 @@ fn run_full_release_check() -> Result<(), String> {
     validate_repository_version_policy()?;
     validate_repository_package_targets()?;
     validate_repository_dependency_policy()?;
+    validate_repository_release_evidence()?;
     validate_repository_changelog()?;
     run_script("scripts/check.sh")
 }
@@ -59,6 +60,19 @@ fn validate_repository_changelog() -> Result<(), String> {
     Changelog::parse(include_str!("../../CHANGELOG.md"))
         .map(|_| ())
         .map_err(|error| format!("changelog validation failed: {error:?}"))
+}
+
+fn validate_repository_release_evidence() -> Result<(), String> {
+    ReleaseEvidence::parse(
+        include_str!("../../README.md"),
+        include_str!("../../manual/SUMMARY.md"),
+        include_str!("../../manual/packaging.md"),
+        include_str!("../../Cargo.toml"),
+        include_str!("../../release/release-criteria.toml"),
+        include_str!("../../release/package-targets.toml"),
+    )
+    .map(|_| ())
+    .map_err(|error| format!("release evidence validation failed: {error:?}"))
 }
 
 fn run_script(script: &str) -> Result<(), String> {
@@ -481,6 +495,273 @@ enum ChangelogError {
     MissingVerificationEvidence,
 }
 
+#[derive(Debug)]
+struct ReleaseEvidence;
+
+impl ReleaseEvidence {
+    fn parse(
+        readme: &str,
+        manual_summary: &str,
+        manual_packaging: &str,
+        workspace_manifest: &str,
+        release_criteria: &str,
+        package_targets: &str,
+    ) -> Result<Self, ReleaseEvidenceError> {
+        let workspace = WorkspaceManifest::parse(workspace_manifest)?;
+        let criteria = ReleaseCriteria::parse(release_criteria)
+            .map_err(|error| ReleaseEvidenceError::InvalidReleaseCriteria(format!("{error:?}")))?;
+        let targets = PackageTargets::parse(package_targets)
+            .map_err(|error| ReleaseEvidenceError::InvalidPackageTargets(format!("{error:?}")))?;
+        Self::validate_workspace_crates(&workspace)?;
+        Self::validate_public_readme_claims(readme, &targets)?;
+        Self::validate_manual_index(manual_summary)?;
+        Self::validate_release_criteria(&workspace, &criteria)?;
+        Self::validate_package_targets(&workspace, manual_packaging, &targets)?;
+        Ok(Self)
+    }
+
+    fn validate_workspace_crates(
+        workspace: &WorkspaceManifest,
+    ) -> Result<(), ReleaseEvidenceError> {
+        for package in REQUIRED_PRODUCTION_PACKAGES {
+            if !workspace.contains_package(package) {
+                return Err(ReleaseEvidenceError::MissingProductionPackage(
+                    (*package).to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_public_readme_claims(
+        readme: &str,
+        targets: &PackageTargets,
+    ) -> Result<(), ReleaseEvidenceError> {
+        for claim in [
+            "desktop",
+            "VST3",
+            "CLAP",
+            "AU",
+            "build-release",
+            "verify-artifact",
+            "package-plugin",
+            "cargo run -p xtask -- check-fast",
+            "cargo run -p xtask -- check",
+        ] {
+            if !readme.contains(claim) {
+                return Err(ReleaseEvidenceError::MissingReadmeClaim(claim.to_owned()));
+            }
+        }
+
+        for target_id in ["desktop-linux", "plugin-clap", "plugin-vst3", "plugin-au"] {
+            if !targets.contains(target_id) {
+                return Err(ReleaseEvidenceError::MissingPackageTarget(
+                    target_id.to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_manual_index(manual_summary: &str) -> Result<(), ReleaseEvidenceError> {
+        for page in [
+            "Desktop Apps",
+            "Plugin Editors",
+            "Runtime APIs",
+            "Packaging",
+            "Security",
+            "Troubleshooting",
+        ] {
+            if !manual_summary.contains(page) {
+                return Err(ReleaseEvidenceError::MissingManualPage(page.to_owned()));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_release_criteria(
+        workspace: &WorkspaceManifest,
+        criteria: &ReleaseCriteria,
+    ) -> Result<(), ReleaseEvidenceError> {
+        for criterion in &criteria.criteria {
+            Self::validate_evidence_path("criterion", &criterion.id, &criterion.evidence)?;
+            if let Some(package) = cargo_package_from_command(&criterion.command)
+                && !workspace.contains_package(package.as_str())
+            {
+                return Err(ReleaseEvidenceError::UnknownCommandPackage {
+                    owner_id: criterion.id.clone(),
+                    package,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_package_targets(
+        workspace: &WorkspaceManifest,
+        manual_packaging: &str,
+        targets: &PackageTargets,
+    ) -> Result<(), ReleaseEvidenceError> {
+        for target in &targets.targets {
+            Self::validate_evidence_path("target", &target.id, &target.evidence)?;
+            if let Some(package) = cargo_package_from_command(&target.command)
+                && !workspace.contains_package(package.as_str())
+            {
+                return Err(ReleaseEvidenceError::UnknownCommandPackage {
+                    owner_id: target.id.clone(),
+                    package,
+                });
+            }
+
+            if !manual_packaging.contains(format!("`{}`", target.id).as_str()) {
+                return Err(ReleaseEvidenceError::ManualMissingPackageTarget(
+                    target.id.clone(),
+                ));
+            }
+
+            if !manual_packaging.contains(&target.command) {
+                return Err(ReleaseEvidenceError::ManualMissingPackageCommand {
+                    target_id: target.id.clone(),
+                    command: target.command.clone(),
+                });
+            }
+
+            if !target.release_gate && !manual_packaging.contains("not a release-gated output") {
+                return Err(ReleaseEvidenceError::ManualMissingNonGatedTarget(
+                    target.id.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_evidence_path(
+        kind: &'static str,
+        id: &str,
+        evidence: &str,
+    ) -> Result<(), ReleaseEvidenceError> {
+        if evidence.starts_with("target/release-evidence/")
+            && std::path::Path::new(evidence)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"))
+        {
+            Ok(())
+        } else {
+            Err(ReleaseEvidenceError::InvalidEvidencePath {
+                kind,
+                id: id.to_owned(),
+                evidence: evidence.to_owned(),
+            })
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ReleaseEvidenceError {
+    InvalidReleaseCriteria(String),
+    InvalidPackageTargets(String),
+    InvalidWorkspaceManifest(String),
+    MissingProductionPackage(String),
+    MissingReadmeClaim(String),
+    MissingPackageTarget(String),
+    MissingManualPage(String),
+    UnknownCommandPackage {
+        owner_id: String,
+        package: String,
+    },
+    InvalidEvidencePath {
+        kind: &'static str,
+        id: String,
+        evidence: String,
+    },
+    ManualMissingPackageTarget(String),
+    ManualMissingPackageCommand {
+        target_id: String,
+        command: String,
+    },
+    ManualMissingNonGatedTarget(String),
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkspaceManifest {
+    workspace: WorkspaceMembers,
+}
+
+impl WorkspaceManifest {
+    fn parse(input: &str) -> Result<Self, ReleaseEvidenceError> {
+        toml::from_str(input)
+            .map_err(|error| ReleaseEvidenceError::InvalidWorkspaceManifest(error.to_string()))
+    }
+
+    fn contains_package(&self, package: &str) -> bool {
+        self.workspace.members.iter().any(|member| {
+            member
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name == package)
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkspaceMembers {
+    members: Vec<String>,
+}
+
+fn cargo_package_from_command(command: &str) -> Option<String> {
+    let mut words = command.split_whitespace();
+    while let Some(word) = words.next() {
+        if word == "-p" || word == "--package" {
+            return words.next().map(ToOwned::to_owned);
+        }
+        if let Some(package) = word
+            .strip_prefix("-p=")
+            .or_else(|| word.strip_prefix("--package="))
+        {
+            return Some(package.to_owned());
+        }
+    }
+    None
+}
+
+const REQUIRED_PRODUCTION_PACKAGES: &[&str] = &[
+    "hawk2ui-a11y",
+    "hawk2ui-api",
+    "hawk2ui-assets",
+    "hawk2ui-authoring",
+    "hawk2ui-build",
+    "hawk2ui-cli",
+    "hawk2ui-compat",
+    "hawk2ui-conformance",
+    "hawk2ui-framework-conformance",
+    "hawk2ui-framework-react",
+    "hawk2ui-framework-solid",
+    "hawk2ui-framework-svelte",
+    "hawk2ui-framework-vue",
+    "hawk2ui-host",
+    "hawk2ui-host-baseview",
+    "hawk2ui-host-winit",
+    "hawk2ui-layout",
+    "hawk2ui-perf",
+    "hawk2ui-platform",
+    "hawk2ui-plugin",
+    "hawk2ui-plugin-adapters",
+    "hawk2ui-plugin-truce",
+    "hawk2ui-render",
+    "hawk2ui-render-skia",
+    "hawk2ui-runtime",
+    "hawk2ui-schema",
+    "hawk2ui-script",
+    "hawk2ui-security",
+    "hawk2ui-security-model",
+    "hawk2ui-smoke",
+    "hawk2ui-style",
+    "hawk2ui-testkit",
+    "hawk2ui-text",
+    "hawk2ui-vst3",
+    "xtask",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -770,6 +1051,81 @@ release_gate = true
         ] {
             assert!(checklist.contains(command), "checklist missing {command}");
         }
+    }
+
+    #[test]
+    fn repository_release_evidence_links_public_claims_to_release_metadata() {
+        ReleaseEvidence::parse(
+            include_str!("../../README.md"),
+            include_str!("../../manual/SUMMARY.md"),
+            include_str!("../../manual/packaging.md"),
+            include_str!("../../Cargo.toml"),
+            include_str!("../../release/release-criteria.toml"),
+            include_str!("../../release/package-targets.toml"),
+        )
+        .expect("repository release evidence must link public claims to release metadata");
+    }
+
+    #[test]
+    fn rejects_manual_package_command_drift_from_release_targets() {
+        let manual = r"
+# Hawk2UI Packaging
+
+## Package Outputs
+
+- `desktop-linux`: `rtk cargo test -p hawk2ui-build package_desktop_linux`
+- `plugin-clap`: `rtk cargo test -p hawk2ui-plugin-adapters stale_command`
+";
+
+        let error = ReleaseEvidence::parse(
+            "# Hawk2UI\n\ndesktop VST3 CLAP AU build-release verify-artifact package-plugin cargo run -p xtask -- check-fast cargo run -p xtask -- check",
+            "- [Desktop Apps](desktop-apps.md)\n- [Plugin Editors](plugin-editors.md)\n- [Runtime APIs](runtime-apis.md)\n- [Packaging](packaging.md)\n- [Security](security.md)\n- [Troubleshooting](troubleshooting.md)",
+            manual,
+            include_str!("../../Cargo.toml"),
+            VALID_CRITERIA,
+            r#"
+[[targets]]
+id = "desktop-linux"
+kind = "desktop-bundle"
+platform = "linux"
+command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
+evidence = "target/release-evidence/desktop-linux.txt"
+release_gate = true
+
+[[targets]]
+id = "plugin-clap"
+kind = "plugin-bundle"
+platform = "cross-platform"
+command = "rtk cargo test -p hawk2ui-plugin-adapters package_clap"
+evidence = "target/release-evidence/plugin-clap.txt"
+release_gate = true
+
+[[targets]]
+id = "plugin-vst3"
+kind = "plugin-bundle"
+platform = "cross-platform"
+command = "rtk cargo test -p hawk2ui-plugin-adapters package_vst3"
+evidence = "target/release-evidence/plugin-vst3.txt"
+release_gate = false
+
+[[targets]]
+id = "plugin-au"
+kind = "plugin-bundle"
+platform = "macos"
+command = "rtk cargo test -p hawk2ui-plugin-adapters package_au"
+evidence = "target/release-evidence/plugin-au.txt"
+release_gate = true
+"#,
+        )
+        .expect_err("manual package command drift must fail");
+
+        assert_eq!(
+            error,
+            ReleaseEvidenceError::ManualMissingPackageCommand {
+                target_id: "plugin-clap".to_owned(),
+                command: "rtk cargo test -p hawk2ui-plugin-adapters package_clap".to_owned(),
+            }
+        );
     }
 
     #[test]

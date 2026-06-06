@@ -35,9 +35,9 @@ The package compatibility matrix currently names these outputs and verification 
 - `desktop-linux`: `rtk cargo test -p hawk2ui-build package_desktop_linux`
 - `desktop-windows`: `rtk cargo test -p hawk2ui-build package_desktop_windows`
 - `desktop-macos`: `rtk cargo test -p hawk2ui-build package_desktop_macos`
-- `plugin-clap`: `rtk cargo test -p hawk2ui-plugin-adapters plugin_adapters_generate_all_supported_package_targets`
-- `plugin-vst3`: tracked package metadata only; not a release-gated output
-- `plugin-au`: `rtk cargo test -p hawk2ui-plugin-adapters plugin_adapters_generate_all_supported_package_targets`
+- `plugin-clap`: `rtk cargo test -p hawk2ui-plugin-adapters package_clap`
+- `plugin-vst3`: `rtk cargo test -p hawk2ui-plugin-adapters package_vst3` (tracked package metadata only; not a release-gated output)
+- `plugin-au`: `rtk cargo test -p hawk2ui-plugin-adapters package_au`
 - `sealed-artifact`: `rtk cargo test -p hawk2ui-build sealed_artifact`
 - `debug-package`: `rtk cargo test -p hawk2ui-build debug_package`
 - `release-package`: `rtk cargo test -p hawk2ui-build release_package`

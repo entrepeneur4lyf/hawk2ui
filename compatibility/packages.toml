@@ -32,7 +32,7 @@ platform = "cross-platform"
 signing = true
 notarization = true
 installer = false
-verify_command = "rtk cargo test -p hawk2ui-plugin-adapters plugin_adapters_generate_all_supported_package_targets"
+verify_command = "rtk cargo test -p hawk2ui-plugin-adapters package_clap"
 
 [[packages]]
 output = "plugin-vst3"
@@ -41,7 +41,7 @@ platform = "cross-platform"
 signing = true
 notarization = true
 installer = false
-verify_command = "rtk cargo test -p hawk2ui-plugin-adapters plugin_adapters_generate_all_supported_package_targets"
+verify_command = "rtk cargo test -p hawk2ui-plugin-adapters package_vst3"
 
 [[packages]]
 output = "plugin-au"
@@ -50,7 +50,7 @@ platform = "macos"
 signing = true
 notarization = true
 installer = false
-verify_command = "rtk cargo test -p hawk2ui-plugin-adapters plugin_adapters_generate_all_supported_package_targets"
+verify_command = "rtk cargo test -p hawk2ui-plugin-adapters package_au"
 
 [[packages]]
 output = "sealed-artifact"

@@ -19,6 +19,8 @@ allow = [
     "BSD-3-Clause",
     # notify 8.x uses CC0 for its Rust source. Accepted for the native dev watcher.
     "CC0-1.0",
+    # webpki-roots ships Mozilla trust-store data under the SPDX-listed CDLA permissive license.
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "MIT-0",
