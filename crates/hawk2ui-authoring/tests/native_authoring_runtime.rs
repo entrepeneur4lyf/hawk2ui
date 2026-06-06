@@ -375,6 +375,142 @@ fn framework_dynamic_size_bindings_update_runtime_layout() {
 }
 
 #[test]
+fn framework_dynamic_text_visual_bindings_update_runtime_draw_commands() {
+    let compiler_json = r##"{
+        "schema_version": 1,
+        "root": {
+            "id": "root",
+            "kind": "view",
+            "children": [
+                {
+                    "key": "title",
+                    "node": {
+                        "id": "title",
+                        "kind": "text",
+                        "props": [
+                            {"name": "text", "value": {"type": "string", "value": "Static"}},
+                            {"name": "font_size", "value": {"type": "number", "value": 16}},
+                            {"name": "color", "value": {"type": "string", "value": "#ffffff"}}
+                        ]
+                    }
+                }
+            ]
+        },
+        "dynamic_bindings": [
+            {
+                "node_id": "title",
+                "target": {"type": "prop", "name": "font_size"},
+                "expression": "size",
+                "dependencies": ["size"]
+            },
+            {
+                "node_id": "title",
+                "target": {"type": "prop", "name": "color"},
+                "expression": "tone",
+                "dependencies": ["tone"]
+            }
+        ]
+    }"##;
+    let program = FrameworkNativeProgram::try_from(
+        FrameworkNativeProgramWire::from_json(compiler_json).expect("compiler JSON parses"),
+    )
+    .expect("compiler artifact validates");
+    let artifact = program
+        .to_native_authoring_artifact("App.tsx", true)
+        .expect("framework program finalizes");
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact(&artifact)
+        .expect("framework artifact bridges");
+
+    let patched = bridged
+        .apply_dynamic_binding(&artifact.dynamic_bindings()[0], PropValue::Number(22.0))
+        .expect("dynamic font size applies")
+        .apply_dynamic_binding(
+            &artifact.dynamic_bindings()[1],
+            PropValue::String("#33ccff".to_string()),
+        )
+        .expect("dynamic text color applies");
+
+    let frame = RuntimeSceneBridge::new(Viewport::new(180.0, 80.0))
+        .build(patched.runtime_tree())
+        .expect("patched runtime tree builds");
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Text {
+                id,
+                font_size,
+                color,
+                ..
+            } if id.as_str() == "title"
+                && (*font_size - 22.0).abs() <= f32::EPSILON
+                && *color == Color::rgba(51, 204, 255, 255)
+        )
+    }));
+}
+
+#[test]
+fn framework_dynamic_background_binding_updates_runtime_fill() {
+    let compiler_json = r##"{
+        "schema_version": 1,
+        "root": {
+            "id": "root",
+            "kind": "view",
+            "children": [
+                {
+                    "key": "panel",
+                    "node": {
+                        "id": "panel",
+                        "kind": "view",
+                        "props": [
+                            {"name": "width", "value": {"type": "number", "value": 160}},
+                            {"name": "height", "value": {"type": "number", "value": 80}},
+                            {"name": "background", "value": {"type": "string", "value": "#111111"}}
+                        ]
+                    }
+                }
+            ]
+        },
+        "dynamic_bindings": [
+            {
+                "node_id": "panel",
+                "target": {"type": "prop", "name": "background"},
+                "expression": "surface",
+                "dependencies": ["surface"]
+            }
+        ]
+    }"##;
+    let program = FrameworkNativeProgram::try_from(
+        FrameworkNativeProgramWire::from_json(compiler_json).expect("compiler JSON parses"),
+    )
+    .expect("compiler artifact validates");
+    let artifact = program
+        .to_native_authoring_artifact("App.tsx", true)
+        .expect("framework program finalizes");
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact(&artifact)
+        .expect("framework artifact bridges");
+
+    let patched = bridged
+        .apply_dynamic_binding(
+            &artifact.dynamic_bindings()[0],
+            PropValue::String("#ff8800".to_string()),
+        )
+        .expect("dynamic background applies");
+
+    let frame = RuntimeSceneBridge::new(Viewport::new(180.0, 80.0))
+        .build(patched.runtime_tree())
+        .expect("patched runtime tree builds");
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Fill { id, color, .. }
+                if id.as_str() == "panel" && *color == Color::rgba(255, 136, 0, 255)
+        )
+    }));
+}
+
+#[test]
 fn native_runtime_bridge_lowers_source_compiled_components_to_runtime_tree() {
     let source = "\
 component CounterCard id=counter-card {

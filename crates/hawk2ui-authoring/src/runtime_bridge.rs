@@ -298,9 +298,9 @@ impl NativeRuntimeBridgeArtifact {
 
     /// Applies one evaluated dynamic binding value to the runtime tree.
     ///
-    /// Text bindings patch the node's [`RuntimeVisual::Text`] payload and mark the node as
-    /// invalidated. Non-text property targets are rejected until the runtime bridge has typed
-    /// patchers for those native properties.
+    /// Text and supported visual property bindings patch the node's typed runtime payload and mark
+    /// the node as invalidated. Unsupported property targets are rejected so generated framework
+    /// artifacts cannot silently drift away from the native runtime contract.
     ///
     /// # Errors
     ///
@@ -330,6 +330,24 @@ impl NativeRuntimeBridgeArtifact {
                     name,
                     size_value,
                 )?;
+                Ok(self)
+            }
+            FrameworkDynamicBindingTarget::Prop { name } if is_text_font_size_property(name) => {
+                let font_size = dynamic_value_positive_number(&value, name)?;
+                self.runtime_tree =
+                    apply_dynamic_text_font_size(self.runtime_tree, binding.node_id(), font_size)?;
+                Ok(self)
+            }
+            FrameworkDynamicBindingTarget::Prop { name } if is_text_color_property(name) => {
+                let color = dynamic_value_color(&value, name)?;
+                self.runtime_tree =
+                    apply_dynamic_text_color(self.runtime_tree, binding.node_id(), color)?;
+                Ok(self)
+            }
+            FrameworkDynamicBindingTarget::Prop { name } if is_background_color_property(name) => {
+                let color = dynamic_value_color(&value, name)?;
+                self.runtime_tree =
+                    apply_dynamic_background(self.runtime_tree, binding.node_id(), color)?;
                 Ok(self)
             }
             FrameworkDynamicBindingTarget::Prop { name } => Err(NativeRuntimeBridgeError::new(
@@ -393,6 +411,99 @@ fn apply_dynamic_layout_size(
         .map_err(NativeRuntimeBridgeError::from)
 }
 
+fn apply_dynamic_text_font_size(
+    tree: RuntimeViewTree,
+    node_id: &str,
+    font_size: f32,
+) -> Result<RuntimeViewTree, NativeRuntimeBridgeError> {
+    let runtime_id = RuntimeViewId::new(node_id);
+    let Some(node) = tree.node(&runtime_id) else {
+        return Err(NativeRuntimeBridgeError::new(
+            "native-runtime.dynamic-binding.node-missing",
+            format!("dynamic binding target node `{node_id}` is not present in the runtime tree"),
+        ));
+    };
+    let visual = match node.visual().clone() {
+        RuntimeVisual::Text(text_visual) => {
+            let next_visual = rebuild_text_visual(&text_visual, font_size, text_visual.color());
+            RuntimeVisual::Text(next_visual)
+        }
+        _ => {
+            return Err(NativeRuntimeBridgeError::new(
+                "native-runtime.dynamic-binding.visual-kind-invalid",
+                format!("dynamic font size binding target `{node_id}` is not a text visual"),
+            ));
+        }
+    };
+    tree.update_visual(&runtime_id, visual)
+        .map_err(NativeRuntimeBridgeError::from)
+}
+
+fn apply_dynamic_text_color(
+    tree: RuntimeViewTree,
+    node_id: &str,
+    color: Color,
+) -> Result<RuntimeViewTree, NativeRuntimeBridgeError> {
+    let runtime_id = RuntimeViewId::new(node_id);
+    let Some(node) = tree.node(&runtime_id) else {
+        return Err(NativeRuntimeBridgeError::new(
+            "native-runtime.dynamic-binding.node-missing",
+            format!("dynamic binding target node `{node_id}` is not present in the runtime tree"),
+        ));
+    };
+    let visual = match node.visual().clone() {
+        RuntimeVisual::Text(text_visual) => {
+            let next_visual = rebuild_text_visual(&text_visual, text_visual.font_size(), color);
+            RuntimeVisual::Text(next_visual)
+        }
+        _ => {
+            return Err(NativeRuntimeBridgeError::new(
+                "native-runtime.dynamic-binding.visual-kind-invalid",
+                format!("dynamic color binding target `{node_id}` is not a text visual"),
+            ));
+        }
+    };
+    tree.update_visual(&runtime_id, visual)
+        .map_err(NativeRuntimeBridgeError::from)
+}
+
+fn apply_dynamic_background(
+    tree: RuntimeViewTree,
+    node_id: &str,
+    color: Color,
+) -> Result<RuntimeViewTree, NativeRuntimeBridgeError> {
+    let runtime_id = RuntimeViewId::new(node_id);
+    let Some(node) = tree.node(&runtime_id) else {
+        return Err(NativeRuntimeBridgeError::new(
+            "native-runtime.dynamic-binding.node-missing",
+            format!("dynamic binding target node `{node_id}` is not present in the runtime tree"),
+        ));
+    };
+    let visual = match node.visual().clone() {
+        RuntimeVisual::None | RuntimeVisual::Fill(_) => RuntimeVisual::Fill(color),
+        RuntimeVisual::StyledBox(box_visual) => {
+            RuntimeVisual::StyledBox(box_visual.with_fill(color))
+        }
+        _ => {
+            return Err(NativeRuntimeBridgeError::new(
+                "native-runtime.dynamic-binding.visual-kind-invalid",
+                format!("dynamic background binding target `{node_id}` is not a box visual"),
+            ));
+        }
+    };
+    tree.update_visual(&runtime_id, visual)
+        .map_err(NativeRuntimeBridgeError::from)
+}
+
+fn rebuild_text_visual(
+    text_visual: &RuntimeTextVisual,
+    font_size: f32,
+    color: Color,
+) -> RuntimeTextVisual {
+    RuntimeTextVisual::new(text_visual.text().to_string(), font_size, color)
+        .with_font_family(text_visual.font_family().to_string())
+}
+
 fn dynamic_value_text(value: PropValue) -> Result<String, NativeRuntimeBridgeError> {
     match value {
         PropValue::String(value) => Ok(value),
@@ -403,6 +514,41 @@ fn dynamic_value_text(value: PropValue) -> Result<String, NativeRuntimeBridgeErr
             "dynamic text binding numeric value must be finite",
         )),
     }
+}
+
+fn dynamic_value_positive_number(
+    value: &PropValue,
+    name: &str,
+) -> Result<f32, NativeRuntimeBridgeError> {
+    match value {
+        PropValue::Number(value) => narrow_number(*value, name, NumberDomain::Positive),
+        PropValue::String(_) | PropValue::Bool(_) => Err(NativeRuntimeBridgeError::new(
+            "native-runtime.dynamic-binding.value-invalid",
+            format!("dynamic numeric binding `{name}` requires a finite positive number"),
+        )),
+    }
+}
+
+fn dynamic_value_color(value: &PropValue, name: &str) -> Result<Color, NativeRuntimeBridgeError> {
+    match value {
+        PropValue::String(value) => parse_hex_color(name, value),
+        PropValue::Number(_) | PropValue::Bool(_) => Err(NativeRuntimeBridgeError::new(
+            "native-runtime.dynamic-binding.value-invalid",
+            format!("dynamic color binding `{name}` requires a #rrggbb string"),
+        )),
+    }
+}
+
+fn is_text_font_size_property(name: &str) -> bool {
+    matches!(name, "font_size" | "font-size")
+}
+
+fn is_text_color_property(name: &str) -> bool {
+    matches!(name, "color" | "text_color" | "text-color")
+}
+
+fn is_background_color_property(name: &str) -> bool {
+    matches!(name, "background" | "background_color" | "background-color")
 }
 
 fn dynamic_value_layout_number(
