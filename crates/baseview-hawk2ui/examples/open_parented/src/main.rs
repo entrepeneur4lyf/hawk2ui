@@ -25,7 +25,8 @@ impl ParentWindowHandler {
         let child_window =
             Window::open_parented(window, window_open_options, ChildWindowHandler::new);
 
-        // TODO: no way to query physical size initially?
+        // Softbuffer is initialized at the requested logical size and then resized from the first
+        // native resize event, which carries the authoritative physical size.
         Self {
             _ctx: ctx,
             surface,
@@ -82,7 +83,8 @@ impl ChildWindowHandler {
         let mut surface = unsafe { softbuffer::Surface::new(&ctx, window) }.unwrap();
         surface.resize(NonZeroU32::new(512).unwrap(), NonZeroU32::new(512).unwrap()).unwrap();
 
-        // TODO: no way to query physical size initially?
+        // Softbuffer is initialized at the requested logical size and then resized from the first
+        // native resize event, which carries the authoritative physical size.
         Self { _ctx: ctx, surface, current_size: PhySize::new(256, 256), damaged: true }
     }
 }

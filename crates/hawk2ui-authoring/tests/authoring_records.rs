@@ -1,9 +1,10 @@
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_authoring::{
     AssetRef, AuthoringDiagnostic, AuthoringDiagnosticSeverity, ChildList, ElementId, ElementKind,
-    ElementNode, EventKind, EventPayloadField, FrameworkDynamicBinding, FrameworkNativeNode,
-    FrameworkNativeProgram, FrameworkNativeProgramWire, FrameworkReactiveBinding, HandlerRef,
-    KeyedChild, NativeLifecycleEvent, NativeRef, PointerEventKind, PropValue, StyleRef,
+    ElementNode, EventKind, EventPayloadField, FrameworkDynamicBinding, FrameworkDynamicValue,
+    FrameworkEventHandlerAction, FrameworkNativeNode, FrameworkNativeProgram,
+    FrameworkNativeProgramWire, FrameworkReactiveBinding, HandlerRef, KeyedChild,
+    NativeLifecycleEvent, NativeRef, PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_render::CustomSurfaceCategory;
 use hawk2ui_runtime::RuntimeVisual;
@@ -51,16 +52,33 @@ const FRAMEWORK_NATIVE_PROGRAM_WIRE_JSON: &str = r#"
     { "kind": "keyed-for-each", "name": "params" },
     { "kind": "effect", "name": "meter-paint" }
   ],
-  "dynamic_bindings": [
-    {
-      "node_id": "title",
-      "target": { "type": "prop", "name": "text" },
-      "expression": "params.title",
-      "dependencies": ["params"]
-    }
-  ]
-}
-"#;
+    "dynamic_bindings": [
+      {
+        "node_id": "title",
+        "target": { "type": "prop", "name": "text" },
+        "expression": "params.title",
+        "dependencies": ["params"]
+      }
+    ],
+    "event_handlers": [
+      {
+        "name": "handlePress",
+        "actions": [
+          {
+            "type": "set_dynamic_value",
+            "name": "params",
+            "value": {
+              "type": "object",
+              "value": {
+                "title": { "type": "string", "value": "Pressed Title" }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+  "#;
 
 #[test]
 fn authoring_diagnostic_converts_to_shared_diagnostic() {
@@ -142,7 +160,15 @@ fn framework_native_program_records_explicit_compiler_boundary_without_source_sc
     )
     .with_reactive_binding(FrameworkReactiveBinding::signal("items"))
     .with_reactive_binding(FrameworkReactiveBinding::keyed_for_each("items"))
-    .with_reactive_binding(FrameworkReactiveBinding::effect("root-props"));
+    .with_reactive_binding(FrameworkReactiveBinding::effect("root-props"))
+    .with_event_handler(
+        hawk2ui_authoring::FrameworkEventHandler::new("handlePress").with_action(
+            FrameworkEventHandlerAction::set_dynamic_value(
+                "label",
+                FrameworkDynamicValue::String("Pressed".to_string()),
+            ),
+        ),
+    );
 
     assert_eq!(program.root().id().as_str(), "root");
     assert_eq!(
@@ -222,6 +248,16 @@ fn framework_native_program_wire_round_trips_real_compiler_artifacts() {
             .map(FrameworkDynamicBinding::stable_key)
             .collect::<Vec<_>>(),
         ["title:prop:text=params.title"]
+    );
+    assert_eq!(program.event_handlers().len(), 1);
+    assert_eq!(program.event_handlers()[0].name(), "handlePress");
+    assert_eq!(
+        program.event_handlers()[0]
+            .actions()
+            .iter()
+            .map(FrameworkEventHandlerAction::stable_key)
+            .collect::<Vec<_>>(),
+        ["set:params"]
     );
 
     let encoded = wire.to_json().expect("compiler wire artifact serializes");

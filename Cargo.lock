@@ -1864,6 +1864,7 @@ dependencies = [
  "glutin-winit",
  "hawk2ui-api",
  "hawk2ui-assets",
+ "hawk2ui-authoring",
  "hawk2ui-host",
  "hawk2ui-layout",
  "hawk2ui-render",

@@ -10,8 +10,12 @@ use std::{
 use boa_engine::{Context, JsValue, JsVariant, Source};
 use hawk2ui_api::Diagnostic;
 use hawk2ui_authoring::{
-    FrameworkDynamicBinding, NativeRuntimeBridgeArtifact, NativeRuntimeBridgeError, PropValue,
+    FrameworkDynamicBinding, FrameworkDynamicValue, FrameworkEventHandler,
+    FrameworkEventHandlerAction, FrameworkInitialDynamicValue, FrameworkInitialDynamicValueMode,
+    FrameworkNativeNode, FrameworkNativeProgram, NativeRuntimeBridgeArtifact,
+    NativeRuntimeBridgeError, PropValue,
 };
+use hawk2ui_runtime::{RuntimeEvent, RuntimeEventKind, RuntimeViewTree};
 use oxc_allocator::Allocator;
 use oxc_codegen::Codegen;
 use oxc_parser::Parser;
@@ -702,6 +706,249 @@ impl DynamicExpressionEnvironment {
         self.bindings
             .insert(name.into(), DynamicExpressionBinding::Getter(value));
         self
+    }
+
+    fn insert_framework_initial(&mut self, value: &FrameworkInitialDynamicValue) {
+        let value_ref = framework_dynamic_value_to_expression_value(value.value_ref());
+        match value.mode() {
+            FrameworkInitialDynamicValueMode::Value => {
+                self.bindings.insert(
+                    value.name().to_string(),
+                    DynamicExpressionBinding::Value(value_ref),
+                );
+            }
+            FrameworkInitialDynamicValueMode::Getter => {
+                self.bindings.insert(
+                    value.name().to_string(),
+                    DynamicExpressionBinding::Getter(value_ref),
+                );
+            }
+        }
+    }
+
+    fn set_framework_value(&mut self, name: &str, value: DynamicExpressionValue) {
+        let updated = match self.bindings.get(name) {
+            Some(DynamicExpressionBinding::Getter(_)) => DynamicExpressionBinding::Getter(value),
+            Some(DynamicExpressionBinding::Value(_)) | None => {
+                DynamicExpressionBinding::Value(value)
+            }
+        };
+        self.bindings.insert(name.to_string(), updated);
+    }
+}
+
+/// Executable framework runtime controller.
+///
+/// The controller owns the retained runtime tree, the framework dynamic environment, event-handler
+/// lookup metadata, and deterministic handler actions emitted by the framework compiler artifact.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameworkRuntimeController {
+    artifact: NativeRuntimeBridgeArtifact,
+    environment: DynamicExpressionEnvironment,
+    event_bindings: BTreeMap<(String, String), String>,
+    event_handlers: BTreeMap<String, FrameworkEventHandler>,
+}
+
+impl FrameworkRuntimeController {
+    /// Creates a controller from a validated framework program and bridged runtime artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptBackendError`] when initial dynamic binding evaluation fails.
+    pub fn from_program(
+        program: &FrameworkNativeProgram,
+        artifact: NativeRuntimeBridgeArtifact,
+    ) -> Result<Self, ScriptBackendError> {
+        let mut environment = DynamicExpressionEnvironment::new();
+        for value in program.initial_dynamic_values() {
+            environment.insert_framework_initial(value);
+        }
+        let mut event_bindings = BTreeMap::new();
+        collect_framework_event_bindings(program.root(), &mut event_bindings);
+        let event_handlers = program
+            .event_handlers()
+            .iter()
+            .map(|handler| (handler.name().to_string(), handler.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let mut controller = Self {
+            artifact,
+            environment,
+            event_bindings,
+            event_handlers,
+        };
+        controller.rebind_runtime_tree()?;
+        Ok(controller)
+    }
+
+    /// Returns the current runtime view tree.
+    #[must_use]
+    pub const fn runtime_tree(&self) -> &RuntimeViewTree {
+        self.artifact.runtime_tree()
+    }
+
+    /// Returns whether a target/event pair has an executable handler.
+    #[must_use]
+    pub fn has_event_handler(&self, target: &str, event_name: &str) -> bool {
+        self.event_bindings
+            .get(&(target.to_string(), event_name.to_string()))
+            .is_some_and(|handler| self.event_handlers.contains_key(handler))
+    }
+
+    /// Dispatches one runtime event through framework handler actions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptBackendError`] when the compiler artifact references a missing handler,
+    /// handler expression evaluation fails, or dynamic rebinding fails.
+    pub fn dispatch_runtime_event(
+        &mut self,
+        event: &RuntimeEvent,
+    ) -> Result<bool, ScriptBackendError> {
+        if !matches!(
+            event.kind,
+            RuntimeEventKind::Ui | RuntimeEventKind::Lifecycle
+        ) {
+            return Ok(false);
+        }
+        let Some(handler_name) = self
+            .event_bindings
+            .get(&(event.target.clone(), event.name.clone()))
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        let Some(handler) = self.event_handlers.get(&handler_name).cloned() else {
+            return Err(ScriptBackendError::new(
+                "script.framework-handler.missing",
+                format!(
+                    "framework event {}:{} references missing handler `{handler_name}`",
+                    event.target, event.name
+                ),
+            ));
+        };
+        for action in handler.actions() {
+            self.apply_framework_handler_action(action)?;
+        }
+        self.rebind_runtime_tree()?;
+        Ok(true)
+    }
+
+    fn apply_framework_handler_action(
+        &mut self,
+        action: &FrameworkEventHandlerAction,
+    ) -> Result<(), ScriptBackendError> {
+        match action {
+            FrameworkEventHandlerAction::SetDynamicValue { name, value } => {
+                self.environment
+                    .set_framework_value(name, framework_dynamic_value_to_expression_value(value));
+                Ok(())
+            }
+            FrameworkEventHandlerAction::SetDynamicExpression {
+                name, expression, ..
+            } => {
+                let value = evaluate_dynamic_expression(
+                    expression,
+                    &self.environment,
+                    ScriptExecutionLimits::DEFAULT,
+                )?;
+                self.environment.set_framework_value(
+                    name,
+                    structured_value_to_dynamic_expression_value(value)?,
+                );
+                Ok(())
+            }
+        }
+    }
+
+    fn rebind_runtime_tree(&mut self) -> Result<(), ScriptBackendError> {
+        let mut backend =
+            ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
+        self.artifact = backend.apply_dynamic_bindings(self.artifact.clone(), &self.environment)?;
+        Ok(())
+    }
+}
+
+fn collect_framework_event_bindings(
+    node: &FrameworkNativeNode,
+    bindings: &mut BTreeMap<(String, String), String>,
+) {
+    for event in node.events() {
+        bindings.insert(
+            (
+                event.target().as_str().to_string(),
+                event.event().stable_key().clone(),
+            ),
+            event.handler().as_str().to_string(),
+        );
+    }
+    for (event, handler) in node.lifecycle() {
+        bindings.insert(
+            (
+                node.id().as_str().to_string(),
+                framework_lifecycle_event_name(*event).to_string(),
+            ),
+            handler.as_str().to_string(),
+        );
+    }
+    for (_, child) in node.children() {
+        collect_framework_event_bindings(child, bindings);
+    }
+}
+
+fn framework_lifecycle_event_name(event: hawk2ui_authoring::NativeLifecycleEvent) -> &'static str {
+    match event {
+        hawk2ui_authoring::NativeLifecycleEvent::Mounted => "lifecycle.mounted",
+        hawk2ui_authoring::NativeLifecycleEvent::Suspended => "lifecycle.suspended",
+        hawk2ui_authoring::NativeLifecycleEvent::Resumed => "lifecycle.resumed",
+        hawk2ui_authoring::NativeLifecycleEvent::HotReloaded => "lifecycle.hot-reloaded",
+        hawk2ui_authoring::NativeLifecycleEvent::ErrorBoundary => "lifecycle.error-boundary",
+        hawk2ui_authoring::NativeLifecycleEvent::Shutdown => "lifecycle.shutdown",
+        hawk2ui_authoring::NativeLifecycleEvent::Unmounted => "lifecycle.unmounted",
+    }
+}
+
+fn framework_dynamic_value_to_expression_value(
+    value: &FrameworkDynamicValue,
+) -> DynamicExpressionValue {
+    match value {
+        FrameworkDynamicValue::Null => DynamicExpressionValue::Null,
+        FrameworkDynamicValue::Bool(value) => DynamicExpressionValue::Bool(*value),
+        FrameworkDynamicValue::Number(value) => DynamicExpressionValue::Number(*value),
+        FrameworkDynamicValue::String(value) => DynamicExpressionValue::String(value.clone()),
+        FrameworkDynamicValue::Array(values) => DynamicExpressionValue::Array(
+            values
+                .iter()
+                .map(framework_dynamic_value_to_expression_value)
+                .collect(),
+        ),
+        FrameworkDynamicValue::Object(values) => DynamicExpressionValue::Object(
+            values
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        framework_dynamic_value_to_expression_value(value),
+                    )
+                })
+                .collect(),
+        ),
+    }
+}
+
+fn structured_value_to_dynamic_expression_value(
+    value: StructuredValue,
+) -> Result<DynamicExpressionValue, ScriptBackendError> {
+    match value {
+        StructuredValue::Null => Ok(DynamicExpressionValue::Null),
+        StructuredValue::Bool(value) => Ok(DynamicExpressionValue::Bool(value)),
+        StructuredValue::Number(value) if value.is_finite() => {
+            Ok(DynamicExpressionValue::Number(value))
+        }
+        StructuredValue::Number(_) => Err(ScriptBackendError::new(
+            "script.framework-handler.value-invalid",
+            "framework handler expression numeric result must be finite",
+        )),
+        StructuredValue::String(value) => Ok(DynamicExpressionValue::String(value)),
     }
 }
 
@@ -2031,6 +2278,79 @@ export function mount(host) {
         assert!(matches!(
             title.visual(),
             RuntimeVisual::Text(text) if text.text() == "Live"
+        ));
+    }
+
+    #[test]
+    fn framework_runtime_controller_executes_handler_actions_and_rebinds_tree() {
+        use hawk2ui_authoring::{
+            ElementKind, EventKind, EventPayloadField, FrameworkDynamicBinding,
+            FrameworkDynamicValue, FrameworkEventHandler, FrameworkEventHandlerAction,
+            FrameworkInitialDynamicValue, FrameworkNativeNode, FrameworkNativeProgram, HandlerRef,
+            NativeRuntimeBridge, PointerEventKind, PropValue,
+        };
+        use hawk2ui_runtime::{RuntimeEvent, RuntimeViewId, RuntimeVisual};
+
+        let program = FrameworkNativeProgram::new(
+            FrameworkNativeNode::new("root", ElementKind::View)
+                .with_event(
+                    EventKind::Pointer(PointerEventKind::Press),
+                    HandlerRef::new("handlePress"),
+                    [EventPayloadField::Position],
+                )
+                .with_child(
+                    "title",
+                    FrameworkNativeNode::new("title", ElementKind::Text)
+                        .with_prop("width", PropValue::Number(160.0))
+                        .with_prop("height", PropValue::Number(32.0)),
+                ),
+        )
+        .with_initial_dynamic_value(FrameworkInitialDynamicValue::value(
+            "label",
+            FrameworkDynamicValue::String("Idle".to_string()),
+        ))
+        .with_dynamic_binding(FrameworkDynamicBinding::prop(
+            "title",
+            "text",
+            "label",
+            vec!["label".to_string()],
+        ))
+        .with_event_handler(FrameworkEventHandler::new("handlePress").with_action(
+            FrameworkEventHandlerAction::set_dynamic_value(
+                "label",
+                FrameworkDynamicValue::String("Pressed".to_string()),
+            ),
+        ));
+        let native = program
+            .to_native_authoring_artifact("App.tsx", true)
+            .expect("program finalizes");
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact(&native)
+            .expect("program bridges");
+
+        let mut controller =
+            FrameworkRuntimeController::from_program(&program, runtime).expect("controller builds");
+        let title = controller
+            .runtime_tree()
+            .node(&RuntimeViewId::new("title"))
+            .expect("title node exists");
+        assert!(matches!(
+            title.visual(),
+            RuntimeVisual::Text(text) if text.text() == "Idle"
+        ));
+
+        let changed = controller
+            .dispatch_runtime_event(&RuntimeEvent::ui("root", "pointer.press"))
+            .expect("handler executes");
+
+        assert!(changed);
+        let title = controller
+            .runtime_tree()
+            .node(&RuntimeViewId::new("title"))
+            .expect("title node exists");
+        assert!(matches!(
+            title.visual(),
+            RuntimeVisual::Text(text) if text.text() == "Pressed"
         ));
     }
 

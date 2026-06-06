@@ -7,28 +7,28 @@ test("framework compiler dispatch emits canonical compiler artifacts", () => {
       framework: "react" as const,
       filename: "App.tsx",
       source:
-        'const label = getLabel(); export function App() { return <hawk-view id="root"><hawk-text id="title">{label}</hawk-text></hawk-view>; }',
+        'let label = "Idle"; function handlePress() { label = "Pressed"; } export function App() { return <hawk-view id="root" onPointerDown={handlePress}><hawk-text id="title">{label}</hawk-text></hawk-view>; }',
       expression: "label",
     },
     {
       framework: "solid" as const,
       filename: "App.tsx",
       source:
-        'const [label] = createSignal("Title"); export function App() { return <hawk-view id="root"><hawk-text id="title">{label()}</hawk-text></hawk-view>; }',
+        'const [label, setLabel] = createSignal("Idle"); function handlePress() { setLabel("Pressed"); } export function App() { return <hawk-view id="root" onPointerDown={handlePress}><hawk-text id="title">{label()}</hawk-text></hawk-view>; }',
       expression: "label()",
     },
     {
       framework: "svelte" as const,
       filename: "App.svelte",
       source:
-        '<script>let label = getLabel();</script><hawk-view id="root"><hawk-text id="title">{label}</hawk-text></hawk-view>',
+        '<script>let label = "Idle"; function handlePress() { label = "Pressed"; }</script><hawk-view id="root" on:press={handlePress}><hawk-text id="title">{label}</hawk-text></hawk-view>',
       expression: "label",
     },
     {
       framework: "vue" as const,
       filename: "App.vue",
       source:
-        '<script setup>const label = computed(() => "Title");</script><template><hawk-view id="root"><hawk-text id="title">{{ label }}</hawk-text></hawk-view></template>',
+        '<script setup>const label = ref("Idle"); function handlePress() { label.value = "Pressed"; }</script><template><hawk-view id="root" @pointerdown="handlePress"><hawk-text id="title">{{ label }}</hawk-text></hawk-view></template>',
       expression: "label",
     },
   ];
@@ -43,6 +43,18 @@ test("framework compiler dispatch emits canonical compiler artifacts", () => {
         target: { type: "prop", name: "text" },
         expression: fixture.expression,
         dependencies: ["label"],
+      },
+    ]);
+    expect(output.compilerArtifact.event_handlers).toEqual([
+      {
+        name: "handlePress",
+        actions: [
+          {
+            type: "set_dynamic_value",
+            name: "label",
+            value: { type: "string", value: "Pressed" },
+          },
+        ],
       },
     ]);
     expect(JSON.parse(compilerArtifactJson(output))).toEqual(output.compilerArtifact);

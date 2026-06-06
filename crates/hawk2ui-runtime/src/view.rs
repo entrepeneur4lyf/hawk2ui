@@ -796,6 +796,12 @@ impl RuntimeSceneFrame {
             .map(|(_, geometry)| *geometry)
     }
 
+    /// Returns resolved render geometry entries in layout traversal order.
+    #[must_use]
+    pub fn geometry_entries(&self) -> &[(RuntimeViewId, Geometry)] {
+        &self.geometry
+    }
+
     /// Returns invalidated runtime view IDs.
     #[must_use]
     pub fn invalidated_view_ids(&self) -> &[RuntimeViewId] {

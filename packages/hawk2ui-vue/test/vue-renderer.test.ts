@@ -5,7 +5,7 @@ test("Vue compiler emits versioned native compiler artifacts from SFC templates"
   const output = compileHawkVue({
     filename: "App.vue",
     source:
-      '<script setup>const items = [{ id: "title" }, { id: "cta" }];</script><template><hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted"><hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text></hawk-view></template>',
+      '<script setup>const status = ref("idle"); function handlePress() { status.value = "pressed"; } function onMounted() { status.value = "mounted"; } function onUnmounted() { status.value = "unmounted"; } const items = [{ id: "title" }, { id: "cta" }];</script><template><hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" @pointerdown="handlePress" @mounted="onMounted" @unmounted="onUnmounted"><hawk-text v-for="item in items" :id="item.id" :key="item.id">{{ item.id }}</hawk-text></hawk-view></template>',
   });
 
   expect(output.compilerArtifact.schema_version).toBe(1);
@@ -44,6 +44,27 @@ test("Vue compiler preserves dynamic text bindings from template interpolations"
       name: "label",
       mode: "value",
       value: { type: "string", value: "Title" },
+    },
+  ]);
+});
+
+test("Vue compiler emits executable pointer handler actions", () => {
+  const output = compileHawkVue({
+    filename: "App.vue",
+    source:
+      '<script setup>const label = ref("Idle"); function handlePress() { label.value = "Pressed"; }</script><template><hawk-view id="root" @pointerdown="handlePress"><hawk-text id="title">{{ label }}</hawk-text></hawk-view></template>',
+  });
+
+  expect(output.compilerArtifact.event_handlers).toEqual([
+    {
+      name: "handlePress",
+      actions: [
+        {
+          type: "set_dynamic_value",
+          name: "label",
+          value: { type: "string", value: "Pressed" },
+        },
+      ],
     },
   ]);
 });

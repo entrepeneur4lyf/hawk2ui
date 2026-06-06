@@ -187,6 +187,7 @@ pub struct FrameworkNativeProgram {
     reactivity: Vec<FrameworkReactiveBinding>,
     dynamic_bindings: Vec<FrameworkDynamicBinding>,
     initial_dynamic_values: Vec<FrameworkInitialDynamicValue>,
+    event_handlers: Vec<FrameworkEventHandler>,
 }
 
 /// Compiler provenance attached to a framework native program.
@@ -218,6 +219,9 @@ pub struct FrameworkNativeProgramWire {
     /// Initial dependency values available for first-frame dynamic binding evaluation.
     #[serde(default)]
     pub initial_dynamic_values: Vec<FrameworkInitialDynamicValueWire>,
+    /// Executable event handlers emitted by the framework compiler.
+    #[serde(default)]
+    pub event_handlers: Vec<FrameworkEventHandlerWire>,
 }
 
 /// Wire compiler provenance for source-fidelity checks.
@@ -505,6 +509,40 @@ pub enum FrameworkDynamicValueWire {
     Object(BTreeMap<String, FrameworkDynamicValueWire>),
 }
 
+/// Wire executable event handler emitted by a framework compiler.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkEventHandlerWire {
+    /// Stable handler name referenced by event and lifecycle bindings.
+    pub name: String,
+    /// Deterministic actions performed when the handler runs.
+    #[serde(default)]
+    pub actions: Vec<FrameworkEventHandlerActionWire>,
+}
+
+/// Wire event handler action.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FrameworkEventHandlerActionWire {
+    /// Set a dynamic dependency directly to a literal value.
+    SetDynamicValue {
+        /// Dynamic dependency name to update.
+        name: String,
+        /// Literal value assigned to the dependency.
+        value: FrameworkDynamicValueWire,
+    },
+    /// Set a dynamic dependency by evaluating a framework expression.
+    SetDynamicExpression {
+        /// Dynamic dependency name to update.
+        name: String,
+        /// Expression evaluated in the current dynamic environment.
+        expression: String,
+        /// Runtime dependencies required by the expression.
+        #[serde(default)]
+        dependencies: Vec<String>,
+    },
+}
+
 /// Wire target for a runtime binding.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -528,6 +566,7 @@ impl FrameworkNativeProgram {
             reactivity: Vec::new(),
             dynamic_bindings: Vec::new(),
             initial_dynamic_values: Vec::new(),
+            event_handlers: Vec::new(),
         }
     }
 
@@ -571,6 +610,13 @@ impl FrameworkNativeProgram {
         self
     }
 
+    /// Adds an executable framework event handler declared by the compiler boundary.
+    #[must_use]
+    pub fn with_event_handler(mut self, handler: FrameworkEventHandler) -> Self {
+        self.event_handlers.push(handler);
+        self
+    }
+
     /// Returns declared reactivity bindings in compiler order.
     #[must_use]
     pub fn reactivity(&self) -> &[FrameworkReactiveBinding] {
@@ -587,6 +633,12 @@ impl FrameworkNativeProgram {
     #[must_use]
     pub fn initial_dynamic_values(&self) -> &[FrameworkInitialDynamicValue] {
         &self.initial_dynamic_values
+    }
+
+    /// Returns executable event handlers in compiler order.
+    #[must_use]
+    pub fn event_handlers(&self) -> &[FrameworkEventHandler] {
+        &self.event_handlers
     }
 
     /// Returns keyed direct children in compiler order.
@@ -728,6 +780,20 @@ impl TryFrom<FrameworkNativeProgramWire> for FrameworkNativeProgram {
                 ));
             }
             program = program.with_initial_dynamic_value(value);
+        }
+        let mut handler_names = BTreeSet::new();
+        for handler in wire.event_handlers {
+            let handler = framework_event_handler_from_wire(handler)?;
+            if !handler_names.insert(handler.name().to_string()) {
+                return Err(AdapterError::with_rule(
+                    "framework-native-program.event-handler.duplicate",
+                    format!(
+                        "event handler `{}` is declared more than once",
+                        handler.name()
+                    ),
+                ));
+            }
+            program = program.with_event_handler(handler);
         }
         Ok(program)
     }
@@ -1017,6 +1083,76 @@ fn framework_initial_dynamic_value_from_wire(
     })
 }
 
+fn framework_event_handler_from_wire(
+    handler: FrameworkEventHandlerWire,
+) -> Result<FrameworkEventHandler, AdapterError> {
+    validate_non_empty(
+        "framework-native-program.event-handler.name-invalid",
+        "event handler name",
+        &handler.name,
+    )?;
+    if handler.actions.is_empty() {
+        return Err(AdapterError::with_rule(
+            "framework-native-program.event-handler.actions-empty",
+            format!(
+                "event handler `{}` must contain at least one action",
+                handler.name
+            ),
+        ));
+    }
+    let mut typed = FrameworkEventHandler::new(handler.name);
+    for action in handler.actions {
+        typed = typed.with_action(framework_event_handler_action_from_wire(action)?);
+    }
+    Ok(typed)
+}
+
+fn framework_event_handler_action_from_wire(
+    action: FrameworkEventHandlerActionWire,
+) -> Result<FrameworkEventHandlerAction, AdapterError> {
+    match action {
+        FrameworkEventHandlerActionWire::SetDynamicValue { name, value } => {
+            validate_non_empty(
+                "framework-native-program.event-handler.action.name-invalid",
+                "event handler action dependency name",
+                &name,
+            )?;
+            Ok(FrameworkEventHandlerAction::set_dynamic_value(
+                name,
+                framework_dynamic_value_from_wire(value)?,
+            ))
+        }
+        FrameworkEventHandlerActionWire::SetDynamicExpression {
+            name,
+            expression,
+            dependencies,
+        } => {
+            validate_non_empty(
+                "framework-native-program.event-handler.action.name-invalid",
+                "event handler action dependency name",
+                &name,
+            )?;
+            validate_non_empty(
+                "framework-native-program.event-handler.action.expression-invalid",
+                "event handler action expression",
+                &expression,
+            )?;
+            for dependency in &dependencies {
+                validate_non_empty(
+                    "framework-native-program.event-handler.action.dependency-invalid",
+                    "event handler action dependency",
+                    dependency,
+                )?;
+            }
+            Ok(FrameworkEventHandlerAction::set_dynamic_expression(
+                name,
+                expression,
+                dependencies,
+            ))
+        }
+    }
+}
+
 fn framework_dynamic_value_from_wire(
     value: FrameworkDynamicValueWire,
 ) -> Result<FrameworkDynamicValue, AdapterError> {
@@ -1222,6 +1358,137 @@ pub enum FrameworkDynamicValue {
     Array(Vec<FrameworkDynamicValue>),
     /// Object literal.
     Object(BTreeMap<String, FrameworkDynamicValue>),
+}
+
+/// Executable event handler declared by a framework compiler boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameworkEventHandler {
+    name: String,
+    actions: Vec<FrameworkEventHandlerAction>,
+}
+
+impl FrameworkEventHandler {
+    /// Creates an event handler with a stable compiler-emitted name.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            actions: Vec::new(),
+        }
+    }
+
+    /// Adds an action to this handler.
+    #[must_use]
+    pub fn with_action(mut self, action: FrameworkEventHandlerAction) -> Self {
+        self.actions.push(action);
+        self
+    }
+
+    /// Returns the stable handler name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns handler actions in compiler order.
+    #[must_use]
+    pub fn actions(&self) -> &[FrameworkEventHandlerAction] {
+        &self.actions
+    }
+}
+
+/// Deterministic action performed by a framework event handler.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FrameworkEventHandlerAction {
+    /// Set a dynamic dependency directly to a literal value.
+    SetDynamicValue {
+        /// Dynamic dependency name to update.
+        name: String,
+        /// Literal value assigned to the dependency.
+        value: FrameworkDynamicValue,
+    },
+    /// Set a dynamic dependency from an evaluated framework expression.
+    SetDynamicExpression {
+        /// Dynamic dependency name to update.
+        name: String,
+        /// Expression evaluated in the current dynamic environment.
+        expression: String,
+        /// Runtime dependencies required by the expression.
+        dependencies: Vec<String>,
+    },
+}
+
+impl FrameworkEventHandlerAction {
+    /// Creates a literal dynamic dependency assignment.
+    #[must_use]
+    pub fn set_dynamic_value(name: impl Into<String>, value: FrameworkDynamicValue) -> Self {
+        Self::SetDynamicValue {
+            name: name.into(),
+            value,
+        }
+    }
+
+    /// Creates an expression-backed dynamic dependency assignment.
+    #[must_use]
+    pub fn set_dynamic_expression(
+        name: impl Into<String>,
+        expression: impl Into<String>,
+        dependencies: impl Into<Vec<String>>,
+    ) -> Self {
+        Self::SetDynamicExpression {
+            name: name.into(),
+            expression: expression.into(),
+            dependencies: dependencies.into(),
+        }
+    }
+
+    /// Returns the dynamic dependency updated by this action.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::SetDynamicValue { name, .. } | Self::SetDynamicExpression { name, .. } => name,
+        }
+    }
+
+    /// Returns the literal value for direct assignments.
+    #[must_use]
+    pub const fn value(&self) -> Option<&FrameworkDynamicValue> {
+        match self {
+            Self::SetDynamicValue { value, .. } => Some(value),
+            Self::SetDynamicExpression { .. } => None,
+        }
+    }
+
+    /// Returns the preserved framework expression for expression assignments.
+    #[must_use]
+    pub fn expression(&self) -> Option<&str> {
+        match self {
+            Self::SetDynamicValue { .. } => None,
+            Self::SetDynamicExpression { expression, .. } => Some(expression),
+        }
+    }
+
+    /// Returns expression dependencies in compiler order.
+    #[must_use]
+    pub fn dependencies(&self) -> &[String] {
+        match self {
+            Self::SetDynamicValue { .. } => &[],
+            Self::SetDynamicExpression { dependencies, .. } => dependencies,
+        }
+    }
+
+    /// Returns the stable diagnostic key for this action.
+    #[must_use]
+    pub fn stable_key(&self) -> String {
+        match self {
+            Self::SetDynamicValue { name, .. } => format!("set:{name}"),
+            Self::SetDynamicExpression {
+                name, expression, ..
+            } => {
+                format!("set:{name}={expression}")
+            }
+        }
+    }
 }
 
 /// Reactive primitive declared by a framework compiler boundary.

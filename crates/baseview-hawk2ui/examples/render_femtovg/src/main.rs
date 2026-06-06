@@ -22,7 +22,8 @@ impl FemtovgExample {
             unsafe { OpenGl::new_from_function(|s| context.get_proc_address(s)) }.unwrap();
 
         let mut canvas = Canvas::new(renderer).unwrap();
-        // TODO: get actual window width
+        // Initialize from the requested size; native resize events below carry the authoritative
+        // physical dimensions once the platform has created the surface.
         canvas.set_size(512, 512, 1.0);
 
         unsafe { context.make_not_current() };

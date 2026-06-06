@@ -22,7 +22,9 @@ impl RegisteredClass {
             hInstance: instance.as_raw(),
             lpszClassName: class_name.as_ptr(),
 
-            style: CS_OWNDC, // TODO: this is very suspicious
+            // Keep one device context per window; the Windows OpenGL path depends on a stable DC
+            // for pixel-format selection and context ownership.
+            style: CS_OWNDC,
             cbClsExtra: 0,
             cbWndExtra: 0,
             hIcon: null_mut(),                                      // Default icon

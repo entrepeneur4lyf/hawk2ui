@@ -13,10 +13,8 @@ use std::{
 
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits, AssetRecord};
 use hawk2ui_authoring::{
-    FrameworkDynamicBinding, FrameworkDynamicValue, FrameworkInitialDynamicValue,
-    FrameworkInitialDynamicValueMode, FrameworkNativeNode, FrameworkNativeProgram,
-    FrameworkNativeProgramWire, NativeLifecycleEvent, NativeRuntimeBridge,
-    NativeRuntimeBridgeArtifact,
+    FrameworkDynamicBinding, FrameworkNativeProgram, FrameworkNativeProgramWire,
+    NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
 };
 use hawk2ui_build::{
     ArtifactSchemaVersion, ArtifactSignaturePolicy, ArtifactSignatureVerificationKey,
@@ -38,8 +36,8 @@ use hawk2ui_plugin_adapters::{
 use hawk2ui_runtime::{EntryNode, RuntimeSceneError, RuntimeViewTree};
 use hawk2ui_schema::schema_catalog_json;
 use hawk2ui_script::{
-    DynamicExpressionEnvironment, DynamicExpressionValue, HostCallPolicy, HostSnapshot,
-    ScriptBackend, ScriptModule, StructuredValue, TimerPolicy, entry_mount_bootstrap,
+    FrameworkRuntimeController, HostCallPolicy, HostSnapshot, ScriptBackend, ScriptModule,
+    StructuredValue, TimerPolicy, entry_mount_bootstrap,
 };
 use hawk2ui_security_model::{PackageTrustRecord, PackageTrustValidator, VerificationReportStatus};
 
@@ -2012,12 +2010,13 @@ fn desktop_runtime_config_from_build_output(
     output: &BuildWorkspaceOutput,
     exit_after_first_frame: bool,
 ) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
-    if let Some(runtime_tree) = entry_framework_runtime_tree(output)? {
-        return desktop_runtime_config_from_manifest_with_runtime_tree(
+    if let Some(controller) = entry_framework_runtime_controller(output)? {
+        return Ok(desktop_runtime_config_from_manifest_with_runtime_tree(
             &output.manifest,
-            runtime_tree,
+            controller.runtime_tree().clone(),
             exit_after_first_frame,
-        );
+        )?
+        .with_framework_controller(controller));
     }
     let Some(script) = entry_script_record(output) else {
         let app_model =
@@ -2212,9 +2211,9 @@ fn entry_script_record(output: &BuildWorkspaceOutput) -> Option<&CompiledScriptR
         .find(|script| script.entrypoint_id == "entry")
 }
 
-fn entry_framework_runtime_tree(
+fn entry_framework_runtime_controller(
     output: &BuildWorkspaceOutput,
-) -> Result<Option<RuntimeViewTree>, Box<CliDiagnostic>> {
+) -> Result<Option<FrameworkRuntimeController>, Box<CliDiagnostic>> {
     let Some(framework) = output
         .artifact
         .compiled_frameworks
@@ -2227,7 +2226,6 @@ fn entry_framework_runtime_tree(
         .map_err(|error| framework_artifact_diagnostic(framework, error.rule(), error.message()))?;
     let program = FrameworkNativeProgram::try_from(wire)
         .map_err(|error| framework_artifact_diagnostic(framework, error.rule(), error.message()))?;
-    reject_framework_handlers_without_executable_payloads(framework, &program)?;
     let authoring = program
         .to_native_authoring_artifact(&framework.source_path, true)
         .map_err(|error| {
@@ -2240,74 +2238,30 @@ fn entry_framework_runtime_tree(
     let bridged = NativeRuntimeBridge::new()
         .bridge_artifact(&authoring)
         .map_err(|error| framework_artifact_diagnostic(framework, error.rule(), error.message()))?;
-    let bridged = apply_initial_framework_dynamic_bindings(framework, &program, bridged)?;
-    Ok(Some(bridged.runtime_tree().clone()))
+    validate_framework_dynamic_environment(framework, &program, &bridged)?;
+    let controller = FrameworkRuntimeController::from_program(&program, bridged).map_err(|error| {
+          Box::new(
+              CliDiagnostic::error(
+                  "runtime.desktop.framework-controller-failed",
+                  format!(
+                      "compiled {} framework artifact for {} cannot initialize runtime controller ({}): {}",
+                      source_framework_label(framework.framework),
+                      framework.source_path,
+                      error.rule(),
+                      error.diagnostic().message()
+                  ),
+              )
+              .file(framework.source_path.clone()),
+          )
+      })?;
+    Ok(Some(controller))
 }
 
-fn reject_framework_handlers_without_executable_payloads(
+fn validate_framework_dynamic_environment(
     framework: &CompiledFrameworkRecord,
     program: &FrameworkNativeProgram,
+    artifact: &NativeRuntimeBridgeArtifact,
 ) -> Result<(), Box<CliDiagnostic>> {
-    let mut handlers = Vec::new();
-    collect_framework_handler_refs(program.root(), &mut handlers);
-    if handlers.is_empty() {
-        return Ok(());
-    }
-    handlers.sort();
-    handlers.dedup();
-    Err(Box::new(
-        CliDiagnostic::error(
-            "runtime.desktop.framework-handlers-unsupported",
-            format!(
-                "compiled {} framework artifact for {} declares handler references [{}], but the sealed artifact does not include executable handler payloads",
-                source_framework_label(framework.framework),
-                framework.source_path,
-                handlers.join(", ")
-            ),
-        )
-        .file(framework.source_path.clone()),
-    ))
-}
-
-fn collect_framework_handler_refs(node: &FrameworkNativeNode, handlers: &mut Vec<String>) {
-    for event in node.events() {
-        handlers.push(format!(
-            "{}:{}:{}",
-            event.target().as_str(),
-            event.event().stable_key(),
-            event.handler().as_str()
-        ));
-    }
-    for (event, handler) in node.lifecycle() {
-        handlers.push(format!(
-            "{}:lifecycle.{}:{}",
-            node.id().as_str(),
-            framework_lifecycle_event_label(*event),
-            handler.as_str()
-        ));
-    }
-    for (_, child) in node.children() {
-        collect_framework_handler_refs(child, handlers);
-    }
-}
-
-const fn framework_lifecycle_event_label(event: NativeLifecycleEvent) -> &'static str {
-    match event {
-        NativeLifecycleEvent::Mounted => "mounted",
-        NativeLifecycleEvent::Suspended => "suspended",
-        NativeLifecycleEvent::Resumed => "resumed",
-        NativeLifecycleEvent::HotReloaded => "hot-reloaded",
-        NativeLifecycleEvent::ErrorBoundary => "error-boundary",
-        NativeLifecycleEvent::Shutdown => "shutdown",
-        NativeLifecycleEvent::Unmounted => "unmounted",
-    }
-}
-
-fn apply_initial_framework_dynamic_bindings(
-    framework: &CompiledFrameworkRecord,
-    program: &FrameworkNativeProgram,
-    artifact: NativeRuntimeBridgeArtifact,
-) -> Result<NativeRuntimeBridgeArtifact, Box<CliDiagnostic>> {
     let dependencies = artifact
         .dynamic_bindings()
         .iter()
@@ -2335,70 +2289,9 @@ fn apply_initial_framework_dynamic_bindings(
                 ),
             )
             .file(framework.source_path.clone()),
-        ));
+          ));
     }
-    if artifact.dynamic_bindings().is_empty() {
-        return Ok(artifact);
-    }
-    let environment =
-        framework_initial_dynamic_environment(program.initial_dynamic_values(), &dependencies);
-    let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
-    backend
-        .apply_dynamic_bindings(artifact, &environment)
-        .map_err(|error| {
-            Box::new(
-                CliDiagnostic::error(
-                    "runtime.desktop.dynamic-binding-failed",
-                    format!(
-                        "compiled {} framework artifact for {} has an invalid initial dynamic binding ({}): {}",
-                        source_framework_label(framework.framework),
-                        framework.source_path,
-                        error.rule(),
-                        error.diagnostic().message()
-                    ),
-                )
-                .file(framework.source_path.clone()),
-            )
-        })
-}
-
-fn framework_initial_dynamic_environment(
-    values: &[FrameworkInitialDynamicValue],
-    required_dependencies: &BTreeSet<String>,
-) -> DynamicExpressionEnvironment {
-    let mut environment = DynamicExpressionEnvironment::new();
-    for value in values {
-        if !required_dependencies.contains(value.name()) {
-            continue;
-        }
-        let expression_value = framework_dynamic_value_to_script(value.value_ref());
-        environment = match value.mode() {
-            FrameworkInitialDynamicValueMode::Value => {
-                environment.with_value(value.name(), expression_value)
-            }
-            FrameworkInitialDynamicValueMode::Getter => {
-                environment.with_getter(value.name(), expression_value)
-            }
-        };
-    }
-    environment
-}
-
-fn framework_dynamic_value_to_script(value: &FrameworkDynamicValue) -> DynamicExpressionValue {
-    match value {
-        FrameworkDynamicValue::Null => DynamicExpressionValue::null(),
-        FrameworkDynamicValue::Bool(value) => DynamicExpressionValue::bool(*value),
-        FrameworkDynamicValue::Number(value) => DynamicExpressionValue::number(*value),
-        FrameworkDynamicValue::String(value) => DynamicExpressionValue::string(value),
-        FrameworkDynamicValue::Array(values) => {
-            DynamicExpressionValue::array(values.iter().map(framework_dynamic_value_to_script))
-        }
-        FrameworkDynamicValue::Object(values) => DynamicExpressionValue::object(
-            values
-                .iter()
-                .map(|(key, value)| (key.as_str(), framework_dynamic_value_to_script(value))),
-        ),
-    }
+    Ok(())
 }
 
 fn entry_script_mount_app_model(
@@ -3539,7 +3432,7 @@ name = "linux-wayland"
     }
 
     #[test]
-    fn desktop_runtime_config_rejects_framework_handlers_without_executable_payloads() {
+    fn desktop_runtime_config_accepts_framework_handlers_with_executable_payloads() {
         let manifest = HawkManifest::parse(
             r#"[identity]
 id = "com.example.framework-handlers"
@@ -3558,14 +3451,37 @@ name = "linux-wayland"
         .expect("manifest parses");
         let compiler_artifact = r#"{
   "schema_version": 1,
-  "root": {
-    "id": "root",
-    "kind": "view",
-    "events": [
-      { "kind": "pointer.press", "handler": "handlePress", "payload_fields": ["position"] }
+    "root": {
+      "id": "root",
+      "kind": "view",
+      "events": [
+        { "kind": "pointer.press", "handler": "handlePress", "payload_fields": ["position"] }
+      ]
+    },
+    "initial_dynamic_values": [
+      { "name": "label", "mode": "value", "value": { "type": "string", "value": "Idle" } }
+    ],
+    "dynamic_bindings": [
+      {
+        "node_id": "root",
+        "target": { "type": "prop", "name": "background" },
+        "expression": "label === 'Pressed' ? '#336699' : '#101010'",
+        "dependencies": ["label"]
+      }
+    ],
+    "event_handlers": [
+      {
+        "name": "handlePress",
+        "actions": [
+          {
+            "type": "set_dynamic_value",
+            "name": "label",
+            "value": { "type": "string", "value": "Pressed" }
+          }
+        ]
+      }
     ]
-  }
-}"#;
+  }"#;
         let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
             .with_compiled_framework(
                 CompiledFrameworkRecord::new(
@@ -3584,15 +3500,14 @@ name = "linux-wayland"
             verification: VerificationReport::new("com.example.framework-handlers"),
         };
 
-        let diagnostic = desktop_runtime_config_from_build_output(&output, true)
-            .expect_err("framework handlers need executable payloads");
+        let config = desktop_runtime_config_from_build_output(&output, true)
+            .expect("framework handlers with executable payloads build runtime config");
 
-        assert_eq!(
-            diagnostic.rule,
-            "runtime.desktop.framework-handlers-unsupported"
-        );
-        assert!(diagnostic.message.contains("handlePress"));
-        assert!(diagnostic.message.contains("src/App.tsx"));
+        assert!(config.runtime_tree().is_some());
+        let controller = config
+            .framework_controller()
+            .expect("desktop config retains executable framework controller");
+        assert!(controller.has_event_handler("root", "pointer.press"));
     }
 
     #[test]

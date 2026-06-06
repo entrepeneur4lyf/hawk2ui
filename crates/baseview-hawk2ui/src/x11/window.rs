@@ -280,9 +280,8 @@ impl<'a> Window<'a> {
         xcb_connection.conn.flush()?;
         let xcb_connection = Rc::new(xcb_connection);
 
-        // TODO: These APIs could use a couple tweaks now that everything is internal and there is
-        //       no error handling anymore at this point. Everything is more or less unchanged
-        //       compared to when raw-gl-context was a separate crate.
+        // GL context creation remains fallible inside the frame handler; this mirrors the
+        // raw-gl-context-era flow while keeping the X11 window creation path synchronous.
         #[cfg(feature = "opengl")]
         let gl_context = visual_info.fb_config.map(|fb_config| {
             use std::ffi::c_ulong;

@@ -5,7 +5,7 @@ test("Svelte compiler emits lifecycle, child props, and deterministic records", 
   const output = compileHawkSvelte({
     filename: "App.svelte",
     source:
-      '<hawk-view id="root" use:root_ref class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}><hawk-text id="title">Title</hawk-text><hawk-button id="cta">Go</hawk-button></hawk-view>',
+      '<script>let status = "idle"; function handlePress() { status = "pressed"; } function onMount() { status = "mounted"; } function onDestroy() { status = "unmounted"; }</script><hawk-view id="root" use:root_ref class="surface.card" data-asset="assets/logo.svg" on:press={handlePress} on:mount={onMount} on:destroy={onDestroy}><hawk-text id="title">Title</hawk-text><hawk-button id="cta">Go</hawk-button></hawk-view>',
   });
 
   expect(output.records).toEqual([
@@ -64,6 +64,27 @@ test("Svelte compiler preserves dynamic text bindings from template expressions"
       name: "label",
       mode: "value",
       value: { type: "string", value: "Live" },
+    },
+  ]);
+});
+
+test("Svelte compiler emits executable pointer handler actions", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let label = "Idle"; function handlePress() { label = "Pressed"; }</script><hawk-view id="root" on:press={handlePress}><hawk-text id="title">{label}</hawk-text></hawk-view>',
+  });
+
+  expect(output.compilerArtifact.event_handlers).toEqual([
+    {
+      name: "handlePress",
+      actions: [
+        {
+          type: "set_dynamic_value",
+          name: "label",
+          value: { type: "string", value: "Pressed" },
+        },
+      ],
     },
   ]);
 });

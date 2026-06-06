@@ -4,12 +4,14 @@ import { parse } from "@babel/parser";
 import {
   compilerArtifactForApp,
   recordsForApp,
-  type HawkCompilerArtifact,
-  type HawkCompilerDynamicBindingWire,
-  type HawkCompilerDynamicValueWire,
-  type HawkCompilerInitialDynamicValueWire,
-  type HawkElementSpec,
-  type HawkEventSpec,
+    type HawkCompilerArtifact,
+    type HawkCompilerDynamicBindingWire,
+    type HawkCompilerDynamicValueWire,
+    type HawkCompilerEventHandlerActionWire,
+    type HawkCompilerEventHandlerWire,
+    type HawkCompilerInitialDynamicValueWire,
+    type HawkElementSpec,
+    type HawkEventSpec,
   type HawkLifecycleSpec,
 } from "../../hawk2ui-native/src/index.ts";
 
@@ -82,6 +84,7 @@ export function compileHawkReact(input: HawkReactCompileInput): HawkReactCompile
   const root = jsxElementToSpec(returned.element, context);
   validateUniqueChildKeys(root);
   const app = { name: input.filename, root };
+  const eventHandlers = eventHandlersForSpec(root, program, returned.scope);
   return {
     framework: "react",
     filename: input.filename,
@@ -91,16 +94,17 @@ export function compileHawkReact(input: HawkReactCompileInput): HawkReactCompile
         [],
         context.dynamicBindings,
         [...context.initialDynamicValues.values()],
-        {
-          compiler: {
-            framework: "react",
-            compiler: "@hawk2ui/react",
-            source_path: input.filename,
-            entrypoint: returned.entrypoint,
+          {
+            compiler: {
+              framework: "react",
+              compiler: "@hawk2ui/react",
+              source_path: input.filename,
+              entrypoint: returned.entrypoint,
+            },
+            eventHandlers,
           },
-        },
-      ),
-    };
+        ),
+      };
   }
 
 function returnedJsxElement(program: AstNode): ReturnedJsxElement | undefined {
@@ -218,6 +222,125 @@ function reactLifecycle(node: AstNode): readonly HawkLifecycleSpec[] {
   const unmounted = jsxRawAttributeValue(node, "onUnmount");
   if (unmounted) lifecycle.push({ phase: "unmounted", handler: handlerName(unmounted) });
   return lifecycle;
+}
+
+function eventHandlersForSpec(
+  root: HawkElementSpec,
+  program: AstNode,
+  componentScope: AstNode | undefined,
+): readonly HawkCompilerEventHandlerWire[] {
+  const declarations = handlerDeclarationsFromBody([
+    ...arrayField(program, "body"),
+    ...arrayField(componentScope, "body"),
+  ]);
+  return referencedHandlerNames(root).map((name) => {
+    const declaration = declarations.get(name);
+    if (!declaration) {
+      throw new Error(`react.handler.missing: event handler \`${name}\` must be declared in the module or component scope.`);
+    }
+    return {
+      name,
+      actions: handlerActions(name, declaration, "react"),
+    };
+  });
+}
+
+function referencedHandlerNames(root: HawkElementSpec): readonly string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const visit = (element: HawkElementSpec): void => {
+    for (const event of element.events ?? []) {
+      if (!seen.has(event.handler)) {
+        seen.add(event.handler);
+        names.push(event.handler);
+      }
+    }
+    for (const lifecycle of element.lifecycle ?? []) {
+      if (!seen.has(lifecycle.handler)) {
+        seen.add(lifecycle.handler);
+        names.push(lifecycle.handler);
+      }
+    }
+    for (const child of element.children ?? []) visit(child);
+  };
+  visit(root);
+  return names;
+}
+
+function handlerDeclarationsFromBody(statements: readonly AstNode[]): ReadonlyMap<string, AstNode> {
+  const declarations = new Map<string, AstNode>();
+  for (const statement of statements) {
+    if (statement.type === "FunctionDeclaration") {
+      const name = identifierName(statement.id as AstNode | undefined);
+      if (name) declarations.set(name, statement);
+      continue;
+    }
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of arrayField(statement, "declarations")) {
+      const name = identifierName(declaration.id as AstNode | undefined);
+      const init = declaration.init as AstNode | undefined;
+      if (name && (init?.type === "ArrowFunctionExpression" || init?.type === "FunctionExpression")) {
+        declarations.set(name, init);
+      }
+    }
+  }
+  return declarations;
+}
+
+function handlerActions(
+  handler: string,
+  declaration: AstNode,
+  framework: string,
+): readonly HawkCompilerEventHandlerActionWire[] {
+  const body = declaration.body as AstNode | undefined;
+  if (!body) {
+    throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must have an executable body.`);
+  }
+  if (body.type !== "BlockStatement") {
+    return [handlerActionFromExpression(handler, body, framework)];
+  }
+  const actions = arrayField(body, "body").map((statement) => {
+    if (statement.type !== "ExpressionStatement") {
+      throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` contains unsupported statements.`);
+    }
+    return handlerActionFromExpression(handler, statement.expression as AstNode | undefined, framework);
+  });
+  if (actions.length === 0) {
+    throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must contain at least one action.`);
+  }
+  return actions;
+}
+
+function handlerActionFromExpression(
+  handler: string,
+  expression: AstNode | undefined,
+  framework: string,
+): HawkCompilerEventHandlerActionWire {
+  if (expression?.type === "AssignmentExpression" && expression.operator === "=") {
+    const name = identifierName(expression.left as AstNode | undefined);
+    if (!name) {
+      throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` assignment target must be a dynamic value name.`);
+    }
+    return dynamicUpdateAction(name, expression.right as AstNode | undefined, framework);
+  }
+  throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must assign a dynamic value.`);
+}
+
+function dynamicUpdateAction(
+  name: string,
+  expression: AstNode | undefined,
+  framework: string,
+): HawkCompilerEventHandlerActionWire {
+  const value = literalDynamicValue(expression);
+  if (value) {
+    return { type: "set_dynamic_value", name, value };
+  }
+  return {
+    type: "set_dynamic_expression",
+    name,
+    expression: expressionSource(expression, framework),
+    dependencies: expressionDependencies(expression),
+  };
 }
 
 function jsxAttributeValue(

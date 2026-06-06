@@ -5,7 +5,7 @@ test("React compiler emits versioned native compiler artifacts from TSX", () => 
   const output = compileHawkReact({
     filename: "App.tsx",
     source:
-      'export function App() { const items = [{ id: "title" }, { id: "cta" }]; return <hawk-view id="root" ref="root_ref" className="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>{items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}</hawk-view>; }',
+      'export function App() { let status = "idle"; function handlePress() { status = "pressed"; } function onMount() { status = "mounted"; } function onUnmount() { status = "unmounted"; } const items = [{ id: "title" }, { id: "cta" }]; return <hawk-view id="root" ref="root_ref" className="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onUnmount={onUnmount}>{items.map((item) => <hawk-text id={item.id} key={item.id}>{item.id}</hawk-text>)}</hawk-view>; }',
   });
 
   expect(output.compilerArtifact.schema_version).toBe(1);
@@ -44,6 +44,27 @@ test("React compiler preserves dynamic text bindings from TSX expressions", () =
       name: "label",
       mode: "value",
       value: { type: "string", value: "Live" },
+    },
+  ]);
+});
+
+test("React compiler emits executable pointer handler actions", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'let label = "Idle"; function handlePress() { label = "Pressed"; } export function App() { return <hawk-view id="root" onPointerDown={handlePress}><hawk-text id="title">{label}</hawk-text></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.event_handlers).toEqual([
+    {
+      name: "handlePress",
+      actions: [
+        {
+          type: "set_dynamic_value",
+          name: "label",
+          value: { type: "string", value: "Pressed" },
+        },
+      ],
     },
   ]);
 });

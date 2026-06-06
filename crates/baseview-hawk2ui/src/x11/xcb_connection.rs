@@ -71,15 +71,14 @@ impl XcbConnection {
         // dpi = N pixels / (M millimeters / (25.4 millimeters / 1 inch))
         //     = N pixels / (M inch / 25.4)
         //     = N * 25.4 pixels / M inch
-        let width_px = screen.width_in_pixels as f64;
-        let width_mm = screen.width_in_millimeters as f64;
-        let height_px = screen.height_in_pixels as f64;
-        let height_mm = screen.height_in_millimeters as f64;
-        let _xres = width_px * 25.4 / width_mm;
-        let yres = height_px * 25.4 / height_mm;
+        let xres = dpi_from_physical_size(screen.width_in_pixels, screen.width_in_millimeters);
+        let yres = dpi_from_physical_size(screen.height_in_pixels, screen.height_in_millimeters);
 
-        // TODO: choose between `xres` and `yres`? (probably both are the same?)
-        yres / 96.0
+        match (xres, yres) {
+            (Some(xres), Some(yres)) => ((xres + yres) * 0.5) / 96.0,
+            (Some(dpi), None) | (None, Some(dpi)) => dpi / 96.0,
+            (None, None) => 1.0,
+        }
     }
 
     #[inline]
@@ -111,4 +110,12 @@ impl XcbConnection {
     pub fn screen(&self) -> &Screen {
         &self.conn.setup().roots[self.conn.default_screen() as usize]
     }
+}
+
+fn dpi_from_physical_size(pixels: u16, millimeters: u16) -> Option<f64> {
+    if pixels == 0 || millimeters == 0 {
+        return None;
+    }
+    let dpi = f64::from(pixels) * 25.4 / f64::from(millimeters);
+    dpi.is_finite().then_some(dpi)
 }

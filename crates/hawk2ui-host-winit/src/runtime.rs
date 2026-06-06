@@ -7,16 +7,17 @@ use std::{
 };
 
 use hawk2ui_assets::AssetRecord;
-use hawk2ui_host::{DesktopHostEvent, DesktopWindowConfig};
+use hawk2ui_host::{DesktopHostEvent, DesktopWindowConfig, PointerInput};
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_runtime::{
-    AnimationCadencePolicy, AnimationFrameScheduler, EntryNode, RuntimeSceneBridge,
+    AnimationCadencePolicy, AnimationFrameScheduler, EntryNode, RuntimeEvent, RuntimeSceneBridge,
     RuntimeSceneFrame, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
     RuntimeVisual,
 };
 use hawk2ui_script::{
-    FrameInput, HostCallPolicy, HostSnapshot, ScriptBackend, ScriptModule, StructuredValue,
-    TimerPolicy, entry_mount_bootstrap_with_host, parse_entry_envelope,
+    FrameInput, FrameworkRuntimeController, HostCallPolicy, HostSnapshot, ScriptBackend,
+    ScriptModule, StructuredValue, TimerPolicy, entry_mount_bootstrap_with_host,
+    parse_entry_envelope,
 };
 use softbuffer::{Context, Surface};
 use winit::{
@@ -41,6 +42,7 @@ pub struct WinitDesktopRuntimeConfig {
     runtime_assets: Vec<AssetRecord>,
     animation_policy: AnimationCadencePolicy,
     script_entry: Option<WinitDesktopScriptEntry>,
+    framework_controller: Option<FrameworkRuntimeController>,
     presentation_backend: WinitPresentationBackend,
 }
 
@@ -131,6 +133,7 @@ impl WinitDesktopRuntimeConfig {
             runtime_assets: Vec::new(),
             animation_policy: AnimationCadencePolicy::disabled(),
             script_entry: None,
+            framework_controller: None,
             presentation_backend: WinitPresentationBackend::Software,
         }
     }
@@ -167,6 +170,14 @@ impl WinitDesktopRuntimeConfig {
     #[must_use]
     pub fn with_script_entry(mut self, script_entry: WinitDesktopScriptEntry) -> Self {
         self.script_entry = Some(script_entry);
+        self
+    }
+
+    /// Sets the executable framework runtime controller used to handle framework UI events.
+    #[must_use]
+    pub fn with_framework_controller(mut self, controller: FrameworkRuntimeController) -> Self {
+        self.runtime_tree = Some(controller.runtime_tree().clone());
+        self.framework_controller = Some(controller);
         self
     }
 
@@ -214,6 +225,12 @@ impl WinitDesktopRuntimeConfig {
     #[must_use]
     pub const fn script_entry(&self) -> Option<&WinitDesktopScriptEntry> {
         self.script_entry.as_ref()
+    }
+
+    /// Returns the executable framework runtime controller, when configured.
+    #[must_use]
+    pub const fn framework_controller(&self) -> Option<&FrameworkRuntimeController> {
+        self.framework_controller.as_ref()
     }
 
     /// Returns the requested native presentation backend.
@@ -782,7 +799,7 @@ impl RuntimeApplication {
             logical_size_to_f32(logical_height)?,
         );
         let fallback_tree;
-        let runtime_tree = if let Some(runtime_tree) = self.config.runtime_tree() {
+        let runtime_tree = if let Some(runtime_tree) = self.current_runtime_tree() {
             runtime_tree
         } else {
             fallback_tree =
@@ -845,7 +862,7 @@ impl RuntimeApplication {
             })?;
         }
 
-        let frame = if self.config.runtime_tree().is_some() {
+        let frame = if self.current_runtime_tree().is_some() {
             let scene = self.build_runtime_scene_for_window(window, size)?;
             self.renderer.render_scene_frame(
                 &scene,
@@ -921,6 +938,14 @@ impl RuntimeApplication {
         }
     }
 
+    fn current_runtime_tree(&self) -> Option<&RuntimeViewTree> {
+        self.config
+            .framework_controller
+            .as_ref()
+            .map(FrameworkRuntimeController::runtime_tree)
+            .or_else(|| self.config.runtime_tree())
+    }
+
     fn apply_script_entry_events(
         &mut self,
         translated: &WinitTranslatedEvent,
@@ -950,6 +975,62 @@ impl RuntimeApplication {
         Ok(true)
     }
 
+    fn apply_framework_entry_events(
+        &mut self,
+        translated: &WinitTranslatedEvent,
+    ) -> Result<bool, WinitHostError> {
+        if self.config.framework_controller.is_none() {
+            return Ok(false);
+        }
+        let pointer_inputs = translated
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                DesktopHostEvent::PointerInput(pointer) => Some(pointer),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if pointer_inputs.is_empty() {
+            return Ok(false);
+        }
+        let Some(window) = self.window.clone() else {
+            return Ok(false);
+        };
+        let size = window.inner_size();
+        let mut changed = false;
+        for pointer in pointer_inputs {
+            let scene = self.build_runtime_scene_for_window(&window, size)?;
+            let Some(event) = self
+                .config
+                .framework_controller
+                .as_ref()
+                .and_then(|controller| {
+                    framework_event_from_pointer_input(&scene, pointer, controller)
+                })
+            else {
+                continue;
+            };
+            let Some(controller) = self.config.framework_controller.as_mut() else {
+                continue;
+            };
+            let handled = controller.dispatch_runtime_event(&event).map_err(|error| {
+                WinitHostError::new(
+                    "desktop.framework-handler.execute-failed",
+                    format!(
+                        "failed to execute desktop framework handler ({}): {}",
+                        error.rule(),
+                        error.message()
+                    ),
+                )
+            })?;
+            if handled {
+                self.config.runtime_tree = Some(controller.runtime_tree().clone());
+                changed = true;
+            }
+        }
+        Ok(changed)
+    }
+
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: WinitHostError) {
         self.last_error = Some(error);
         event_loop.exit();
@@ -971,6 +1052,13 @@ impl RuntimeApplication {
         self.lifecycle.record_translated_event(&translated);
         let script_rerendered = match self.apply_script_entry_events(&translated) {
             Ok(script_rerendered) => script_rerendered,
+            Err(error) => {
+                self.fail(event_loop, error);
+                return;
+            }
+        };
+        let framework_rerendered = match self.apply_framework_entry_events(&translated) {
+            Ok(framework_rerendered) => framework_rerendered,
             Err(error) => {
                 self.fail(event_loop, error);
                 return;
@@ -1001,7 +1089,7 @@ impl RuntimeApplication {
             | WindowEvent::HoveredFileCancelled
             | WindowEvent::Occluded(_)
             | WindowEvent::ModifiersChanged(_) => {
-                if translated.requires_redraw || script_rerendered {
+                if translated.requires_redraw || script_rerendered || framework_rerendered {
                     self.request_redraw();
                 }
                 Ok(())
@@ -1125,6 +1213,33 @@ fn desktop_frame_inputs_from_host_events(events: &[DesktopHostEvent]) -> Vec<Fra
             | DesktopHostEvent::FramePresented { .. } => None,
         })
         .collect()
+}
+
+fn framework_event_from_pointer_input(
+    scene: &RuntimeSceneFrame,
+    pointer: &PointerInput,
+    controller: &FrameworkRuntimeController,
+) -> Option<RuntimeEvent> {
+    if pointer.button != "left-down" {
+        return None;
+    }
+    scene
+        .geometry_entries()
+        .iter()
+        .rev()
+        .find(|(id, geometry)| {
+            geometry_contains(*geometry, pointer.x, pointer.y)
+                && controller.has_event_handler(id.as_str(), "pointer.press")
+        })
+        .map(|(id, _)| RuntimeEvent::ui(id.as_str(), "pointer.press"))
+}
+
+fn geometry_contains(geometry: hawk2ui_render::Geometry, x: f64, y: f64) -> bool {
+    let left = f64::from(geometry.x);
+    let top = f64::from(geometry.y);
+    let right = left + f64::from(geometry.width);
+    let bottom = top + f64::from(geometry.height);
+    x >= left && y >= top && x < right && y < bottom
 }
 
 fn run_script_entry_frame(
@@ -1402,14 +1517,21 @@ impl ApplicationHandler<WinitDesktopRuntimeUserEvent> for RuntimeApplication {
 mod tests {
     use std::time::Duration;
 
+    use hawk2ui_authoring::{
+        ElementKind, EventKind, EventPayloadField, FrameworkDynamicBinding, FrameworkDynamicValue,
+        FrameworkEventHandler, FrameworkEventHandlerAction, FrameworkInitialDynamicValue,
+        FrameworkNativeNode, FrameworkNativeProgram, HandlerRef, NativeRuntimeBridge,
+        PointerEventKind, PropValue,
+    };
     use hawk2ui_host::{DesktopHostEvent, KeyboardInput, PointerInput};
     use hawk2ui_layout::Viewport;
-    use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge};
-    use hawk2ui_script::{FrameInput, HostSnapshot};
+    use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeViewId, RuntimeVisual};
+    use hawk2ui_script::{FrameInput, FrameworkRuntimeController, HostSnapshot};
 
     use super::{
         RuntimeLifecycle, WinitDesktopScriptEntry, WinitHostError,
-        desktop_frame_inputs_from_host_events, logical_size_to_f32, run_script_entry_frame,
+        desktop_frame_inputs_from_host_events, framework_event_from_pointer_input,
+        logical_size_to_f32, run_script_entry_frame,
     };
 
     #[test]
@@ -1484,7 +1606,7 @@ mod tests {
             .summary()
             .presentation_fallback_reason
             .as_ref()
-            .expect("GPU preferred fallback should retain diagnostic evidence");
+            .unwrap_or_else(|| panic!("GPU preferred fallback should retain diagnostic evidence"));
         assert_eq!(reason.rule(), "desktop.gpu.wayland-required");
         assert_eq!(
             reason.message(),
@@ -1494,7 +1616,8 @@ mod tests {
 
     #[test]
     fn logical_size_to_f32_rejects_invalid_viewport_values() {
-        let value = logical_size_to_f32(1280.0).expect("valid size");
+        let value =
+            logical_size_to_f32(1280.0).unwrap_or_else(|error| panic!("valid size: {error:?}"));
         assert!((value - 1280.0).abs() < f32::EPSILON);
         assert!(logical_size_to_f32(0.0).is_err());
         assert!(logical_size_to_f32(f64::INFINITY).is_err());
@@ -1560,15 +1683,95 @@ export function mount(host) {
             320.0,
             200.0,
         )
-        .expect("script entry frame runs");
+        .unwrap_or_else(|error| panic!("script entry frame runs: {error:?}"));
 
         assert_eq!(frame.ui_json, r#"{"count":1}"#);
         let scene = RuntimeSceneBridge::new(Viewport::new(320.0, 200.0))
             .build(&frame.runtime_tree)
-            .expect("script frame produces a runtime scene");
+            .unwrap_or_else(|error| panic!("script frame produces a runtime scene: {error:?}"));
         assert!(scene.draw_commands().iter().any(|command| matches!(
             command,
             RuntimeDrawCommand::Text { text, .. } if text == "event:left-down@12.5"
         )));
+    }
+
+    #[test]
+    fn framework_pointer_input_hit_tests_scene_and_executes_handler() {
+        let program = FrameworkNativeProgram::new(
+            FrameworkNativeNode::new("root", ElementKind::View)
+                .with_prop("width", PropValue::Number(320.0))
+                .with_prop("height", PropValue::Number(200.0))
+                .with_child(
+                    "button",
+                    FrameworkNativeNode::new("button", ElementKind::Button)
+                        .with_prop("width", PropValue::Number(120.0))
+                        .with_prop("height", PropValue::Number(48.0))
+                        .with_event(
+                            EventKind::Pointer(PointerEventKind::Press),
+                            HandlerRef::new("handlePress"),
+                            [EventPayloadField::Position],
+                        )
+                        .with_child(
+                            "label",
+                            FrameworkNativeNode::new("label", ElementKind::Text)
+                                .with_prop("width", PropValue::Number(120.0))
+                                .with_prop("height", PropValue::Number(32.0)),
+                        ),
+                ),
+        )
+        .with_initial_dynamic_value(FrameworkInitialDynamicValue::value(
+            "label",
+            FrameworkDynamicValue::String("Idle".to_string()),
+        ))
+        .with_dynamic_binding(FrameworkDynamicBinding::prop(
+            "label",
+            "text",
+            "label",
+            vec!["label".to_string()],
+        ))
+        .with_event_handler(FrameworkEventHandler::new("handlePress").with_action(
+            FrameworkEventHandlerAction::set_dynamic_value(
+                "label",
+                FrameworkDynamicValue::String("Pressed".to_string()),
+            ),
+        ));
+        let native = program
+            .to_native_authoring_artifact("App.tsx", true)
+            .unwrap_or_else(|error| panic!("program finalizes: {error:?}"));
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact(&native)
+            .unwrap_or_else(|error| panic!("program bridges: {error:?}"));
+        let mut controller = FrameworkRuntimeController::from_program(&program, runtime)
+            .unwrap_or_else(|error| panic!("controller builds: {error:?}"));
+        let scene = RuntimeSceneBridge::new(Viewport::new(320.0, 200.0))
+            .build(controller.runtime_tree())
+            .unwrap_or_else(|error| panic!("scene builds: {error:?}"));
+
+        let event = framework_event_from_pointer_input(
+            &scene,
+            &PointerInput::new(16.0, 16.0, "left-down"),
+            &controller,
+        )
+        .unwrap_or_else(|| panic!("button receives pointer press"));
+        let changed = controller
+            .dispatch_runtime_event(&event)
+            .unwrap_or_else(|error| panic!("handler executes: {error:?}"));
+
+        assert!(changed);
+        let label = controller
+            .runtime_tree()
+            .node(&RuntimeViewId::new("label"))
+            .unwrap_or_else(|| panic!("label node exists"));
+        assert!(matches!(
+            label.visual(),
+            RuntimeVisual::Text(text) if text.text() == "Pressed"
+        ));
+
+        let outside = framework_event_from_pointer_input(
+            &scene,
+            &PointerInput::new(250.0, 180.0, "left-down"),
+            &controller,
+        );
+        assert!(outside.is_none());
     }
 }

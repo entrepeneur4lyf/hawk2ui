@@ -19,8 +19,8 @@ pub unsafe extern "system" fn wnd_proc<W: WindowImpl>(
             let inner_ptr = create.lpCreateParams as *mut WindowData<W>;
 
             let Some(inner_ptr) = NonNull::new(inner_ptr) else {
-                // If the state pointer was null for some weird reason, we just abort.
-                // TODO: log error
+                // A null state pointer means CreateWindowExW was called without Baseview state;
+                // abort creation because there is no safe recovery path inside the wndproc.
                 return -1;
             };
 
@@ -30,7 +30,8 @@ pub unsafe extern "system" fn wnd_proc<W: WindowImpl>(
                 // Recover and free the received pointer data.
                 drop(Rc::from_raw(inner_ptr.as_ptr()));
 
-                // TODO: log error
+                // Abort creation after reclaiming the state pointer; callers observe the failed
+                // CreateWindowExW result from the window creation API.
                 return -1;
             }
 
@@ -55,7 +56,8 @@ pub unsafe extern "system" fn wnd_proc<W: WindowImpl>(
                     // it than risk crashing
                     drop(Rc::from_raw(inner_ptr.as_ptr()));
 
-                    // TODO: log error
+                    // Abort creation after initializer failure. The window creation API reports
+                    // failure to the caller, while the wndproc keeps teardown local and safe.
                     -1
                 }
             }

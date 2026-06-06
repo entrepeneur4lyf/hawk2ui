@@ -38,4 +38,5 @@ softbuffer = "0.4.8"
 winit = "0.30.12"
 
 [dev-dependencies]
+hawk2ui-authoring = { version = "0.1.0", path = "../hawk2ui-authoring" }
 image = { version = "0.25.10", default-features = false, features = ["png"] }

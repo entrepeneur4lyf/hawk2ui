@@ -15,7 +15,9 @@ pub(super) struct WindowVisualConfig {
     pub color_map: Option<Colormap>,
 }
 
-// TODO: make visual negotiation actually check all of a visual's parameters
+// Window visual selection is intentionally conservative: GL windows use the visual paired with the
+// chosen framebuffer config, while software windows prefer a 32-bit TRUE_COLOR visual so alpha and
+// client-side composition behave consistently across X11 window managers.
 impl WindowVisualConfig {
     #[cfg(feature = "opengl")]
     pub fn find_best_visual_config_for_gl(

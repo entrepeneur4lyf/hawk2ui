@@ -35,7 +35,7 @@ test("framework packages emit equivalent native records for the shared fixture",
   const svelte = compileHawkSvelte({
     filename: "App.svelte",
     source:
-      '<script>const items = [{ id: "title" }, { id: "cta" }];</script><hawk-view id="root" use:root_ref class="surface.card" data-asset="assets/logo.svg" on:press={handlePress}>{#each items as item (item.id)}<hawk-text id={item.id}></hawk-text>{/each}</hawk-view>',
+      '<script>let status = "idle"; function handlePress() { status = "pressed"; } const items = [{ id: "title" }, { id: "cta" }];</script><hawk-view id="root" use:root_ref class="surface.card" data-asset="assets/logo.svg" on:press={handlePress}>{#each items as item (item.id)}<hawk-text id={item.id}></hawk-text>{/each}</hawk-view>',
   });
 
   const react = createHawkReactRoot({ id: "root" });

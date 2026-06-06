@@ -1,15 +1,18 @@
 import { parse as parseScript, parseExpression } from "@babel/parser";
+import generate from "@babel/generator";
 import { parse as parseTemplate } from "@vue/compiler-dom";
 import { compileTemplate, parse as parseSfc } from "@vue/compiler-sfc";
 import {
   compilerArtifactForApp,
   recordsForApp,
-  type HawkCompilerArtifact,
-  type HawkCompilerDynamicBindingWire,
-  type HawkCompilerDynamicValueWire,
-  type HawkCompilerInitialDynamicValueWire,
-  type HawkElementSpec,
-  type HawkEventSpec,
+    type HawkCompilerArtifact,
+    type HawkCompilerDynamicBindingWire,
+    type HawkCompilerDynamicValueWire,
+    type HawkCompilerEventHandlerActionWire,
+    type HawkCompilerEventHandlerWire,
+    type HawkCompilerInitialDynamicValueWire,
+    type HawkElementSpec,
+    type HawkEventSpec,
   type HawkLifecycleSpec,
 } from "../../hawk2ui-native/src/index.ts";
 
@@ -75,6 +78,7 @@ export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput
   const root = vueElementToSpec(rootNode, context);
   validateUniqueChildKeys(root);
   const app = { name: input.filename, root };
+  const eventHandlers = eventHandlerArtifactsForSpec(root, script);
   return {
     framework: "vue",
     filename: input.filename,
@@ -84,16 +88,17 @@ export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput
         [],
         context.dynamicBindings,
         [...context.initialDynamicValues.values()],
-        {
-          compiler: {
-            framework: "vue",
-            compiler: "@hawk2ui/vue",
-            source_path: input.filename,
-            entrypoint: "default",
+          {
+            compiler: {
+              framework: "vue",
+              compiler: "@hawk2ui/vue",
+              source_path: input.filename,
+              entrypoint: "default",
+            },
+            eventHandlers,
           },
-        },
-      ),
-    };
+        ),
+      };
   }
 
 function vueElementToSpec(node: AstNode, context: VueLoweringContext): HawkElementSpec {
@@ -182,6 +187,134 @@ function vueLifecycle(node: AstNode): readonly HawkLifecycleSpec[] {
     if (event === "unmounted") lifecycle.push({ phase: "unmounted", handler: vueHandlerName(directive) });
   }
   return lifecycle;
+}
+
+function eventHandlerArtifactsForSpec(root: HawkElementSpec, script: string): readonly HawkCompilerEventHandlerWire[] {
+  const declarations = handlerDeclarationsFromScript(script);
+  return referencedHandlerNames(root).map((name) => {
+    const declaration = declarations.get(name);
+    if (!declaration) {
+      throw new Error(`vue.handler.missing: event handler \`${name}\` must be declared in the component script.`);
+    }
+    return {
+      name,
+      actions: handlerActions(name, declaration),
+    };
+  });
+}
+
+function referencedHandlerNames(root: HawkElementSpec): readonly string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const visit = (element: HawkElementSpec): void => {
+    for (const event of element.events ?? []) {
+      if (!seen.has(event.handler)) {
+        seen.add(event.handler);
+        names.push(event.handler);
+      }
+    }
+    for (const lifecycle of element.lifecycle ?? []) {
+      if (!seen.has(lifecycle.handler)) {
+        seen.add(lifecycle.handler);
+        names.push(lifecycle.handler);
+      }
+    }
+    for (const child of element.children ?? []) visit(child);
+  };
+  visit(root);
+  return names;
+}
+
+function handlerDeclarationsFromScript(source: string): ReadonlyMap<string, AstNode> {
+  const declarations = new Map<string, AstNode>();
+  if (!source.trim()) return declarations;
+  const ast = parseScript(source, {
+    sourceType: "module",
+    plugins: ["typescript"],
+  }) as unknown as AstNode;
+  for (const statement of arrayField(ast.program as AstNode | undefined, "body")) {
+    if (statement.type === "FunctionDeclaration") {
+      const name = identifierName(statement.id as AstNode | undefined);
+      if (name) declarations.set(name, statement);
+      continue;
+    }
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of arrayField(statement, "declarations")) {
+      const name = identifierName(declaration.id as AstNode | undefined);
+      const init = declaration.init as AstNode | undefined;
+      if (name && (init?.type === "ArrowFunctionExpression" || init?.type === "FunctionExpression")) {
+        declarations.set(name, init);
+      }
+    }
+  }
+  return declarations;
+}
+
+function handlerActions(handler: string, declaration: AstNode): readonly HawkCompilerEventHandlerActionWire[] {
+  const body = declaration.body as AstNode | undefined;
+  if (!body) {
+    throw new Error(`vue.handler.unsupported: event handler \`${handler}\` must have an executable body.`);
+  }
+  if (body.type !== "BlockStatement") {
+    return [handlerActionFromExpression(handler, body)];
+  }
+  const actions = arrayField(body, "body").map((statement) => {
+    if (statement.type !== "ExpressionStatement") {
+      throw new Error(`vue.handler.unsupported: event handler \`${handler}\` contains unsupported statements.`);
+    }
+    return handlerActionFromExpression(handler, statement.expression as AstNode | undefined);
+  });
+  if (actions.length === 0) {
+    throw new Error(`vue.handler.unsupported: event handler \`${handler}\` must contain at least one action.`);
+  }
+  return actions;
+}
+
+function handlerActionFromExpression(handler: string, expression: AstNode | undefined): HawkCompilerEventHandlerActionWire {
+  if (expression?.type === "AssignmentExpression" && expression.operator === "=") {
+    const name = assignmentTargetName(expression.left as AstNode | undefined);
+    if (!name) {
+      throw new Error(`vue.handler.unsupported: event handler \`${handler}\` assignment target must be a dynamic value or ref value.`);
+    }
+    return dynamicUpdateAction(name, expression.right as AstNode | undefined);
+  }
+  throw new Error(`vue.handler.unsupported: event handler \`${handler}\` must assign a dynamic value.`);
+}
+
+function assignmentTargetName(target: AstNode | undefined): string | undefined {
+  if (target?.type === "Identifier") return identifierName(target);
+  if (target?.type !== "MemberExpression") return undefined;
+  const object = identifierName(target.object as AstNode | undefined);
+  const property = identifierName(target.property as AstNode | undefined);
+  return object && property === "value" ? object : undefined;
+}
+
+function dynamicUpdateAction(
+  name: string,
+  expression: AstNode | undefined,
+): HawkCompilerEventHandlerActionWire {
+  const value = literalDynamicValue(expression);
+  if (value) {
+    return { type: "set_dynamic_value", name, value };
+  }
+  const source = expressionSourceFromAst(expression, "vue");
+  return {
+    type: "set_dynamic_expression",
+    name,
+    expression: source,
+    dependencies: expressionDependencies(source),
+  };
+}
+
+function expressionSourceFromAst(expression: AstNode | undefined, framework: string): string {
+  if (!expression) {
+    throw new Error(`${framework}.expression.unsupported: handler actions require an expression.`);
+  }
+  const source = generate(expression as never, { concise: true }).code.trim();
+  if (!source) {
+    throw new Error(`${framework}.expression.unsupported: handler actions require a printable expression.`);
+  }
+  return source;
 }
 
 function vueAttributeValue(

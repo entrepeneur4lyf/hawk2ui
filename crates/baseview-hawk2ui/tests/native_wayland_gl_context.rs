@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use baseview::gl::GlConfig;
-use baseview::{Event, EventStatus, WindowHandler, WindowOpenOptions};
+use baseview::{Event, EventStatus, Size, WindowHandler, WindowOpenOptions};
 use raw_window_handle::{
     HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
     WaylandDisplayHandle, WaylandWindowHandle,
@@ -37,6 +37,7 @@ fn native_wayland_gl_context_can_be_made_current_when_enabled() {
     );
 
     let build_context_seen = Arc::new(AtomicBool::new(false));
+    let resize_completed = Arc::new(AtomicBool::new(false));
     let frame_completed = Arc::new(AtomicBool::new(false));
     let last_error = Arc::new(Mutex::new(None));
     let mut event_loop = EventLoop::builder();
@@ -46,6 +47,7 @@ fn native_wayland_gl_context_can_be_made_current_when_enabled() {
 
     let mut app = BaseviewGlSmokeApp::new(
         Arc::clone(&build_context_seen),
+        Arc::clone(&resize_completed),
         Arc::clone(&frame_completed),
         Arc::clone(&last_error),
     );
@@ -61,6 +63,10 @@ fn native_wayland_gl_context_can_be_made_current_when_enabled() {
         "Baseview Wayland build callback should see the requested GL context"
     );
     assert!(
+        resize_completed.load(Ordering::SeqCst),
+        "Baseview Wayland GL context should remain currentable after resizing the child window"
+    );
+    assert!(
         frame_completed.load(Ordering::SeqCst),
         "Baseview Wayland GL context should be currentable and presentable"
     );
@@ -71,6 +77,7 @@ struct BaseviewGlSmokeApp {
     child: Option<baseview::WindowHandle>,
     parent: Option<Window>,
     build_context_seen: Arc<AtomicBool>,
+    resize_completed: Arc<AtomicBool>,
     frame_completed: Arc<AtomicBool>,
     last_error: Arc<Mutex<Option<String>>>,
     parent_created: bool,
@@ -79,14 +86,15 @@ struct BaseviewGlSmokeApp {
 
 impl BaseviewGlSmokeApp {
     fn new(
-        build_context_seen: Arc<AtomicBool>, frame_completed: Arc<AtomicBool>,
-        last_error: Arc<Mutex<Option<String>>>,
+        build_context_seen: Arc<AtomicBool>, resize_completed: Arc<AtomicBool>,
+        frame_completed: Arc<AtomicBool>, last_error: Arc<Mutex<Option<String>>>,
     ) -> Self {
         Self {
             started_at: Instant::now(),
             child: None,
             parent: None,
             build_context_seen,
+            resize_completed,
             frame_completed,
             last_error,
             parent_created: false,
@@ -111,11 +119,12 @@ impl BaseviewGlSmokeApp {
             .with_size(320.0, 180.0)
             .with_gl_config(GlConfig::default());
         let build_context_seen = Arc::clone(&self.build_context_seen);
+        let resize_completed = Arc::clone(&self.resize_completed);
         let frame_completed = Arc::clone(&self.frame_completed);
         let last_error = Arc::clone(&self.last_error);
         let child = baseview::Window::open_parented(&raw_parent, options, move |window| {
             build_context_seen.store(window.gl_context().is_some(), Ordering::SeqCst);
-            GlContextProbeHandler { frame_completed, last_error }
+            GlContextProbeHandler { resize_completed, frame_completed, last_error }
         });
         self.child = Some(child);
         self.child_created = true;
@@ -150,6 +159,7 @@ impl ApplicationHandler for BaseviewGlSmokeApp {
 }
 
 struct GlContextProbeHandler {
+    resize_completed: Arc<AtomicBool>,
     frame_completed: Arc<AtomicBool>,
     last_error: Arc<Mutex<Option<String>>>,
 }
@@ -157,7 +167,20 @@ struct GlContextProbeHandler {
 impl WindowHandler for GlContextProbeHandler {
     fn on_frame(&mut self, window: &mut baseview::Window) {
         match probe_context(window.gl_context()) {
-            Ok(()) => self.frame_completed.store(true, Ordering::SeqCst),
+            Ok(()) => {
+                window.resize(Size::new(400.0, 220.0));
+                match probe_context(window.gl_context()) {
+                    Ok(()) => {
+                        self.resize_completed.store(true, Ordering::SeqCst);
+                        self.frame_completed.store(true, Ordering::SeqCst);
+                    }
+                    Err(error) => {
+                        let mut last_error =
+                            self.last_error.lock().expect("last_error lock should succeed");
+                        *last_error = Some(error.to_owned());
+                    }
+                }
+            }
             Err(error) => {
                 let mut last_error =
                     self.last_error.lock().expect("last_error lock should succeed");

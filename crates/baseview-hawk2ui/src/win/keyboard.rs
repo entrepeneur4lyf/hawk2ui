@@ -257,7 +257,8 @@ fn vk_to_key(vk: VkCode) -> Option<Key> {
         VK_MENU | VK_LMENU | VK_RMENU => Key::Alt,
         VK_PAUSE => Key::Pause,
         VK_CAPITAL => Key::CapsLock,
-        // TODO: disambiguate kana and hangul? same vk
+        // Windows exposes Kana/Hangul through the same virtual-key code, so Baseview maps it to
+        // the DOM-compatible KanaMode key for deterministic cross-platform event records.
         VK_KANA => Key::KanaMode,
         VK_JUNJA => Key::JunjaMode,
         VK_FINAL => Key::FinalMode,

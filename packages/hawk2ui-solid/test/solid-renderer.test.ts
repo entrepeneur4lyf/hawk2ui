@@ -5,7 +5,7 @@ test("Solid compiler emits versioned native compiler artifacts from TSX", () => 
   const output = compileHawkSolid({
     filename: "App.tsx",
     source:
-      'export function App() { const [items] = createSignal([{ id: "title" }, { id: "cta" }]); return <hawk-view id="root" ref={root_ref} class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}><For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For></hawk-view>; }',
+      'export function App() { const [status, setStatus] = createSignal("idle"); function handlePress() { setStatus("pressed"); } function onMount() { setStatus("mounted"); } function onCleanup() { setStatus("unmounted"); } const [items] = createSignal([{ id: "title" }, { id: "cta" }]); return <hawk-view id="root" ref={root_ref} class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress} onMount={onMount} onCleanup={onCleanup}><For each={items()}>{(item) => <hawk-text id={item.id}>{item.id}</hawk-text>}</For></hawk-view>; }',
   });
 
   expect(output.compilerArtifact.schema_version).toBe(1);
@@ -45,6 +45,27 @@ test("Solid compiler preserves dynamic text bindings from signal expressions", (
       name: "label",
       mode: "getter",
       value: { type: "string", value: "Title" },
+    },
+  ]);
+});
+
+test("Solid compiler emits executable pointer handler actions", () => {
+  const output = compileHawkSolid({
+    filename: "App.tsx",
+    source:
+      'const [label, setLabel] = createSignal("Idle"); function handlePress() { setLabel("Pressed"); } export function App() { return <hawk-view id="root" onPointerDown={handlePress}><hawk-text id="title">{label()}</hawk-text></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.event_handlers).toEqual([
+    {
+      name: "handlePress",
+      actions: [
+        {
+          type: "set_dynamic_value",
+          name: "label",
+          value: { type: "string", value: "Pressed" },
+        },
+      ],
     },
   ]);
 });

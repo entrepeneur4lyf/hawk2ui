@@ -5,10 +5,12 @@ import {
   compilerArtifactForApp,
   recordsForApp,
   type HawkCompilerArtifact,
-  type HawkCompilerDynamicBindingWire,
-  type HawkCompilerDynamicValueWire,
-  type HawkCompilerInitialDynamicValueWire,
-  type HawkCompilerReactiveBindingWire,
+    type HawkCompilerDynamicBindingWire,
+    type HawkCompilerDynamicValueWire,
+    type HawkCompilerEventHandlerActionWire,
+    type HawkCompilerEventHandlerWire,
+    type HawkCompilerInitialDynamicValueWire,
+    type HawkCompilerReactiveBindingWire,
   type HawkElementSpec,
   type HawkEventSpec,
   type HawkLifecycleSpec,
@@ -90,6 +92,12 @@ export function compileHawkSolid(input: HawkSolidCompileInput): HawkSolidCompile
   validateUniqueChildKeys(root);
   context.reactivity.push({ kind: "effect", name: "root-props" });
   const app = { name: input.filename, root };
+  const eventHandlers = eventHandlersForSpec(
+    root,
+    program,
+    returned.scope,
+    solidSetterBindingsFromProgram(program, returned.scope),
+  );
   return {
     framework: "solid",
     filename: input.filename,
@@ -99,16 +107,17 @@ export function compileHawkSolid(input: HawkSolidCompileInput): HawkSolidCompile
         uniqueReactivity(context.reactivity),
         context.dynamicBindings,
         [...context.initialDynamicValues.values()],
-        {
-          compiler: {
-            framework: "solid",
-            compiler: "@hawk2ui/solid",
-            source_path: input.filename,
-            entrypoint: returned.entrypoint,
+          {
+            compiler: {
+              framework: "solid",
+              compiler: "@hawk2ui/solid",
+              source_path: input.filename,
+              entrypoint: returned.entrypoint,
+            },
+            eventHandlers,
           },
-        },
-      ),
-    };
+        ),
+      };
   }
 
 function returnedJsxElement(program: AstNode): ReturnedJsxElement | undefined {
@@ -212,6 +221,136 @@ function solidLifecycle(node: AstNode): readonly HawkLifecycleSpec[] {
   const cleanup = jsxRawAttributeValue(node, "onCleanup");
   if (cleanup) lifecycle.push({ phase: "unmounted", handler: handlerName(cleanup) });
   return lifecycle;
+}
+
+function eventHandlersForSpec(
+  root: HawkElementSpec,
+  program: AstNode,
+  componentScope: AstNode | undefined,
+  setterBindings: ReadonlyMap<string, string>,
+): readonly HawkCompilerEventHandlerWire[] {
+  const declarations = handlerDeclarationsFromBody([
+    ...arrayField(program, "body"),
+    ...arrayField(componentScope, "body"),
+  ]);
+  return referencedHandlerNames(root).map((name) => {
+    const declaration = declarations.get(name);
+    if (!declaration) {
+      throw new Error(`solid.handler.missing: event handler \`${name}\` must be declared in the module or component scope.`);
+    }
+    return {
+      name,
+      actions: handlerActions(name, declaration, setterBindings, "solid"),
+    };
+  });
+}
+
+function referencedHandlerNames(root: HawkElementSpec): readonly string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const visit = (element: HawkElementSpec): void => {
+    for (const event of element.events ?? []) {
+      if (!seen.has(event.handler)) {
+        seen.add(event.handler);
+        names.push(event.handler);
+      }
+    }
+    for (const lifecycle of element.lifecycle ?? []) {
+      if (!seen.has(lifecycle.handler)) {
+        seen.add(lifecycle.handler);
+        names.push(lifecycle.handler);
+      }
+    }
+    for (const child of element.children ?? []) visit(child);
+  };
+  visit(root);
+  return names;
+}
+
+function handlerDeclarationsFromBody(statements: readonly AstNode[]): ReadonlyMap<string, AstNode> {
+  const declarations = new Map<string, AstNode>();
+  for (const statement of statements) {
+    if (statement.type === "FunctionDeclaration") {
+      const name = identifierName(statement.id as AstNode | undefined);
+      if (name) declarations.set(name, statement);
+      continue;
+    }
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of arrayField(statement, "declarations")) {
+      const name = identifierName(declaration.id as AstNode | undefined);
+      const init = declaration.init as AstNode | undefined;
+      if (name && (init?.type === "ArrowFunctionExpression" || init?.type === "FunctionExpression")) {
+        declarations.set(name, init);
+      }
+    }
+  }
+  return declarations;
+}
+
+function handlerActions(
+  handler: string,
+  declaration: AstNode,
+  setterBindings: ReadonlyMap<string, string>,
+  framework: string,
+): readonly HawkCompilerEventHandlerActionWire[] {
+  const body = declaration.body as AstNode | undefined;
+  if (!body) {
+    throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must have an executable body.`);
+  }
+  if (body.type !== "BlockStatement") {
+    return [handlerActionFromExpression(handler, body, setterBindings, framework)];
+  }
+  const actions = arrayField(body, "body").map((statement) => {
+    if (statement.type !== "ExpressionStatement") {
+      throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` contains unsupported statements.`);
+    }
+    return handlerActionFromExpression(handler, statement.expression as AstNode | undefined, setterBindings, framework);
+  });
+  if (actions.length === 0) {
+    throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must contain at least one action.`);
+  }
+  return actions;
+}
+
+function handlerActionFromExpression(
+  handler: string,
+  expression: AstNode | undefined,
+  setterBindings: ReadonlyMap<string, string>,
+  framework: string,
+): HawkCompilerEventHandlerActionWire {
+  if (expression?.type === "AssignmentExpression" && expression.operator === "=") {
+    const name = identifierName(expression.left as AstNode | undefined);
+    if (!name) {
+      throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` assignment target must be a dynamic value name.`);
+    }
+    return dynamicUpdateAction(name, expression.right as AstNode | undefined, framework);
+  }
+  if (expression?.type === "CallExpression") {
+    const setter = identifierName(expression.callee as AstNode | undefined);
+    const name = setter ? setterBindings.get(setter) : undefined;
+    const argument = (expression.arguments as AstNode[] | undefined)?.[0];
+    if (name && argument) {
+      return dynamicUpdateAction(name, argument, framework);
+    }
+  }
+  throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must assign a dynamic value or call a signal setter.`);
+}
+
+function dynamicUpdateAction(
+  name: string,
+  expression: AstNode | undefined,
+  framework: string,
+): HawkCompilerEventHandlerActionWire {
+  const value = literalDynamicValue(expression);
+  if (value) {
+    return { type: "set_dynamic_value", name, value };
+  }
+  return {
+    type: "set_dynamic_expression",
+    name,
+    expression: expressionSource(expression, framework),
+    dependencies: expressionDependencies(expression),
+  };
 }
 
 function jsxAttributeValue(
@@ -406,6 +545,27 @@ function solidSignalsFromProgram(program: AstNode, componentScope: AstNode | und
   return { arrays, initialDynamicValues, reactivity };
 }
 
+function solidSetterBindingsFromProgram(program: AstNode, componentScope: AstNode | undefined): ReadonlyMap<string, string> {
+  const bindings = new Map<string, string>();
+  collectSolidSetterBindings(arrayField(program, "body"), bindings);
+  collectSolidSetterBindings(arrayField(componentScope, "body"), bindings);
+  return bindings;
+}
+
+function collectSolidSetterBindings(statements: readonly AstNode[], bindings: Map<string, string>): void {
+  for (const statement of statements) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of arrayField(statement, "declarations")) {
+      const init = declaration.init as AstNode | undefined;
+      if (init?.type !== "CallExpression" || identifierName(init.callee as AstNode | undefined) !== "createSignal") {
+        continue;
+      }
+      const pair = signalBindingPair(declaration.id as AstNode | undefined);
+      if (pair) bindings.set(pair.setter, pair.signal);
+    }
+  }
+}
+
 function collectSolidSignalsFromBody(
   statements: readonly AstNode[],
   arrays: Map<string, readonly LiteralRecord[]>,
@@ -447,6 +607,14 @@ function signalBindingName(node: AstNode | undefined): string | undefined {
   if (node?.type === "Identifier") return identifierName(node);
   if (node?.type !== "ArrayPattern") return undefined;
   return identifierName((node.elements as AstNode[] | undefined)?.[0]);
+}
+
+function signalBindingPair(node: AstNode | undefined): { readonly signal: string; readonly setter: string } | undefined {
+  if (node?.type !== "ArrayPattern") return undefined;
+  const elements = node.elements as AstNode[] | undefined;
+  const signal = identifierName(elements?.[0]);
+  const setter = identifierName(elements?.[1]);
+  return signal && setter ? { signal, setter } : undefined;
 }
 
 function literalObjectArray(node: AstNode | undefined): readonly LiteralRecord[] | undefined {

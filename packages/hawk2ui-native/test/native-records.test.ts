@@ -220,3 +220,59 @@ test("compilerArtifactForApp preserves explicit compiler source metadata", () =>
     }),
   ).toThrow("native.compiler.source-path-invalid");
 });
+
+test("compilerArtifactForApp preserves executable event handler artifacts", () => {
+  const spec = {
+    name: "native-events",
+    root: {
+      id: "root",
+      kind: "view" as const,
+      events: [{ kind: "pointer.press" as const, handler: "handlePress" }],
+    },
+  };
+
+  const artifact = compilerArtifactForApp(spec, [], [], [], {
+    eventHandlers: [
+      {
+        name: "handlePress",
+        actions: [
+          {
+            type: "set_dynamic_value",
+            name: "label",
+            value: { type: "string", value: "Pressed" },
+          },
+        ],
+      },
+    ],
+  });
+
+  expect(artifact.event_handlers).toEqual([
+    {
+      name: "handlePress",
+      actions: [
+        {
+          type: "set_dynamic_value",
+          name: "label",
+          value: { type: "string", value: "Pressed" },
+        },
+      ],
+    },
+  ]);
+
+  expect(() =>
+    compilerArtifactForApp(spec, [], [], [], {
+      eventHandlers: [
+        {
+          name: "unreferenced",
+          actions: [
+            {
+              type: "set_dynamic_value",
+              name: "label",
+              value: { type: "string", value: "Pressed" },
+            },
+          ],
+        },
+      ],
+    }),
+  ).toThrow("native.event-handler.unreferenced");
+});

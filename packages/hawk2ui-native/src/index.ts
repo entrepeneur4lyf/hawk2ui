@@ -96,6 +96,24 @@ export type HawkCompilerDynamicValueWire =
   | { readonly type: "array"; readonly value: readonly HawkCompilerDynamicValueWire[] }
   | { readonly type: "object"; readonly value: Readonly<Record<string, HawkCompilerDynamicValueWire>> };
 
+export type HawkCompilerEventHandlerActionWire =
+  | {
+    readonly type: "set_dynamic_value";
+    readonly name: string;
+    readonly value: HawkCompilerDynamicValueWire;
+  }
+  | {
+    readonly type: "set_dynamic_expression";
+    readonly name: string;
+    readonly expression: string;
+    readonly dependencies: readonly string[];
+  };
+
+export interface HawkCompilerEventHandlerWire {
+  readonly name: string;
+  readonly actions: readonly HawkCompilerEventHandlerActionWire[];
+}
+
 export interface HawkCompilerInitialDynamicValueWire {
   readonly name: string;
   readonly mode: "value" | "getter";
@@ -111,6 +129,7 @@ export interface HawkCompilerSourceWire {
 
 export interface HawkCompilerArtifactOptions {
   readonly compiler?: HawkCompilerSourceWire;
+  readonly eventHandlers?: readonly HawkCompilerEventHandlerWire[];
 }
 
 export interface HawkCompilerArtifact {
@@ -120,6 +139,7 @@ export interface HawkCompilerArtifact {
   readonly reactivity: readonly HawkCompilerReactiveBindingWire[];
   readonly dynamic_bindings: readonly HawkCompilerDynamicBindingWire[];
   readonly initial_dynamic_values: readonly HawkCompilerInitialDynamicValueWire[];
+  readonly event_handlers: readonly HawkCompilerEventHandlerWire[];
 }
 
 export interface HawkCompiledApp extends HawkAppSpec {
@@ -152,6 +172,7 @@ export function compilerArtifactForApp(
   validateElement(spec.root);
   validateDynamicBindings(dynamicBindings, elementIds(spec.root));
   validateInitialDynamicValues(initialDynamicValues);
+  validateEventHandlers(options.eventHandlers ?? [], referencedHandlerNames(spec.root));
   const compiler = cloneCompilerSourceWire(options.compiler ?? nativeCompilerSourceForApp(spec));
   validateCompilerSource(compiler);
   return {
@@ -164,14 +185,15 @@ export function compilerArtifactForApp(
       target: { ...binding.target },
       expression: binding.expression,
       dependencies: [...binding.dependencies],
-    })),
-    initial_dynamic_values: initialDynamicValues.map((value) => ({
-      name: value.name,
-      mode: value.mode,
-      value: cloneDynamicValueWire(value.value),
-    })),
-  };
-}
+      })),
+      initial_dynamic_values: initialDynamicValues.map((value) => ({
+        name: value.name,
+        mode: value.mode,
+        value: cloneDynamicValueWire(value.value),
+      })),
+      event_handlers: (options.eventHandlers ?? []).map(cloneEventHandlerWire),
+    };
+  }
 
 export function recordsForApp(spec: HawkAppSpec): readonly string[] {
   const records: string[] = [];
@@ -440,6 +462,54 @@ function validateInitialDynamicValues(values: readonly HawkCompilerInitialDynami
   }
 }
 
+function validateEventHandlers(value: unknown, referencedHandlers: ReadonlySet<string>): void {
+  const handlers = validateRecordArray(
+    value,
+    "native.event-handlers.invalid",
+    "event handler artifacts must be an array of records.",
+  );
+  const names = new Set<string>();
+  for (const handler of handlers) {
+    if (typeof handler.name !== "string" || !handler.name.trim()) {
+      throw new Error("native.event-handler.name-invalid: event handler artifacts require stable names.");
+    }
+    if (names.has(handler.name)) {
+      throw new Error(`native.event-handler.duplicate: event handler \`${handler.name}\` is declared more than once.`);
+    }
+    names.add(handler.name);
+    if (!referencedHandlers.has(handler.name)) {
+      throw new Error(`native.event-handler.unreferenced: event handler \`${handler.name}\` is not referenced by the element tree.`);
+    }
+    const actions = validateRecordArray(
+      handler.actions,
+      "native.event-handler.actions-invalid",
+      `event handler \`${handler.name}\` requires an array of action records.`,
+    );
+    if (actions.length === 0) {
+      throw new Error(`native.event-handler.actions-empty: event handler \`${handler.name}\` requires at least one executable action.`);
+    }
+    for (const action of actions) {
+      if (typeof action.name !== "string" || !action.name.trim()) {
+        throw new Error(`native.event-handler.action-name-invalid: event handler \`${handler.name}\` action requires a stable dynamic value name.`);
+      }
+      if (action.type === "set_dynamic_value") {
+        validateDynamicValue(action.value, action.name);
+      } else if (action.type === "set_dynamic_expression") {
+        if (typeof action.expression !== "string" || !action.expression.trim()) {
+          throw new Error(`native.event-handler.expression-invalid: event handler \`${handler.name}\` expression actions require a non-empty expression.`);
+        }
+        validateStringArray(
+          action.dependencies,
+          "native.event-handler.dependencies-invalid",
+          `event handler \`${handler.name}\` expression dependencies must be an array of stable names.`,
+        );
+      } else {
+        throw new Error(`native.event-handler.action-type-invalid: event handler \`${handler.name}\` has unsupported action type \`${String(action.type)}\`.`);
+      }
+    }
+  }
+}
+
 function validateDynamicValue(value: unknown, name: string): asserts value is HawkCompilerDynamicValueWire {
   if (!isObjectRecord(value) || typeof value.type !== "string") {
     throw new Error(`native.initial-dynamic-value.type-invalid: initial dynamic value \`${name}\` has an unsupported dynamic value record.`);
@@ -510,6 +580,27 @@ function cloneDynamicValueWire(value: HawkCompilerDynamicValueWire): HawkCompile
   }
 }
 
+function cloneEventHandlerWire(handler: HawkCompilerEventHandlerWire): HawkCompilerEventHandlerWire {
+  return {
+    name: handler.name,
+    actions: handler.actions.map((action) => {
+      if (action.type === "set_dynamic_value") {
+        return {
+          type: "set_dynamic_value",
+          name: action.name,
+          value: cloneDynamicValueWire(action.value),
+        };
+      }
+      return {
+        type: "set_dynamic_expression",
+        name: action.name,
+        expression: action.expression,
+        dependencies: [...action.dependencies],
+      };
+    }),
+  };
+}
+
 function elementIds(root: HawkElementSpec): ReadonlySet<string> {
   const ids = new Set<string>();
   const visit = (element: HawkElementSpec): void => {
@@ -520,6 +611,23 @@ function elementIds(root: HawkElementSpec): ReadonlySet<string> {
   };
   visit(root);
   return ids;
+}
+
+function referencedHandlerNames(root: HawkElementSpec): ReadonlySet<string> {
+  const names = new Set<string>();
+  const visit = (element: HawkElementSpec): void => {
+    for (const event of element.events ?? []) {
+      names.add(event.handler);
+    }
+    for (const lifecycle of element.lifecycle ?? []) {
+      names.add(lifecycle.handler);
+    }
+    for (const child of element.children ?? []) {
+      visit(child);
+    }
+  };
+  visit(root);
+  return names;
 }
 
 function isUnsafeAssetPath(path: string): boolean {
