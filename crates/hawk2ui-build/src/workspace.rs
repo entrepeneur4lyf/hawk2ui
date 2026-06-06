@@ -727,10 +727,9 @@ mod tests {
     #[test]
     fn framework_compiler_host_reports_timeout_with_captured_output() {
         let root = temp_dir("compiler-timeout");
-        let bun = fake_executable_path(&root, "slow-bun");
+        let bun = slow_compiler_launcher(&root);
         let script = root.join("compiler.ts");
-        write_file(&script, "unused");
-        write_slow_fake_bun(&bun);
+        write_slow_compiler_script(&script);
 
         let host =
             FrameworkCompilerHost::for_test(bun, script, std::time::Duration::from_millis(50));
@@ -827,6 +826,27 @@ mod tests {
             );
         }
         make_executable(path);
+    }
+
+    fn slow_compiler_launcher(root: &Path) -> PathBuf {
+        if cfg!(windows) {
+            let bun = fake_executable_path(root, "slow-bun");
+            write_slow_fake_bun(&bun);
+            bun
+        } else {
+            PathBuf::from("/bin/sh")
+        }
+    }
+
+    fn write_slow_compiler_script(path: &Path) {
+        if cfg!(windows) {
+            write_file(path, "unused");
+        } else {
+            write_file(
+                path,
+                "#!/bin/sh\nprintf 'starting compiler\\n'\nprintf 'still compiling\\n' >&2\nsleep 5\n",
+            );
+        }
     }
 
     #[cfg(unix)]

@@ -8,9 +8,11 @@ use std::{
 
 use hawk2ui_assets::AssetRecord;
 use hawk2ui_host::{DesktopHostEvent, DesktopWindowConfig};
-use hawk2ui_layout::Viewport;
+use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_runtime::{
-    AnimationCadencePolicy, AnimationFrameScheduler, EntryNode, RuntimeSceneBridge, RuntimeViewTree,
+    AnimationCadencePolicy, AnimationFrameScheduler, EntryNode, RuntimeSceneBridge,
+    RuntimeSceneFrame, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
+    RuntimeVisual,
 };
 use hawk2ui_script::{
     FrameInput, HostCallPolicy, HostSnapshot, ScriptBackend, ScriptModule, StructuredValue,
@@ -27,7 +29,7 @@ use winit::{
 
 use crate::{
     SoftwareFrameRenderer, WinitEventTranslator, WinitHostError, WinitTranslatedEvent,
-    physical_frame_size,
+    gpu_frame::WinitGpuFramePresenter, physical_frame_size,
 };
 
 /// Production desktop runtime configuration.
@@ -39,6 +41,41 @@ pub struct WinitDesktopRuntimeConfig {
     runtime_assets: Vec<AssetRecord>,
     animation_policy: AnimationCadencePolicy,
     script_entry: Option<WinitDesktopScriptEntry>,
+    presentation_backend: WinitPresentationBackend,
+}
+
+/// Native presentation backend requested for the desktop runtime.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WinitPresentationBackend {
+    /// Skia CPU raster rendering copied into a `softbuffer` native surface.
+    #[default]
+    Software,
+    /// Prefer Skia GPU rendering when a platform GPU surface can be created, otherwise fall back to
+    /// software presentation with a diagnostic.
+    GpuPreferred,
+    /// Require Skia GPU rendering and fail startup if a platform GPU surface cannot be created.
+    GpuRequired,
+}
+
+/// Native presentation backend that actually presented frames for a desktop runtime.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WinitPresentationBackendUsed {
+    /// Skia CPU raster rendering copied into a `softbuffer` native surface.
+    #[default]
+    Software,
+    /// Skia GPU rendering presented through a native OpenGL surface.
+    Gpu,
+}
+
+impl WinitPresentationBackendUsed {
+    /// Returns the stable diagnostic label for the backend.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Software => "software",
+            Self::Gpu => "gpu",
+        }
+    }
 }
 
 /// Executable desktop entry script retained by the native runtime for host-event rerenders.
@@ -94,6 +131,7 @@ impl WinitDesktopRuntimeConfig {
             runtime_assets: Vec::new(),
             animation_policy: AnimationCadencePolicy::disabled(),
             script_entry: None,
+            presentation_backend: WinitPresentationBackend::Software,
         }
     }
 
@@ -132,6 +170,16 @@ impl WinitDesktopRuntimeConfig {
         self
     }
 
+    /// Sets the native presentation backend preference.
+    #[must_use]
+    pub const fn with_presentation_backend(
+        mut self,
+        presentation_backend: WinitPresentationBackend,
+    ) -> Self {
+        self.presentation_backend = presentation_backend;
+        self
+    }
+
     /// Returns the desktop window configuration.
     #[must_use]
     pub const fn window(&self) -> &DesktopWindowConfig {
@@ -166,6 +214,12 @@ impl WinitDesktopRuntimeConfig {
     #[must_use]
     pub const fn script_entry(&self) -> Option<&WinitDesktopScriptEntry> {
         self.script_entry.as_ref()
+    }
+
+    /// Returns the requested native presentation backend.
+    #[must_use]
+    pub const fn presentation_backend(&self) -> WinitPresentationBackend {
+        self.presentation_backend
     }
 
     /// Validates runtime configuration before entering the native event loop.
@@ -374,10 +428,18 @@ impl WinitDesktopRuntimeSurfaceState {
 /// Summary returned after the desktop runtime exits.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WinitDesktopRuntimeSummary {
+    /// Native presentation backend that actually presented runtime frames.
+    pub presentation_backend_used: WinitPresentationBackendUsed,
     /// Whether a native window was created.
     pub window_created: bool,
     /// Number of full frames presented.
     pub frames_presented: u64,
+    /// Number of full frames presented by the native GPU backend.
+    pub gpu_frames_presented: u64,
+    /// Whether a submitted GPU frame was read back for verification.
+    pub gpu_readback_verified: bool,
+    /// Diagnostic explaining why a preferred backend fell back to another presentation path.
+    pub presentation_fallback_reason: Option<WinitHostError>,
     /// Number of resize events processed.
     pub resizes: u64,
     /// Number of DPI change events processed.
@@ -429,6 +491,42 @@ impl WinitDesktopRuntime {
             WinitHostError::new(
                 "desktop.event-loop.run-failed",
                 format!("winit event loop failed: {error}"),
+            )
+        })?;
+        app.finish()
+    }
+
+    /// Runs the native Wayland event loop from a non-main test or embedding thread.
+    ///
+    /// Normal applications should use [`Self::run_blocking`]. This entry point exists for native
+    /// smoke harnesses and embedders that intentionally create the Linux Wayland event loop away
+    /// from the process main thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when event-loop creation, window creation, rendering, resize, or
+    /// presentation fails.
+    #[cfg(target_os = "linux")]
+    pub fn run_wayland_any_thread_blocking(
+        &self,
+        config: WinitDesktopRuntimeConfig,
+    ) -> Result<WinitDesktopRuntimeSummary, WinitHostError> {
+        use winit::platform::wayland::EventLoopBuilderExtWayland;
+
+        config.validate()?;
+        let mut builder = EventLoop::builder();
+        builder.with_wayland().with_any_thread(true);
+        let event_loop = builder.build().map_err(|error| {
+            WinitHostError::new(
+                "desktop.event-loop.create-failed",
+                format!("failed to create winit Wayland event loop: {error}"),
+            )
+        })?;
+        let mut app = RuntimeApplication::new(config, self.renderer.clone());
+        event_loop.run_app(&mut app).map_err(|error| {
+            WinitHostError::new(
+                "desktop.event-loop.run-failed",
+                format!("winit Wayland event loop failed: {error}"),
             )
         })?;
         app.finish()
@@ -492,6 +590,7 @@ struct RuntimeApplication {
     window: Option<Arc<Window>>,
     context: Option<Context<Arc<Window>>>,
     surface: Option<Surface<Arc<Window>, Arc<Window>>>,
+    gpu_presenter: Option<WinitGpuFramePresenter>,
     lifecycle: RuntimeLifecycle,
     event_translator: WinitEventTranslator,
     animation: AnimationFrameScheduler,
@@ -511,6 +610,7 @@ impl RuntimeApplication {
             window: None,
             context: None,
             surface: None,
+            gpu_presenter: None,
             lifecycle: RuntimeLifecycle::default(),
             event_translator: WinitEventTranslator::new(metrics),
             animation,
@@ -552,12 +652,32 @@ impl RuntimeApplication {
 
     fn create_window(&mut self, event_loop: &ActiveEventLoop) -> Result<(), WinitHostError> {
         let metrics = self.config.window.metrics;
-        let attributes = Window::default_attributes()
-            .with_title(self.config.window.title.clone())
-            .with_inner_size(LogicalSize::new(
-                metrics.logical_width,
-                metrics.logical_height,
-            ));
+        let attributes = window_attributes(&self.config.window);
+        match self.config.presentation_backend {
+            WinitPresentationBackend::Software => {
+                self.create_software_window(event_loop, attributes)
+            }
+            WinitPresentationBackend::GpuRequired => self.create_gpu_window(event_loop, attributes),
+            WinitPresentationBackend::GpuPreferred => {
+                match self.create_gpu_window(event_loop, attributes.clone()) {
+                    Ok(()) => Ok(()),
+                    Err(error) => {
+                        self.lifecycle.record_gpu_preferred_fallback(&error);
+                        self.create_software_window(event_loop, attributes)
+                    }
+                }
+            }
+        }?;
+        self.event_translator = WinitEventTranslator::new(metrics);
+        self.request_redraw();
+        Ok(())
+    }
+
+    fn create_software_window(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        attributes: winit::window::WindowAttributes,
+    ) -> Result<(), WinitHostError> {
         let window = Arc::new(event_loop.create_window(attributes).map_err(|error| {
             WinitHostError::new(
                 "desktop.window.create-failed",
@@ -578,14 +698,44 @@ impl RuntimeApplication {
         })?;
 
         self.lifecycle.record_window_created();
+        self.lifecycle
+            .record_presentation_backend_used(WinitPresentationBackendUsed::Software);
         self.context = Some(context);
         self.surface = Some(surface);
+        self.gpu_presenter = None;
         self.window = Some(window);
-        self.request_redraw();
+        Ok(())
+    }
+
+    fn create_gpu_window(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        attributes: winit::window::WindowAttributes,
+    ) -> Result<(), WinitHostError> {
+        let (window, presenter) = WinitGpuFramePresenter::create_wayland_window(
+            event_loop,
+            attributes,
+            self.config.runtime_assets().iter().cloned(),
+        )?;
+        self.lifecycle.record_window_created();
+        self.lifecycle
+            .record_presentation_backend_used(WinitPresentationBackendUsed::Gpu);
+        self.context = None;
+        self.surface = None;
+        self.gpu_presenter = Some(presenter);
+        self.window = Some(window);
         Ok(())
     }
 
     fn resize_surface(&mut self, size: PhysicalSize<u32>) -> Result<(), WinitHostError> {
+        if let Some(gpu_presenter) = self.gpu_presenter.as_mut() {
+            if let Some(window) = self.window.as_ref() {
+                gpu_presenter.resize_to_window(window)?;
+            }
+            self.request_redraw();
+            return Ok(());
+        }
+
         let Some(surface) = self.surface.as_mut() else {
             return Ok(());
         };
@@ -604,44 +754,80 @@ impl RuntimeApplication {
         Ok(())
     }
 
-    fn present_frame(&mut self, event_loop: &ActiveEventLoop) -> Result<(), WinitHostError> {
-        if !self.lifecycle.accepts_frame_presentation() {
-            return Ok(());
-        }
-        let Some(window) = self.window.as_ref() else {
+    fn build_runtime_scene_for_window(
+        &self,
+        window: &Window,
+        size: PhysicalSize<u32>,
+    ) -> Result<RuntimeSceneFrame, WinitHostError> {
+        let logical_width = f64::from(size.width) / window.scale_factor();
+        let logical_height = f64::from(size.height) / window.scale_factor();
+        let viewport = Viewport::new(
+            logical_size_to_f32(logical_width)?,
+            logical_size_to_f32(logical_height)?,
+        );
+        let fallback_tree;
+        let runtime_tree = if let Some(runtime_tree) = self.config.runtime_tree() {
+            runtime_tree
+        } else {
+            fallback_tree =
+                default_runtime_tree(&self.config.window.title, viewport.width, viewport.height);
+            &fallback_tree
+        };
+        RuntimeSceneBridge::new(viewport)
+            .build(runtime_tree)
+            .map_err(|error| {
+                WinitHostError::new(
+                    "desktop.runtime-scene.build-failed",
+                    format!("failed to build runtime scene for desktop frame: {error:?}"),
+                )
+            })
+    }
+
+    fn present_gpu_frame(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window: &Window,
+        size: PhysicalSize<u32>,
+    ) -> Result<(), WinitHostError> {
+        let scene = self.build_runtime_scene_for_window(window, size)?;
+        let frame_index = self.lifecycle.summary.frames_presented;
+        let Some(gpu_presenter) = self.gpu_presenter.as_mut() else {
             return Ok(());
         };
-        let size = window.inner_size();
+        gpu_presenter.present_scene_frame(window, &scene, frame_index)?;
+        self.lifecycle
+            .record_gpu_frame_presented(gpu_presenter.last_snapshot().is_some());
+        if self.config.exit_after_first_frame {
+            event_loop.exit();
+        }
+        Ok(())
+    }
+
+    fn present_software_frame(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window: &Window,
+        size: PhysicalSize<u32>,
+    ) -> Result<(), WinitHostError> {
         let (Some(width), Some(height)) =
             (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
         else {
             return Ok(());
         };
-        let Some(surface) = self.surface.as_mut() else {
-            return Ok(());
-        };
-        surface.resize(width, height).map_err(|error| {
-            WinitHostError::new(
-                "desktop.surface.resize-failed",
-                format!("failed to resize native presentation surface before render: {error}"),
-            )
-        })?;
+        {
+            let Some(surface) = self.surface.as_mut() else {
+                return Ok(());
+            };
+            surface.resize(width, height).map_err(|error| {
+                WinitHostError::new(
+                    "desktop.surface.resize-failed",
+                    format!("failed to resize native presentation surface before render: {error}"),
+                )
+            })?;
+        }
 
-        let frame = if let Some(runtime_tree) = self.config.runtime_tree() {
-            let logical_width = f64::from(size.width) / window.scale_factor();
-            let logical_height = f64::from(size.height) / window.scale_factor();
-            let viewport = Viewport::new(
-                logical_size_to_f32(logical_width)?,
-                logical_size_to_f32(logical_height)?,
-            );
-            let scene = RuntimeSceneBridge::new(viewport)
-                .build(runtime_tree)
-                .map_err(|error| {
-                    WinitHostError::new(
-                        "desktop.runtime-scene.build-failed",
-                        format!("failed to build runtime scene for desktop frame: {error:?}"),
-                    )
-                })?;
+        let frame = if self.config.runtime_tree().is_some() {
+            let scene = self.build_runtime_scene_for_window(window, size)?;
             self.renderer.render_scene_frame(
                 &scene,
                 size.width,
@@ -655,6 +841,9 @@ impl RuntimeApplication {
                 size.height,
                 window.scale_factor(),
             )?
+        };
+        let Some(surface) = self.surface.as_mut() else {
+            return Ok(());
         };
         let mut buffer = surface.buffer_mut().map_err(|error| {
             WinitHostError::new(
@@ -671,14 +860,33 @@ impl RuntimeApplication {
             )
         })?;
         self.lifecycle.record_frame_presented();
+        if self.config.exit_after_first_frame {
+            event_loop.exit();
+        }
+        Ok(())
+    }
+
+    fn present_frame(&mut self, event_loop: &ActiveEventLoop) -> Result<(), WinitHostError> {
+        if !self.lifecycle.accepts_frame_presentation() {
+            return Ok(());
+        }
+        let Some(window) = self.window.clone() else {
+            return Ok(());
+        };
+        let size = window.inner_size();
+        if NonZeroU32::new(size.width).is_none() || NonZeroU32::new(size.height).is_none() {
+            return Ok(());
+        }
+        if self.gpu_presenter.is_some() {
+            self.present_gpu_frame(event_loop, &window, size)?;
+        } else {
+            self.present_software_frame(event_loop, &window, size)?;
+        }
         if let Some(tick) = self.animation.step_at(self.elapsed_ms()) {
             self.lifecycle.record_animation_tick();
             if tick.reduced_rate_due {
                 self.request_redraw();
             }
-        }
-        if self.config.exit_after_first_frame {
-            event_loop.exit();
         }
         Ok(())
     }
@@ -794,6 +1002,7 @@ impl RuntimeApplication {
     }
 
     fn handle_exiting(&mut self) {
+        self.gpu_presenter = None;
         self.surface = None;
         self.context = None;
         self.window = None;
@@ -816,6 +1025,45 @@ fn logical_size_to_f32(value: f64) -> Result<f32, WinitHostError> {
             "desktop.runtime-scene.invalid-viewport",
             "runtime scene viewport dimensions must be finite and greater than zero",
         ))
+    }
+}
+
+fn window_attributes(config: &DesktopWindowConfig) -> winit::window::WindowAttributes {
+    Window::default_attributes()
+        .with_title(config.title.clone())
+        .with_inner_size(LogicalSize::new(
+            config.metrics.logical_width,
+            config.metrics.logical_height,
+        ))
+}
+
+fn default_runtime_tree(title: &str, width: f32, height: f32) -> RuntimeViewTree {
+    let root_id = RuntimeViewId::new("desktop-default-root");
+    let root = RuntimeViewNode::new(
+        root_id.clone(),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(width, height)),
+        RuntimeVisual::Fill(hawk2ui_render::Color::rgba(8, 10, 14, 255)),
+    );
+    let tree = RuntimeViewTree::new(root);
+    let title_node = RuntimeViewNode::new(
+        RuntimeViewId::new("desktop-default-title"),
+        LayoutStyle::flex_container(FlexDirection::Column)
+            .with_size(LayoutSizing::fixed(width.max(1.0), 64.0)),
+        RuntimeVisual::Text(RuntimeTextVisual::new(
+            title,
+            18.0,
+            hawk2ui_render::Color::rgba(241, 245, 249, 255),
+        )),
+    );
+    match tree.with_child(&root_id, title_node) {
+        Ok(tree) => tree,
+        Err(_) => RuntimeViewTree::new(RuntimeViewNode::new(
+            root_id,
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_size(LayoutSizing::fixed(width, height)),
+            RuntimeVisual::Fill(hawk2ui_render::Color::rgba(8, 10, 14, 255)),
+        )),
     }
 }
 
@@ -969,10 +1217,29 @@ impl RuntimeLifecycle {
         self.summary.window_created = true;
     }
 
+    fn record_presentation_backend_used(
+        &mut self,
+        presentation_backend_used: WinitPresentationBackendUsed,
+    ) {
+        self.summary.presentation_backend_used = presentation_backend_used;
+    }
+
     fn record_frame_presented(&mut self) {
         if self.accepts_frame_presentation() {
             self.summary.frames_presented += 1;
         }
+    }
+
+    fn record_gpu_frame_presented(&mut self, readback_verified: bool) {
+        if self.accepts_frame_presentation() {
+            self.summary.frames_presented += 1;
+            self.summary.gpu_frames_presented += 1;
+            self.summary.gpu_readback_verified |= readback_verified;
+        }
+    }
+
+    fn record_gpu_preferred_fallback(&mut self, error: &WinitHostError) {
+        self.summary.presentation_fallback_reason = Some(error.clone());
     }
 
     fn record_resize(&mut self) {
@@ -1103,8 +1370,8 @@ mod tests {
     use hawk2ui_script::{FrameInput, HostSnapshot};
 
     use super::{
-        RuntimeLifecycle, WinitDesktopScriptEntry, desktop_frame_inputs_from_host_events,
-        logical_size_to_f32, run_script_entry_frame,
+        RuntimeLifecycle, WinitDesktopScriptEntry, WinitHostError,
+        desktop_frame_inputs_from_host_events, logical_size_to_f32, run_script_entry_frame,
     };
 
     #[test]
@@ -1142,6 +1409,26 @@ mod tests {
         lifecycle.request_close();
         lifecycle.record_animation_tick();
         assert_eq!(lifecycle.summary().animation_ticks, 2);
+    }
+
+    #[test]
+    fn runtime_lifecycle_records_gpu_preferred_fallback_reason() {
+        let mut lifecycle = RuntimeLifecycle::default();
+        lifecycle.record_gpu_preferred_fallback(&WinitHostError::new(
+            "desktop.gpu.wayland-required",
+            "Winit GPU presentation currently requires a native Wayland display",
+        ));
+
+        let reason = lifecycle
+            .summary()
+            .presentation_fallback_reason
+            .as_ref()
+            .expect("GPU preferred fallback should retain diagnostic evidence");
+        assert_eq!(reason.rule(), "desktop.gpu.wayland-required");
+        assert_eq!(
+            reason.message(),
+            "Winit GPU presentation currently requires a native Wayland display"
+        );
     }
 
     #[test]

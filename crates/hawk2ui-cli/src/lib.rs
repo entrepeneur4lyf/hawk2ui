@@ -8,7 +8,7 @@ pub mod executor;
 
 pub use commands::{
     BuildCommandResult, BuildCommandRunner, BuildCommandScenario, CliCommand, CliError,
-    CliExitCode, CommandCatalog,
+    CliExitCode, CliPresentationBackend, CommandCatalog,
 };
 pub use dev_loop::{
     DevChangeClassifier, DevErrorOverlay, DevLoop, DevLoopEvent, DevLoopReport, DevPatchKind,

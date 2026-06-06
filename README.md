@@ -27,6 +27,7 @@ Hawk2UI compiles familiar web authoring primitives into a signed native artifact
 ```bash
 cargo run -p hawk2ui-cli -- new            # scaffold a project
 cargo run -p hawk2ui-cli -- dev            # hot-reload the native surface
+cargo run -p hawk2ui-cli -- run-desktop --presentation-backend gpu-preferred
 cargo run -p hawk2ui-cli -- build-dev      # produce an unsigned local artifact
 
 HAWK2UI_RELEASE_SIGNING_KEY_ID=local-release \
@@ -45,7 +46,9 @@ The native stack: `skia-safe` rendering, `taffy` flexbox/grid layout, `parley`/`
 
 ## Status
 
-Implemented on a stable architecture baseline (`docs/decisions/0002-stable-architecture-baseline.md`) with enforced release-readiness gates. The core engine, runtime, desktop and plugin hosts, framework adapters, and the build/CLI toolchain are in place and covered by CI (format, clippy, unit + integration + smoke tests, render benchmark, docs, dependency policy). Full application and plugin packaging is still being completed — see `CHANGELOG.md` for current limitations.
+Implemented against an enforced production baseline. The core engine, runtime, desktop and plugin hosts, framework adapters, and the build/CLI toolchain are in place and covered by CI (format, clippy, unit + integration + smoke tests, render benchmark, docs, dependency policy).
+
+The baseline is stable, production-ready, and feature-complete. No MVP scope, candidate backend, partial framework compiler, placeholder runtime path, or deferred compatibility target satisfies the baseline. Any missing feature, unsupported production platform, stub, TODO, or untested integration is a release blocker until code, tests, manual coverage, and release evidence prove it complete.
 
 ## Build & Test
 
@@ -61,6 +64,7 @@ The `hawk2ui-cli` binary drives the authoring workflow:
 ```bash
 cargo run -p hawk2ui-cli -- new            # scaffold a project
 cargo run -p hawk2ui-cli -- dev            # watch + hot-reload the native surface
+cargo run -p hawk2ui-cli -- run-desktop --presentation-backend gpu-preferred
 cargo run -p hawk2ui-cli -- build-dev      # produce an unsigned local artifact
 HAWK2UI_RELEASE_SIGNING_KEY_ID=local-release \
 HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
@@ -76,13 +80,11 @@ See `examples/` for working `manifest.hawk.toml` layouts (`desktop-basic`, `plug
 
 ## Documentation
 
-- Product direction — `docs/specs/0001-product-direction.md`
-- Domain spec index — `docs/specs/0002-domain-spec-index.md`
-- Rendering architecture — `docs/specs/rendering-architecture.md`
-- Crate selection rationale — `docs/technical/crate-selection.md`
-- Decisions (repo reset, stable baseline) — `docs/decisions/`
-- Domain specs, task lists, and coverage — `specs/`, `tasks/` (`tasks/COVERAGE.md`)
-- User-facing manual — `manual/`
+- User-facing manual — `manual/README.md`
+- Developer guide — `manual/developer-guide.md`
+- API reference — `manual/api-reference.md`
+- Rendering reference — `manual/rendering-reference.md`
+- Packaging guide — `manual/packaging.md`
 
 ## Assets
 
@@ -132,7 +134,8 @@ checks, or source-truth conformance.
 | Platform backends | Remediated | `hawk2ui-platform` now provides executable backends for scoped filesystem reads/writes, policy-approved HTTP(S) GET requests through bounded `ureq`, text clipboard storage, and declared secret-store lookup/redaction, with a deterministic static network backend for offline verification. |
 | Skia CPU renderer depth | Remediated | `hawk2ui-render-skia` now has pixel-tested source-rect image drawing, nearest/linear sampling, mipmap/tile-mode controls, text highlight/stroke/underline/strikethrough/subpixel controls, SVG clip paths, explicit blend-mode rect compositing, structured effects, vector assets, and runtime-scene replay. |
 | Runtime shader effects (`SkRuntimeEffect`) | Remediated | Runtime shader effects now cross the framework boundary: backend-neutral render APIs, retained runtime shader-effect visuals, runtime draw commands, authoring props, Skia replay, bounded `SkSL` compilation, typed float/int uniforms, registered image child shaders, cache stats, capability reporting, and Skia pixel tests. |
-| GPU/Wayland production backend | Open | Baseview has a Ganesh GL path and gated native GPU smoke coverage for X11, but GPU is not yet promoted to production because there is no Wayland production gate. Public compatibility continues to mark GPU as candidate until native Wayland GPU presentation is exercised by code-backed tests. |
+| Desktop Wayland GPU backend | Remediated | `hawk2ui-host-winit` now exposes typed software/GPU-preferred/GPU-required presentation selection, creates native Wayland EGL/Glutin surfaces, renders through Skia Ganesh GL, verifies submitted frames with readback evidence, exposes GPU frame counts in runtime summaries, and has a gated native Wayland smoke test (`HAWK2UI_NATIVE_WAYLAND_GPU_SMOKE=1`). |
+| Baseview native Wayland plugin embedding | Remediated | The vendored Baseview adapter now accepts native Wayland parent handles, opens Wayland child surfaces, creates EGL/OpenGL contexts for GPU plugin editors, reports GL creation failures as hard diagnostics, accepts CLAP Wayland parent ABI calls, and has gated native software/GL Wayland smokes including resize-after-GL coverage. |
 | Security evidence vocabulary | Remediated | `hawk2ui-security` remains an evidence vocabulary for decisions made by concrete validators in `hawk2ui-build`, `hawk2ui-assets`, `hawk2ui-script`, `hawk2ui-platform`, and `hawk2ui-security-model`; conformance tests require the manual to state that boundary. |
 
 Recently closed hardening items include CLAP multi-instance state isolation,

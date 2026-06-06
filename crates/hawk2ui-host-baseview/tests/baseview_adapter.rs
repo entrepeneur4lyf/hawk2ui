@@ -798,6 +798,61 @@ fn baseview_clap_runtime_editor_host_drives_callback_lifecycle_from_plugin_path(
 }
 
 #[test]
+fn baseview_clap_runtime_editor_host_accepts_native_wayland_callback_lifecycle() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": []
+        }
+    }));
+    let (runtime_artifact, verifier) = signed_runtime_artifact_value(sealed_artifact);
+    let output_root = temp_package_root("hawk2ui-baseview-clap-host-wayland-lifecycle");
+    let request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.host-wayland", "Host Wayland", "Hawk2UI"),
+        BundleOutput::new(output_root.to_string_lossy(), "HostWayland"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds")
+        .materialize()
+        .expect("materialization succeeds");
+    let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostWayland.clap");
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
+        .with_release_verifier(verifier);
+
+    host.create(ClapGuiWindowApi::Wayland, false)
+        .expect("native Wayland create resolves verified runtime session");
+    host.set_parent(
+        ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::Wayland, 42)
+            .expect("Wayland CLAP parent handle validates"),
+        "clap-host-wayland-parent",
+    )
+    .expect("native Wayland set-parent attaches live Baseview editor");
+    assert!(host.attached());
+
+    let snapshot = host
+        .show()
+        .expect("native Wayland host show presents runtime frame");
+    assert_eq!((snapshot.width(), snapshot.height()), (320, 180));
+    assert_eq!(snapshot.pixel_at(10, 10), Some(0x001a_6f4a));
+}
+
+#[test]
 fn baseview_clap_runtime_editor_host_requires_trusted_release_key() {
     let sealed_artifact = SealedArtifact::from_manifest(
         ArtifactSchemaVersion::new(1, 0),
@@ -1349,6 +1404,70 @@ fn baseview_clap_runtime_editor_host_binds_generated_text_abi_to_live_editor() {
             .dispatch_text(&mut host, "command=destroy\n")
             .expect("ABI destroy dispatch succeeds"),
         "response=destroyed\n"
+    );
+}
+
+#[test]
+fn baseview_clap_runtime_editor_host_binds_wayland_generated_text_abi() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": []
+        }
+    }));
+    let (runtime_artifact, verifier) = signed_runtime_artifact_value(sealed_artifact);
+    let output_root = temp_package_root("hawk2ui-baseview-clap-host-wayland-text-abi");
+    let request = PackageRequest::new(
+        FormatMetadata::new(
+            "com.hawk2ui.host-wayland-text-abi",
+            "Host Wayland Text ABI",
+            "Hawk2UI",
+        ),
+        BundleOutput::new(output_root.to_string_lossy(), "HostWaylandTextAbi"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds")
+        .materialize()
+        .expect("materialization succeeds");
+    let clap_plugin_path =
+        std::path::Path::new(&outputs[0].output_path).join("HostWaylandTextAbi.clap");
+    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
+        .with_release_verifier(verifier);
+    let bridge = BaseviewClapRuntimeEditorHostAbiBridge::new();
+
+    assert_eq!(
+        bridge
+            .dispatch_text(&mut host, "command=create\napi=wayland\nfloating=false\n")
+            .expect("Wayland ABI create dispatch succeeds"),
+        "response=created\n"
+    );
+    assert_eq!(
+        bridge
+            .dispatch_text(&mut host, "command=set_parent\napi=wayland\nparent=42\n")
+            .expect("Wayland ABI set-parent dispatch succeeds"),
+        "response=parent_attached\n"
+    );
+    assert_eq!(
+        bridge
+            .dispatch_text(&mut host, "command=show\n")
+            .expect("Wayland ABI show dispatch succeeds"),
+        "response=frame_presented\nwidth=320\nheight=180\npresented_frame_count=1\n"
     );
 }
 

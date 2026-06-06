@@ -27,6 +27,65 @@ fn manual(path: &str) -> String {
     read_workspace_file(path)
 }
 
+#[test]
+fn readme_states_non_negotiable_production_baseline() {
+    let readme = manual("README.md");
+
+    for required in [
+        "The baseline is stable, production-ready, and feature-complete.",
+        "No MVP scope, candidate backend, partial framework compiler, placeholder runtime path, or deferred compatibility target satisfies the baseline.",
+        "Any missing feature, unsupported production platform, stub, TODO, or untested integration is a release blocker until code, tests, manual coverage, and release evidence prove it complete.",
+    ] {
+        assert!(
+            readme.contains(required),
+            "README must state non-negotiable production baseline sentence: {required}"
+        );
+    }
+
+    for stale_reference in [
+        "docs/specs/",
+        "docs/decisions/",
+        "docs/technical/",
+        "current limitations",
+    ] {
+        assert!(
+            !readme.contains(stale_reference),
+            "README must not point users at removed planning docs or soften baseline with `{stale_reference}`"
+        );
+    }
+}
+
+#[test]
+fn readme_states_desktop_and_baseview_wayland_gpu_backends_are_remediated() {
+    let readme = manual("README.md");
+
+    for required in [
+        "Desktop Wayland GPU backend",
+        "Remediated",
+        "HAWK2UI_NATIVE_WAYLAND_GPU_SMOKE=1",
+        "Baseview native Wayland plugin embedding",
+        "vendored Baseview adapter now accepts native Wayland parent handles",
+        "reports GL creation failures as hard diagnostics",
+        "CLAP Wayland parent ABI",
+    ] {
+        assert!(
+            readme.contains(required),
+            "README must preserve GPU/Wayland production status evidence: {required}"
+        );
+    }
+
+    for stale in [
+        "baseview-truce` remains X11-only",
+        "DAW-owned plugin editor embedding on native Wayland still requires",
+        "Baseview plugin editor embedding on native Wayland remains blocked",
+    ] {
+        assert!(
+            !readme.contains(stale),
+            "README must not preserve stale Wayland blocker wording: {stale}"
+        );
+    }
+}
+
 fn read_workspace_bytes(path: &str) -> Vec<u8> {
     fs::read(workspace_path(path))
         .unwrap_or_else(|error| panic!("required source-of-truth file `{path}`: {error}"))

@@ -34,6 +34,7 @@ fn native_wayland_baseview_child_exposes_egl_gl_context_when_enabled() {
     );
 
     let context_seen = Arc::new(AtomicBool::new(false));
+    let resize_requested = Arc::new(AtomicBool::new(false));
     let frame_completed = Arc::new(AtomicBool::new(false));
     let last_error = Arc::new(Mutex::new(None));
     let mut event_loop = EventLoop::builder();
@@ -43,6 +44,7 @@ fn native_wayland_baseview_child_exposes_egl_gl_context_when_enabled() {
 
     let mut app = GlSmokeApp::new(
         Arc::clone(&context_seen),
+        Arc::clone(&resize_requested),
         Arc::clone(&frame_completed),
         Arc::clone(&last_error),
     );
@@ -64,6 +66,10 @@ fn native_wayland_baseview_child_exposes_egl_gl_context_when_enabled() {
         "Baseview Wayland child should expose an EGL/OpenGL context when gl_config is set"
     );
     assert!(
+        resize_requested.load(Ordering::SeqCst),
+        "Baseview Wayland child should accept a resize after GL context creation"
+    );
+    assert!(
         frame_completed.load(Ordering::SeqCst),
         "Baseview Wayland GL context should make current and swap buffers"
     );
@@ -74,6 +80,7 @@ struct GlSmokeApp {
     child: Option<baseview::WindowHandle>,
     parent: Option<Window>,
     context_seen: Arc<AtomicBool>,
+    resize_requested: Arc<AtomicBool>,
     frame_completed: Arc<AtomicBool>,
     last_error: Arc<Mutex<Option<String>>>,
     window_created: bool,
@@ -83,6 +90,7 @@ struct GlSmokeApp {
 impl GlSmokeApp {
     fn new(
         context_seen: Arc<AtomicBool>,
+        resize_requested: Arc<AtomicBool>,
         frame_completed: Arc<AtomicBool>,
         last_error: Arc<Mutex<Option<String>>>,
     ) -> Self {
@@ -91,6 +99,7 @@ impl GlSmokeApp {
             child: None,
             parent: None,
             context_seen,
+            resize_requested,
             frame_completed,
             last_error,
             window_created: false,
@@ -128,12 +137,14 @@ impl GlSmokeApp {
         options = options.with_gl_config(GlConfig::default());
 
         let context_seen = Arc::clone(&self.context_seen);
+        let resize_requested = Arc::clone(&self.resize_requested);
         let frame_completed = Arc::clone(&self.frame_completed);
         let last_error = Arc::clone(&self.last_error);
         let child = adapter
             .open_parented_window_with_options(options, move |window| GlSmokeHandler {
                 context_available_at_build: window.gl_context().is_some(),
                 context_seen,
+                resize_requested,
                 frame_completed,
                 last_error,
             })
@@ -174,6 +185,7 @@ impl ApplicationHandler for GlSmokeApp {
 struct GlSmokeHandler {
     context_available_at_build: bool,
     context_seen: Arc<AtomicBool>,
+    resize_requested: Arc<AtomicBool>,
     frame_completed: Arc<AtomicBool>,
     last_error: Arc<Mutex<Option<String>>>,
 }
@@ -185,14 +197,22 @@ impl WindowHandler for GlSmokeHandler {
             window.close();
             return;
         }
-        let Some(context) = window.gl_context() else {
+        if window.gl_context().is_none() {
             self.record_error("GL context was unavailable during frame rendering".to_owned());
             window.close();
             return;
-        };
+        }
         self.context_seen.store(true, Ordering::SeqCst);
 
-        let _ = context;
+        window.resize(baseview::Size::new(400.0, 220.0));
+        self.resize_requested.store(true, Ordering::SeqCst);
+
+        let Some(context) = window.gl_context() else {
+            self.record_error("GL context was unavailable after Wayland resize".to_owned());
+            window.close();
+            return;
+        };
+        context.swap_buffers();
         self.frame_completed.store(true, Ordering::SeqCst);
         window.close();
     }

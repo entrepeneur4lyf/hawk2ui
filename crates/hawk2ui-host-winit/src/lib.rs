@@ -1,6 +1,7 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 //! `Winit`-backed desktop host adapter for `Hawk2UI`.
 
+mod gpu_frame;
 mod runtime;
 mod software_frame;
 
@@ -19,7 +20,7 @@ use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, TouchPhase,
 pub use runtime::{
     WinitDesktopReload, WinitDesktopReloadKind, WinitDesktopReloadReport, WinitDesktopRuntime,
     WinitDesktopRuntimeConfig, WinitDesktopRuntimeSummary, WinitDesktopRuntimeSurfaceState,
-    WinitDesktopScriptEntry,
+    WinitDesktopScriptEntry, WinitPresentationBackend, WinitPresentationBackendUsed,
 };
 pub use software_frame::{
     DesktopErrorOverlay, SoftwareFrame, SoftwareFrameRenderer, physical_frame_size,

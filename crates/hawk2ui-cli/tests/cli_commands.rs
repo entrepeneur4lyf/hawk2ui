@@ -1,5 +1,7 @@
 use hawk2ui_build::{ArtifactSignatureStatus, ArtifactSigningKey, SealedArtifact};
-use hawk2ui_cli::{CliCommand, CliExitCode, CommandCatalog, WorkspaceCommandRunner};
+use hawk2ui_cli::{
+    CliCommand, CliExitCode, CliPresentationBackend, CommandCatalog, WorkspaceCommandRunner,
+};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -72,6 +74,33 @@ fn cli_commands_parse_known_commands_and_reject_invalid_command() {
     assert_eq!(
         catalog.parse(["hawk2ui", "explain"]).unwrap(),
         CliCommand::Explain
+    );
+    assert_eq!(
+        catalog.parse(["hawk2ui", "run-desktop"]).unwrap(),
+        CliCommand::RunDesktop {
+            presentation_backend: CliPresentationBackend::Software,
+        }
+    );
+    assert_eq!(
+        catalog
+            .parse([
+                "hawk2ui",
+                "run-desktop",
+                "--presentation-backend",
+                "gpu-required",
+            ])
+            .unwrap(),
+        CliCommand::RunDesktop {
+            presentation_backend: CliPresentationBackend::GpuRequired,
+        }
+    );
+    assert_eq!(
+        catalog
+            .parse(["hawk2ui", "run-desktop", "--gpu-preferred"])
+            .unwrap(),
+        CliCommand::RunDesktop {
+            presentation_backend: CliPresentationBackend::GpuPreferred,
+        }
     );
 
     let error = catalog
@@ -840,7 +869,9 @@ path = "assets/logo.svg"
     );
     write_file(&root.join("src/main.ts"), "export const app = 'desktop';");
 
-    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::RunDesktop);
+    let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::RunDesktop {
+        presentation_backend: CliPresentationBackend::Software,
+    });
 
     assert_eq!(execution.exit_code, CliExitCode::Validation);
     assert_eq!(execution.diagnostics[0].rule, "build.file-missing");

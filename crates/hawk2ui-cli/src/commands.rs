@@ -25,7 +25,10 @@ pub enum CliCommand {
         path: Option<String>,
     },
     /// Run a desktop app.
-    RunDesktop,
+    RunDesktop {
+        /// Native presentation backend requested for the desktop runtime.
+        presentation_backend: CliPresentationBackend,
+    },
     /// Package plugin targets.
     PackagePlugin,
     /// Export the central generated JSON Schema catalog.
@@ -40,6 +43,41 @@ pub enum CliCommand {
     Explain,
 }
 
+/// Native desktop presentation backend requested by the CLI.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum CliPresentationBackend {
+    /// Use Skia CPU raster rendering copied into a native software surface.
+    #[default]
+    Software,
+    /// Prefer Skia GPU presentation and fall back to software when unavailable.
+    GpuPreferred,
+    /// Require Skia GPU presentation and fail startup when unavailable.
+    GpuRequired,
+}
+
+impl CliPresentationBackend {
+    /// Parses a presentation backend name accepted by `run-desktop`.
+    #[must_use]
+    pub fn parse_name(name: &str) -> Option<Self> {
+        match name {
+            "software" => Some(Self::Software),
+            "gpu-preferred" => Some(Self::GpuPreferred),
+            "gpu-required" => Some(Self::GpuRequired),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable CLI label for the backend.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Software => "software",
+            Self::GpuPreferred => "gpu-preferred",
+            Self::GpuRequired => "gpu-required",
+        }
+    }
+}
+
 impl CliCommand {
     fn from_name(name: &str) -> Option<Self> {
         match name {
@@ -50,7 +88,9 @@ impl CliCommand {
             "build-dev" => Some(Self::BuildDev),
             "build-release" => Some(Self::BuildRelease),
             "verify-artifact" => Some(Self::VerifyArtifact { path: None }),
-            "run-desktop" => Some(Self::RunDesktop),
+            "run-desktop" => Some(Self::RunDesktop {
+                presentation_backend: CliPresentationBackend::Software,
+            }),
             "package-plugin" => Some(Self::PackagePlugin),
             "export-schemas" => Some(Self::ExportSchemas),
             "export-params" => Some(Self::ExportParams),
@@ -112,16 +152,56 @@ impl CommandCatalog {
             exit_code: CliExitCode::Usage,
             message: format!("unknown command: {}", command_name.as_ref()),
         })?;
-        if let CliCommand::VerifyArtifact { path } = &mut command
-            && let Some(value) = args.next()
-        {
-            *path = Some(value.as_ref().to_string());
-        }
-        if let Some(extra) = args.next() {
-            return Err(CliError {
-                exit_code: CliExitCode::Usage,
-                message: format!("unexpected argument: {}", extra.as_ref()),
-            });
+        match &mut command {
+            CliCommand::VerifyArtifact { path } => {
+                if let Some(value) = args.next() {
+                    *path = Some(value.as_ref().to_string());
+                }
+                if let Some(extra) = args.next() {
+                    return Err(unexpected_argument(extra.as_ref()));
+                }
+            }
+            CliCommand::RunDesktop {
+                presentation_backend,
+            } => {
+                while let Some(argument) = args.next() {
+                    match argument.as_ref() {
+                        "--presentation-backend" => {
+                            let Some(value) = args.next() else {
+                                return Err(CliError {
+                                    exit_code: CliExitCode::Usage,
+                                    message: "--presentation-backend requires a value".into(),
+                                });
+                            };
+                            *presentation_backend = CliPresentationBackend::parse_name(
+                                value.as_ref(),
+                            )
+                            .ok_or_else(|| CliError {
+                                exit_code: CliExitCode::Usage,
+                                message: format!(
+                                    "unknown presentation backend: {}",
+                                    value.as_ref()
+                                ),
+                            })?;
+                        }
+                        "--software" => {
+                            *presentation_backend = CliPresentationBackend::Software;
+                        }
+                        "--gpu-preferred" => {
+                            *presentation_backend = CliPresentationBackend::GpuPreferred;
+                        }
+                        "--gpu-required" => {
+                            *presentation_backend = CliPresentationBackend::GpuRequired;
+                        }
+                        other => return Err(unexpected_argument(other)),
+                    }
+                }
+            }
+            _ => {
+                if let Some(extra) = args.next() {
+                    return Err(unexpected_argument(extra.as_ref()));
+                }
+            }
         }
         Ok(command)
     }
@@ -140,7 +220,7 @@ impl CommandCatalog {
             "  build-dev        Build and write a development sealed artifact",
             "  build-release    Build and write a production sealed artifact",
             "  verify-artifact  Verify a sealed artifact container",
-            "  run-desktop      Run a desktop native surface",
+            "  run-desktop      Run a desktop native surface [--presentation-backend software|gpu-preferred|gpu-required]",
             "  package-plugin   Materialize CLAP, VST3, AU, and standalone package layouts",
             "  export-schemas   Export the central generated JSON Schema catalog",
             "  export-params    Emit truce parameter source generated from the manifest",
@@ -149,6 +229,13 @@ impl CommandCatalog {
             "  explain          Explain project targets, capabilities, and next commands",
         ]
         .join("\n")
+    }
+}
+
+fn unexpected_argument(argument: &str) -> CliError {
+    CliError {
+        exit_code: CliExitCode::Usage,
+        message: format!("unexpected argument: {argument}"),
     }
 }
 

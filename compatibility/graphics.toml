@@ -17,3 +17,30 @@ backend = "skia-gpu-candidate"
 supported = false
 features = ["high-dpi", "image-layers", "vector-layers", "effects"]
 diagnostic = "backend.capability.gpu-unavailable"
+
+[[backends]]
+backend = "skia-gpu-wayland-desktop"
+supported = true
+features = [
+    "gpu-ganesh-gl",
+    "wayland-egl",
+    "high-dpi",
+    "image-layers",
+    "vector-layers",
+    "effects",
+    "runtime-scene-replay",
+]
+diagnostic = "backend.capability.gpu-unavailable"
+
+[[backends]]
+backend = "skia-gpu-wayland-baseview-plugin"
+supported = true
+features = [
+    "gpu-ganesh-gl",
+    "wayland-egl",
+    "plugin-editor-embedding",
+    "clap-wayland-parent",
+    "runtime-scene-replay",
+    "resize-after-gl",
+]
+diagnostic = "backend.capability.gpu-unavailable"

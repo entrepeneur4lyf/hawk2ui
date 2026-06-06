@@ -27,7 +27,7 @@ use hawk2ui_build::{
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
     WinitDesktopReload, WinitDesktopReloadKind, WinitDesktopRuntime, WinitDesktopRuntimeConfig,
-    WinitDesktopScriptEntry,
+    WinitDesktopRuntimeSummary, WinitDesktopScriptEntry, WinitPresentationBackend,
 };
 use hawk2ui_plugin::{BundleOutput, FormatMetadata, PluginEditor, PluginEditorSize};
 use hawk2ui_plugin_adapters::{
@@ -43,9 +43,9 @@ use hawk2ui_script::{
 use hawk2ui_security_model::{PackageTrustRecord, PackageTrustValidator, VerificationReportStatus};
 
 use crate::{
-    CliCommand, CliDiagnostic, CliExitCode, DevChangeClassifier, DevLoop, DevPatchKind,
-    DevPatchPlan, DevWatchKind, DevWatchedPath, FileSystemWatcher, NotifyFileSystemWatcher,
-    RecordingReloadTarget, RecordingWatcher,
+    CliCommand, CliDiagnostic, CliExitCode, CliPresentationBackend, DevChangeClassifier, DevLoop,
+    DevPatchKind, DevPatchPlan, DevWatchKind, DevWatchedPath, FileSystemWatcher,
+    NotifyFileSystemWatcher, RecordingReloadTarget, RecordingWatcher,
 };
 
 const ARTIFACT_SCHEMA_VERSION: ArtifactSchemaVersion = ArtifactSchemaVersion::new(1, 0);
@@ -304,7 +304,9 @@ impl WorkspaceCommandRunner {
             CliCommand::BuildDev => self.build(BuildProfile::Development),
             CliCommand::BuildRelease => self.build(BuildProfile::Production),
             CliCommand::VerifyArtifact { path } => self.verify_artifact(path.as_deref()),
-            CliCommand::RunDesktop => self.run_desktop(),
+            CliCommand::RunDesktop {
+                presentation_backend,
+            } => self.run_desktop(presentation_backend),
             CliCommand::PackagePlugin => self.package_plugin(),
             CliCommand::ExportSchemas => Self::export_schemas(),
             CliCommand::ExportParams => self.export_params(),
@@ -365,7 +367,7 @@ impl WorkspaceCommandRunner {
             Err(execution) => return execution,
         };
         if manifest.has_target(PackageTarget::Desktop) {
-            return self.run_desktop();
+            return self.run_desktop(CliPresentationBackend::Software);
         }
         if manifest.has_target(PackageTarget::Plugin) {
             return self.package_plugin();
@@ -712,7 +714,7 @@ impl WorkspaceCommandRunner {
         ))
     }
 
-    fn run_desktop(&self) -> CommandExecution {
+    fn run_desktop(&self, presentation_backend: CliPresentationBackend) -> CommandExecution {
         let output = match self.build_workspace() {
             Ok(output) => output,
             Err(execution) => return execution,
@@ -734,15 +736,12 @@ impl WorkspaceCommandRunner {
                 Err(diagnostic) => {
                     return CommandExecution::failure(CliExitCode::Runtime, vec![*diagnostic]);
                 }
-            };
+            }
+            .with_presentation_backend(runtime_presentation_backend(presentation_backend));
         match WinitDesktopRuntime::new().run_blocking(config) {
-            Ok(summary) => CommandExecution::success(format!(
-                "desktop runtime exited cleanly\nframes-presented: {}\nresizes: {}\ndpi-changes: {}\ninput-events: {}\nclose-requested: {}\n",
-                summary.frames_presented,
-                summary.resizes,
-                summary.dpi_changes,
-                summary.input_events,
-                summary.close_requested
+            Ok(summary) => CommandExecution::success(desktop_runtime_summary_output(
+                presentation_backend,
+                &summary,
             )),
             Err(error) => CommandExecution::failure(
                 CliExitCode::Runtime,
@@ -1520,6 +1519,43 @@ fn plugin_package_formats() -> impl Iterator<Item = PackageFormat> {
         PackageFormat::Standalone,
     ]
     .into_iter()
+}
+
+fn runtime_presentation_backend(
+    presentation_backend: CliPresentationBackend,
+) -> WinitPresentationBackend {
+    match presentation_backend {
+        CliPresentationBackend::Software => WinitPresentationBackend::Software,
+        CliPresentationBackend::GpuPreferred => WinitPresentationBackend::GpuPreferred,
+        CliPresentationBackend::GpuRequired => WinitPresentationBackend::GpuRequired,
+    }
+}
+
+fn desktop_runtime_summary_output(
+    presentation_backend: CliPresentationBackend,
+    summary: &WinitDesktopRuntimeSummary,
+) -> String {
+    let mut output = format!(
+        "desktop runtime exited cleanly\npresentation-backend-requested: {}\npresentation-backend-used: {}\nframes-presented: {}\ngpu-frames-presented: {}\ngpu-readback-verified: {}\nresizes: {}\ndpi-changes: {}\ninput-events: {}\nclose-requested: {}\n",
+        presentation_backend.label(),
+        summary.presentation_backend_used.label(),
+        summary.frames_presented,
+        summary.gpu_frames_presented,
+        summary.gpu_readback_verified,
+        summary.resizes,
+        summary.dpi_changes,
+        summary.input_events,
+        summary.close_requested
+    );
+    if let Some(reason) = summary.presentation_fallback_reason.as_ref() {
+        let _ = writeln!(output, "presentation-fallback-rule: {}", reason.rule());
+        let _ = writeln!(
+            output,
+            "presentation-fallback-message: {}",
+            reason.message()
+        );
+    }
+    output
 }
 
 fn signed_runtime_artifact_value(
@@ -2302,6 +2338,7 @@ mod tests {
         ArtifactHash, BuildPipeline, CompiledFrameworkRecord, CompiledScriptRecord, SealedArtifact,
         SourceFramework, VerificationReport,
     };
+    use hawk2ui_host_winit::{WinitHostError, WinitPresentationBackendUsed};
     use hawk2ui_layout::Viewport;
     use hawk2ui_render::Color;
     use hawk2ui_runtime::RuntimeSceneBridge;
@@ -2312,6 +2349,27 @@ mod tests {
 
     fn float_eq_f64(left: f64, right: f64) -> bool {
         (left - right).abs() < f64::EPSILON
+    }
+
+    #[test]
+    fn desktop_runtime_summary_output_includes_gpu_preferred_fallback_reason() {
+        let summary = WinitDesktopRuntimeSummary {
+            presentation_backend_used: WinitPresentationBackendUsed::Software,
+            presentation_fallback_reason: Some(WinitHostError::new(
+                "desktop.gpu.wayland-required",
+                "Winit GPU presentation currently requires a native Wayland display",
+            )),
+            ..WinitDesktopRuntimeSummary::default()
+        };
+
+        let output = desktop_runtime_summary_output(CliPresentationBackend::GpuPreferred, &summary);
+
+        assert!(output.contains("presentation-backend-requested: gpu-preferred"));
+        assert!(output.contains("presentation-backend-used: software"));
+        assert!(output.contains("presentation-fallback-rule: desktop.gpu.wayland-required"));
+        assert!(output.contains(
+            "presentation-fallback-message: Winit GPU presentation currently requires a native Wayland display"
+        ));
     }
 
     #[test]

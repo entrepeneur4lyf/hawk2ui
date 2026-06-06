@@ -13,11 +13,17 @@ description = "Winit-backed desktop host adapter for Hawk2UI."
 name = "hawk2ui_host_winit"
 path = "src/lib.rs"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
 
 [dependencies]
 arboard = "3.6.1"
+glutin = { version = "0.32.3", default-features = false, features = ["egl", "glx", "wayland", "x11"] }
+glutin-winit = { version = "0.5.0", default-features = false, features = ["egl", "glx", "wayland", "x11"] }
 hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
 hawk2ui-assets = { version = "0.1.0", path = "../hawk2ui-assets" }
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }

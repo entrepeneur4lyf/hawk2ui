@@ -809,6 +809,20 @@ fn gpu_editor_gl_config() -> baseview::gl::GlConfig {
     }
 }
 
+/// Takes a build-time GPU editor error recorded by the Baseview handler.
+#[cfg(target_os = "linux")]
+fn take_gpu_editor_open_error(
+    last_error: &Arc<Mutex<Option<BaseviewHostError>>>,
+) -> Option<BaseviewHostError> {
+    match last_error.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => Some(BaseviewHostError::new(
+            "baseview.gpu-error-sink-poisoned",
+            "Baseview GPU editor error sink was poisoned while opening the editor window",
+        )),
+    }
+}
+
 // SAFETY: Baseview's `GlContext::make_current`/`make_not_current` are `unsafe`
 // because making a context current is only sound on a single thread at a time.
 // Every caller below invokes these on Baseview's GUI thread — the thread that
@@ -1619,12 +1633,18 @@ impl BaseviewPluginAdapter {
         let metrics = self.config.metrics;
         let mut options = self.open_options.clone();
         options.gl_config = Some(gpu_editor_gl_config());
+        let open_error = Arc::clone(&last_error);
         let handle = self.open_parented_window_with_options(options, move |window| {
             BaseviewGlSkiaFrameHandler::new(window, scene, metrics, presented_frames, last_error)
                 .with_event_sink(event_sink)
                 .with_scene_producer(scene_producer)
         })?;
-        Ok(BaseviewEditorWindowHandle { handle })
+        let mut editor_handle = BaseviewEditorWindowHandle { handle };
+        if let Some(error) = take_gpu_editor_open_error(&open_error) {
+            editor_handle.close();
+            return Err(error);
+        }
+        Ok(editor_handle)
     }
 }
 
@@ -2110,12 +2130,6 @@ impl BaseviewClapRuntimeEditorHost {
             return Err(BaseviewHostError::new(
                 "baseview.clap-runtime-editor.floating-unsupported",
                 "Baseview CLAP runtime editors must be embedded in a host parent",
-            ));
-        }
-        if api == ClapGuiWindowApi::Wayland {
-            return Err(BaseviewHostError::new(
-                "baseview.clap-runtime-editor.unsupported-api",
-                "Baseview CLAP runtime editors do not support native Wayland parent handles",
             ));
         }
         let session = ClapRuntimeEditorSession::load_trusted_from_clap_plugin_path(
@@ -3059,6 +3073,23 @@ mod tests {
                 display: 0x100,
                 surface: 0x200,
             })
+        );
+    }
+
+    #[test]
+    fn gpu_editor_open_error_is_taken_from_shared_error_sink() {
+        let errors = Arc::new(Mutex::new(Some(BaseviewHostError::new(
+            "baseview.gl.context-missing",
+            "baseview did not create an OpenGL context",
+        ))));
+
+        let error = take_gpu_editor_open_error(&errors)
+            .expect("GPU editor open should surface build-time GL errors");
+
+        assert_eq!(error.rule(), "baseview.gl.context-missing");
+        assert!(
+            take_gpu_editor_open_error(&errors).is_none(),
+            "GPU editor open error should only be reported once"
         );
     }
 }

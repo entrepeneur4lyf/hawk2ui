@@ -23,4 +23,4 @@ Unsupported selector forms report these diagnostic rules: `selector.combinator.u
 
 ## Rendering Checks
 
-If rendering differs by host, confirm the requested backend is supported. The supported backend in the compatibility matrix is `skia-cpu-raster`; `skia-gpu-candidate` is recorded as a candidate, not a supported production backend.
+If rendering differs by host, confirm the requested backend is supported. The supported backends in the compatibility matrix are `skia-cpu-raster`, `skia-gpu-wayland-desktop`, and `skia-gpu-wayland-baseview-plugin`; `skia-gpu-candidate` is recorded as a candidate for GPU paths that are not promoted for the active host. GPU-required paths must report a backend diagnostic rather than silently falling back when context creation or presentation is unavailable.

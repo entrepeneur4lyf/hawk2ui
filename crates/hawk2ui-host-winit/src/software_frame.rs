@@ -258,7 +258,7 @@ impl SoftwareFrameRenderer {
     }
 }
 
-fn register_runtime_assets(
+pub(crate) fn register_runtime_assets(
     backend: &mut SkiaRendererBackend,
     assets: &[AssetRecord],
 ) -> Result<(), WinitHostError> {
@@ -513,7 +513,7 @@ fn surface_to_frame(
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn scale_factor_to_f32(scale_factor: f64) -> Result<f32, WinitHostError> {
+pub(crate) fn scale_factor_to_f32(scale_factor: f64) -> Result<f32, WinitHostError> {
     if !scale_factor.is_finite() || scale_factor <= 0.0 {
         return Err(WinitHostError::new(
             "desktop.frame.invalid-scale",
@@ -542,7 +542,7 @@ fn validate_pixel_size(width: u32, height: u32) -> Result<(), WinitHostError> {
     }
 }
 
-fn map_backend_error(error: &BackendError) -> WinitHostError {
+pub(crate) fn map_backend_error(error: &BackendError) -> WinitHostError {
     WinitHostError::new(
         error.diagnostic().rule(),
         error.diagnostic().message().to_string(),

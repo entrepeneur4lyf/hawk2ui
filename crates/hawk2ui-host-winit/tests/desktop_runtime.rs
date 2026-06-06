@@ -3,7 +3,8 @@ use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits};
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
     DesktopErrorOverlay, SoftwareFrameRenderer, WinitDesktopReload, WinitDesktopReloadKind,
-    WinitDesktopRuntimeConfig, WinitDesktopRuntimeSurfaceState, WinitHostError,
+    WinitDesktopRuntimeConfig, WinitDesktopRuntimeSummary, WinitDesktopRuntimeSurfaceState,
+    WinitHostError, WinitPresentationBackend, WinitPresentationBackendUsed,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_render::{Color, CustomSurfaceCategory, CustomSurfaceDataSnapshot};
@@ -351,6 +352,38 @@ fn runtime_config_accepts_animation_cadence_policy() {
     config.validate().expect("valid runtime config");
     assert_eq!(config.animation_policy().max_frame_rate_hz(), Some(30));
     assert_eq!(config.animation_policy().reduced_rate_divisor(), 2);
+}
+
+#[test]
+fn runtime_config_defaults_to_software_and_can_require_wayland_gpu_presentation() {
+    let config = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+        "app",
+        SurfaceMetrics::new(640.0, 480.0, 1.0),
+    ));
+    assert_eq!(
+        config.presentation_backend(),
+        WinitPresentationBackend::Software
+    );
+
+    let gpu_required = config.with_presentation_backend(WinitPresentationBackend::GpuRequired);
+    gpu_required.validate().expect("valid GPU-required config");
+    assert_eq!(
+        gpu_required.presentation_backend(),
+        WinitPresentationBackend::GpuRequired
+    );
+}
+
+#[test]
+fn runtime_summary_defaults_to_software_presentation_evidence() {
+    let summary = WinitDesktopRuntimeSummary::default();
+
+    assert_eq!(
+        summary.presentation_backend_used,
+        WinitPresentationBackendUsed::Software
+    );
+    assert_eq!(summary.gpu_frames_presented, 0);
+    assert!(!summary.gpu_readback_verified);
+    assert!(summary.presentation_fallback_reason.is_none());
 }
 
 #[test]

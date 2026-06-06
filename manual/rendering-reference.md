@@ -16,7 +16,9 @@ The rendering pipeline consumes layout geometry and produces backend-neutral pai
 The graphics compatibility matrix names these backends:
 
 - `skia-cpu-raster`: supported; covers CPU raster, high DPI, text shaping, source-rect/sampled/tiled image draws, vector layers, structured effects, SVG clip paths, explicit blend-mode rect compositing, `SkRuntimeEffect` shader effects, runtime-scene replay, and dirty regions.
-- `skia-gpu-candidate`: not currently marked supported; Baseview has a Ganesh GL path and gated native GPU smoke coverage for X11, but production support requires a Wayland-capable gate before this backend can be promoted.
+- `skia-gpu-candidate`: not currently marked supported for all hosts; non-promoted GPU paths must report `backend.capability.gpu-unavailable` instead of silently falling back when GPU is required.
+- `skia-gpu-wayland-desktop`: supported for `winit` desktop windows on native Wayland; the host creates a Wayland EGL/Glutin surface, renders runtime scenes through Skia Ganesh GL, swaps native buffers, and records readback evidence in the desktop runtime summary.
+- `skia-gpu-wayland-baseview-plugin`: supported for Baseview-backed plugin editor child windows on native Wayland; the host accepts Wayland parent handles, creates child EGL/OpenGL contexts, renders runtime scenes through Skia Ganesh GL, reports context creation failures as hard diagnostics, and covers resize-after-GL creation in the gated native smoke.
 
 The stable diagnostic rules for backend capability gaps are `backend.capability.unsupported` and `backend.capability.gpu-unavailable`.
 
