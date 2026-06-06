@@ -13,8 +13,9 @@ use std::{
 use hawk2ui_assets::{AssetBackend, AssetHash, AssetLimits, AssetRecord};
 use hawk2ui_authoring::{
     FrameworkDynamicBinding, FrameworkDynamicValue, FrameworkInitialDynamicValue,
-    FrameworkInitialDynamicValueMode, FrameworkNativeProgram, FrameworkNativeProgramWire,
-    NativeRuntimeBridge, NativeRuntimeBridgeArtifact,
+    FrameworkInitialDynamicValueMode, FrameworkNativeNode, FrameworkNativeProgram,
+    FrameworkNativeProgramWire, NativeLifecycleEvent, NativeRuntimeBridge,
+    NativeRuntimeBridgeArtifact,
 };
 use hawk2ui_build::{
     ArtifactSchemaVersion, ArtifactSignaturePolicy, ArtifactSignatureVerificationKey,
@@ -1795,6 +1796,7 @@ fn entry_framework_runtime_tree(
         .map_err(|error| framework_artifact_diagnostic(framework, error.rule(), error.message()))?;
     let program = FrameworkNativeProgram::try_from(wire)
         .map_err(|error| framework_artifact_diagnostic(framework, error.rule(), error.message()))?;
+    reject_framework_handlers_without_executable_payloads(framework, &program)?;
     let authoring = program
         .to_native_authoring_artifact(&framework.source_path, true)
         .map_err(|error| {
@@ -1809,6 +1811,65 @@ fn entry_framework_runtime_tree(
         .map_err(|error| framework_artifact_diagnostic(framework, error.rule(), error.message()))?;
     let bridged = apply_initial_framework_dynamic_bindings(framework, &program, bridged)?;
     Ok(Some(bridged.runtime_tree().clone()))
+}
+
+fn reject_framework_handlers_without_executable_payloads(
+    framework: &CompiledFrameworkRecord,
+    program: &FrameworkNativeProgram,
+) -> Result<(), Box<CliDiagnostic>> {
+    let mut handlers = Vec::new();
+    collect_framework_handler_refs(program.root(), &mut handlers);
+    if handlers.is_empty() {
+        return Ok(());
+    }
+    handlers.sort();
+    handlers.dedup();
+    Err(Box::new(
+        CliDiagnostic::error(
+            "runtime.desktop.framework-handlers-unsupported",
+            format!(
+                "compiled {} framework artifact for {} declares handler references [{}], but the sealed artifact does not include executable handler payloads",
+                source_framework_label(framework.framework),
+                framework.source_path,
+                handlers.join(", ")
+            ),
+        )
+        .file(framework.source_path.clone()),
+    ))
+}
+
+fn collect_framework_handler_refs(node: &FrameworkNativeNode, handlers: &mut Vec<String>) {
+    for event in node.events() {
+        handlers.push(format!(
+            "{}:{}:{}",
+            event.target().as_str(),
+            event.event().stable_key(),
+            event.handler().as_str()
+        ));
+    }
+    for (event, handler) in node.lifecycle() {
+        handlers.push(format!(
+            "{}:lifecycle.{}:{}",
+            node.id().as_str(),
+            framework_lifecycle_event_label(*event),
+            handler.as_str()
+        ));
+    }
+    for (_, child) in node.children() {
+        collect_framework_handler_refs(child, handlers);
+    }
+}
+
+const fn framework_lifecycle_event_label(event: NativeLifecycleEvent) -> &'static str {
+    match event {
+        NativeLifecycleEvent::Mounted => "mounted",
+        NativeLifecycleEvent::Suspended => "suspended",
+        NativeLifecycleEvent::Resumed => "resumed",
+        NativeLifecycleEvent::HotReloaded => "hot-reloaded",
+        NativeLifecycleEvent::ErrorBoundary => "error-boundary",
+        NativeLifecycleEvent::Shutdown => "shutdown",
+        NativeLifecycleEvent::Unmounted => "unmounted",
+    }
 }
 
 fn apply_initial_framework_dynamic_bindings(
@@ -3005,6 +3066,63 @@ name = "linux-wayland"
             "runtime.desktop.dynamic-environment-missing"
         );
         assert!(diagnostic.message.contains("label"));
+    }
+
+    #[test]
+    fn desktop_runtime_config_rejects_framework_handlers_without_executable_payloads() {
+        let manifest = HawkManifest::parse(
+            r#"[identity]
+id = "com.example.framework-handlers"
+name = "Framework Handlers"
+version = "1.0.0"
+
+[source]
+entry = "src/App.tsx"
+framework = "react"
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+        )
+        .expect("manifest parses");
+        let compiler_artifact = r#"{
+  "schema_version": 1,
+  "root": {
+    "id": "root",
+    "kind": "view",
+    "events": [
+      { "kind": "pointer.press", "handler": "handlePress", "payload_fields": ["position"] }
+    ]
+  }
+}"#;
+        let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+            .with_compiled_framework(
+                CompiledFrameworkRecord::new(
+                    "entry",
+                    SourceFramework::React,
+                    "src/App.tsx",
+                    "frameworks/entry.hawk.framework.json",
+                    ArtifactHash::from_bytes(compiler_artifact.as_bytes()),
+                )
+                .with_compiler_artifact_json(compiler_artifact),
+            );
+        let output = BuildWorkspaceOutput {
+            manifest,
+            pipeline: BuildPipeline::production(),
+            artifact,
+            verification: VerificationReport::new("com.example.framework-handlers"),
+        };
+
+        let diagnostic = desktop_runtime_config_from_build_output(&output, true)
+            .expect_err("framework handlers need executable payloads");
+
+        assert_eq!(
+            diagnostic.rule,
+            "runtime.desktop.framework-handlers-unsupported"
+        );
+        assert!(diagnostic.message.contains("handlePress"));
+        assert!(diagnostic.message.contains("src/App.tsx"));
     }
 
     #[test]
