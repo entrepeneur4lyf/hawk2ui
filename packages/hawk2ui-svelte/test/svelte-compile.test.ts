@@ -78,6 +78,35 @@ test("Svelte compiler preserves dynamic layout prop bindings from template expre
   ]);
 });
 
+test("Svelte compiler preserves dynamic visual prop bindings from template expressions", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let panelBackground = getSurface(); let titleSize = getSize(); let titleColor = getColor();</script><hawk-view id="root"><hawk-view id="panel" background={panelBackground}></hawk-view><hawk-text id="title" font_size={titleSize} color={titleColor}>Title</hawk-text></hawk-view>',
+  });
+
+  expect(output.compilerArtifact.dynamic_bindings).toEqual([
+    {
+      node_id: "panel",
+      target: { type: "prop", name: "background" },
+      expression: "panelBackground",
+      dependencies: ["panelBackground"],
+    },
+    {
+      node_id: "title",
+      target: { type: "prop", name: "font_size" },
+      expression: "titleSize",
+      dependencies: ["titleSize"],
+    },
+    {
+      node_id: "title",
+      target: { type: "prop", name: "color" },
+      expression: "titleColor",
+      dependencies: ["titleColor"],
+    },
+  ]);
+});
+
 test("Svelte compiler rejects duplicate child ids", () => {
   expect(() =>
     compileHawkSvelte({

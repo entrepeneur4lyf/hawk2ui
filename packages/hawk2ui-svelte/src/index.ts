@@ -31,6 +31,8 @@ interface SvelteLoweringContext {
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
 }
 
+const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
+
 export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteCompileOutput {
   if (!input.filename.endsWith(".svelte")) {
     throw new Error("Hawk2UI Svelte inputs must be .svelte files.");
@@ -84,7 +86,7 @@ function svelteElementToSpec(node: AstNode, context: SvelteLoweringContext): Haw
     children: childSpecs(node, context),
   };
 
-  const props = layoutProps(node, context, id, "svelte");
+  const props = runtimeProps(node, context, id, "svelte");
   const text = textContent(node, context, id);
   if (text) props.text = text;
   return Object.keys(props).length > 0 ? { ...spec, props } : spec;
@@ -245,6 +247,48 @@ function layoutProps(
     if (value !== undefined) props[name] = value;
   }
   return props;
+}
+
+function runtimeProps(
+  node: AstNode,
+  context: SvelteLoweringContext,
+  nodeId: string,
+  framework: string,
+): Record<string, string | number | boolean> {
+  const props = layoutProps(node, context, nodeId, framework);
+  for (const name of VISUAL_PROP_NAMES) {
+    const value = dynamicVisualAttributeValue(node, name, context, nodeId, framework);
+    if (value !== undefined) props[name] = value;
+  }
+  return props;
+}
+
+function dynamicVisualAttributeValue(
+  node: AstNode,
+  name: string,
+  context: SvelteLoweringContext,
+  nodeId: string,
+  framework: string,
+): string | number | boolean | undefined {
+  const attribute = attributesOf(node).find((item) => item.type === "Attribute" && item.name === name);
+  if (!attribute) return undefined;
+  const value = attribute.value;
+  if (!Array.isArray(value) || value.length === 0) return "";
+  const first = value[0] as AstNode;
+  if (first.type === "Text") return stringField(first, "data");
+  if (first.type !== "MustacheTag") {
+    throw new Error(`${framework}.attribute.unsupported: visual prop \`${name}\` on \`${nodeId}\` must be a static scalar or expression.`);
+  }
+  const expression = first.expression as AstNode | undefined;
+  const staticValue = staticTextExpressionValue(expression, context);
+  if (staticValue !== undefined) return staticValue;
+  context.dynamicBindings.push({
+    node_id: nodeId,
+    target: { type: "prop", name },
+    expression: expressionSource(expression, context),
+    dependencies: expressionDependencies(expression),
+  });
+  return undefined;
 }
 
 function dynamicLayoutAttributeValue(

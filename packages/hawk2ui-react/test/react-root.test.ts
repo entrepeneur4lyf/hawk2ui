@@ -58,6 +58,35 @@ test("React compiler preserves dynamic layout prop bindings from TSX expressions
   ]);
 });
 
+test("React compiler preserves dynamic visual prop bindings from TSX expressions", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'const panelBackground = getSurface(); const titleSize = getSize(); const titleColor = getColor(); export function App() { return <hawk-view id="root"><hawk-view id="panel" background={panelBackground}></hawk-view><hawk-text id="title" font_size={titleSize} color={titleColor}>Title</hawk-text></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.dynamic_bindings).toEqual([
+    {
+      node_id: "panel",
+      target: { type: "prop", name: "background" },
+      expression: "panelBackground",
+      dependencies: ["panelBackground"],
+    },
+    {
+      node_id: "title",
+      target: { type: "prop", name: "font_size" },
+      expression: "titleSize",
+      dependencies: ["titleSize"],
+    },
+    {
+      node_id: "title",
+      target: { type: "prop", name: "color" },
+      expression: "titleColor",
+      dependencies: ["titleColor"],
+    },
+  ]);
+});
+
 test("React root renders, updates, removes children, and unmounts deterministically", () => {
   const root = createHawkReactRoot({ id: "host" });
 

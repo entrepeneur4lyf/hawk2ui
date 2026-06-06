@@ -58,6 +58,35 @@ test("Vue compiler preserves dynamic layout prop bindings from template bindings
   ]);
 });
 
+test("Vue compiler preserves dynamic visual prop bindings from template bindings", () => {
+  const output = compileHawkVue({
+    filename: "App.vue",
+    source:
+      '<script setup>const panelBackground = computed(() => "#111111"); const titleSize = computed(() => 18); const titleColor = computed(() => "#ffffff");</script><template><hawk-view id="root"><hawk-view id="panel" :background="panelBackground"></hawk-view><hawk-text id="title" :font_size="titleSize" :color="titleColor">Title</hawk-text></hawk-view></template>',
+  });
+
+  expect(output.compilerArtifact.dynamic_bindings).toEqual([
+    {
+      node_id: "panel",
+      target: { type: "prop", name: "background" },
+      expression: "panelBackground",
+      dependencies: ["panelBackground"],
+    },
+    {
+      node_id: "title",
+      target: { type: "prop", name: "font_size" },
+      expression: "titleSize",
+      dependencies: ["titleSize"],
+    },
+    {
+      node_id: "title",
+      target: { type: "prop", name: "color" },
+      expression: "titleColor",
+      dependencies: ["titleColor"],
+    },
+  ]);
+});
+
 test("Vue renderer renders, patches, removes children, and unmounts deterministically", () => {
   const renderer = createHawkVueRenderer();
   const target = { id: "host" };

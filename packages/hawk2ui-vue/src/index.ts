@@ -38,6 +38,8 @@ interface VueLoweringContext {
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
 }
 
+const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
+
 export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput {
   if (!input.filename.endsWith(".vue")) {
     throw new Error("Hawk2UI Vue compiler inputs must be .vue files.");
@@ -99,7 +101,7 @@ function vueElementToSpec(node: AstNode, context: VueLoweringContext): HawkEleme
     lifecycle: vueLifecycle(node),
     children: vueChildSpecs(node, context),
   };
-  const props = layoutProps(node, context, id, "vue");
+  const props = runtimeProps(node, context, id, "vue");
   const text = vueTextContent(node, context, id);
   if (text) props.text = text;
   return Object.keys(props).length > 0 ? { ...spec, props } : spec;
@@ -256,6 +258,53 @@ function layoutProps(
     if (value !== undefined) props[name] = value;
   }
   return props;
+}
+
+function runtimeProps(
+  node: AstNode,
+  context: VueLoweringContext,
+  nodeId: string,
+  framework: string,
+): Record<string, string | number | boolean> {
+  const props = layoutProps(node, context, nodeId, framework);
+  for (const name of VISUAL_PROP_NAMES) {
+    const value = dynamicVisualAttributeValue(node, name, context, nodeId, framework);
+    if (value !== undefined) props[name] = value;
+  }
+  return props;
+}
+
+function dynamicVisualAttributeValue(
+  node: AstNode,
+  name: string,
+  context: VueLoweringContext,
+  nodeId: string,
+  framework: string,
+): string | number | boolean | undefined {
+  const staticAttr = arrayField(node, "props").find((prop) => prop.type === 6 && prop.name === name);
+  const staticValue = staticAttr?.value as AstNode | undefined;
+  if (typeof staticValue?.content === "string") return staticValue.content;
+  if (staticAttr) {
+    throw new Error(`${framework}.attribute.unsupported: visual prop \`${name}\` on \`${nodeId}\` must be a static scalar or expression.`);
+  }
+
+  const bound = vueDirectives(node, "bind").find(
+    (directive) => stringField(directive.arg as AstNode | undefined, "content") === name,
+  );
+  const expression = stringField(bound?.exp as AstNode | undefined, "content");
+  if (bound && !expression) {
+    throw new Error(`${framework}.attribute.unsupported: visual prop \`${name}\` on \`${nodeId}\` requires a binding expression.`);
+  }
+  if (!expression) return undefined;
+  const staticExpression = staticVueExpressionValue(expression, context);
+  if (staticExpression !== undefined) return staticExpression;
+  context.dynamicBindings.push({
+    node_id: nodeId,
+    target: { type: "prop", name },
+    expression: expressionSource(expression, framework),
+    dependencies: expressionDependencies(expression),
+  });
+  return undefined;
 }
 
 function dynamicLayoutAttributeValue(

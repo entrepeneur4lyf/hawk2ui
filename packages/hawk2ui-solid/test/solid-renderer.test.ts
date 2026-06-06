@@ -59,6 +59,35 @@ test("Solid compiler preserves dynamic layout prop bindings from signal expressi
   ]);
 });
 
+test("Solid compiler preserves dynamic visual prop bindings from signal expressions", () => {
+  const output = compileHawkSolid({
+    filename: "App.tsx",
+    source:
+      'const [panelBackground] = createSignal("#111111"); const [titleSize] = createSignal(18); const [titleColor] = createSignal("#ffffff"); export function App() { return <hawk-view id="root"><hawk-view id="panel" background={panelBackground()}></hawk-view><hawk-text id="title" font_size={titleSize()} color={titleColor()}>Title</hawk-text></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.dynamic_bindings).toEqual([
+    {
+      node_id: "panel",
+      target: { type: "prop", name: "background" },
+      expression: "panelBackground()",
+      dependencies: ["panelBackground"],
+    },
+    {
+      node_id: "title",
+      target: { type: "prop", name: "font_size" },
+      expression: "titleSize()",
+      dependencies: ["titleSize"],
+    },
+    {
+      node_id: "title",
+      target: { type: "prop", name: "color" },
+      expression: "titleColor()",
+      dependencies: ["titleColor"],
+    },
+  ]);
+});
+
 test("Solid renderer records fine-grained updates, removals, and dispose", () => {
   let component = {
     id: "root",

@@ -43,6 +43,8 @@ interface ReturnedJsxElement {
   readonly scope: AstNode | undefined;
 }
 
+const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
+
 export function compileHawkReact(input: HawkReactCompileInput): HawkReactCompileOutput {
   if (!/\.[jt]sx$/.test(input.filename)) {
     throw new Error("Hawk2UI React compiler inputs must be .jsx or .tsx files.");
@@ -126,7 +128,7 @@ function jsxElementToSpec(node: AstNode, context: ReactLoweringContext): HawkEle
     lifecycle: reactLifecycle(node),
     children: reactChildSpecs(node, context),
   };
-  const props = layoutProps(node, context, id, "react");
+  const props = runtimeProps(node, context, id, "react");
   const text = reactTextContent(node, context, id);
   if (text) props.text = text;
   return Object.keys(props).length > 0 ? { ...spec, props } : spec;
@@ -294,6 +296,45 @@ function layoutProps(
     if (value !== undefined) props[name] = value;
   }
   return props;
+}
+
+function runtimeProps(
+  node: AstNode,
+  context: ReactLoweringContext,
+  nodeId: string,
+  framework: string,
+): Record<string, string | number | boolean> {
+  const props = layoutProps(node, context, nodeId, framework);
+  for (const name of VISUAL_PROP_NAMES) {
+    const value = dynamicVisualAttributeValue(node, name, context, nodeId, framework);
+    if (value !== undefined) props[name] = value;
+  }
+  return props;
+}
+
+function dynamicVisualAttributeValue(
+  node: AstNode,
+  name: string,
+  context: ReactLoweringContext,
+  nodeId: string,
+  framework: string,
+): string | number | boolean | undefined {
+  const value = jsxRawAttributeValue(node, name);
+  if (!value) return undefined;
+  if (value.type === "StringLiteral") return value.value as string;
+  if (value.type !== "JSXExpressionContainer") {
+    throw new Error(`${framework}.attribute.unsupported: visual prop \`${name}\` on \`${nodeId}\` must be a static scalar or expression.`);
+  }
+  const expression = value.expression as AstNode | undefined;
+  const staticValue = staticTextExpressionValue(expression, context);
+  if (staticValue !== undefined) return staticValue;
+  context.dynamicBindings.push({
+    node_id: nodeId,
+    target: { type: "prop", name },
+    expression: expressionSource(expression, framework),
+    dependencies: expressionDependencies(expression),
+  });
+  return undefined;
 }
 
 function dynamicLayoutAttributeValue(
