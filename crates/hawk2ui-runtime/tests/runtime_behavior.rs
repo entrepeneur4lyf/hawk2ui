@@ -1057,6 +1057,14 @@ fn runtime_scene_bridge_uses_text_measurement_for_intrinsic_text_geometry() {
         frame.geometry_for(&RuntimeViewId::new("label")).unwrap(),
         Geometry::new(0.0, 0.0, 180.0, 19.0)
     );
+    assert!(frame.draw_commands().iter().any(|command| matches!(
+        command,
+        RuntimeDrawCommand::Text {
+            font_family,
+            text,
+            ..
+        } if text == "Measured" && font_family == "Atkinson"
+    )));
 }
 
 #[test]

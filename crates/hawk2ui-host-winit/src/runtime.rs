@@ -3,7 +3,7 @@
 use std::{
     num::NonZeroU32,
     sync::{Arc, mpsc::Receiver},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use hawk2ui_assets::AssetRecord;
@@ -436,6 +436,12 @@ pub struct WinitDesktopRuntimeSummary {
     pub frames_presented: u64,
     /// Number of full frames presented by the native GPU backend.
     pub gpu_frames_presented: u64,
+    /// Duration of the last successfully presented frame in microseconds.
+    pub last_frame_duration_micros: u64,
+    /// Maximum duration of any successfully presented frame in microseconds.
+    pub max_frame_duration_micros: u64,
+    /// Sum of all successfully presented frame durations in microseconds.
+    pub total_frame_duration_micros: u64,
     /// Whether a submitted GPU frame was read back for verification.
     pub gpu_readback_verified: bool,
     /// Diagnostic explaining why a preferred backend fell back to another presentation path.
@@ -452,6 +458,16 @@ pub struct WinitDesktopRuntimeSummary {
     pub native_reloads: u64,
     /// Whether a close request was received.
     pub close_requested: bool,
+}
+
+impl WinitDesktopRuntimeSummary {
+    /// Returns the average successful frame duration in microseconds.
+    #[must_use]
+    pub fn average_frame_duration_micros(&self) -> u64 {
+        self.total_frame_duration_micros
+            .checked_div(self.frames_presented)
+            .unwrap_or(0)
+    }
 }
 
 /// Production `winit` desktop runtime.
@@ -794,9 +810,11 @@ impl RuntimeApplication {
         let Some(gpu_presenter) = self.gpu_presenter.as_mut() else {
             return Ok(());
         };
+        let frame_started_at = Instant::now();
         gpu_presenter.present_scene_frame(window, &scene, frame_index)?;
+        let frame_duration = frame_started_at.elapsed();
         self.lifecycle
-            .record_gpu_frame_presented(gpu_presenter.last_snapshot().is_some());
+            .record_gpu_frame_presented(gpu_presenter.last_snapshot().is_some(), frame_duration);
         if self.config.exit_after_first_frame {
             event_loop.exit();
         }
@@ -814,6 +832,7 @@ impl RuntimeApplication {
         else {
             return Ok(());
         };
+        let frame_started_at = Instant::now();
         {
             let Some(surface) = self.surface.as_mut() else {
                 return Ok(());
@@ -859,7 +878,8 @@ impl RuntimeApplication {
                 format!("failed to present native frame: {error}"),
             )
         })?;
-        self.lifecycle.record_frame_presented();
+        self.lifecycle
+            .record_frame_presented(frame_started_at.elapsed());
         if self.config.exit_after_first_frame {
             event_loop.exit();
         }
@@ -1224,18 +1244,30 @@ impl RuntimeLifecycle {
         self.summary.presentation_backend_used = presentation_backend_used;
     }
 
-    fn record_frame_presented(&mut self) {
+    fn record_frame_presented(&mut self, frame_duration: Duration) {
         if self.accepts_frame_presentation() {
             self.summary.frames_presented += 1;
+            self.record_frame_duration(frame_duration);
         }
     }
 
-    fn record_gpu_frame_presented(&mut self, readback_verified: bool) {
+    fn record_gpu_frame_presented(&mut self, readback_verified: bool, frame_duration: Duration) {
         if self.accepts_frame_presentation() {
             self.summary.frames_presented += 1;
             self.summary.gpu_frames_presented += 1;
             self.summary.gpu_readback_verified |= readback_verified;
+            self.record_frame_duration(frame_duration);
         }
+    }
+
+    fn record_frame_duration(&mut self, frame_duration: Duration) {
+        let micros = duration_to_micros_u64(frame_duration);
+        self.summary.last_frame_duration_micros = micros;
+        self.summary.max_frame_duration_micros = self.summary.max_frame_duration_micros.max(micros);
+        self.summary.total_frame_duration_micros = self
+            .summary
+            .total_frame_duration_micros
+            .saturating_add(micros);
     }
 
     fn record_gpu_preferred_fallback(&mut self, error: &WinitHostError) {
@@ -1306,6 +1338,10 @@ impl RuntimeLifecycle {
     }
 }
 
+fn duration_to_micros_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+}
+
 impl ApplicationHandler for RuntimeApplication {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.handle_resumed(event_loop);
@@ -1364,6 +1400,8 @@ impl ApplicationHandler<WinitDesktopRuntimeUserEvent> for RuntimeApplication {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use hawk2ui_host::{DesktopHostEvent, KeyboardInput, PointerInput};
     use hawk2ui_layout::Viewport;
     use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge};
@@ -1379,8 +1417,12 @@ mod tests {
         let mut lifecycle = RuntimeLifecycle::default();
 
         assert!(lifecycle.accepts_frame_presentation());
-        lifecycle.record_frame_presented();
+        lifecycle.record_frame_presented(Duration::from_millis(3));
         assert_eq!(lifecycle.summary().frames_presented, 1);
+        assert_eq!(lifecycle.summary().last_frame_duration_micros, 3_000);
+        assert_eq!(lifecycle.summary().max_frame_duration_micros, 3_000);
+        assert_eq!(lifecycle.summary().total_frame_duration_micros, 3_000);
+        assert_eq!(lifecycle.summary().average_frame_duration_micros(), 3_000);
 
         assert!(lifecycle.request_close());
         assert!(!lifecycle.request_close());
@@ -1391,11 +1433,30 @@ mod tests {
         lifecycle.record_resize();
         lifecycle.record_dpi_change();
         lifecycle.record_input_event();
-        lifecycle.record_frame_presented();
+        lifecycle.record_frame_presented(Duration::from_millis(9));
         assert_eq!(lifecycle.summary().resizes, 0);
         assert_eq!(lifecycle.summary().dpi_changes, 0);
         assert_eq!(lifecycle.summary().input_events, 0);
         assert_eq!(lifecycle.summary().frames_presented, 1);
+        assert_eq!(lifecycle.summary().last_frame_duration_micros, 3_000);
+        assert_eq!(lifecycle.summary().max_frame_duration_micros, 3_000);
+        assert_eq!(lifecycle.summary().total_frame_duration_micros, 3_000);
+    }
+
+    #[test]
+    fn runtime_lifecycle_records_gpu_frame_timing_and_readback() {
+        let mut lifecycle = RuntimeLifecycle::default();
+
+        lifecycle.record_gpu_frame_presented(true, Duration::from_millis(4));
+        lifecycle.record_gpu_frame_presented(false, Duration::from_millis(6));
+
+        assert_eq!(lifecycle.summary().frames_presented, 2);
+        assert_eq!(lifecycle.summary().gpu_frames_presented, 2);
+        assert!(lifecycle.summary().gpu_readback_verified);
+        assert_eq!(lifecycle.summary().last_frame_duration_micros, 6_000);
+        assert_eq!(lifecycle.summary().max_frame_duration_micros, 6_000);
+        assert_eq!(lifecycle.summary().total_frame_duration_micros, 10_000);
+        assert_eq!(lifecycle.summary().average_frame_duration_micros(), 5_000);
     }
 
     #[test]

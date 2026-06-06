@@ -333,6 +333,17 @@ pub struct SkiaTextDrawOptions {
     subpixel: bool,
 }
 
+#[derive(Clone, Copy)]
+struct SkiaTextRenderRequest<'text> {
+    text: &'text str,
+    font_family: Option<&'text str>,
+    x: f32,
+    y: f32,
+    font_size: f32,
+    color: Color,
+    options: SkiaTextDrawOptions,
+}
+
 impl SkiaTextDrawOptions {
     /// Creates default text draw options with fill-only, anti-aliased text.
     #[must_use]
@@ -1492,6 +1503,36 @@ impl SkiaRendererBackend {
         Ok(())
     }
 
+    /// Draws text at a concrete baseline position with an explicit preferred font family.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] when there is no active frame, text support is unavailable, font
+    /// metrics are invalid, or Skia cannot resolve any usable typeface.
+    pub fn draw_text_at_with_family(
+        &mut self,
+        text: &str,
+        font_family: &str,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        color: Color,
+    ) -> Result<(), BackendError> {
+        self.render_text_request(SkiaTextRenderRequest {
+            text,
+            font_family: Some(font_family),
+            x,
+            y,
+            font_size,
+            color,
+            options: SkiaTextDrawOptions::new(),
+        })?;
+        self.commands.push(format!(
+            "text-at-family:{text}:{font_family}:{x},{y}:{font_size}"
+        ));
+        Ok(())
+    }
+
     /// Draws a shaped text layout at a concrete top-left position.
     ///
     /// # Errors
@@ -2189,11 +2230,13 @@ impl SkiaRendererBackend {
             RuntimeDrawCommand::Text {
                 geometry,
                 text,
+                font_family,
                 font_size,
                 color,
                 ..
-            } => self.draw_text_at(
+            } => self.draw_text_at_with_family(
                 text,
+                font_family,
                 geometry.x,
                 geometry.y + *font_size,
                 *font_size,
@@ -2460,6 +2503,21 @@ impl SkiaRendererBackend {
         color: Color,
         options: SkiaTextDrawOptions,
     ) -> Result<(), BackendError> {
+        self.render_text_request(SkiaTextRenderRequest {
+            text,
+            font_family: None,
+            x,
+            y,
+            font_size,
+            color,
+            options,
+        })
+    }
+
+    fn render_text_request(
+        &mut self,
+        request: SkiaTextRenderRequest<'_>,
+    ) -> Result<(), BackendError> {
         self.require_active_frame()?;
         if !self.capabilities.text {
             return self.fail(
@@ -2467,55 +2525,71 @@ impl SkiaRendererBackend {
                 "backend does not support text rendering",
             );
         }
-        validate_text_placement(x, y, font_size).inspect_err(|error| {
+        validate_text_placement(request.x, request.y, request.font_size).inspect_err(|error| {
             self.diagnostics.push(error.diagnostic().clone());
         })?;
-        let Some(typeface) = self.default_typeface.clone() else {
+        let requested_typeface = request
+            .font_family
+            .filter(|family| !family.trim().is_empty())
+            .and_then(|family| {
+                FontMgr::new().legacy_make_typeface(Some(family), FontStyle::normal())
+            });
+        let Some(typeface) = requested_typeface.or_else(|| self.default_typeface.clone()) else {
             return self.fail(
                 "skia.text.typeface-unavailable",
-                "system font manager did not provide a default typeface",
+                "system font manager did not provide a requested or default typeface",
             );
         };
-        validate_text_draw_options(options).inspect_err(|error| {
+        validate_text_draw_options(request.options).inspect_err(|error| {
             self.diagnostics.push(error.diagnostic().clone());
         })?;
-        let mut font = Font::new(typeface, font_size);
-        font.set_subpixel(options.subpixel);
-        let mut fill_paint = paint(color, PaintStyle::Fill);
+        let mut font = Font::new(typeface, request.font_size);
+        font.set_subpixel(request.options.subpixel);
+        let mut fill_paint = paint(request.color, PaintStyle::Fill);
         fill_paint.set_anti_alias(true);
-        let text_width = measured_text_width(&font, text, &fill_paint, font_size);
+        let text_width = measured_text_width(&font, request.text, &fill_paint, request.font_size);
         self.with_active_surface(|surface| {
-            if let Some(highlight) = options.highlight {
+            if let Some(highlight) = request.options.highlight {
                 let mut highlight_paint = paint(highlight, PaintStyle::Fill);
                 highlight_paint.set_anti_alias(false);
                 surface.canvas().draw_rect(
-                    Rect::from_xywh(x, y - font_size, text_width, font_size * 1.1),
+                    Rect::from_xywh(
+                        request.x,
+                        request.y - request.font_size,
+                        text_width,
+                        request.font_size * 1.1,
+                    ),
                     &highlight_paint,
                 );
             }
-            if let Some(stroke) = options.stroke {
+            if let Some(stroke) = request.options.stroke {
                 let mut stroke_paint = paint(stroke.color, PaintStyle::Stroke);
                 stroke_paint.set_anti_alias(true);
                 stroke_paint.set_stroke_width(stroke.width);
-                surface
-                    .canvas()
-                    .draw_str(text, (x, y), &font, &stroke_paint);
+                surface.canvas().draw_str(
+                    request.text,
+                    (request.x, request.y),
+                    &font,
+                    &stroke_paint,
+                );
             }
-            surface.canvas().draw_str(text, (x, y), &font, &fill_paint);
-            if let Some(underline) = options.underline {
+            surface
+                .canvas()
+                .draw_str(request.text, (request.x, request.y), &font, &fill_paint);
+            if let Some(underline) = request.options.underline {
                 draw_text_decoration(
                     surface.canvas(),
-                    x,
-                    y + font_size * 0.1,
+                    request.x,
+                    request.y + request.font_size * 0.1,
                     text_width,
                     underline,
                 );
             }
-            if let Some(strikethrough) = options.strikethrough {
+            if let Some(strikethrough) = request.options.strikethrough {
                 draw_text_decoration(
                     surface.canvas(),
-                    x,
-                    y - font_size * 0.35,
+                    request.x,
+                    request.y - request.font_size * 0.35,
                     text_width,
                     strikethrough,
                 );

@@ -877,7 +877,12 @@ fn plugin_adapters_generate_loadable_vst3_cdylib_factory() {
     let package_root = Path::new(&vst3_output.output_path);
     let generated_root = package_root.join("Contents/Resources/generated-vst3");
     let generated_manifest = generated_root.join("Cargo.toml");
+    let generated_source = generated_root.join("src/lib.rs");
     assert!(generated_manifest.is_file());
+    let source = std::fs::read_to_string(&generated_source).expect("generated VST3 source reads");
+    assert!(source.contains("hawk2ui-vst3-state-v1"));
+    assert!(source.contains("write_vst3_state"));
+    assert!(source.contains("restore_vst3_state"));
 
     let target_dir = output_root.join("target");
     let status = std::process::Command::new("cargo")
@@ -1156,11 +1161,13 @@ fn main() {
             (factory_vtbl.getClassInfo)(factory, 0, &mut processor),
             kResultOk
         );
-        assert_eq!(c_chars_to_string(&processor.category), "Audio Module Class");
-        assert_eq!(c_chars_to_string(&processor.name), "VST3 Loadable");
-        instantiate_class(factory, processor.cid);
+          assert_eq!(c_chars_to_string(&processor.category), "Audio Module Class");
+          assert_eq!(c_chars_to_string(&processor.name), "VST3 Loadable");
+          instantiate_class(factory, processor.cid);
+          instantiate_component_routing(factory, processor.cid);
+          instantiate_processor_passthrough(factory, processor.cid);
 
-        let mut controller = std::mem::MaybeUninit::<PClassInfo>::zeroed().assume_init();
+          let mut controller = std::mem::MaybeUninit::<PClassInfo>::zeroed().assume_init();
         assert_eq!(
             (factory_vtbl.getClassInfo)(factory, 1, &mut controller),
             kResultOk
@@ -1187,11 +1194,164 @@ unsafe fn instantiate_class(factory: *mut IPluginFactory, cid: TUID) {
     );
     assert_eq!(result, kResultOk);
     assert!(!object.is_null());
-    let unknown = object.cast::<FUnknown>();
-    ((*(*unknown).vtbl).release)(unknown);
-}
+      let unknown = object.cast::<FUnknown>();
+      ((*(*unknown).vtbl).release)(unknown);
+  }
 
-unsafe fn instantiate_controller_with_parameters(factory: *mut IPluginFactory, cid: TUID) {
+  unsafe fn instantiate_component_routing(factory: *mut IPluginFactory, cid: TUID) {
+      let mut object = ptr::null_mut::<c_void>();
+      let result = ((*(*factory).vtbl).createInstance)(
+          factory,
+          cid.as_ptr(),
+          IComponent_iid.as_ptr(),
+          &mut object,
+      );
+      assert_eq!(result, kResultOk);
+      assert!(!object.is_null());
+      let component = object.cast::<IComponent>();
+      let vtbl = &*(*component).vtbl;
+      let mut input = RoutingInfo {
+          mediaType: MediaTypes_::kAudio as MediaType,
+          busIndex: 0,
+          channel: 1,
+      };
+      let mut output = RoutingInfo {
+          mediaType: 0,
+          busIndex: -1,
+          channel: -1,
+      };
+      assert_eq!(
+          (vtbl.getRoutingInfo)(component, &mut input, &mut output),
+          kResultOk
+      );
+      assert_eq!(output.mediaType, MediaTypes_::kAudio as MediaType);
+      assert_eq!(output.busIndex, 0);
+      assert_eq!(output.channel, 1);
+
+      let unknown = object.cast::<FUnknown>();
+      ((*(*unknown).vtbl).release)(unknown);
+  }
+
+  unsafe fn instantiate_processor_passthrough(factory: *mut IPluginFactory, cid: TUID) {
+      let mut object = ptr::null_mut::<c_void>();
+      let result = ((*(*factory).vtbl).createInstance)(
+          factory,
+          cid.as_ptr(),
+          IAudioProcessor_iid.as_ptr(),
+          &mut object,
+      );
+      assert_eq!(result, kResultOk);
+      assert!(!object.is_null());
+      let processor = object.cast::<IAudioProcessor>();
+      let vtbl = &*(*processor).vtbl;
+      assert_eq!(
+          (vtbl.canProcessSampleSize)(
+              processor,
+              SymbolicSampleSizes_::kSample32 as i32
+          ),
+          kResultOk
+      );
+      assert_eq!(
+          (vtbl.canProcessSampleSize)(
+              processor,
+              SymbolicSampleSizes_::kSample64 as i32
+          ),
+          kResultOk
+      );
+      assert_process32_passthrough(processor, vtbl);
+      assert_process64_passthrough(processor, vtbl);
+
+      let unknown = object.cast::<FUnknown>();
+      ((*(*unknown).vtbl).release)(unknown);
+  }
+
+  unsafe fn assert_process32_passthrough(
+      processor: *mut IAudioProcessor,
+      vtbl: &IAudioProcessorVtbl,
+  ) {
+      let mut input_left = [0.25_f32, -0.5, 0.75];
+      let mut input_right = [1.0_f32, 0.5, -1.0];
+      let mut output_left = [0.0_f32; 3];
+      let mut output_right = [0.0_f32; 3];
+      let mut input_channels = [input_left.as_mut_ptr(), input_right.as_mut_ptr()];
+      let mut output_channels = [output_left.as_mut_ptr(), output_right.as_mut_ptr()];
+      let mut input_bus = AudioBusBuffers {
+          numChannels: 2,
+          silenceFlags: 0,
+          __field0: AudioBusBuffers__type0 {
+              channelBuffers32: input_channels.as_mut_ptr(),
+          },
+      };
+      let mut output_bus = AudioBusBuffers {
+          numChannels: 2,
+          silenceFlags: 0,
+          __field0: AudioBusBuffers__type0 {
+              channelBuffers32: output_channels.as_mut_ptr(),
+          },
+      };
+      let mut process_data = ProcessData {
+          processMode: 0,
+          symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
+          numSamples: 3,
+          numInputs: 1,
+          numOutputs: 1,
+          inputs: &mut input_bus,
+          outputs: &mut output_bus,
+          inputParameterChanges: ptr::null_mut(),
+          outputParameterChanges: ptr::null_mut(),
+          inputEvents: ptr::null_mut(),
+          outputEvents: ptr::null_mut(),
+          processContext: ptr::null_mut(),
+      };
+      assert_eq!((vtbl.process)(processor, &mut process_data), kResultOk);
+      assert_eq!(output_left, input_left);
+      assert_eq!(output_right, input_right);
+  }
+
+  unsafe fn assert_process64_passthrough(
+      processor: *mut IAudioProcessor,
+      vtbl: &IAudioProcessorVtbl,
+  ) {
+      let mut input_left = [0.125_f64, -0.25, 0.5];
+      let mut input_right = [0.75_f64, 0.0, -0.75];
+      let mut output_left = [0.0_f64; 3];
+      let mut output_right = [0.0_f64; 3];
+      let mut input_channels = [input_left.as_mut_ptr(), input_right.as_mut_ptr()];
+      let mut output_channels = [output_left.as_mut_ptr(), output_right.as_mut_ptr()];
+      let mut input_bus = AudioBusBuffers {
+          numChannels: 2,
+          silenceFlags: 0,
+          __field0: AudioBusBuffers__type0 {
+              channelBuffers64: input_channels.as_mut_ptr(),
+          },
+      };
+      let mut output_bus = AudioBusBuffers {
+          numChannels: 2,
+          silenceFlags: 0,
+          __field0: AudioBusBuffers__type0 {
+              channelBuffers64: output_channels.as_mut_ptr(),
+          },
+      };
+      let mut process_data = ProcessData {
+          processMode: 0,
+          symbolicSampleSize: SymbolicSampleSizes_::kSample64 as i32,
+          numSamples: 3,
+          numInputs: 1,
+          numOutputs: 1,
+          inputs: &mut input_bus,
+          outputs: &mut output_bus,
+          inputParameterChanges: ptr::null_mut(),
+          outputParameterChanges: ptr::null_mut(),
+          inputEvents: ptr::null_mut(),
+          outputEvents: ptr::null_mut(),
+          processContext: ptr::null_mut(),
+      };
+      assert_eq!((vtbl.process)(processor, &mut process_data), kResultOk);
+      assert_eq!(output_left, input_left);
+      assert_eq!(output_right, input_right);
+  }
+
+  unsafe fn instantiate_controller_with_parameters(factory: *mut IPluginFactory, cid: TUID) {
     let mut object = ptr::null_mut::<c_void>();
     let result = ((*(*factory).vtbl).createInstance)(
         factory,
@@ -1215,10 +1375,24 @@ unsafe fn instantiate_controller_with_parameters(factory: *mut IPluginFactory, c
 
     assert!(((vtbl.normalizedParamToPlain)(controller, 7, 0.5) + 24.0).abs() < f64::EPSILON);
     assert!(((vtbl.plainParamToNormalized)(controller, 7, -24.0) - 0.5).abs() < f64::EPSILON);
-    assert_eq!((vtbl.setParamNormalized)(controller, 7, 0.75), kResultOk);
-    assert!(((vtbl.getParamNormalized)(controller, 7) - 0.75).abs() < f64::EPSILON);
+      assert_eq!((vtbl.setParamNormalized)(controller, 7, 0.75), kResultOk);
+      assert!(((vtbl.getParamNormalized)(controller, 7) - 0.75).abs() < f64::EPSILON);
 
-    let mut display = [0_u16; 128];
+      let mut state_stream = MemoryStream::new();
+      assert_eq!((vtbl.getState)(controller, state_stream.as_stream()), kResultOk);
+      assert!(
+          state_stream
+              .bytes
+              .starts_with(b"hawk2ui-vst3-state-v1\nparam 7 "),
+          "VST3 controller state must contain Hawk2UI parameter payload"
+      );
+      assert_eq!((vtbl.setParamNormalized)(controller, 7, 0.25), kResultOk);
+      assert!(((vtbl.getParamNormalized)(controller, 7) - 0.25).abs() < f64::EPSILON);
+      state_stream.rewind();
+      assert_eq!((vtbl.setState)(controller, state_stream.as_stream()), kResultOk);
+      assert!(((vtbl.getParamNormalized)(controller, 7) - 0.75).abs() < f64::EPSILON);
+
+      let mut display = [0_u16; 128];
     assert_eq!(
         (vtbl.getParamStringByValue)(controller, 7, 0.5, &mut display),
         kResultOk
@@ -1251,10 +1425,162 @@ fn wstring_to_string<const N: usize>(source: &[u16; N]) -> String {
     String::from_utf16(&units).expect("VST3 strings are UTF-16")
 }
 
-fn utf16_with_nul(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-"#
+  fn utf16_with_nul(value: &str) -> Vec<u16> {
+      value.encode_utf16().chain(std::iter::once(0)).collect()
+  }
+
+  #[repr(C)]
+  struct MemoryStream {
+      stream: IBStream,
+      bytes: Vec<u8>,
+      read_offset: usize,
+  }
+
+  impl MemoryStream {
+      fn new() -> Self {
+          Self {
+              stream: IBStream {
+                  vtbl: &MEMORY_STREAM_VTBL,
+              },
+              bytes: Vec::new(),
+              read_offset: 0,
+          }
+      }
+
+      fn as_stream(&mut self) -> *mut IBStream {
+          &mut self.stream
+      }
+
+      fn rewind(&mut self) {
+          self.read_offset = 0;
+      }
+  }
+
+  static MEMORY_STREAM_VTBL: IBStreamVtbl = IBStreamVtbl {
+      base: FUnknownVtbl {
+          queryInterface: memory_stream_query_interface,
+          addRef: memory_stream_add_ref,
+          release: memory_stream_release,
+      },
+      read: memory_stream_read,
+      write: memory_stream_write,
+      seek: memory_stream_seek,
+      tell: memory_stream_tell,
+  };
+
+  unsafe extern "system" fn memory_stream_query_interface(
+      this: *mut FUnknown,
+      _iid: *const TUID,
+      obj: *mut *mut c_void,
+  ) -> tresult {
+      if this.is_null() || obj.is_null() {
+          return kInvalidArgument;
+      }
+      unsafe {
+          *obj = this.cast();
+      }
+      kResultOk
+  }
+
+  unsafe extern "system" fn memory_stream_add_ref(_this: *mut FUnknown) -> uint32 {
+      1
+  }
+
+  unsafe extern "system" fn memory_stream_release(_this: *mut FUnknown) -> uint32 {
+      1
+  }
+
+  unsafe extern "system" fn memory_stream_read(
+      this: *mut IBStream,
+      buffer: *mut c_void,
+      num_bytes: int32,
+      num_bytes_read: *mut int32,
+  ) -> tresult {
+      if this.is_null() || buffer.is_null() || num_bytes < 0 || num_bytes_read.is_null() {
+          return kInvalidArgument;
+      }
+      let stream = unsafe { &mut *this.cast::<MemoryStream>() };
+      let requested = num_bytes as usize;
+      let available = stream.bytes.len().saturating_sub(stream.read_offset);
+      let read_len = requested.min(available);
+      if read_len > 0 {
+          unsafe {
+              ptr::copy_nonoverlapping(
+                  stream.bytes.as_ptr().add(stream.read_offset),
+                  buffer.cast::<u8>(),
+                  read_len,
+              );
+          }
+      }
+      stream.read_offset = stream.read_offset.saturating_add(read_len);
+      unsafe {
+          *num_bytes_read = read_len as int32;
+      }
+      kResultOk
+  }
+
+  unsafe extern "system" fn memory_stream_write(
+      this: *mut IBStream,
+      buffer: *mut c_void,
+      num_bytes: int32,
+      num_bytes_written: *mut int32,
+  ) -> tresult {
+      if this.is_null() || buffer.is_null() || num_bytes < 0 || num_bytes_written.is_null() {
+          return kInvalidArgument;
+      }
+      let stream = unsafe { &mut *this.cast::<MemoryStream>() };
+      let write_len = num_bytes as usize;
+      let bytes = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), write_len) };
+      stream.bytes.extend_from_slice(bytes);
+      unsafe {
+          *num_bytes_written = num_bytes;
+      }
+      kResultOk
+  }
+
+  unsafe extern "system" fn memory_stream_seek(
+      this: *mut IBStream,
+      pos: int64,
+      mode: int32,
+      result: *mut int64,
+  ) -> tresult {
+      if this.is_null() || result.is_null() {
+          return kInvalidArgument;
+      }
+      let stream = unsafe { &mut *this.cast::<MemoryStream>() };
+      let base = match mode {
+          0 => 0_i64,
+          1 => stream.read_offset as i64,
+          2 => stream.bytes.len() as i64,
+          _ => return kInvalidArgument,
+      };
+      let Some(next) = base.checked_add(pos) else {
+          return kInvalidArgument;
+      };
+      if next < 0 {
+          return kInvalidArgument;
+      }
+      stream.read_offset = (next as usize).min(stream.bytes.len());
+      unsafe {
+          *result = stream.read_offset as int64;
+      }
+      kResultOk
+  }
+
+  unsafe extern "system" fn memory_stream_tell(
+      this: *mut IBStream,
+      pos: *mut int64,
+  ) -> tresult {
+      if this.is_null() || pos.is_null() {
+          return kInvalidArgument;
+      }
+      let stream = unsafe { &mut *this.cast::<MemoryStream>() };
+      unsafe {
+          *pos = stream.read_offset as int64;
+      }
+      kResultOk
+  }
+  "#
 }
 
 #[allow(clippy::too_many_lines)]

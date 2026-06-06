@@ -10,8 +10,8 @@ use hawk2ui_render_skia::{
     SkiaRuntimeEffectChildInput, SkiaRuntimeEffectUniform, SkiaSurfaceConfig, SkiaTextDrawOptions,
 };
 use hawk2ui_runtime::{
-    RuntimeCustomSurfaceVisual, RuntimeSceneBridge, RuntimeShaderEffectVisual, RuntimeViewId,
-    RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
+    RuntimeCustomSurfaceVisual, RuntimeSceneBridge, RuntimeShaderEffectVisual, RuntimeTextVisual,
+    RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
 };
 use hawk2ui_text::{FontCatalog, LineBreakMode, TextBackend, TextLayoutInput};
 use image::{ColorType, ImageEncoder};
@@ -532,6 +532,18 @@ fn skia_backend_replays_runtime_scene_frame_commands() {
     .with_child(
         &root_id,
         RuntimeViewNode::new(
+            RuntimeViewId::new("label"),
+            LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(96.0, 20.0)),
+            RuntimeVisual::Text(
+                RuntimeTextVisual::new("Family", 14.0, Color::rgba(255, 255, 255, 255))
+                    .with_font_family("Hawk2UI Sans"),
+            ),
+        ),
+    )
+    .unwrap()
+    .with_child(
+        &root_id,
+        RuntimeViewNode::new(
             RuntimeViewId::new("meter"),
             LayoutStyle::custom_measured().with_size(LayoutSizing::fixed(72.0, 18.0)),
             RuntimeVisual::CustomSurface(
@@ -558,6 +570,12 @@ fn skia_backend_replays_runtime_scene_frame_commands() {
     assert!(backend.command_keys().iter().any(|key| {
         key.starts_with("runtime-scene-frame:commands=") && key.contains(":frame=4:dpi=1")
     }));
+    assert!(
+        backend
+            .command_keys()
+            .iter()
+            .any(|key| key.starts_with("text-at-family:Family:Hawk2UI Sans:"))
+    );
 }
 
 #[test]

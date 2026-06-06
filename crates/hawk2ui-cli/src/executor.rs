@@ -576,15 +576,7 @@ impl WorkspaceCommandRunner {
         });
 
         match WinitDesktopRuntime::new().run_dev_blocking(config, reload_receiver) {
-            Ok(summary) => CommandExecution::success(format!(
-                "development loop exited cleanly\nframes-presented: {}\nresizes: {}\ndpi-changes: {}\ninput-events: {}\nnative-reloads: {}\nclose-requested: {}\n",
-                summary.frames_presented,
-                summary.resizes,
-                summary.dpi_changes,
-                summary.input_events,
-                summary.native_reloads,
-                summary.close_requested
-            )),
+            Ok(summary) => CommandExecution::success(dev_live_runtime_summary_output(&summary)),
             Err(error) => CommandExecution::failure(
                 CliExitCode::Runtime,
                 vec![CliDiagnostic::error(error.rule(), error.message())],
@@ -1907,12 +1899,16 @@ fn desktop_runtime_summary_output(
     summary: &WinitDesktopRuntimeSummary,
 ) -> String {
     let mut output = format!(
-        "desktop runtime exited cleanly\npresentation-backend-requested: {}\npresentation-backend-used: {}\nframes-presented: {}\ngpu-frames-presented: {}\ngpu-readback-verified: {}\nresizes: {}\ndpi-changes: {}\ninput-events: {}\nclose-requested: {}\n",
+        "desktop runtime exited cleanly\npresentation-backend-requested: {}\npresentation-backend-used: {}\nframes-presented: {}\ngpu-frames-presented: {}\ngpu-readback-verified: {}\nframe-duration-last-us: {}\nframe-duration-max-us: {}\nframe-duration-average-us: {}\nframe-duration-total-us: {}\nresizes: {}\ndpi-changes: {}\ninput-events: {}\nclose-requested: {}\n",
         presentation_backend.label(),
         summary.presentation_backend_used.label(),
         summary.frames_presented,
         summary.gpu_frames_presented,
         summary.gpu_readback_verified,
+        summary.last_frame_duration_micros,
+        summary.max_frame_duration_micros,
+        summary.average_frame_duration_micros(),
+        summary.total_frame_duration_micros,
         summary.resizes,
         summary.dpi_changes,
         summary.input_events,
@@ -1927,6 +1923,21 @@ fn desktop_runtime_summary_output(
         );
     }
     output
+}
+
+fn dev_live_runtime_summary_output(summary: &WinitDesktopRuntimeSummary) -> String {
+    format!(
+        "development loop exited cleanly\nframes-presented: {}\nframe-duration-last-us: {}\nframe-duration-max-us: {}\nframe-duration-average-us: {}\nresizes: {}\ndpi-changes: {}\ninput-events: {}\nnative-reloads: {}\nclose-requested: {}\n",
+        summary.frames_presented,
+        summary.last_frame_duration_micros,
+        summary.max_frame_duration_micros,
+        summary.average_frame_duration_micros(),
+        summary.resizes,
+        summary.dpi_changes,
+        summary.input_events,
+        summary.native_reloads,
+        summary.close_requested
+    )
 }
 
 fn signed_runtime_artifact_value(
@@ -2726,6 +2737,10 @@ mod tests {
     fn desktop_runtime_summary_output_includes_gpu_preferred_fallback_reason() {
         let summary = WinitDesktopRuntimeSummary {
             presentation_backend_used: WinitPresentationBackendUsed::Software,
+            frames_presented: 2,
+            last_frame_duration_micros: 3_000,
+            max_frame_duration_micros: 5_000,
+            total_frame_duration_micros: 8_000,
             presentation_fallback_reason: Some(WinitHostError::new(
                 "desktop.gpu.wayland-required",
                 "Winit GPU presentation currently requires a native Wayland display",
@@ -2737,6 +2752,10 @@ mod tests {
 
         assert!(output.contains("presentation-backend-requested: gpu-preferred"));
         assert!(output.contains("presentation-backend-used: software"));
+        assert!(output.contains("frame-duration-last-us: 3000"));
+        assert!(output.contains("frame-duration-max-us: 5000"));
+        assert!(output.contains("frame-duration-average-us: 4000"));
+        assert!(output.contains("frame-duration-total-us: 8000"));
         assert!(output.contains("presentation-fallback-rule: desktop.gpu.wayland-required"));
         assert!(output.contains(
             "presentation-fallback-message: Winit GPU presentation currently requires a native Wayland display"
@@ -3147,10 +3166,12 @@ export function mount() {
                 id,
                 geometry,
                 text,
+                font_family,
                 font_size,
                 color
             } if id.as_str() == "hero-title"
                 && text == "Styled Hero"
+                && font_family == "Hawk2UI Sans"
                 && float_eq(geometry.width, 320.0)
                 && float_eq(geometry.height, 40.0)
                 && float_eq(*font_size, 18.0)
@@ -3246,10 +3267,12 @@ name = "linux-wayland"
                 id,
                 geometry,
                 text,
+                font_family,
                 font_size,
                 color
             } if id.as_str() == "framework-title"
                 && text == "Hello Framework Runtime"
+                && font_family == "Hawk2UI Sans"
                 && float_eq(geometry.width, 360.0)
                 && float_eq(geometry.height, 48.0)
                 && float_eq(*font_size, 21.0)

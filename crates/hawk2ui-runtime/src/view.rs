@@ -597,6 +597,8 @@ pub enum RuntimeDrawCommand {
         geometry: Geometry,
         /// Text payload.
         text: String,
+        /// Preferred font family.
+        font_family: String,
         /// Font size in logical pixels.
         font_size: f32,
         /// Text color.
@@ -1120,6 +1122,7 @@ impl RuntimeViewTree {
                         id: entry.node.id().clone(),
                         geometry,
                         text: text.text().to_string(),
+                        font_family: text.font_family().to_string(),
                         font_size: text.font_size(),
                         color: text.color(),
                     });

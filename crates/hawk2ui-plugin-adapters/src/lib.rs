@@ -2318,11 +2318,12 @@ const VST3_CDYLIB_SOURCE_TEMPLATE: &str = r#"//! Generated Hawk2UI VST3 entry li
 #![allow(non_snake_case)]
 #![allow(unsafe_code)]
 
-use std::{
-    ffi::{c_char, c_void},
-    ptr,
-    sync::atomic::{AtomicU64, Ordering},
-};
+  use std::{
+      ffi::{c_char, c_void},
+      fmt::Write as _,
+      ptr,
+      sync::atomic::{AtomicU64, Ordering},
+  };
 
 use hawk2ui_vst3::{
     Vst3ClassCategory, Vst3ClassId, Vst3FactoryInfo, Vst3PluginClassInfo, Vst3String,
@@ -2434,13 +2435,30 @@ impl IComponentTrait for Hawk2uiVst3Processor {
         }
     }
 
-    unsafe fn getRoutingInfo(
-        &self,
-        _in_info: *mut RoutingInfo,
-        _out_info: *mut RoutingInfo,
-    ) -> tresult {
-        kNotImplemented
-    }
+      unsafe fn getRoutingInfo(
+          &self,
+          in_info: *mut RoutingInfo,
+          out_info: *mut RoutingInfo,
+      ) -> tresult {
+          if in_info.is_null() || out_info.is_null() {
+              return kInvalidArgument;
+          }
+          let input = unsafe { *in_info };
+          if input.mediaType != MediaTypes_::kAudio as MediaType
+              || input.busIndex != 0
+              || !(0..2).contains(&input.channel)
+          {
+              return kInvalidArgument;
+          }
+          unsafe {
+              *out_info = RoutingInfo {
+                  mediaType: MediaTypes_::kAudio as MediaType,
+                  busIndex: 0,
+                  channel: input.channel,
+              };
+          }
+          kResultOk
+      }
 
     unsafe fn activateBus(
         &self,
@@ -2456,13 +2474,13 @@ impl IComponentTrait for Hawk2uiVst3Processor {
         kResultOk
     }
 
-    unsafe fn setState(&self, _state: *mut IBStream) -> tresult {
-        kResultOk
-    }
+      unsafe fn setState(&self, state: *mut IBStream) -> tresult {
+          unsafe { restore_vst3_state(state) }
+      }
 
-    unsafe fn getState(&self, _state: *mut IBStream) -> tresult {
-        kResultOk
-    }
+      unsafe fn getState(&self, state: *mut IBStream) -> tresult {
+          unsafe { write_vst3_state(state) }
+      }
 }
 
 impl IAudioProcessorTrait for Hawk2uiVst3Processor {
@@ -2501,11 +2519,13 @@ impl IAudioProcessorTrait for Hawk2uiVst3Processor {
         }
     }
 
-    unsafe fn canProcessSampleSize(&self, symbolic_sample_size: i32) -> tresult {
-        if symbolic_sample_size == SymbolicSampleSizes_::kSample32 as i32 {
-            kResultOk
-        } else {
-            kNotImplemented
+      unsafe fn canProcessSampleSize(&self, symbolic_sample_size: i32) -> tresult {
+          if symbolic_sample_size == SymbolicSampleSizes_::kSample32 as i32
+              || symbolic_sample_size == SymbolicSampleSizes_::kSample64 as i32
+          {
+              kResultOk
+          } else {
+              kNotImplemented
         }
     }
 
@@ -2521,13 +2541,29 @@ impl IAudioProcessorTrait for Hawk2uiVst3Processor {
         kResultOk
     }
 
-    unsafe fn process(&self, data: *mut ProcessData) -> tresult {
-        if data.is_null() {
-            kInvalidArgument
-        } else {
-            kResultOk
-        }
-    }
+      unsafe fn process(&self, data: *mut ProcessData) -> tresult {
+          if data.is_null() {
+              return kInvalidArgument;
+          }
+          let data = unsafe { &mut *data };
+          if data.numSamples < 0 || data.numInputs < 0 || data.numOutputs < 0 {
+              return kInvalidArgument;
+          }
+          let copied = match data.symbolicSampleSize {
+              value if value == SymbolicSampleSizes_::kSample32 as i32 => unsafe {
+                  copy_vst3_audio32(data)
+              },
+              value if value == SymbolicSampleSizes_::kSample64 as i32 => unsafe {
+                  copy_vst3_audio64(data)
+              },
+              _ => return kInvalidArgument,
+          };
+          if copied {
+              kResultOk
+          } else {
+              kInvalidArgument
+          }
+      }
 
     unsafe fn getTailSamples(&self) -> u32 {
         0
@@ -2573,17 +2609,17 @@ impl IPluginBaseTrait for Hawk2uiVst3Controller {
 }
 
 impl IEditControllerTrait for Hawk2uiVst3Controller {
-    unsafe fn setComponentState(&self, _state: *mut IBStream) -> tresult {
-        kResultOk
-    }
+      unsafe fn setComponentState(&self, state: *mut IBStream) -> tresult {
+          unsafe { restore_vst3_state(state) }
+      }
 
-    unsafe fn setState(&self, _state: *mut IBStream) -> tresult {
-        kResultOk
-    }
+      unsafe fn setState(&self, state: *mut IBStream) -> tresult {
+          unsafe { restore_vst3_state(state) }
+      }
 
-    unsafe fn getState(&self, _state: *mut IBStream) -> tresult {
-        kResultOk
-    }
+      unsafe fn getState(&self, state: *mut IBStream) -> tresult {
+          unsafe { write_vst3_state(state) }
+      }
 
     unsafe fn getParameterCount(&self) -> i32 {
         __PARAMETER_COUNT__
@@ -2836,18 +2872,186 @@ fn current_parameter_value(index: usize) -> ParamValue {
     f64::from_bits(PARAMETER_VALUES[index].load(Ordering::Acquire))
 }
 
-fn store_parameter_value(param_id: ParamID, value_normalized: ParamValue) -> bool {
-    if !value_normalized.is_finite() {
-        return false;
-    }
-    let Some(index) = find_parameter_index(param_id) else {
-        return false;
-    };
-    PARAMETER_VALUES[index].store(value_normalized.clamp(0.0, 1.0).to_bits(), Ordering::Release);
-    true
-}
+  fn store_parameter_value(param_id: ParamID, value_normalized: ParamValue) -> bool {
+      if !value_normalized.is_finite() {
+          return false;
+      }
+      let Some(index) = find_parameter_index(param_id) else {
+          return false;
+      };
+      PARAMETER_VALUES[index].store(value_normalized.clamp(0.0, 1.0).to_bits(), Ordering::Release);
+      true
+  }
 
-fn class_id_tuid(hex: &str) -> TUID {
+  unsafe fn copy_vst3_audio32(data: &mut ProcessData) -> bool {
+      if data.numInputs == 0 || data.numOutputs == 0 || data.numSamples == 0 {
+          return true;
+      }
+      if data.inputs.is_null() || data.outputs.is_null() {
+          return false;
+      }
+      let bus_count = data.numInputs.min(data.numOutputs) as usize;
+      let frame_count = data.numSamples as usize;
+      for bus_index in 0..bus_count {
+          let input_bus = unsafe { &*data.inputs.add(bus_index) };
+          let output_bus = unsafe { &mut *data.outputs.add(bus_index) };
+          output_bus.silenceFlags = input_bus.silenceFlags;
+          if input_bus.numChannels <= 0 || output_bus.numChannels <= 0 {
+              continue;
+          }
+          let channel_count = input_bus.numChannels.min(output_bus.numChannels) as usize;
+          let input_channels = unsafe { input_bus.__field0.channelBuffers32 };
+          let output_channels = unsafe { output_bus.__field0.channelBuffers32 };
+          if input_channels.is_null() || output_channels.is_null() {
+              return false;
+          }
+          for channel_index in 0..channel_count {
+              let input = unsafe { *input_channels.add(channel_index) };
+              let output = unsafe { *output_channels.add(channel_index) };
+              if input.is_null() || output.is_null() {
+                  return false;
+              }
+              unsafe {
+                  ptr::copy_nonoverlapping(input, output, frame_count);
+              }
+          }
+      }
+      true
+  }
+
+  unsafe fn copy_vst3_audio64(data: &mut ProcessData) -> bool {
+      if data.numInputs == 0 || data.numOutputs == 0 || data.numSamples == 0 {
+          return true;
+      }
+      if data.inputs.is_null() || data.outputs.is_null() {
+          return false;
+      }
+      let bus_count = data.numInputs.min(data.numOutputs) as usize;
+      let frame_count = data.numSamples as usize;
+      for bus_index in 0..bus_count {
+          let input_bus = unsafe { &*data.inputs.add(bus_index) };
+          let output_bus = unsafe { &mut *data.outputs.add(bus_index) };
+          output_bus.silenceFlags = input_bus.silenceFlags;
+          if input_bus.numChannels <= 0 || output_bus.numChannels <= 0 {
+              continue;
+          }
+          let channel_count = input_bus.numChannels.min(output_bus.numChannels) as usize;
+          let input_channels = unsafe { input_bus.__field0.channelBuffers64 };
+          let output_channels = unsafe { output_bus.__field0.channelBuffers64 };
+          if input_channels.is_null() || output_channels.is_null() {
+              return false;
+          }
+          for channel_index in 0..channel_count {
+              let input = unsafe { *input_channels.add(channel_index) };
+              let output = unsafe { *output_channels.add(channel_index) };
+              if input.is_null() || output.is_null() {
+                  return false;
+              }
+              unsafe {
+                  ptr::copy_nonoverlapping(input, output, frame_count);
+              }
+          }
+      }
+      true
+  }
+
+  fn vst3_state_payload() -> Vec<u8> {
+      let mut state = String::from("hawk2ui-vst3-state-v1\n");
+      for (index, parameter) in PARAMETERS.iter().enumerate() {
+          let bits = PARAMETER_VALUES[index].load(Ordering::Acquire);
+          let _ = writeln!(state, "param {} {}", parameter.id, bits);
+      }
+      state.into_bytes()
+  }
+
+  unsafe fn write_vst3_state(stream: *mut IBStream) -> tresult {
+      if stream.is_null() {
+          return kInvalidArgument;
+      }
+      let payload = vst3_state_payload();
+      let Ok(byte_count) = i32::try_from(payload.len()) else {
+          return kResultFalse;
+      };
+      let mut written = 0_i32;
+      let result = unsafe {
+          ((*(*stream).vtbl).write)(stream, payload.as_ptr().cast_mut().cast(), byte_count, &mut written)
+      };
+      if result == kResultOk && written == byte_count {
+          kResultOk
+      } else {
+          kResultFalse
+      }
+  }
+
+  unsafe fn restore_vst3_state(stream: *mut IBStream) -> tresult {
+      if stream.is_null() {
+          return kInvalidArgument;
+      }
+      let Some(payload) = (unsafe { read_vst3_state_payload(stream) }) else {
+          return kResultFalse;
+      };
+      if restore_vst3_state_payload(&payload) {
+          kResultOk
+      } else {
+          kResultFalse
+      }
+  }
+
+  unsafe fn read_vst3_state_payload(stream: *mut IBStream) -> Option<Vec<u8>> {
+      const MAX_STATE_BYTES: usize = 64 * 1024;
+      let mut payload = Vec::new();
+      let mut buffer = [0_u8; 1024];
+      loop {
+          let mut read_len = 0_i32;
+          let result = unsafe {
+              ((*(*stream).vtbl).read)(
+                  stream,
+                  buffer.as_mut_ptr().cast(),
+                  i32::try_from(buffer.len()).ok()?,
+                  &mut read_len,
+              )
+          };
+          if result != kResultOk || read_len < 0 {
+              return None;
+          }
+          if read_len == 0 {
+              break;
+          }
+          let read_len = usize::try_from(read_len).ok()?;
+          if payload.len().saturating_add(read_len) > MAX_STATE_BYTES || read_len > buffer.len() {
+              return None;
+          }
+          payload.extend_from_slice(&buffer[..read_len]);
+      }
+      Some(payload)
+  }
+
+  fn restore_vst3_state_payload(payload: &[u8]) -> bool {
+      let Ok(state) = std::str::from_utf8(payload) else {
+          return false;
+      };
+      if !state.starts_with("hawk2ui-vst3-state-v1\n") {
+          return false;
+      }
+      for line in state.lines().skip(1) {
+          let mut parts = line.split_ascii_whitespace();
+          if parts.next() != Some("param") {
+              continue;
+          }
+          let Some(param_id) = parts.next().and_then(|value| value.parse::<ParamID>().ok()) else {
+              return false;
+          };
+          let Some(bits) = parts.next().and_then(|value| value.parse::<u64>().ok()) else {
+              return false;
+          };
+          if !store_parameter_value(param_id, f64::from_bits(bits)) {
+              return false;
+          }
+      }
+      true
+  }
+
+  fn class_id_tuid(hex: &str) -> TUID {
     let mut tuid = [0 as c_char; 16];
     for (index, byte) in tuid.iter_mut().enumerate() {
         let offset = index * 2;
