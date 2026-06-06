@@ -23,7 +23,7 @@ members = [
     "crates/hawk2ui-plugin",
     "crates/hawk2ui-plugin-adapters",
     "crates/hawk2ui-plugin-truce",
-    "crates/hawk2ui-plugin-truce-spike",
+    "crates/hawk2ui-plugin-truce-fixture",
     "crates/hawk2ui-vst3",
     "crates/hawk2ui-render",
     "crates/hawk2ui-render-skia",

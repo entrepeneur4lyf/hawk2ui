@@ -158,9 +158,9 @@ pub enum HostParamValue {
 }
 
 /// One parameter projected into an editor entry script, addressed by its stable
-/// string key. The numeric truce `id` is carried too (Decision 0003 D2/D1) as
-/// the host-side routing detail that maps a write back to the bridge, but
-/// authors address parameters by `key`, never by id.
+/// string key. The numeric truce `id` is carried as the host-side routing detail
+/// that maps a write back to the bridge, but authors address parameters by
+/// `key`, never by id.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HostParam {
     /// Stable string key the author addresses the parameter by.
@@ -187,7 +187,7 @@ pub struct HostMeter {
     /// Stable string key the author addresses the meter by.
     pub key: String,
     /// truce meter `ParamId` u32 (`METER_ID_BASE + declaration_index`), carried
-    /// so JS never computes it (Decision 0003 Lock 2). Meters are read-only.
+    /// so JS never computes it. Meters are read-only.
     pub id: u32,
     /// Current level in `0.0..=1.0`.
     pub value: f32,
@@ -207,7 +207,7 @@ pub struct HostSnapshot {
 /// Wraps a compiled entry module like [`entry_mount_bootstrap`], projecting a
 /// `host` that carries a frozen `snapshot` of parameters and meters the script
 /// reads by string key, accepts parameter edits, and threads an opaque UI-state
-/// blob across invocations (Decision 0003, the C3 protocol).
+/// blob across invocations.
 ///
 /// Reads (pure data — embedded as a JSON literal, no host call, `deny_all`
 /// preserved):
@@ -266,9 +266,9 @@ pub fn entry_mount_bootstrap_with_host(
     // rather than panicking (the crate forbids `unwrap`/`expect` in non-test).
     let snapshot = serde_json::to_string(snapshot)
         .unwrap_or_else(|_| String::from(r#"{"params":[],"meters":[]}"#));
-    // The per-frame input batch (Decision 0004 D1): the same injection-safe
-    // JSON-⊂-JS embedding as the snapshot. An empty batch is `[]` — an idle
-    // frame the entry sees as `host.events.length === 0` (D3).
+    // The per-frame input batch uses the same injection-safe JSON-⊂-JS embedding
+    // as the snapshot. An empty batch is `[]` — an idle frame the entry sees as
+    // `host.events.length === 0`.
     let events = serde_json::to_string(events).unwrap_or_else(|_| String::from("[]"));
     // The host always feeds serde_json output (or "null"), so this is a valid,
     // injection-safe JS expression. An empty string degrades to `null`.
@@ -310,8 +310,8 @@ for (const __meter of __hawk2ui_snapshot.meters) {{
   const __hawk2ui_ui_in = {incoming_ui};
 let __hawk2ui_ui_out = __hawk2ui_ui_in;
 const __hawk2ui_host = Object.freeze({{
-      // Per-frame input (Decision 0004 D1/D3): the events that arrived since the
-      // previous frame, drained and in arrival order; `[]` on an idle frame.
+      // Per-frame input: the events that arrived since the previous frame,
+      // drained and in arrival order; `[]` on an idle frame.
       events: Object.freeze(__hawk2ui_events.map(Object.freeze)),
       on(name, handler) {{ __hawk2ui_dispatch_event(name, handler); }},
       setState(_value) {{}},
@@ -350,7 +350,7 @@ JSON.stringify({{ tree: __hawk2ui_tree, edits: __hawk2ui_edits, ui: __hawk2ui_ui
 /// (`host.beginEdit`/`setParam`/`setParamPlain`/`endEdit`/`automate`), parsed
 /// from the return envelope's `edits` array. The host validates each, maps `key`
 /// → truce `ParamId`, and replays the gesture onto the bridge; meters have no
-/// edit variant (read-only, Decision 0003 Lock 2).
+/// edit variant because meters are read-only.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum HostEdit {
@@ -367,7 +367,7 @@ pub enum HostEdit {
         normalized: f64,
     },
     /// Set the parameter to a plain (natural-unit) value; the host normalizes it
-    /// via the parameter's range before `set_param` (Decision 0003 D3).
+    /// via the parameter's range before `set_param`.
     SetPlain {
         /// Stable parameter key.
         key: String,
@@ -388,16 +388,16 @@ pub enum HostEdit {
     },
 }
 
-/// One window input event projected into an editor entry's per-frame `host.events`
-/// array (Decision 0004 D2 — the public input API). The host drains the events
-/// that arrived since the previous frame, translates each from a `PluginHostEvent`
-/// (pointer/keyboard/focus only; resize/DPI/lifecycle are engine-handled, D7), and
+/// One window input event projected into an editor entry's per-frame
+/// `host.events` array. The host drains the events that arrived since the
+/// previous frame, translates each from a `PluginHostEvent`
+/// (pointer/keyboard/focus only; resize/DPI/lifecycle are engine-handled), and
 /// embeds them as a frozen array each invocation — input rides the source, like
 /// the read snapshot, so it adds no host-call capability.
 ///
 /// The `kind` tag (not `type`, which is the view-node tag) discriminates the
 /// variants; coordinates are logical points sharing the layout geometry space
-/// (D4), so an author hit-tests `x`/`y` against node positions directly.
+/// so an author hit-tests `x`/`y` against node positions directly.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FrameInput {
@@ -503,8 +503,8 @@ pub fn parse_entry_envelope(value: &str) -> Result<EntryEnvelope, EnvelopeError>
 
 /// Per-parameter write routing the host needs to replay an edit list onto the
 /// truce bridge: the `key` → `id` map plus the data to normalize a `setParamPlain`
-/// (the bridge offers only a normalized `set_param`, and Decision 0003 D3 puts the
-/// plain→normalized conversion on the host). Built from the parameter model by
+/// (the bridge offers only a normalized `set_param`, so the host owns the
+/// plain→normalized conversion). Built from the parameter model by
 /// `hawk2ui-build`'s `edit_routing_from_model`; consumed by the editor's replay.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParamRoute {
@@ -527,9 +527,9 @@ impl ParamRoute {
     /// Normalizes a plain (natural-unit) value to `0.0..=1.0` for the bridge's
     /// `set_param`, mirroring `ParameterRecord::normalize` (float/int by range,
     /// bool by non-zero) plus the enum `index / (count - 1)` of the snapshot
-    /// projection. The host owns this conversion (Decision 0003 D3); the math is
-    /// duplicated here rather than imported because `hawk2ui-plugin-truce` stays
-    /// free of the parameter model.
+    /// projection. The host owns this conversion; the math is duplicated here rather
+    /// than imported because `hawk2ui-plugin-truce` stays free of the parameter
+    /// model.
     #[must_use]
     pub fn normalize_plain(&self, plain: f64) -> f64 {
         let normalized = match self.kind {
@@ -562,8 +562,8 @@ impl ParamRoute {
 
 /// The host-side write routing for a plugin's parameters: a `key` → [`ParamRoute`]
 /// lookup the editor's edit replay resolves each edit through. Meters are absent
-/// (read-only, Decision 0003 Lock 2), so a write addressed to a meter key never
-/// resolves and is skipped.
+/// because they are read-only, so a write addressed to a meter key never resolves
+/// and is skipped.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EditRouting {
     routes: Vec<ParamRoute>,
@@ -1920,9 +1920,9 @@ export function mount(host) {
         let StructuredValue::String(json) = execution.value() else {
             panic!("mount must return a serialized node tree");
         };
-        // id 3 (truce ParamId, projected per Decision 0003 D2); float kind;
-        // plain value 1200; formatted text; normalized; bypass reads as a JS
-        // boolean; the meter as its level; two params, one meter.
+        // id 3 (truce ParamId); float kind; plain value 1200; formatted text;
+        // normalized; bypass reads as a JS boolean; the meter as its level; two
+        // params, one meter.
         assert!(
             json.contains("3|float|1200|1.20 kHz|0.42|true|0.5|2|1"),
             "{json}"
@@ -2070,9 +2070,9 @@ export function mount(host) {
 
     #[test]
     fn projects_input_events_into_the_entry_host() {
-        // The locked host.events shape (Decision 0004 D2): kind-tagged pointer /
-        // key / focus events, in arrival order (D3), with a fractional logical
-        // coordinate preserved through the JSON-⊂-JS embed.
+        // The host.events shape: kind-tagged pointer / key / focus events, in
+        // arrival order, with a fractional logical coordinate preserved through
+        // the JSON-⊂-JS embed.
         let envelope = run_entry_with_events(
             r#"
 export function mount(host) {

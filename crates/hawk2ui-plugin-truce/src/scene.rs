@@ -14,7 +14,7 @@
 //! the [`HostSnapshot`] the caller passes (parameters and meters projected from
 //! the plugin's parameter model — see `hawk2ui-build`'s `host_snapshot_from_model`).
 //! The snapshot here is the model's declared defaults; re-projecting it from the
-//! live truce `EditorBridge` is a later step (task 0009.4). Being pure, the
+//! live truce `EditorBridge` happens in the live render cycle. Being pure, the
 //! builder is unit-tested directly in the fast gate.
 
 use hawk2ui_layout::Viewport;
@@ -66,8 +66,8 @@ impl std::error::Error for EditorSceneError {}
 /// the ordered parameter [`HostEdit`]s it emitted and the UI-state blob it
 /// returned (the locked `{ tree, edits, ui }` envelope, split apart). The
 /// construction path ([`build_editor_scene`]) keeps only the scene; the live
-/// render cycle (task 0009.4) replays the edits onto the bridge and persists
-/// `ui_json` to thread back into the next invocation.
+/// render cycle replays the edits onto the bridge and persists `ui_json` to
+/// thread back into the next invocation.
 pub(crate) struct EditorFrame {
     /// The renderable scene built from the entry's view tree.
     pub(crate) scene: RuntimeSceneFrame,
@@ -175,9 +175,8 @@ pub(crate) fn build_editor_frame(
 /// A thin wrapper over [`build_editor_frame`] that keeps only the scene: the
 /// construction path has no prior UI state to thread (so it passes `"null"`) and
 /// no bridge yet to replay the entry's edits onto (so they are dropped). The live
-/// per-frame cycle (task 0009.4) uses [`build_editor_frame`] directly to also
-/// replay edits and persist the UI blob. Pass an empty [`HostSnapshot`] for a
-/// paramless editor.
+/// per-frame cycle uses [`build_editor_frame`] directly to also replay edits and
+/// persist the UI blob. Pass an empty [`HostSnapshot`] for a paramless editor.
 ///
 /// # Errors
 ///

@@ -64,7 +64,7 @@ fn approx(actual: f64, expected: f64) -> bool {
 fn emitter_reproduces_compiled_golden() {
     let model = spike_model();
     assert_eq!(
-        emit_truce_params_struct("SpikeParams", &model),
+        emit_truce_params_struct("GeneratedParams", &model),
         include_str!("fixtures/golden_params.rs"),
         "emitter output drifted from the compiled golden fixture; regenerate the fixture from the emitter"
     );
@@ -72,7 +72,7 @@ fn emitter_reproduces_compiled_golden() {
 
 #[test]
 fn generated_params_expose_truce_infos() {
-    let params = golden::SpikeParams::default();
+    let params = golden::GeneratedParams::default();
     let infos = params.param_infos();
     assert_eq!(infos.len(), 5, "expected the five emitted parameters");
 
@@ -137,7 +137,7 @@ fn generated_params_expose_truce_infos() {
 
 #[test]
 fn generated_params_read_back_through_the_bridge_by_id() {
-    let params: Arc<dyn Params> = Arc::new(golden::SpikeParams::default());
+    let params: Arc<dyn Params> = Arc::new(golden::GeneratedParams::default());
     let context = for_test_params(Arc::clone(&params));
     let bridge = context.bridge();
 

@@ -5,13 +5,13 @@
 //! truce `ParamId` through an [`EditRouting`], normalizes a plain value via the
 //! parameter's range, and replays the gesture onto the bridge's
 //! `begin_edit`/`set_param`/`end_edit` — on the host/UI thread, the channel
-//! truce's format wrappers expect (Decision 0003 D3). Because the edits ride the
-//! entry's return JSON, this adds no host-call capability.
+//! truce's format wrappers expect. Because the edits ride the entry's return
+//! JSON, this adds no host-call capability.
 //!
 //! The replay is **pure** (no windowing) and tracks open gestures in a caller-held
 //! set, so it is exercised directly against a recording bridge in the fast gate.
-//! Wiring it into the live per-frame invocation — re-projecting and re-running the
-//! entry on input, then replaying its edits — is task 0009.4.
+//! The live per-frame invocation re-projects, re-runs the entry on input, and
+//! replays its edits through this path.
 
 use std::collections::{HashMap, HashSet};
 
@@ -43,8 +43,8 @@ impl EditReplayDiagnostic {
 /// Replays `edits` onto `bridge`, resolving each key through `routing` and
 /// tracking open automation gestures in `open_gestures` so a gesture begun on one
 /// invocation and ended on a later one replays as one bracket (the host threads
-/// the set across frames; Decision 0003 D3). `last_pushed` carries the last value
-/// replayed per id so a redundant per-frame set is suppressed (Decision 0004 D8).
+/// the set across frames). `last_pushed` carries the last value replayed per id
+/// so a redundant per-frame set is suppressed.
 ///
 /// Gesture rules, all skip-and-record (never panic):
 /// - A `begin` for a key with no open gesture opens one; a second `begin` while
@@ -52,7 +52,7 @@ impl EditReplayDiagnostic {
 /// - A bare `set`/`setPlain` with no surrounding `begin`/`end` is **valid** (it is
 ///   not auto-bracketed — truce's begin/end only mark the host's touched lane).
 /// - A `set`/`setPlain` re-pushing the value already pushed for the id is
-///   **suppressed** (D8): the bridge is not called. A changed value, or any value
+///   **suppressed**: the bridge is not called. A changed value, or any value
 ///   after a gesture boundary (which clears the memory), passes.
 /// - `setPlain` is normalized to `0.0..=1.0` via the route before `set_param`.
 /// - `automate` is one-shot `begin`+`set`+`end`, unless a gesture is already open
@@ -146,10 +146,10 @@ fn edit_key(edit: &HostEdit) -> &str {
 }
 
 /// Replays a `set_param`, suppressing a redundant re-push of the value already
-/// pushed for `id` (Decision 0004 D8). An entry that emits an unchanging
-/// `setParam` every frame would otherwise storm the host's automation lane at
-/// vsync; a changed value — or any value after a gesture boundary, which clears
-/// the memory — always reaches the bridge.
+/// pushed for `id`. An entry that emits an unchanging `setParam` every frame
+/// would otherwise storm the host's automation lane at vsync; a changed value —
+/// or any value after a gesture boundary, which clears the memory — always
+/// reaches the bridge.
 fn push_set<S: std::hash::BuildHasher>(
     bridge: &dyn EditorBridge,
     id: u32,
@@ -476,9 +476,8 @@ mod tests {
 
     #[test]
     fn suppresses_a_repeat_set_but_passes_changes_and_gesture_boundaries() {
-        // Decision 0004 D8: a continuous loop re-pushing the same value every
-        // frame must not storm the bridge, yet real moves and gesture re-asserts
-        // must always land.
+        // A continuous loop re-pushing the same value every frame must not storm
+        // the bridge, yet real moves and gesture re-asserts must always land.
         let bridge = RecordingBridge::new();
         let mut open = HashSet::new();
         let mut last = HashMap::new();

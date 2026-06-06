@@ -6,7 +6,7 @@
 //! carries its own state, returning the new scene — so it is tested directly
 //! against a fake bridge in the fast gate, independent of how it is driven. The
 //! editor's [`crate::editor::Hawk2uiTruceEditor`] installs it as the Baseview GPU
-//! handler's per-frame scene producer on `open` (task 0009.4b).
+//! handler's per-frame scene producer on `open`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,8 +23,8 @@ use crate::scene::{EditorSceneError, build_editor_frame};
 /// fields (key / id / kind / enum variants) from `template` and takes its
 /// **dynamic** fields from the bridge — a parameter's plain `value`,
 /// `normalized`, and display `text` from `get_param_plain` / `get_param` /
-/// `format_param`, a meter's level from `get_meter` (Decision 0003 D2, all
-/// non-advancing "host→GUI sync" reads).
+/// `format_param`, a meter's level from `get_meter` (all non-advancing
+/// "host→GUI sync" reads).
 ///
 /// `template` is the construction-time default snapshot from `hawk2ui-build`'s
 /// `host_snapshot_from_model`; reusing it as the static shape avoids re-deriving
@@ -61,7 +61,7 @@ pub(crate) fn refresh_snapshot_from_bridge(
 
 /// Types a plain (denormalized) bridge value by kind, so editor JS sees a `bool`
 /// as a boolean and an `int`/`enum` as an integer — never a flattened float
-/// (Decision 0003 Lock 3).
+/// value.
 fn host_param_value(kind: HostParamKind, plain: f64) -> HostParamValue {
     match kind {
         HostParamKind::Float => HostParamValue::Float(plain),
@@ -121,8 +121,8 @@ pub(crate) struct EditorRenderState {
     ui_json: String,
     open_gestures: HashSet<u32>,
     /// The last normalized value replayed to the bridge per id this open, for the
-    /// bare-set suppression that guards the host against per-frame storms
-    /// (Decision 0004 D8). Resets with the clone on each `open`.
+    /// bare-set suppression that guards the host against per-frame storms. Resets
+    /// with the clone on each `open`.
     last_pushed: HashMap<u32, f64>,
     width: f32,
     height: f32,
@@ -158,10 +158,10 @@ impl EditorRenderState {
     ///    values),
     /// 2. run the entry with that snapshot, the per-frame input `events`, and the
     ///    persisted UI blob — the author reads `host.events` and emits edits in
-    ///    response (Decision 0004 D1),
+    ///    response,
     /// 3. replay the entry's edits onto the `bridge` (begin/set/end gestures,
     ///    tracked across cycles in `self.open_gestures`; a bare set that re-pushes
-    ///    the last value is suppressed via `self.last_pushed`, D8),
+    ///    the last value is suppressed via `self.last_pushed`),
     /// 4. persist the entry's outgoing UI blob for the next cycle,
     /// 5. return the new scene and any replay diagnostics.
     ///
@@ -437,9 +437,9 @@ export function mount(host) {
         );
     }
 
-    // The motivating input -> edit path (Decision 0004): an entry emits an edit
-    // only in response to a pointer press. No events means no edit (idle frames
-    // stay silent); a left-down drives the gesture onto the bridge.
+    // The motivating input -> edit path: an entry emits an edit only in response
+    // to a pointer press. No events means no edit (idle frames stay silent); a
+    // left-down drives the gesture onto the bridge.
     const PRESS_TO_EDIT_SCRIPT: &str = r#"
 export function mount(host) {
     for (const ev of host.events) {

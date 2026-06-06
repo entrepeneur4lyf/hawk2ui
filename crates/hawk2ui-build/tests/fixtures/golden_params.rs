@@ -3,7 +3,7 @@
 use truce::prelude::*;
 
 #[derive(ParamEnum)]
-pub enum SpikeParamsOscShape {
+pub enum GeneratedParamsOscShape {
     Sine,
     Saw,
     #[name = "Square / Pulse"]
@@ -11,7 +11,7 @@ pub enum SpikeParamsOscShape {
 }
 
 #[derive(Params)]
-pub struct SpikeParams {
+pub struct GeneratedParams {
     #[param(id = 0, name = "Osc Mix", range = "linear(0, 1)", unit = "none", default = 0.4)]
     pub osc_mix: FloatParam,
     #[param(id = 1, name = "Cutoff", range = "linear(20, 20000)", unit = "Hz", default = 1000)]
@@ -21,7 +21,7 @@ pub struct SpikeParams {
     #[param(id = 3, name = "Bypass", default = 0)]
     pub bypass: BoolParam,
     #[param(id = 4, name = "Osc Shape", default = 1)]
-    pub osc_shape: EnumParam<SpikeParamsOscShape>,
+    pub osc_shape: EnumParam<GeneratedParamsOscShape>,
     #[meter]
     pub output_level: MeterSlot,
 }

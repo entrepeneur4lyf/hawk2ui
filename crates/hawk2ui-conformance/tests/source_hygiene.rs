@@ -164,14 +164,14 @@ fn panic_style_gate_covers_assertion_macro_variants() {
 
 #[test]
 fn truce_editor_crate_never_captures_a_param_store() {
-    // Decision 0003 D4 (Lock 3): the truce editor reads parameters ONLY through
-    // the non-advancing `EditorBridge`, never by capturing truce's typed param
-    // store — a captured store exposes a `FloatParam` whose advancing `read()`
-    // could perturb the audio thread from a GUI repaint. Rust can't assert "this
-    // struct lacks a field of type X", so this is a source-pattern gate, the same
-    // enforcement class as the panic-style check above and the `unsafe_code`
-    // boundary. The two patterns reach the store: capturing it (the param
-    // accessor call) or storing it (the trait-object field).
+    // The truce editor reads parameters only through the non-advancing
+    // `EditorBridge`, never by capturing truce's typed param store. A captured
+    // store exposes a `FloatParam` whose advancing `read()` could perturb the
+    // audio thread from a GUI repaint. Rust cannot assert "this struct lacks a
+    // field of type X", so this is a source-pattern gate, the same enforcement
+    // class as the panic-style check above and the `unsafe_code` boundary. The two
+    // patterns reach the store: capturing it (the param accessor call) or storing
+    // it (the trait-object field).
     let root = workspace_root();
     let sources = collect_crate_production_sources(&root, "hawk2ui-plugin-truce");
     assert!(
@@ -184,7 +184,7 @@ fn truce_editor_crate_never_captures_a_param_store() {
         for forbidden in [".params()", "dyn Params"] {
             assert!(
                 !production_source.contains(forbidden),
-                "`{}` must not contain `{forbidden}`: the truce editor must read parameters only through the non-advancing EditorBridge, never a captured truce param store (Decision 0003 D4)",
+                "`{}` must not contain `{forbidden}`: the truce editor must read parameters only through the non-advancing EditorBridge, never a captured truce param store",
                 source_path.display()
             );
         }

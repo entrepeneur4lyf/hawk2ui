@@ -1,23 +1,17 @@
 #![forbid(unsafe_code)]
-//! Feasibility spike (Phase 5 keystone de-risk): a *real* truce plugin whose
-//! [`PluginLogic::editor`] returns the `Hawk2UI` truce editor.
+//! Truce export fixture whose [`PluginLogic::editor`] returns the `Hawk2UI`
+//! truce editor.
 //!
-//! Everything before this exercised the editor in isolation — the
-//! `hawk2ui-plugin-truce` smoke drives [`Hawk2uiTruceEditor::open`] with a
-//! hand-built `PluginContext` (`for_test_params`). Nothing had ever composed the
-//! editor into a truce `Plugin` through the real `truce::plugin!` export macro,
-//! so the production artifact->editor wiring rested on an unproven assumption:
-//! that truce's export macro accepts `Box<dyn Editor> = Hawk2uiTruceEditor`.
-//! This crate answers that empirically, in compiled code, before that wiring is
-//! designed — a one-parameter passthrough plugin whose `editor()` is
-//! [`Hawk2uiTruceEditor::from_entry_script`].
+//! The fixture composes the editor into a truce [`Plugin`] through the real
+//! `truce::plugin!` export macro. That keeps the production artifact-to-editor
+//! seam covered by compiled code: truce must accept
+//! `Box<dyn Editor> = Hawk2uiTruceEditor`, and the editor entry script must
+//! build a clean scene.
 //!
-//! Provisional by design: the [`SpikeParams`] struct and `ENTRY_SOURCE` are
-//! hand-written here. In production, `hawk2ui-build`'s `emit_truce_params_struct`
-//! generates the `#[derive(Params)]` struct and `host_snapshot_from_model` /
-//! `edit_routing_from_model` generate the editor projection — all from the
-//! manifest's parameter model. This spike is the reference shape that codegen
-//! targets; it is not the production plugin.
+//! The [`FixtureParams`] struct and `ENTRY_SOURCE` intentionally mirror the
+//! codegen shape emitted for packaged plugins: a `#[derive(Params)]` parameter
+//! struct, manifest-derived host projection records, and an editor source pulled
+//! through [`Hawk2uiTruceEditor::from_entry_script`].
 
 use std::sync::Arc;
 
@@ -31,7 +25,7 @@ use hawk2ui_plugin_truce::{EditRouting, Hawk2uiTruceEditor, HostSnapshot};
 /// trait is sealed — only `#[derive(Params)]` can satisfy it — so production
 /// codegen emits exactly this shape from the manifest.
 #[derive(Params)]
-pub struct SpikeParams {
+pub struct FixtureParams {
     #[param(
         id = 0,
         name = "Level",
@@ -43,22 +37,22 @@ pub struct SpikeParams {
 }
 
 /// Editor-only passthrough plugin. `Hawk2UI` authors write the editor, not the
-/// DSP, so `process` is a straight input->output copy; the point of the spike
-/// is [`PluginLogic::editor`].
-pub struct SpikePlugin {
-    params: Arc<SpikeParams>,
+/// DSP, so `process` is a straight input->output copy; the covered behavior is
+/// [`PluginLogic::editor`].
+pub struct FixturePlugin {
+    params: Arc<FixtureParams>,
 }
 
-impl SpikePlugin {
+impl FixturePlugin {
     /// Builds the plugin around its parameter struct. truce's export macro calls
-    /// this with the `Arc<SpikeParams>` it owns.
+    /// this with the `Arc<FixtureParams>` it owns.
     #[must_use]
-    pub fn new(params: Arc<SpikeParams>) -> Self {
+    pub fn new(params: Arc<FixtureParams>) -> Self {
         Self { params }
     }
 }
 
-impl PluginLogic for SpikePlugin {
+impl PluginLogic for FixturePlugin {
     fn reset(&mut self, sample_rate: f64, _max_block_size: usize) {
         self.params.set_sample_rate(sample_rate);
     }
@@ -91,8 +85,8 @@ impl PluginLogic for SpikePlugin {
 }
 
 truce::plugin! {
-    logic: SpikePlugin,
-    params: SpikeParams,
+    logic: FixturePlugin,
+    params: FixtureParams,
 }
 
 /// The editor surface configuration: a fixed 320x180 logical editor at 1.0
@@ -100,24 +94,21 @@ truce::plugin! {
 /// `Editor::open` from the host.
 fn editor_config() -> PluginEditorConfig {
     PluginEditorConfig::new(
-        "hawk2ui-plugin-truce-spike",
-        PluginParentHandle::opaque("truce-spike-parent"),
+        "hawk2ui-plugin-truce-fixture",
+        PluginParentHandle::opaque("truce-fixture-parent"),
         SurfaceMetrics::new(320.0, 180.0, 1.0),
     )
 }
 
-/// A minimal compiled entry whose `mount` returns the editor's root view (a blue
-/// fill with a title). Embedded as a `&str` — Decision 0004's deferral: the
-/// production wiring will instead pull the compiled source from the sealed
-/// artifact.
+/// A minimal compiled entry whose `mount` returns the editor's root view.
 const ENTRY_SOURCE: &str = r##"
 export function mount(host) {
     return {
-        id: "truce-spike-root",
+        id: "truce-fixture-root",
         type: "view",
         props: { backgroundColor: "#2060b4" },
         children: [
-            { id: "truce-spike-title", type: "text", text: "Hawk2UI plugin editor" }
+            { id: "truce-fixture-title", type: "text", text: "Hawk2UI plugin editor" }
         ]
     };
 }
@@ -159,7 +150,7 @@ mod tests {
         );
         assert_eq!(editor.size(), (320, 180));
 
-        let boxed = PluginLogic::editor(&SpikePlugin::new(Arc::new(SpikeParams::default())));
+        let boxed = PluginLogic::editor(&FixturePlugin::new(Arc::new(FixtureParams::default())));
         assert_eq!(boxed.size(), (320, 180));
     }
 }

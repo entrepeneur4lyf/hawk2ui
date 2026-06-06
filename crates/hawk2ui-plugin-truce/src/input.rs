@@ -3,16 +3,16 @@
 //! `hawk2ui-host-baseview` already converts native Baseview events into
 //! [`PluginHostEvent`]s and records them into a shared sink; the live render
 //! producer drains that sink each frame and calls this to project the
-//! author-facing subset into [`FrameInput`]s for `host.events` (Decision 0004).
+//! author-facing subset into [`FrameInput`]s for `host.events`.
 //! Only pointer / keyboard / focus cross — resize, DPI, lifecycle, and
-//! frame-presented events are engine-handled (D7) and dropped here.
+//! frame-presented events are engine-handled and dropped here.
 
 use hawk2ui_host::PluginHostEvent;
 use hawk2ui_script::FrameInput;
 
 /// Projects the author-facing input events (pointer / keyboard / focus) from a
 /// drained batch of [`PluginHostEvent`]s into [`FrameInput`]s, preserving arrival
-/// order (Decision 0004 D3) and dropping every engine-handled event (D7).
+/// order and dropping every engine-handled event.
 ///
 /// The drop is a wildcard, not an enumeration: a `PluginHostEvent` variant added
 /// later is engine-handled by default and stays out of `host.events` until
@@ -69,8 +69,8 @@ mod tests {
 
     #[test]
     fn drops_engine_handled_events() {
-        // Resize / DPI / lifecycle / frame-presented are engine-handled (D7) and
-        // never reach the author's host.events — only the focus event survives.
+        // Resize / DPI / lifecycle / frame-presented are engine-handled and never
+        // reach the author's host.events — only the focus event survives.
         let metrics = SurfaceMetrics::new(320.0, 180.0, 1.0);
         let events = vec![
             PluginHostEvent::HostResize(metrics),

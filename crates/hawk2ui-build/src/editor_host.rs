@@ -12,11 +12,11 @@
 //! `hawk2ui-script` (which owns [`HostSnapshot`]). `hawk2ui-plugin-truce` stays
 //! decoupled from the parameter model, knowing only the projected snapshot type.
 //!
-//! ## Scope (task 0009.1b): declared defaults only
+//! ## Scope: declared defaults only
 //!
 //! Every projected value is sourced from the model's **declared defaults**. The
-//! live host→GUI sync — re-projecting from the truce `EditorBridge` on input, on
-//! a host parameter change, or per-frame for meter vsync — is task 0009.4.
+//! live host→GUI sync re-projects from the truce `EditorBridge` on input, on a
+//! host parameter change, or per-frame for meter vsync.
 //! Meters therefore project at their floor (`0.0`) here, since the model carries
 //! no persisted meter level.
 
@@ -39,7 +39,7 @@ pub fn host_snapshot_from_model(model: &ParameterModel) -> HostSnapshot {
     // `resolved_param_ids` returns the truce `ParamId` u32 per parameter in
     // declaration order (pinned ids honored, unpinned filled lowest-free) — the
     // same ids the codegen emits, so the projection routes writes to the exact
-    // discriminant the DSP uses (Decision 0003 Lock 1).
+    // discriminant the DSP uses.
     let param_ids = model.resolved_param_ids();
     HostSnapshot {
         params: model
@@ -49,9 +49,9 @@ pub fn host_snapshot_from_model(model: &ParameterModel) -> HostSnapshot {
             .map(|(record, id)| host_param_from_record(record, id))
             .collect(),
         // Meters carry no persisted level; they project at their floor until the
-        // live bridge feeds real values (task 0009.4). truce auto-assigns meter
-        // ids as `METER_ID_BASE + declaration_index` (Decision 0003 Lock 2), so
-        // the projection mirrors that order.
+        // live bridge feeds real values. truce auto-assigns meter ids as
+        // `METER_ID_BASE + declaration_index`, so the projection mirrors that
+        // order.
         meters: model
             .meters
             .iter()
@@ -113,8 +113,8 @@ fn default_normalized(record: &ParameterRecord) -> f64 {
 /// Projects a [`ParameterModel`] into the host-side [`EditRouting`] the editor's
 /// edit replay resolves writes through: each parameter's `key` → truce `ParamId`
 /// plus the kind/range data needed to normalize a `setParamPlain` (the host owns
-/// that conversion, Decision 0003 D3). Meters are excluded — they are read-only,
-/// so a write addressed to a meter key never resolves.
+/// that conversion). Meters are excluded — they are read-only, so a write
+/// addressed to a meter key never resolves.
 #[must_use]
 pub fn edit_routing_from_model(model: &ParameterModel) -> EditRouting {
     let param_ids = model.resolved_param_ids();
@@ -243,10 +243,10 @@ mod tests {
     }
 
     /// Meter ids must be `METER_ID_BASE + declaration_index` — the truce
-    /// auto-assignment the codegen relies on (Decision 0003 Lock 2). This holds
-    /// only because the projection iterates meters in codegen order; assert it on
-    /// a two-meter model so a future reorder can't silently de-sync the projected
-    /// id from the real `ParamId`.
+    /// auto-assignment the codegen relies on. This holds only because the
+    /// projection iterates meters in codegen order; assert it on a two-meter
+    /// model so a future reorder can't silently de-sync the projected id from the
+    /// real `ParamId`.
     #[test]
     fn projects_meter_ids_at_the_meter_base_offset() {
         let model = ParameterModel::new([ParameterRecord::boolean("bypass", "Bypass", false)])
@@ -311,7 +311,7 @@ export function mount(host) {
         assert_eq!(cutoff.kind, HostParamKind::Float);
         assert!((cutoff.min - 20.0).abs() < 1e-9);
         assert!((cutoff.max - 20000.0).abs() < 1e-9);
-        // setParamPlain normalizes via the range, host-side (Decision 0003 D3).
+        // setParamPlain normalizes via the range on the host side.
         assert!((cutoff.normalize_plain(10010.0) - 0.5).abs() < 1e-9);
 
         let mode = routing.route("mode").expect("mode routes");

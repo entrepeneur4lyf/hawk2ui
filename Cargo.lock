@@ -1870,7 +1870,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hawk2ui-plugin-truce-spike"
+name = "hawk2ui-plugin-truce-fixture"
 version = "0.1.0"
 dependencies = [
  "hawk2ui-host",

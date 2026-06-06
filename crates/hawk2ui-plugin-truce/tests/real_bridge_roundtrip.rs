@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 //! A real truce `EditorBridge` round-trip: prove an editor edit lands a value in
-//! a real truce parameter store (Phase 5, feasibility #2 — the load-bearing half).
+//! a real truce parameter store.
 //!
 //! The replay unit tests (`src/replay.rs`) and the input-seam glue test
 //! (`src/editor.rs`) drive [`replay_edits`] against a **hand-written**

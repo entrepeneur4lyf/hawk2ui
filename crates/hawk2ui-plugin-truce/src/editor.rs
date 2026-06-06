@@ -106,8 +106,8 @@ pub struct Hawk2uiTruceEditor {
     render_state: Option<EditorRenderState>,
     adapter: Option<BaseviewPluginAdapter>,
     window: Option<BaseviewEditorWindowHandle>,
-    /// INVARIANT (Decision 0003 D4 / Lock 3): the editor holds the host **bridge
-    /// only** — never truce's typed parameter store. The bridge's parameter reads
+    /// INVARIANT: the editor holds the host **bridge only** — never truce's
+    /// typed parameter store. The bridge's parameter reads
     /// (`get_param` / `get_param_plain`) are the non-advancing "host→GUI sync"
     /// path; the typed store would instead expose a `FloatParam` whose advancing
     /// `read()` (a smoother step meant for `process()`) could perturb the audio
@@ -305,10 +305,9 @@ impl Hawk2uiTruceEditor {
         };
         // The shared input sink: the GPU frame handler records translated native
         // events into it each `on_event`, and the scene producer drains it each
-        // frame to feed `host.events` (Decision 0004 U3). Created before the
-        // producer so both hold a clone of the same sink; the editor still
-        // observes progress through `presented_frame_count` / `has_error`, never
-        // through this sink.
+        // frame to feed `host.events`. Created before the producer so both hold a
+        // clone of the same sink; the editor still observes progress through
+        // `presented_frame_count` / `has_error`, never through this sink.
         let events = Arc::new(Mutex::new(Vec::new()));
         // The live render producer (the per-frame drain → bridge-read → entry →
         // replay cycle); `None` for a hand-built or failed-construction editor,
@@ -328,13 +327,13 @@ impl Hawk2uiTruceEditor {
 
     /// Builds the per-frame scene producer the GPU frame handler calls each
     /// frame: drain the shared `event_sink`, translate the author-facing native
-    /// events into `host.events` (Decision 0004 D1), then one
+    /// events into `host.events`, then one
     /// [`EditorRenderState::render`] against the captured bridge.
     ///
     /// The closure **degrades** rather than propagating — on a failed cycle (an
     /// author bug mid-session) it keeps the last good scene and records the error
     /// into the shared `last_error` (observable via [`Self::has_error`]), never
-    /// panicking into the host's UI thread (Decision 0003 D5). It is `Send`
+    /// panicking into the host's UI thread. It is `Send`
     /// (it owns the render state, an `Arc<dyn EditorBridge>`, the `last_error`
     /// handle, the event sink, and the last good scene) so the frame handler
     /// stays `Send`.

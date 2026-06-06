@@ -1,4 +1,4 @@
-# truce plugin configuration for the Hawk2UI truce-composition spike.
+# truce plugin configuration for the Hawk2UI truce-composition fixture.
 #
 # Placed crate-local (not at the workspace root) on purpose: this is a
 # multi-plugin framework workspace, so a root truce.toml claiming the whole
@@ -13,10 +13,10 @@ url = "https://hawk2ui.com"
 au_manufacturer = "Hwk2"
 
 [[plugin]]
-name = "Hawk2UI Truce Spike"
-bundle_id = "truce-spike"
-crate = "hawk2ui-plugin-truce-spike"
+name = "Hawk2UI Truce Fixture"
+bundle_id = "truce-fixture"
+crate = "hawk2ui-plugin-truce-fixture"
 category = "effect"
-fourcc = "H2sp"
-au3_subtype = "H2s3"
+fourcc = "H2fx"
+au3_subtype = "H2f3"
 au_tag = "Effects"
