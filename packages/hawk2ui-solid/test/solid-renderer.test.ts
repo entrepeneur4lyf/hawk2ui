@@ -9,6 +9,12 @@ test("Solid compiler emits versioned native compiler artifacts from TSX", () => 
   });
 
   expect(output.compilerArtifact.schema_version).toBe(1);
+  expect(output.compilerArtifact.compiler).toEqual({
+    framework: "solid",
+    compiler: "@hawk2ui/solid",
+    source_path: "App.tsx",
+    entrypoint: "App",
+  });
   expect(output.compilerArtifact.root.id).toBe("root");
   expect(output.compilerArtifact.root.style_refs).toEqual(["surface.card"]);
   expect(output.compilerArtifact.root.children.map((child) => child.key)).toEqual(["title", "cta"]);

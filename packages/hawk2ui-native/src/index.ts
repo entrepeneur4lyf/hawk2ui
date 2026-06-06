@@ -102,8 +102,20 @@ export interface HawkCompilerInitialDynamicValueWire {
   readonly value: HawkCompilerDynamicValueWire;
 }
 
+export interface HawkCompilerSourceWire {
+  readonly framework: string;
+  readonly compiler: string;
+  readonly source_path: string;
+  readonly entrypoint: string;
+}
+
+export interface HawkCompilerArtifactOptions {
+  readonly compiler?: HawkCompilerSourceWire;
+}
+
 export interface HawkCompilerArtifact {
   readonly schema_version: 1;
+  readonly compiler: HawkCompilerSourceWire;
   readonly root: HawkCompilerNodeWire;
   readonly reactivity: readonly HawkCompilerReactiveBindingWire[];
   readonly dynamic_bindings: readonly HawkCompilerDynamicBindingWire[];
@@ -132,6 +144,7 @@ export function compilerArtifactForApp(
   reactivity: readonly HawkCompilerReactiveBindingWire[] = [],
   dynamicBindings: readonly HawkCompilerDynamicBindingWire[] = [],
   initialDynamicValues: readonly HawkCompilerInitialDynamicValueWire[] = [],
+  options: HawkCompilerArtifactOptions = {},
 ): HawkCompilerArtifact {
   if (!spec.name.trim()) {
     throw new Error("Hawk2UI native app requires a stable name.");
@@ -139,8 +152,11 @@ export function compilerArtifactForApp(
   validateElement(spec.root);
   validateDynamicBindings(dynamicBindings, elementIds(spec.root));
   validateInitialDynamicValues(initialDynamicValues);
+  const compiler = cloneCompilerSourceWire(options.compiler ?? nativeCompilerSourceForApp(spec));
+  validateCompilerSource(compiler);
   return {
     schema_version: 1,
+    compiler,
     root: elementToWire(spec.root),
     reactivity: reactivity.map((binding) => ({ ...binding })),
     dynamic_bindings: dynamicBindings.map((binding) => ({
@@ -163,6 +179,39 @@ export function recordsForApp(spec: HawkAppSpec): readonly string[] {
   emitElement(spec.root, records);
   emitLifecycle(spec.root, "unmounted", records);
   return records;
+}
+
+function nativeCompilerSourceForApp(spec: HawkAppSpec): HawkCompilerSourceWire {
+  return {
+    framework: "native",
+    compiler: "@hawk2ui/native",
+    source_path: spec.name,
+    entrypoint: "root",
+  };
+}
+
+function cloneCompilerSourceWire(source: HawkCompilerSourceWire): HawkCompilerSourceWire {
+  return {
+    framework: source.framework,
+    compiler: source.compiler,
+    source_path: source.source_path,
+    entrypoint: source.entrypoint,
+  };
+}
+
+function validateCompilerSource(source: HawkCompilerSourceWire): void {
+  if (!source.framework.trim()) {
+    throw new Error("native.compiler.framework-invalid: compiler metadata requires a framework name.");
+  }
+  if (!source.compiler.trim()) {
+    throw new Error("native.compiler.compiler-invalid: compiler metadata requires a compiler package name.");
+  }
+  if (!source.source_path.trim() || isUnsafeAssetPath(source.source_path)) {
+    throw new Error("native.compiler.source-path-invalid: compiler metadata source path must be workspace-relative.");
+  }
+  if (!source.entrypoint.trim()) {
+    throw new Error("native.compiler.entrypoint-invalid: compiler metadata requires an entrypoint.");
+  }
 }
 
 function emitElement(element: HawkElementSpec, records: string[]): void {

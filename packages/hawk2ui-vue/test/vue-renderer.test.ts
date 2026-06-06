@@ -9,6 +9,12 @@ test("Vue compiler emits versioned native compiler artifacts from SFC templates"
   });
 
   expect(output.compilerArtifact.schema_version).toBe(1);
+  expect(output.compilerArtifact.compiler).toEqual({
+    framework: "vue",
+    compiler: "@hawk2ui/vue",
+    source_path: "App.vue",
+    entrypoint: "default",
+  });
   expect(output.compilerArtifact.root.id).toBe("root");
   expect(output.compilerArtifact.root.style_refs).toEqual(["surface.card"]);
   expect(output.compilerArtifact.root.children.map((child) => child.key)).toEqual(["title", "cta"]);

@@ -79,14 +79,22 @@ export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput
     framework: "vue",
     filename: input.filename,
     records: recordsForApp(app),
-    compilerArtifact: compilerArtifactForApp(
-      app,
-      [],
-      context.dynamicBindings,
-      [...context.initialDynamicValues.values()],
-    ),
-  };
-}
+      compilerArtifact: compilerArtifactForApp(
+        app,
+        [],
+        context.dynamicBindings,
+        [...context.initialDynamicValues.values()],
+        {
+          compiler: {
+            framework: "vue",
+            compiler: "@hawk2ui/vue",
+            source_path: input.filename,
+            entrypoint: "default",
+          },
+        },
+      ),
+    };
+  }
 
 function vueElementToSpec(node: AstNode, context: VueLoweringContext): HawkElementSpec {
   const tag = stringField(node, "tag");

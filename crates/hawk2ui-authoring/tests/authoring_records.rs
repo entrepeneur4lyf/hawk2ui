@@ -8,6 +8,60 @@ use hawk2ui_authoring::{
 use hawk2ui_render::CustomSurfaceCategory;
 use hawk2ui_runtime::RuntimeVisual;
 
+const FRAMEWORK_NATIVE_PROGRAM_WIRE_JSON: &str = r#"
+{
+  "schema_version": 1,
+  "compiler": {
+    "framework": "react",
+    "compiler": "@hawk2ui/react",
+    "source_path": "src/App.tsx",
+    "entrypoint": "App"
+  },
+  "root": {
+    "id": "root",
+    "kind": "view",
+    "refs": ["root_ref"],
+    "style_refs": ["surface.card"],
+    "asset_refs": [{ "name": "react.asset", "path": "assets/logo.svg" }],
+    "events": [{
+      "kind": "pointer.press",
+      "handler": "handlePress",
+      "payload_fields": ["position"]
+    }],
+    "lifecycle": [
+      { "event": "mounted", "handler": "onMount" },
+      { "event": "unmounted", "handler": "onUnmount" }
+    ],
+    "children": [{
+      "key": "title",
+      "node": {
+        "id": "title",
+        "kind": "text",
+        "key": "title",
+        "props": [
+          { "name": "text", "value": { "type": "string", "value": "Compiled Title" } },
+          { "name": "font_size", "value": { "type": "number", "value": 18.0 } },
+          { "name": "selected", "value": { "type": "bool", "value": true } }
+        ]
+      }
+    }]
+  },
+  "reactivity": [
+    { "kind": "signal", "name": "params" },
+    { "kind": "keyed-for-each", "name": "params" },
+    { "kind": "effect", "name": "meter-paint" }
+  ],
+  "dynamic_bindings": [
+    {
+      "node_id": "title",
+      "target": { "type": "prop", "name": "text" },
+      "expression": "params.title",
+      "dependencies": ["params"]
+    }
+  ]
+}
+"#;
+
 #[test]
 fn authoring_diagnostic_converts_to_shared_diagnostic() {
     let diagnostic = Diagnostic::from(AuthoringDiagnostic::new(
@@ -120,59 +174,15 @@ fn framework_native_program_records_explicit_compiler_boundary_without_source_sc
 
 #[test]
 fn framework_native_program_wire_round_trips_real_compiler_artifacts() {
-    let json = r#"
-{
-  "schema_version": 1,
-  "root": {
-    "id": "root",
-    "kind": "view",
-    "refs": ["root_ref"],
-    "style_refs": ["surface.card"],
-    "asset_refs": [{ "name": "react.asset", "path": "assets/logo.svg" }],
-    "events": [{
-      "kind": "pointer.press",
-      "handler": "handlePress",
-      "payload_fields": ["position"]
-    }],
-    "lifecycle": [
-      { "event": "mounted", "handler": "onMount" },
-      { "event": "unmounted", "handler": "onUnmount" }
-    ],
-    "children": [{
-      "key": "title",
-      "node": {
-        "id": "title",
-        "kind": "text",
-        "key": "title",
-        "props": [
-          { "name": "text", "value": { "type": "string", "value": "Compiled Title" } },
-          { "name": "font_size", "value": { "type": "number", "value": 18.0 } },
-          { "name": "selected", "value": { "type": "bool", "value": true } }
-        ]
-      }
-    }]
-  },
-    "reactivity": [
-      { "kind": "signal", "name": "params" },
-      { "kind": "keyed-for-each", "name": "params" },
-      { "kind": "effect", "name": "meter-paint" }
-    ],
-    "dynamic_bindings": [
-      {
-        "node_id": "title",
-        "target": { "type": "prop", "name": "text" },
-        "expression": "params.title",
-        "dependencies": ["params"]
-      }
-    ]
-  }
-"#;
-
-    let wire =
-        FrameworkNativeProgramWire::from_json(json).expect("compiler wire artifact must parse");
+    let wire = FrameworkNativeProgramWire::from_json(FRAMEWORK_NATIVE_PROGRAM_WIRE_JSON)
+        .expect("compiler wire artifact must parse");
     let program = FrameworkNativeProgram::try_from(wire.clone())
         .expect("compiler wire artifact must validate into a native program");
 
+    assert_eq!(program.compiler().framework(), "react");
+    assert_eq!(program.compiler().compiler(), "@hawk2ui/react");
+    assert_eq!(program.compiler().source_path(), "src/App.tsx");
+    assert_eq!(program.compiler().entrypoint(), "App");
     assert_eq!(program.root().id().as_str(), "root");
     assert_eq!(program.root().refs()[0].name(), "root_ref");
     assert_eq!(program.root().style_refs()[0].name(), "surface.card");

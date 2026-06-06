@@ -91,3 +91,33 @@ test("compilerArtifactForApp rejects invalid initial dynamic values", () => {
     ]),
   ).toThrow("native.initial-dynamic-value.number-invalid");
 });
+
+test("compilerArtifactForApp preserves explicit compiler source metadata", () => {
+  const spec = { name: "react-app", root: { id: "root", kind: "view" as const } };
+  const artifact = compilerArtifactForApp(spec, [], [], [], {
+    compiler: {
+      framework: "react",
+      compiler: "@hawk2ui/react",
+      source_path: "src/App.tsx",
+      entrypoint: "App",
+    },
+  });
+
+  expect(artifact.compiler).toEqual({
+    framework: "react",
+    compiler: "@hawk2ui/react",
+    source_path: "src/App.tsx",
+    entrypoint: "App",
+  });
+
+  expect(() =>
+    compilerArtifactForApp(spec, [], [], [], {
+      compiler: {
+        framework: "react",
+        compiler: "@hawk2ui/react",
+        source_path: "../App.tsx",
+        entrypoint: "App",
+      },
+    }),
+  ).toThrow("native.compiler.source-path-invalid");
+});

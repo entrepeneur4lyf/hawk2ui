@@ -50,6 +50,7 @@ interface SolidLoweringContext {
 interface ReturnedJsxElement {
   readonly element: AstNode;
   readonly scope: AstNode | undefined;
+  readonly entrypoint: string;
 }
 
 const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
@@ -93,25 +94,37 @@ export function compileHawkSolid(input: HawkSolidCompileInput): HawkSolidCompile
     framework: "solid",
     filename: input.filename,
     records: recordsForApp(app),
-    compilerArtifact: compilerArtifactForApp(
-      app,
-      uniqueReactivity(context.reactivity),
-      context.dynamicBindings,
-      [...context.initialDynamicValues.values()],
-    ),
-  };
-}
+      compilerArtifact: compilerArtifactForApp(
+        app,
+        uniqueReactivity(context.reactivity),
+        context.dynamicBindings,
+        [...context.initialDynamicValues.values()],
+        {
+          compiler: {
+            framework: "solid",
+            compiler: "@hawk2ui/solid",
+            source_path: input.filename,
+            entrypoint: returned.entrypoint,
+          },
+        },
+      ),
+    };
+  }
 
 function returnedJsxElement(program: AstNode): ReturnedJsxElement | undefined {
   for (const statement of arrayField(program, "body")) {
     const declaration = statement.declaration as AstNode | undefined;
     const candidate = statement.type === "ExportNamedDeclaration" && declaration ? declaration : statement;
     if (candidate.type === "FunctionDeclaration") {
-      const returned = returnArgument(candidate.body as AstNode | undefined);
-      if (returned && isHawkJsxElement(returned)) {
-        return { element: returned, scope: candidate.body as AstNode | undefined };
+        const returned = returnArgument(candidate.body as AstNode | undefined);
+        if (returned && isHawkJsxElement(returned)) {
+          return {
+            element: returned,
+            scope: candidate.body as AstNode | undefined,
+            entrypoint: identifierName(candidate.id as AstNode | undefined) ?? "default",
+          };
+        }
       }
-    }
   }
   return undefined;
 }

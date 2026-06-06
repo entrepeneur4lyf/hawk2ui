@@ -64,14 +64,22 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
     framework: "svelte",
     filename: input.filename,
     records: recordsForApp(app),
-    compilerArtifact: compilerArtifactForApp(
-      app,
-      [],
-      context.dynamicBindings,
-      [...context.initialDynamicValues.values()],
-    ),
-  };
-}
+      compilerArtifact: compilerArtifactForApp(
+        app,
+        [],
+        context.dynamicBindings,
+        [...context.initialDynamicValues.values()],
+        {
+          compiler: {
+            framework: "svelte",
+            compiler: "@hawk2ui/svelte",
+            source_path: input.filename,
+            entrypoint: "default",
+          },
+        },
+      ),
+    };
+  }
 
 function svelteElementToSpec(node: AstNode, context: SvelteLoweringContext): HawkElementSpec {
   const tag = stringField(node, "name");

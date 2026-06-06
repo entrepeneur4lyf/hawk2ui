@@ -21,6 +21,12 @@ test("Svelte compiler emits lifecycle, child props, and deterministic records", 
     "prop:cta:text=Go",
     "lifecycle:unmounted:root:onDestroy",
   ]);
+  expect(output.compilerArtifact.compiler).toEqual({
+    framework: "svelte",
+    compiler: "@hawk2ui/svelte",
+    source_path: "App.svelte",
+    entrypoint: "default",
+  });
   expect(output.compilerArtifact.root.style_refs).toEqual(["surface.card"]);
   expect(output.compilerArtifact.root.children.map((child) => child.key)).toEqual(["title", "cta"]);
   expect(output.compilerArtifact.root.lifecycle).toEqual([

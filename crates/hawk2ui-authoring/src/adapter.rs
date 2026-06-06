@@ -182,10 +182,20 @@ impl FrameworkNativeNode {
 /// Typed native program emitted by framework compiler/runtime adapters.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameworkNativeProgram {
+    compiler: FrameworkCompilerMetadata,
     root: FrameworkNativeNode,
     reactivity: Vec<FrameworkReactiveBinding>,
     dynamic_bindings: Vec<FrameworkDynamicBinding>,
     initial_dynamic_values: Vec<FrameworkInitialDynamicValue>,
+}
+
+/// Compiler provenance attached to a framework native program.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FrameworkCompilerMetadata {
+    framework: String,
+    compiler: String,
+    source_path: String,
+    entrypoint: String,
 }
 
 /// Versioned native compiler artifact emitted by framework-specific compilers.
@@ -194,6 +204,9 @@ pub struct FrameworkNativeProgram {
 pub struct FrameworkNativeProgramWire {
     /// Wire schema version. Version `1` is the current compiler artifact format.
     pub schema_version: u32,
+    /// Compiler provenance emitted by the framework adapter.
+    #[serde(default)]
+    pub compiler: FrameworkCompilerMetadataWire,
     /// Root node emitted by the framework compiler.
     pub root: FrameworkNativeNodeWire,
     /// Framework reactivity bindings emitted by the compiler.
@@ -205,6 +218,31 @@ pub struct FrameworkNativeProgramWire {
     /// Initial dependency values available for first-frame dynamic binding evaluation.
     #[serde(default)]
     pub initial_dynamic_values: Vec<FrameworkInitialDynamicValueWire>,
+}
+
+/// Wire compiler provenance for source-fidelity checks.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkCompilerMetadataWire {
+    /// Framework label that produced the native program.
+    pub framework: String,
+    /// Compiler package or adapter name that produced the native program.
+    pub compiler: String,
+    /// Workspace-relative author source path.
+    pub source_path: String,
+    /// Framework entrypoint lowered by the compiler.
+    pub entrypoint: String,
+}
+
+impl Default for FrameworkCompilerMetadataWire {
+    fn default() -> Self {
+        Self {
+            framework: "unknown".to_string(),
+            compiler: "unknown".to_string(),
+            source_path: "unknown".to_string(),
+            entrypoint: "unknown".to_string(),
+        }
+    }
 }
 
 impl FrameworkNativeProgramWire {
@@ -485,6 +523,7 @@ impl FrameworkNativeProgram {
     #[must_use]
     pub const fn new(root: FrameworkNativeNode) -> Self {
         Self {
+            compiler: FrameworkCompilerMetadata::unknown(),
             root,
             reactivity: Vec::new(),
             dynamic_bindings: Vec::new(),
@@ -492,10 +531,23 @@ impl FrameworkNativeProgram {
         }
     }
 
+    /// Returns compiler provenance for this native program.
+    #[must_use]
+    pub const fn compiler(&self) -> &FrameworkCompilerMetadata {
+        &self.compiler
+    }
+
     /// Returns the root node.
     #[must_use]
     pub const fn root(&self) -> &FrameworkNativeNode {
         &self.root
+    }
+
+    /// Sets compiler provenance declared by the compiler boundary.
+    #[must_use]
+    pub fn with_compiler(mut self, compiler: FrameworkCompilerMetadata) -> Self {
+        self.compiler = compiler;
+        self
     }
 
     /// Adds a framework reactivity binding declared by the compiler boundary.
@@ -588,6 +640,59 @@ impl FrameworkNativeProgram {
     }
 }
 
+impl FrameworkCompilerMetadata {
+    /// Creates an explicit compiler provenance record.
+    #[must_use]
+    pub fn new(
+        framework: impl Into<String>,
+        compiler: impl Into<String>,
+        source_path: impl Into<String>,
+        entrypoint: impl Into<String>,
+    ) -> Self {
+        Self {
+            framework: framework.into(),
+            compiler: compiler.into(),
+            source_path: source_path.into(),
+            entrypoint: entrypoint.into(),
+        }
+    }
+
+    /// Returns fallback provenance used for manually constructed native programs.
+    #[must_use]
+    pub const fn unknown() -> Self {
+        Self {
+            framework: String::new(),
+            compiler: String::new(),
+            source_path: String::new(),
+            entrypoint: String::new(),
+        }
+    }
+
+    /// Returns the framework label that produced the native program.
+    #[must_use]
+    pub fn framework(&self) -> &str {
+        &self.framework
+    }
+
+    /// Returns the compiler package or adapter name.
+    #[must_use]
+    pub fn compiler(&self) -> &str {
+        &self.compiler
+    }
+
+    /// Returns the workspace-relative source path.
+    #[must_use]
+    pub fn source_path(&self) -> &str {
+        &self.source_path
+    }
+
+    /// Returns the framework entrypoint lowered by the compiler.
+    #[must_use]
+    pub fn entrypoint(&self) -> &str {
+        &self.entrypoint
+    }
+}
+
 impl TryFrom<FrameworkNativeProgramWire> for FrameworkNativeProgram {
     type Error = AdapterError;
 
@@ -602,7 +707,8 @@ impl TryFrom<FrameworkNativeProgramWire> for FrameworkNativeProgram {
             ));
         }
 
-        let mut program = Self::new(framework_native_node_from_wire(wire.root)?);
+        let mut program = Self::new(framework_native_node_from_wire(wire.root)?)
+            .with_compiler(framework_compiler_metadata_from_wire(wire.compiler)?);
         for binding in wire.reactivity {
             program = program.with_reactive_binding(framework_reactivity_from_wire(binding)?);
         }
@@ -625,6 +731,49 @@ impl TryFrom<FrameworkNativeProgramWire> for FrameworkNativeProgram {
         }
         Ok(program)
     }
+}
+
+fn framework_compiler_metadata_from_wire(
+    wire: FrameworkCompilerMetadataWire,
+) -> Result<FrameworkCompilerMetadata, AdapterError> {
+    validate_non_empty(
+        "framework-native-program.compiler.framework-invalid",
+        "compiler framework",
+        &wire.framework,
+    )?;
+    validate_non_empty(
+        "framework-native-program.compiler.compiler-invalid",
+        "compiler package",
+        &wire.compiler,
+    )?;
+    validate_non_empty(
+        "framework-native-program.compiler.source-path-invalid",
+        "compiler source path",
+        &wire.source_path,
+    )?;
+    validate_non_empty(
+        "framework-native-program.compiler.entrypoint-invalid",
+        "compiler entrypoint",
+        &wire.entrypoint,
+    )?;
+    if wire.source_path.starts_with('/')
+        || wire.source_path.contains("://")
+        || wire.source_path.split('/').any(|segment| segment == "..")
+    {
+        return Err(AdapterError::with_rule(
+            "framework-native-program.compiler.source-path-invalid",
+            format!(
+                "compiler source path `{}` must be workspace-relative",
+                wire.source_path
+            ),
+        ));
+    }
+    Ok(FrameworkCompilerMetadata::new(
+        wire.framework,
+        wire.compiler,
+        wire.source_path,
+        wire.entrypoint,
+    ))
 }
 
 fn framework_native_node_from_wire(
