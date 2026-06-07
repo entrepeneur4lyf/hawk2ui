@@ -1,6 +1,6 @@
 # Hawk2UI Getting Started
 
-Hawk2UI models native desktop applications and embeddable plugin editors from a `manifest.hawk.toml` file. This page documents the implemented manifest surface, repository fixtures, and CLI command catalog.
+Hawk2UI models native desktop applications and embeddable plugin editors from a project manifest. The canonical source manifest is `hawk.json`; the current repository fixtures still use legacy `manifest.hawk.toml` while the implementation migrates. See [Project Manifest](project-manifest.md) for the canonical JSON contract. This page documents the implemented legacy manifest surface, repository fixtures, and CLI command catalog.
 
 ## Project Shape
 

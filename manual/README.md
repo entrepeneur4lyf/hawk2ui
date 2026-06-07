@@ -2,13 +2,17 @@
 
 Hawk2UI is a native windowing and rendering framework for production desktop applications and embeddable plugin editors. This manual is for application authors, plugin authors, and framework integration authors. It is grounded in implemented code: CLI command definitions, manifest parser behavior, public API inventory, compatibility matrices, examples, and conformance tests.
 
+## Project Manifest
+
+Hawk2UI projects are manifest-driven. The canonical source manifest is `hawk.json`, which declares package identity, app entrypoints, desktop targets, plugin targets, assets, permissions, and release policy. Existing `manifest.hawk.toml` fixtures remain legacy migration inputs while the implementation is converted. Start with [Project Manifest](project-manifest.md).
+
 ## Desktop Applications
 
-Desktop applications declare a `desktop` target in `manifest.hawk.toml` and are modeled through the native host adapter API records. Start with [Desktop Apps](desktop-apps.md) and the fixtures `examples/desktop-basic/manifest.hawk.toml` and `examples/desktop-dashboard/manifest.hawk.toml`.
+Desktop applications declare a `desktop` target in the project manifest and are modeled through the native host adapter API records. Start with [Desktop Apps](desktop-apps.md), [Project Manifest](project-manifest.md), and the legacy fixtures `examples/desktop-basic/manifest.hawk.toml` and `examples/desktop-dashboard/manifest.hawk.toml`.
 
 ## Plugin Editors
 
-Plugin editors declare a `plugin` target and include host-facing plugin metadata. Start with [Plugin Editors](plugin-editors.md) and the fixtures `examples/plugin-basic/manifest.hawk.toml`, `examples/plugin-synth-editor/manifest.hawk.toml`, and `examples/plugin-meter-analyzer/manifest.hawk.toml`.
+Plugin editors declare a `plugin` target and include host-facing plugin metadata. Start with [Plugin Editors](plugin-editors.md), [Project Manifest](project-manifest.md), and the legacy fixtures `examples/plugin-basic/manifest.hawk.toml`, `examples/plugin-synth-editor/manifest.hawk.toml`, and `examples/plugin-meter-analyzer/manifest.hawk.toml`.
 
 ## Style System
 

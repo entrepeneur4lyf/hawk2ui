@@ -2,6 +2,7 @@
 
 - [Manual Home](README.md)
 - [Getting Started](getting-started.md)
+- [Project Manifest](project-manifest.md)
 - [Desktop Apps](desktop-apps.md)
 - [Plugin Editors](plugin-editors.md)
 - [Style Reference](style-reference.md)
