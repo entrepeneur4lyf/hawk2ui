@@ -1,0 +1,27 @@
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.examples.desktop-basic",
+    "name": "Hawk2UI Desktop Basic",
+    "version": "0.1.0",
+    "bundleId": "com.hawk2ui.examples.desktop-basic"
+  },
+  "app": {
+    "entry": "src/main.ts",
+    "style": "styles/main.hawk.css"
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "linux-wayland"
+      }
+    ]
+  },
+  "permissions": {
+    "capabilities": [
+      "native-windowing",
+      "sealed-artifacts"
+    ]
+  }
+}

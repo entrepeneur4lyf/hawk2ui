@@ -37,6 +37,11 @@ pub enum CliCommand {
     ExportParams,
     /// Pin a stable numeric id to every unpinned manifest parameter.
     PinIds,
+    /// Convert legacy `manifest.hawk.toml` into canonical `hawk.json`.
+    MigrateManifest {
+        /// Overwrite an existing canonical manifest.
+        force: bool,
+    },
     /// Render diagnostics.
     Diagnostics,
     /// Explain the current project and available workflows.
@@ -95,6 +100,7 @@ impl CliCommand {
             "export-schemas" => Some(Self::ExportSchemas),
             "export-params" => Some(Self::ExportParams),
             "pin-ids" => Some(Self::PinIds),
+            "migrate-manifest" => Some(Self::MigrateManifest { force: false }),
             "diagnostics" => Some(Self::Diagnostics),
             "explain" => Some(Self::Explain),
             _ => None,
@@ -197,6 +203,14 @@ impl CommandCatalog {
                     }
                 }
             }
+            CliCommand::MigrateManifest { force } => {
+                for argument in args.by_ref() {
+                    match argument.as_ref() {
+                        "--force" => *force = true,
+                        other => return Err(unexpected_argument(other)),
+                    }
+                }
+            }
             _ => {
                 if let Some(extra) = args.next() {
                     return Err(unexpected_argument(extra.as_ref()));
@@ -225,6 +239,7 @@ impl CommandCatalog {
             "  export-schemas   Export the central generated JSON Schema catalog",
             "  export-params    Emit truce parameter source generated from the manifest",
             "  pin-ids          Pin a stable numeric id to every unpinned manifest parameter",
+            "  migrate-manifest Convert legacy manifest.hawk.toml into canonical hawk.json [--force]",
             "  diagnostics      Render structured diagnostics",
             "  explain          Explain project targets, capabilities, and next commands",
         ]

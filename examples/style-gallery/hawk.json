@@ -1,0 +1,21 @@
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.examples.style-gallery",
+    "name": "Hawk2UI Style Gallery",
+    "version": "0.1.0",
+    "bundleId": "com.hawk2ui.examples.style-gallery"
+  },
+  "app": {
+    "entry": "src/main.ts",
+    "style": "styles/gallery.hawk.css"
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "style-gallery"
+      }
+    ]
+  }
+}

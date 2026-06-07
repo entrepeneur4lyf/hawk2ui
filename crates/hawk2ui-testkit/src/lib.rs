@@ -412,13 +412,13 @@ mod tests {
     fn fixture_helpers_load_registered_fixture() {
         let catalog = FixtureCatalog::new([TestFixture::new(
             "desktop-basic",
-            "examples/desktop-basic/manifest.hawk.toml",
+            "examples/desktop-basic/hawk.json",
             FixtureKind::Manifest,
         )]);
 
         let fixture = catalog.require("desktop-basic").unwrap();
 
-        assert_eq!(fixture.path(), "examples/desktop-basic/manifest.hawk.toml");
+        assert_eq!(fixture.path(), "examples/desktop-basic/hawk.json");
         assert_eq!(fixture.kind(), FixtureKind::Manifest);
     }
 

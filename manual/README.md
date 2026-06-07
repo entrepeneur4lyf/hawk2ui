@@ -4,15 +4,15 @@ Hawk2UI is a native windowing and rendering framework for production desktop app
 
 ## Project Manifest
 
-Hawk2UI projects are manifest-driven. The canonical source manifest is `hawk.json`, which declares package identity, app entrypoints, desktop targets, plugin targets, assets, permissions, and release policy. Existing `manifest.hawk.toml` fixtures remain legacy migration inputs while the implementation is converted. Start with [Project Manifest](project-manifest.md).
+Hawk2UI projects are manifest-driven. The canonical source manifest is `hawk.json`, which declares package identity, app entrypoints, desktop targets, plugin targets, assets, permissions, and release policy. Legacy `manifest.hawk.toml` files are accepted as migration inputs, not as the long-term project format. Start with [Project Manifest](project-manifest.md).
 
 ## Desktop Applications
 
-Desktop applications declare a `desktop` target in the project manifest and are modeled through the native host adapter API records. Start with [Desktop Apps](desktop-apps.md), [Project Manifest](project-manifest.md), and the legacy fixtures `examples/desktop-basic/manifest.hawk.toml` and `examples/desktop-dashboard/manifest.hawk.toml`.
+Desktop applications declare a `desktop` target in the project manifest and are modeled through the native host adapter API records. Start with [Desktop Apps](desktop-apps.md), [Project Manifest](project-manifest.md), and the fixtures `examples/desktop-basic/hawk.json` and `examples/desktop-dashboard/hawk.json`.
 
 ## Plugin Editors
 
-Plugin editors declare a `plugin` target and include host-facing plugin metadata. Start with [Plugin Editors](plugin-editors.md), [Project Manifest](project-manifest.md), and the legacy fixtures `examples/plugin-basic/manifest.hawk.toml`, `examples/plugin-synth-editor/manifest.hawk.toml`, and `examples/plugin-meter-analyzer/manifest.hawk.toml`.
+Plugin editors declare a `plugin` target and include host-facing plugin metadata. Start with [Plugin Editors](plugin-editors.md), [Project Manifest](project-manifest.md), and the fixtures `examples/plugin-basic/hawk.json`, `examples/plugin-synth-editor/hawk.json`, and `examples/plugin-meter-analyzer/hawk.json`.
 
 ## Style System
 

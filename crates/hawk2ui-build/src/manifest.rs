@@ -86,6 +86,196 @@ struct RawManifest {
     presets: Vec<PresetDeclaration>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RawJsonManifest {
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    schema: Option<String>,
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    package: JsonPackage,
+    app: JsonApp,
+    targets: JsonTargets,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin: Option<JsonPlugin>,
+    #[serde(default, skip_serializing_if = "JsonAssets::is_empty")]
+    assets: JsonAssets,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    presets: Vec<PresetDeclaration>,
+    #[serde(default, skip_serializing_if = "JsonPermissions::is_empty")]
+    permissions: JsonPermissions,
+    #[serde(default, skip_serializing_if = "JsonBuild::is_empty")]
+    build: JsonBuild,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonPackage {
+    id: String,
+    name: String,
+    version: String,
+    #[serde(rename = "bundleId", skip_serializing_if = "Option::is_none")]
+    bundle_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonApp {
+    entry: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    framework: Option<SourceFramework>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    style: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    script: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonTargets {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    desktop: Vec<JsonDesktopTarget>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    plugin: Vec<JsonPluginTarget>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonDesktopTarget {
+    name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    platforms: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window: Option<JsonWindow>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonPluginTarget {
+    name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    formats: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    editor: Option<JsonPluginEditor>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonWindow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    height: Option<u32>,
+    #[serde(rename = "minWidth", skip_serializing_if = "Option::is_none")]
+    min_width: Option<u32>,
+    #[serde(rename = "minHeight", skip_serializing_if = "Option::is_none")]
+    min_height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resizable: Option<bool>,
+    #[serde(
+        rename = "presentationBackend",
+        skip_serializing_if = "Option::is_none"
+    )]
+    presentation_backend: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonPluginEditor {
+    width: u32,
+    height: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resizable: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonPlugin {
+    id: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vendor: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parameters: Vec<JsonPluginParameter>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    meters: Vec<PluginMeter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    state: Option<JsonPluginState>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonPluginParameter {
+    id: String,
+    #[serde(rename = "paramId", default, skip_serializing_if = "Option::is_none")]
+    param_id: Option<u32>,
+    name: String,
+    #[serde(default)]
+    kind: PluginParameterKind,
+    #[serde(default = "unit_interval_min")]
+    min: f64,
+    #[serde(default = "unit_interval_max")]
+    max: f64,
+    default: f64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    unit: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    variants: Vec<PluginEnumVariant>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonPluginState {
+    version: u32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonAssets {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    include: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    entries: Vec<AssetDeclaration>,
+}
+
+impl JsonAssets {
+    fn is_empty(&self) -> bool {
+        self.include.is_empty() && self.entries.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonPermissions {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    filesystem: Vec<String>,
+}
+
+impl JsonPermissions {
+    fn is_empty(&self) -> bool {
+        self.capabilities.is_empty() && self.network.is_none() && self.filesystem.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonBuild {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<String>,
+}
+
+impl JsonBuild {
+    fn is_empty(&self) -> bool {
+        self.output.is_none()
+    }
+}
+
 /// App identity metadata.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -264,13 +454,21 @@ pub struct PresetDeclaration {
 }
 
 impl HawkManifest {
-    /// Parses and validates a Hawk manifest from TOML.
+    /// Parses and validates a Hawk manifest from canonical `hawk.json` or legacy TOML.
     ///
     /// # Errors
     ///
     /// Returns [`ManifestError`] when parsing fails or validation rejects the manifest.
     pub fn parse(input: &str) -> Result<Self, ManifestError> {
-        validate_manifest_schema(input)?;
+        if is_json_manifest(input) {
+            Self::parse_json(input)
+        } else {
+            Self::parse_legacy_toml(input)
+        }
+    }
+
+    fn parse_legacy_toml(input: &str) -> Result<Self, ManifestError> {
+        validate_legacy_toml_manifest_schema(input)?;
         let raw: RawManifest =
             toml::from_str(input).map_err(|error| ManifestError::Parse(error.to_string()))?;
         let manifest = Self {
@@ -292,13 +490,20 @@ impl HawkManifest {
         Ok(manifest)
     }
 
-    /// Generates the JSON Schema used to validate raw manifest documents.
+    fn parse_json(input: &str) -> Result<Self, ManifestError> {
+        validate_json_manifest_schema(input)?;
+        let raw: RawJsonManifest =
+            serde_json::from_str(input).map_err(|error| ManifestError::Parse(error.to_string()))?;
+        raw.into_manifest()
+    }
+
+    /// Generates the JSON Schema used to validate canonical `hawk.json` documents.
     ///
     /// # Errors
     ///
     /// Returns [`ManifestError`] when the generated schema cannot be represented as JSON.
     pub fn json_schema() -> Result<serde_json::Value, ManifestError> {
-        serde_json::to_value(schemars::schema_for!(RawManifest))
+        serde_json::to_value(schemars::schema_for!(RawJsonManifest))
             .map_err(|error| ManifestError::Parse(error.to_string()))
     }
 
@@ -500,6 +705,254 @@ impl HawkManifest {
         }
 
         Ok(())
+    }
+}
+
+impl RawJsonManifest {
+    fn into_manifest(self) -> Result<HawkManifest, ManifestError> {
+        if self.schema_version != 1 {
+            return Err(ManifestError::SchemaValidation {
+                path: "/schemaVersion".into(),
+                message: "unsupported schemaVersion; expected 1".into(),
+            });
+        }
+        validate_json_targets(&self.targets)?;
+
+        let mut targets =
+            Vec::with_capacity(self.targets.desktop.len() + self.targets.plugin.len());
+        targets.extend(
+            self.targets
+                .desktop
+                .into_iter()
+                .map(|target| TargetDeclaration {
+                    kind: PackageTarget::Desktop,
+                    name: target.name,
+                }),
+        );
+        let editor = self.targets.plugin.iter().find_map(|target| {
+            target
+                .editor
+                .as_ref()
+                .map(JsonPluginEditor::editor_metadata)
+        });
+        targets.extend(
+            self.targets
+                .plugin
+                .into_iter()
+                .map(|target| TargetDeclaration {
+                    kind: PackageTarget::Plugin,
+                    name: target.name,
+                }),
+        );
+
+        let (plugin, parameters, meters) = self.plugin.map_or_else(
+            || (None, Vec::new(), Vec::new()),
+            |plugin| {
+                (
+                    Some(PluginIdentity {
+                        id: plugin.id,
+                        name: plugin.name,
+                    }),
+                    plugin
+                        .parameters
+                        .into_iter()
+                        .map(PluginParameter::from)
+                        .collect(),
+                    plugin.meters,
+                )
+            },
+        );
+
+        let manifest = HawkManifest {
+            identity: ManifestIdentity {
+                id: self.package.id.clone(),
+                name: self.package.name.clone(),
+                version: self.package.version.clone(),
+            },
+            package: Some(PackageMetadata {
+                name: self.package.name,
+                bundle_id: self.package.bundle_id.unwrap_or(self.package.id),
+            }),
+            source: SourceEntrypoint {
+                entry: self.app.entry,
+                framework: self.app.framework,
+                style: self.app.style,
+                script: self.app.script,
+            },
+            capabilities: self.permissions.capabilities,
+            targets,
+            plugin,
+            editor,
+            parameters,
+            meters,
+            assets: self.assets.entries,
+            presets: self.presets,
+        };
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    fn from_manifest(manifest: &HawkManifest) -> Self {
+        let package = JsonPackage {
+            id: manifest.identity.id.clone(),
+            name: manifest.identity.name.clone(),
+            version: manifest.identity.version.clone(),
+            bundle_id: manifest
+                .package
+                .as_ref()
+                .map(|package| package.bundle_id.clone())
+                .or_else(|| Some(manifest.identity.id.clone())),
+        };
+        let targets = JsonTargets {
+            desktop: manifest
+                .targets
+                .iter()
+                .filter(|target| target.kind == PackageTarget::Desktop)
+                .map(|target| JsonDesktopTarget {
+                    name: target.name.clone(),
+                    platforms: Vec::new(),
+                    window: None,
+                })
+                .collect(),
+            plugin: manifest
+                .targets
+                .iter()
+                .filter(|target| target.kind == PackageTarget::Plugin)
+                .map(|target| JsonPluginTarget {
+                    name: target.name.clone(),
+                    formats: Vec::new(),
+                    editor: manifest
+                        .editor
+                        .as_ref()
+                        .map(JsonPluginEditor::from_editor_metadata),
+                })
+                .collect(),
+        };
+        let plugin = manifest.plugin.as_ref().map(|plugin| JsonPlugin {
+            id: plugin.id.clone(),
+            name: plugin.name.clone(),
+            vendor: None,
+            parameters: manifest
+                .parameters
+                .iter()
+                .cloned()
+                .map(JsonPluginParameter::from)
+                .collect(),
+            meters: manifest.meters.clone(),
+            state: None,
+        });
+        Self {
+            schema: Some("https://hawk2ui.dev/schemas/hawk.schema.json".into()),
+            schema_version: 1,
+            package,
+            app: JsonApp {
+                entry: manifest.source.entry.clone(),
+                framework: manifest.source.framework,
+                style: manifest.source.style.clone(),
+                script: manifest.source.script.clone(),
+            },
+            targets,
+            plugin,
+            assets: JsonAssets {
+                include: Vec::new(),
+                entries: manifest.assets.clone(),
+            },
+            presets: manifest.presets.clone(),
+            permissions: JsonPermissions {
+                capabilities: manifest.capabilities.clone(),
+                network: None,
+                filesystem: Vec::new(),
+            },
+            build: JsonBuild::default(),
+        }
+    }
+}
+
+fn validate_json_targets(targets: &JsonTargets) -> Result<(), ManifestError> {
+    for (index, target) in targets.desktop.iter().enumerate() {
+        for platform in &target.platforms {
+            if !matches!(
+                platform.as_str(),
+                "windows" | "macos" | "linux-wayland" | "linux-x11"
+            ) {
+                return Err(ManifestError::SchemaValidation {
+                    path: format!("/targets/desktop/{index}/platforms"),
+                    message: format!("unsupported desktop platform: {platform}"),
+                });
+            }
+        }
+        if let Some(window) = &target.window
+            && let Some(backend) = &window.presentation_backend
+            && !matches!(
+                backend.as_str(),
+                "software" | "gpu-preferred" | "gpu-required"
+            )
+        {
+            return Err(ManifestError::SchemaValidation {
+                path: format!("/targets/desktop/{index}/window/presentationBackend"),
+                message: format!("unsupported presentation backend: {backend}"),
+            });
+        }
+    }
+    for (index, target) in targets.plugin.iter().enumerate() {
+        for format in &target.formats {
+            if !matches!(format.as_str(), "clap" | "vst3" | "au" | "standalone") {
+                return Err(ManifestError::SchemaValidation {
+                    path: format!("/targets/plugin/{index}/formats"),
+                    message: format!("unsupported plugin format: {format}"),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+impl JsonPluginEditor {
+    fn editor_metadata(&self) -> EditorMetadata {
+        EditorMetadata {
+            width: self.width,
+            height: self.height,
+        }
+    }
+
+    fn from_editor_metadata(editor: &EditorMetadata) -> Self {
+        Self {
+            width: editor.width,
+            height: editor.height,
+            resizable: None,
+        }
+    }
+}
+
+impl From<JsonPluginParameter> for PluginParameter {
+    fn from(parameter: JsonPluginParameter) -> Self {
+        Self {
+            id: parameter.id,
+            param_id: parameter.param_id,
+            name: parameter.name,
+            kind: parameter.kind,
+            min: parameter.min,
+            max: parameter.max,
+            default: parameter.default,
+            unit: parameter.unit,
+            variants: parameter.variants,
+        }
+    }
+}
+
+impl From<PluginParameter> for JsonPluginParameter {
+    fn from(parameter: PluginParameter) -> Self {
+        Self {
+            id: parameter.id,
+            param_id: parameter.param_id,
+            name: parameter.name,
+            kind: parameter.kind,
+            min: parameter.min,
+            max: parameter.max,
+            default: parameter.default,
+            unit: parameter.unit,
+            variants: parameter.variants,
+        }
     }
 }
 
@@ -710,16 +1163,39 @@ pub enum ManifestError {
     },
 }
 
-fn validate_manifest_schema(input: &str) -> Result<(), ManifestError> {
+fn is_json_manifest(input: &str) -> bool {
+    input.trim_start().starts_with('{')
+}
+
+fn legacy_toml_json_schema() -> Result<serde_json::Value, ManifestError> {
+    serde_json::to_value(schemars::schema_for!(RawManifest))
+        .map_err(|error| ManifestError::Parse(error.to_string()))
+}
+
+fn validate_legacy_toml_manifest_schema(input: &str) -> Result<(), ManifestError> {
     let toml_value: toml::Value =
         toml::from_str(input).map_err(|error| ManifestError::Parse(error.to_string()))?;
     let json_value = serde_json::to_value(toml_value)
         .map_err(|error| ManifestError::Parse(error.to_string()))?;
+    let schema = legacy_toml_json_schema()?;
+    validate_json_value_against_schema(&json_value, &schema)
+}
+
+fn validate_json_manifest_schema(input: &str) -> Result<(), ManifestError> {
+    let json_value: serde_json::Value =
+        serde_json::from_str(input).map_err(|error| ManifestError::Parse(error.to_string()))?;
     let schema = HawkManifest::json_schema()?;
-    let validator = jsonschema::Validator::new(&schema)
+    validate_json_value_against_schema(&json_value, &schema)
+}
+
+fn validate_json_value_against_schema(
+    json_value: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> Result<(), ManifestError> {
+    let validator = jsonschema::Validator::new(schema)
         .map_err(|error| ManifestError::Parse(error.to_string()))?;
     validator
-        .validate(&json_value)
+        .validate(json_value)
         .map_err(|error| ManifestError::SchemaValidation {
             path: error.instance_path().as_str().to_string(),
             message: error.to_string(),
@@ -792,4 +1268,21 @@ pub fn pin_param_ids(source: &str) -> Result<PinParamIds, ManifestError> {
             assigned,
         })
     }
+}
+
+/// Converts a legacy `manifest.hawk.toml` document into canonical `hawk.json`.
+///
+/// # Errors
+///
+/// Returns [`ManifestError`] when the legacy manifest is invalid or the canonical
+/// JSON document cannot be rendered.
+pub fn migrate_toml_manifest_to_json(source: &str) -> Result<String, ManifestError> {
+    let manifest = HawkManifest::parse_legacy_toml(source)?;
+    let raw_json = RawJsonManifest::from_manifest(&manifest);
+    serde_json::to_string_pretty(&raw_json)
+        .map(|mut rendered| {
+            rendered.push('\n');
+            rendered
+        })
+        .map_err(|error| ManifestError::Parse(error.to_string()))
 }

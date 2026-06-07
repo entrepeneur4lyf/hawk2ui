@@ -1,0 +1,14 @@
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.examples.security-denials",
+    "name": "Hawk2UI Security Denials",
+    "version": "0.1.0",
+    "bundleId": "com.hawk2ui.examples.security-denials"
+  },
+  "app": {
+    "entry": "fixtures/denied.ts"
+  },
+  "targets": {}
+}

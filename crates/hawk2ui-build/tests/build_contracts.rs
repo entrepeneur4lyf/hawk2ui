@@ -9,7 +9,7 @@ use hawk2ui_build::{
     BuildPipelineError, BuildWorkspace, BuildWorkspaceError, CompiledAssetRecord,
     CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget,
     PackageTargetRecord, SealedArtifact, SealedArtifactError, SourceFramework, SourceSpan,
-    VerificationReport,
+    VerificationReport, migrate_toml_manifest_to_json,
 };
 use hawk2ui_plugin::{ParameterRange, ParameterValue};
 use image::{ColorType, ImageEncoder};
@@ -131,6 +131,91 @@ name = "Gain"
 default = 0.5
 "#;
 
+const VALID_HAWK_JSON: &str = r#"
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.json-basic",
+    "name": "JSON Basic",
+    "version": "0.1.0",
+    "bundleId": "com.hawk2ui.json-basic"
+  },
+  "app": {
+    "entry": "src/App.svelte",
+    "framework": "svelte",
+    "style": "styles/app.hawk.css",
+    "script": "src/bootstrap.ts"
+  },
+  "permissions": {
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "standalone",
+        "platforms": ["linux-wayland"],
+        "window": {
+          "title": "JSON Basic",
+          "width": 960,
+          "height": 540
+        }
+      }
+    ],
+    "plugin": [
+      {
+        "name": "editor",
+        "formats": ["clap", "vst3"],
+        "editor": {
+          "width": 960,
+          "height": 540
+        }
+      }
+    ]
+  },
+  "plugin": {
+    "id": "com.hawk2ui.json-plugin",
+    "name": "JSON Plugin",
+    "vendor": "Hawk2UI",
+    "parameters": [
+      {
+        "id": "gain",
+        "paramId": 7,
+        "name": "Gain",
+        "kind": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "unit": ""
+      },
+      {
+        "id": "mode",
+        "paramId": 8,
+        "name": "Mode",
+        "kind": "enum",
+        "default": 1,
+        "variants": [
+          { "id": "clean", "name": "Clean" },
+          { "id": "driven", "name": "Driven" }
+        ]
+      }
+    ],
+    "meters": [
+      { "id": "output", "name": "Output" }
+    ],
+    "state": {
+      "version": 1
+    }
+  },
+  "assets": {
+    "include": ["assets/**"]
+  },
+  "build": {
+    "output": "target/hawk2ui"
+  }
+}
+"#;
+
 #[test]
 fn manifest_validation_accepts_complete_manifest() {
     let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
@@ -139,6 +224,144 @@ fn manifest_validation_accepts_complete_manifest() {
     assert!(manifest.has_capability("native-windowing"));
     assert!(manifest.has_target(PackageTarget::Desktop));
     assert_eq!(manifest.parameters.len(), 1);
+}
+
+#[test]
+fn manifest_validation_accepts_canonical_hawk_json_manifest() {
+    let manifest = HawkManifest::parse(VALID_HAWK_JSON).expect("valid hawk.json parses");
+
+    assert_eq!(manifest.identity.id, "com.hawk2ui.json-basic");
+    assert_eq!(manifest.identity.name, "JSON Basic");
+    assert_eq!(
+        manifest.package.as_ref().unwrap().bundle_id,
+        "com.hawk2ui.json-basic"
+    );
+    assert_eq!(manifest.source.entry, "src/App.svelte");
+    assert_eq!(manifest.source.framework, Some(SourceFramework::Svelte));
+    assert!(manifest.has_capability("native-windowing"));
+    assert!(manifest.has_target(PackageTarget::Desktop));
+    assert!(manifest.has_target(PackageTarget::Plugin));
+    assert_eq!(manifest.targets[0].name, "standalone");
+    assert_eq!(manifest.targets[1].name, "editor");
+    assert_eq!(manifest.editor.as_ref().unwrap().width, 960);
+    assert_eq!(manifest.parameters[0].param_id, Some(7));
+    assert_eq!(manifest.parameters[1].variants[1].id, "driven");
+    assert_eq!(manifest.meters[0].id, "output");
+}
+
+#[test]
+fn manifest_validation_rejects_unknown_hawk_json_fields() {
+    let input = r#"
+{
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.bad-json",
+    "name": "Bad JSON",
+    "version": "1.0.0"
+  },
+  "app": {
+    "entry": "src/main.ts"
+  },
+  "targets": {
+    "desktop": [
+      { "name": "standalone" }
+    ]
+  },
+  "surprise": true
+}
+"#;
+
+    let error = HawkManifest::parse(input).expect_err("unknown JSON fields must fail");
+
+    match error {
+        ManifestError::SchemaValidation { path, message } => {
+            assert_eq!(path, "");
+            assert!(message.contains("surprise") || message.contains("additional"));
+        }
+        other => panic!("expected schema validation error, got {other:?}"),
+    }
+}
+
+#[test]
+fn manifest_migration_emits_canonical_hawk_json_and_preserves_pinned_param_ids() {
+    let migrated = migrate_toml_manifest_to_json(
+        r#"
+[identity]
+id = "com.hawk2ui.legacy"
+name = "Legacy"
+version = "1.0.0"
+
+[package]
+name = "legacy"
+bundle_id = "com.hawk2ui.legacy"
+
+[source]
+entry = "src/main.ts"
+framework = "react"
+style = "styles/main.hawk.css"
+script = "src/bootstrap.ts"
+
+[capabilities]
+keys = ["native-windowing", "sealed-artifacts"]
+
+[[targets]]
+kind = "desktop"
+name = "standalone"
+
+[[targets]]
+kind = "plugin"
+name = "editor"
+
+[plugin]
+id = "com.hawk2ui.legacy"
+name = "Legacy Plugin"
+
+[editor]
+width = 900
+height = 500
+
+[[parameters]]
+id = "gain"
+param_id = 5
+name = "Gain"
+default = 0.75
+
+[[meters]]
+id = "output"
+name = "Output"
+
+[[assets]]
+id = "logo"
+kind = "vector"
+path = "assets/logo.svg"
+
+[[presets]]
+id = "default"
+name = "Default"
+"#,
+    )
+    .expect("legacy TOML migrates");
+    let migrated_value: serde_json::Value =
+        serde_json::from_str(&migrated).expect("migration output is JSON");
+
+    assert_eq!(migrated_value["schemaVersion"], 1);
+    assert_eq!(migrated_value["package"]["id"], "com.hawk2ui.legacy");
+    assert_eq!(migrated_value["app"]["framework"], "react");
+    assert_eq!(
+        migrated_value["targets"]["desktop"][0]["name"],
+        "standalone"
+    );
+    assert_eq!(
+        migrated_value["targets"]["plugin"][0]["editor"]["width"],
+        900
+    );
+    assert_eq!(migrated_value["plugin"]["parameters"][0]["paramId"], 5);
+    assert_eq!(
+        migrated_value["assets"]["entries"][0]["path"],
+        "assets/logo.svg"
+    );
+    assert_eq!(migrated_value["presets"][0]["id"], "default");
+    HawkManifest::parse(&migrated).expect("migrated hawk.json parses");
 }
 
 #[test]
@@ -1833,6 +2056,55 @@ style = "styles/main.hawk.css"
         error,
         BuildWorkspaceError::StyleCompilation { path, .. } if path == "styles/main.hawk.css"
     ));
+}
+
+#[test]
+fn build_workspace_prefers_canonical_hawk_json_over_legacy_toml() {
+    let root = temp_build_workspace("hawk-json-preferred");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.legacy-preferred"
+name = "Legacy Preferred"
+version = "1.0.0"
+
+[source]
+entry = "src/legacy.ts"
+"#,
+    );
+    write_file(
+        &root.join("hawk.json"),
+        r#"
+{
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.json-preferred",
+    "name": "JSON Preferred",
+    "version": "1.0.0"
+  },
+  "app": {
+    "entry": "src/json.ts"
+  },
+  "targets": {
+    "desktop": [
+      { "name": "standalone" }
+    ]
+  }
+}
+"#,
+    );
+    write_file(&root.join("src/json.ts"), "export const app = 'json';");
+
+    let output = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect("workspace should build from canonical hawk.json");
+
+    assert_eq!(output.manifest.identity.id, "com.hawk2ui.json-preferred");
+    assert_eq!(
+        output.artifact.compiled_scripts[0].source_path,
+        "src/json.ts"
+    );
 }
 
 #[test]

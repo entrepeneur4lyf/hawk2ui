@@ -1,0 +1,54 @@
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.examples.plugin-basic",
+    "name": "Hawk2UI Plugin Basic",
+    "version": "0.1.0",
+    "bundleId": "com.hawk2ui.examples.plugin-basic"
+  },
+  "app": {
+    "entry": "src/editor.ts"
+  },
+  "targets": {
+    "plugin": [
+      {
+        "name": "vst3-clap",
+        "editor": {
+          "width": 960,
+          "height": 540
+        }
+      }
+    ]
+  },
+  "plugin": {
+    "id": "com.hawk2ui.examples.plugin-basic",
+    "name": "Hawk2UI Plugin Basic",
+    "parameters": [
+      {
+        "id": "gain",
+        "paramId": 1001,
+        "name": "Gain",
+        "kind": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5
+      },
+      {
+        "id": "mix",
+        "paramId": 1002,
+        "name": "Mix",
+        "kind": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0
+      }
+    ]
+  },
+  "permissions": {
+    "capabilities": [
+      "plugin-editor",
+      "sealed-artifacts"
+    ]
+  }
+}

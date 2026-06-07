@@ -1,0 +1,54 @@
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.examples.plugin-synth-editor",
+    "name": "Hawk2UI Plugin Synth Editor",
+    "version": "0.1.0",
+    "bundleId": "com.hawk2ui.examples.plugin-synth-editor"
+  },
+  "app": {
+    "entry": "src/editor.ts"
+  },
+  "targets": {
+    "plugin": [
+      {
+        "name": "clap-vst3",
+        "editor": {
+          "width": 960,
+          "height": 540
+        }
+      }
+    ]
+  },
+  "plugin": {
+    "id": "com.hawk2ui.examples.plugin-synth-editor",
+    "name": "Hawk2UI Plugin Synth Editor",
+    "parameters": [
+      {
+        "id": "osc.mix",
+        "paramId": 2001,
+        "name": "Osc Mix",
+        "kind": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.4
+      },
+      {
+        "id": "filter.cutoff",
+        "paramId": 2002,
+        "name": "Cutoff",
+        "kind": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.8
+      }
+    ]
+  },
+  "permissions": {
+    "capabilities": [
+      "plugin-editor",
+      "sealed-artifacts"
+    ]
+  }
+}

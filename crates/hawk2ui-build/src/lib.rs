@@ -26,7 +26,8 @@ pub use assets::{
 pub use diagnostic::{BuildDiagnostic, BuildDiagnosticSeverity, DiagnosticLocation, SourceSpan};
 pub use editor_host::{edit_routing_from_model, host_snapshot_from_model};
 pub use manifest::{
-    HawkManifest, ManifestError, PackageTarget, PinParamIds, SourceFramework, pin_param_ids,
+    HawkManifest, ManifestError, PackageTarget, PinParamIds, SourceFramework,
+    migrate_toml_manifest_to_json, pin_param_ids,
 };
 pub use param_codegen::emit_truce_params_struct;
 pub use pipeline::{BuildPhase, BuildPhaseDiagnostic, BuildPipeline, BuildPipelineError};

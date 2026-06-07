@@ -1,6 +1,6 @@
 # Hawk2UI Desktop Apps
 
-Desktop apps are projects with at least one manifest target whose `kind` is `desktop`. The repository fixtures that exercise this path are `examples/desktop-basic/manifest.hawk.toml` and `examples/desktop-dashboard/manifest.hawk.toml`.
+Desktop apps are projects with at least one manifest target whose `kind` is `desktop`. The repository fixtures that exercise this path are `examples/desktop-basic/hawk.json` and `examples/desktop-dashboard/hawk.json`.
 
 ## Desktop Manifest
 

@@ -307,7 +307,7 @@ impl SmokeRunner {
             return Err("desktop-basic fixture must use desktop target".into());
         }
         let root = fixture.absolute_path();
-        require_file(&root.join("manifest.hawk.toml"))?;
+        require_file(&root.join("hawk.json"))?;
         require_file(&root.join("src/main.ts"))?;
         require_file(&root.join("styles/tokens.json"))?;
         require_file(&root.join("styles/main.hawk.css"))?;
@@ -369,7 +369,7 @@ impl SmokeRunner {
             return Err("desktop-dashboard fixture must use desktop target".into());
         }
         let root = fixture.absolute_path();
-        require_file(&root.join("manifest.hawk.toml"))?;
+        require_file(&root.join("hawk.json"))?;
         require_file(&root.join("src/main.ts"))?;
         require_file(&root.join("styles/main.hawk.css"))?;
         let build = build_workspace_verified(&root)?;
@@ -417,7 +417,7 @@ impl SmokeRunner {
             return Err("plugin-synth-editor fixture must use plugin target".into());
         }
         let root = fixture.absolute_path();
-        require_file(&root.join("manifest.hawk.toml"))?;
+        require_file(&root.join("hawk.json"))?;
         require_file(&root.join("src/editor.ts"))?;
         let build = build_workspace_verified(&root)?;
         let trace = fs::read_to_string(root.join("artifacts/editor.trace"))
@@ -499,7 +499,7 @@ impl SmokeRunner {
             return Err("plugin-meter-analyzer fixture must use plugin target".into());
         }
         let root = fixture.absolute_path();
-        require_file(&root.join("manifest.hawk.toml"))?;
+        require_file(&root.join("hawk.json"))?;
         require_file(&root.join("src/editor.ts"))?;
         let trace = fs::read_to_string(root.join("artifacts/realtime.trace"))
             .map_err(|error| error.to_string())?;
@@ -571,7 +571,7 @@ impl SmokeRunner {
             return Err("style-gallery fixture must use desktop target".into());
         }
         let root = fixture.absolute_path();
-        require_file(&root.join("manifest.hawk.toml"))?;
+        require_file(&root.join("hawk.json"))?;
         require_file(&root.join("src/main.ts"))?;
         require_file(&root.join("styles/gallery.hawk.css"))?;
         require_file(&root.join("assets/vector.svg"))?;
@@ -646,15 +646,15 @@ impl SmokeRunner {
         for (framework, package_entrypoint, example_root, source_file) in frameworks {
             require_file(&workspace.join(package_entrypoint))?;
             let example = workspace.join(example_root);
-            require_file(&example.join("manifest.hawk.toml"))?;
+            require_file(&example.join("hawk.json"))?;
             require_file(&example.join(source_file))?;
             require_file(&example.join("assets/logo.svg"))?;
             require_file(&example.join("styles/main.hawk.css"))?;
-            let manifest = fs::read_to_string(example.join("manifest.hawk.toml"))
-                .map_err(|error| error.to_string())?;
+            let manifest =
+                fs::read_to_string(example.join("hawk.json")).map_err(|error| error.to_string())?;
             let source =
                 fs::read_to_string(example.join(source_file)).map_err(|error| error.to_string())?;
-            if !manifest.contains(&format!("framework = \"{framework}\"")) {
+            if !manifest.contains(&format!("\"framework\": \"{framework}\"")) {
                 return Err(format!("framework manifest mismatch for {framework}"));
             }
             if !source.contains("assets/logo.svg") {
@@ -701,7 +701,7 @@ impl SmokeRunner {
             return Err("security-denials fixture must use desktop target".into());
         }
         let root = fixture.absolute_path();
-        require_file(&root.join("manifest.hawk.toml"))?;
+        require_file(&root.join("hawk.json"))?;
         require_file(&root.join("fixtures/denied.ts"))?;
         let denials = observed_security_denials()?;
         Ok(SecurityDenialSmokeResult {

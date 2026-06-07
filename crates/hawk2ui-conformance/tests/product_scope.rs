@@ -14,22 +14,22 @@ fn read_workspace_file(path: &str) -> String {
     })
 }
 
-fn assert_required_sections(input: &str, sections: &[&str]) {
-    for section in sections {
+fn assert_required_json_keys(input: &str, keys: &[&str]) {
+    for key in keys {
         assert!(
-            input.contains(section),
-            "manifest fixture must contain `{section}`"
+            input.contains(&format!("\"{key}\"")),
+            "manifest fixture must contain JSON key `{key}`"
         );
     }
 }
 
 #[test]
 fn product_scope_desktop_manifest_declares_native_window_target() {
-    let input = read_workspace_file("examples/desktop-basic/manifest.hawk.toml");
+    let input = read_workspace_file("examples/desktop-basic/hawk.json");
 
-    assert_required_sections(
+    assert_required_json_keys(
         &input,
-        &["[identity]", "[source]", "[capabilities]", "[[targets]]"],
+        &["schemaVersion", "package", "app", "permissions", "targets"],
     );
 
     let manifest = HawkManifest::parse(&input).expect("desktop manifest must parse");
@@ -42,18 +42,19 @@ fn product_scope_desktop_manifest_declares_native_window_target() {
 
 #[test]
 fn product_scope_plugin_manifest_declares_editor_and_parameters() {
-    let input = read_workspace_file("examples/plugin-basic/manifest.hawk.toml");
+    let input = read_workspace_file("examples/plugin-basic/hawk.json");
 
-    assert_required_sections(
+    assert_required_json_keys(
         &input,
         &[
-            "[identity]",
-            "[source]",
-            "[capabilities]",
-            "[[targets]]",
-            "[plugin]",
-            "[editor]",
-            "[[parameters]]",
+            "schemaVersion",
+            "package",
+            "app",
+            "permissions",
+            "targets",
+            "plugin",
+            "editor",
+            "parameters",
         ],
     );
 

@@ -37,7 +37,7 @@ cargo run -p hawk2ui-cli -- build-release  # produce a signed release artifact
 
 ## How It Works
 
-A project is driven by a canonical `hawk.json` manifest plus a framework/native entry point, CSS, scripts, and assets. Existing `manifest.hawk.toml` fixtures are legacy migration inputs while the implementation is converted. The build pipeline validates and compiles the project into a signed, schema-versioned **sealed artifact**, which a host loads and renders. One engine drives two host surfaces:
+A project is driven by a canonical `hawk.json` manifest plus a framework/native entry point, CSS, scripts, and assets. Legacy `manifest.hawk.toml` projects are accepted only as migration inputs. The build pipeline validates and compiles the project into a signed, schema-versioned **sealed artifact**, which a host loads and renders. One engine drives two host surfaces:
 
 - **`desktop`** — native OS application windows (Hawk2UI owns the window lifecycle), via `winit`.
 - **`plugin`** — editor surfaces embedded in a DAW-owned parent window, via `baseview`, packaged as CLAP/VST3/AU/standalone.
@@ -76,7 +76,7 @@ HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
 cargo run -p hawk2ui-cli -- package-plugin # CLAP / VST3 / AU / standalone
 ```
 
-See `examples/` for working `manifest.hawk.toml` layouts (`desktop-basic`, `plugin-synth-editor`), and `CLAUDE.md` for the architecture and crate layering.
+See `examples/` for working `hawk.json` layouts (`desktop-basic`, `plugin-synth-editor`), and `CLAUDE.md` for the architecture and crate layering.
 
 ## Documentation
 

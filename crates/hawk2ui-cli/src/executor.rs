@@ -21,7 +21,8 @@ use hawk2ui_build::{
     ArtifactSignatureVerifier, ArtifactSigningKey, AssetCompilationError, BuildDiagnostic,
     BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput, CompiledFrameworkRecord,
     CompiledScriptRecord, HawkManifest, ManifestError, PackageTarget, PinParamIds, SealedArtifact,
-    SealedArtifactError, SourceFramework, emit_truce_params_struct, pin_param_ids,
+    SealedArtifactError, SourceFramework, emit_truce_params_struct, migrate_toml_manifest_to_json,
+    pin_param_ids,
 };
 use hawk2ui_host::{DesktopWindowConfig, SurfaceMetrics};
 use hawk2ui_host_winit::{
@@ -53,6 +54,8 @@ const MAX_RUNTIME_ASSET_BYTES: u64 = 64 * 1024 * 1024;
 const RELEASE_SIGNING_KEY_ID_ENV: &str = "HAWK2UI_RELEASE_SIGNING_KEY_ID";
 const RELEASE_SIGNING_KEY_HEX_ENV: &str = "HAWK2UI_RELEASE_SIGNING_KEY_HEX";
 const TRUSTED_RELEASE_KEYS_ENV: &str = "HAWK2UI_TRUSTED_RELEASE_KEYS";
+const CANONICAL_MANIFEST_FILE: &str = "hawk.json";
+const LEGACY_MANIFEST_FILE: &str = "manifest.hawk.toml";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BuildProfile {
@@ -310,18 +313,19 @@ impl WorkspaceCommandRunner {
             CliCommand::ExportSchemas => Self::export_schemas(),
             CliCommand::ExportParams => self.export_params(),
             CliCommand::PinIds => self.pin_ids(),
+            CliCommand::MigrateManifest { force } => self.migrate_manifest(force),
             CliCommand::Diagnostics => self.diagnostics(),
             CliCommand::Explain => self.explain(),
         }
     }
 
     fn new_project(&self) -> CommandExecution {
-        let manifest_path = self.manifest_path();
-        if manifest_path.exists() {
+        let manifest_path = self.canonical_manifest_path();
+        if manifest_path.exists() || self.legacy_manifest_path().exists() {
             return CommandExecution::failure(
                 CliExitCode::Usage,
                 vec![
-                    CliDiagnostic::error("project.exists", "manifest.hawk.toml already exists")
+                    CliDiagnostic::error("project.exists", "hawk.json already exists")
                         .file(manifest_path.display().to_string()),
                 ],
             );
@@ -1075,7 +1079,7 @@ impl WorkspaceCommandRunner {
     }
 
     fn pin_ids(&self) -> CommandExecution {
-        let manifest_path = self.manifest_path();
+        let manifest_path = self.legacy_manifest_path();
         let source = match fs::read_to_string(&manifest_path) {
             Ok(source) => source,
             Err(error) => return io_failure("manifest.read-failed", &manifest_path, &error),
@@ -1099,6 +1103,54 @@ impl WorkspaceCommandRunner {
                 vec![manifest_error_diagnostic(error)],
             ),
         }
+    }
+
+    fn migrate_manifest(&self, force: bool) -> CommandExecution {
+        let legacy_path = self.legacy_manifest_path();
+        let canonical_path = self.canonical_manifest_path();
+        if !legacy_path.is_file() {
+            return CommandExecution::failure(
+                CliExitCode::Validation,
+                vec![
+                    CliDiagnostic::error(
+                        "manifest.migration.legacy-missing",
+                        "legacy manifest.hawk.toml is required for migration",
+                    )
+                    .file(legacy_path.display().to_string()),
+                ],
+            );
+        }
+        if canonical_path.exists() && !force {
+            return CommandExecution::failure(
+                CliExitCode::Usage,
+                vec![
+                    CliDiagnostic::error(
+                        "manifest.migration.would-overwrite",
+                        "hawk.json already exists; pass --force to overwrite it",
+                    )
+                    .file(canonical_path.display().to_string()),
+                ],
+            );
+        }
+        let source = match fs::read_to_string(&legacy_path) {
+            Ok(source) => source,
+            Err(error) => return io_failure("manifest.read-failed", &legacy_path, &error),
+        };
+        let migrated = match migrate_toml_manifest_to_json(&source) {
+            Ok(migrated) => migrated,
+            Err(error) => {
+                return CommandExecution::failure(
+                    CliExitCode::Validation,
+                    vec![manifest_error_diagnostic(error).file(legacy_path.display().to_string())],
+                );
+            }
+        };
+        if let Err(error) = fs::write(&canonical_path, migrated) {
+            return io_failure("manifest.write-failed", &canonical_path, &error);
+        }
+        CommandExecution::success(format!(
+            "migrated {LEGACY_MANIFEST_FILE} to {CANONICAL_MANIFEST_FILE}\n"
+        ))
     }
 
     fn validated_manifest(&self) -> Result<HawkManifest, CommandExecution> {
@@ -1193,7 +1245,15 @@ impl WorkspaceCommandRunner {
     }
 
     fn manifest_path(&self) -> PathBuf {
-        self.root.join("manifest.hawk.toml")
+        existing_manifest_path(&self.root)
+    }
+
+    fn canonical_manifest_path(&self) -> PathBuf {
+        self.root.join(CANONICAL_MANIFEST_FILE)
+    }
+
+    fn legacy_manifest_path(&self) -> PathBuf {
+        self.root.join(LEGACY_MANIFEST_FILE)
     }
 }
 
@@ -1226,6 +1286,15 @@ fn non_empty_env(value: Option<String>) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+fn existing_manifest_path(root: &Path) -> PathBuf {
+    let canonical = root.join(CANONICAL_MANIFEST_FILE);
+    if canonical.is_file() {
+        canonical
+    } else {
+        root.join(LEGACY_MANIFEST_FILE)
+    }
 }
 
 fn manifest_error_diagnostic(error: ManifestError) -> CliDiagnostic {
@@ -1339,7 +1408,7 @@ fn build_workspace_error_diagnostic(error: BuildWorkspaceError, root: &Path) -> 
             format!("declared build path escapes the workspace: {path}"),
         ),
         BuildWorkspaceError::ManifestInvalid(error) => manifest_error_diagnostic(error)
-            .file(root.join("manifest.hawk.toml").display().to_string()),
+            .file(existing_manifest_path(root).display().to_string()),
         BuildWorkspaceError::AssetCompilation(error) => asset_compilation_diagnostic(error, root),
         BuildWorkspaceError::ScriptCompilation { path, error } => CliDiagnostic::error(
             error.diagnostic().rule(),
@@ -1958,7 +2027,7 @@ fn event_debug(event: &crate::DevLoopEvent) -> String {
 
 fn dev_watched_paths(manifest: &HawkManifest) -> Vec<DevWatchedPath> {
     let mut paths = BTreeSet::from([
-        DevWatchedPath::new("manifest.hawk.toml", DevWatchKind::Manifest),
+        DevWatchedPath::new(CANONICAL_MANIFEST_FILE, DevWatchKind::Manifest),
         DevWatchedPath::new(manifest.source.entry.clone(), DevWatchKind::RuntimeTree),
     ]);
     if let Some(style) = &manifest.source.style {
@@ -2413,7 +2482,7 @@ fn runtime_scene_diagnostic(error: &RuntimeSceneError) -> Box<CliDiagnostic> {
 
 fn default_project_files() -> [(&'static str, &'static str); 6] {
     [
-        ("manifest.hawk.toml", default_manifest()),
+        ("hawk.json", default_manifest()),
         ("src/main.ts", default_entry_source()),
         ("src/bootstrap.ts", default_bootstrap_source()),
         ("styles/main.hawk.css", default_style_source()),
@@ -2423,59 +2492,80 @@ fn default_project_files() -> [(&'static str, &'static str); 6] {
 }
 
 fn default_manifest() -> &'static str {
-    r#"[identity]
-id = "com.example.hawk2ui-app"
-name = "Hawk2UI App"
-version = "0.1.0"
-
-[package]
-name = "hawk2ui-app"
-bundle_id = "com.example.hawk2ui-app"
-
-[source]
-entry = "src/main.ts"
-style = "styles/main.hawk.css"
-script = "src/bootstrap.ts"
-
-[capabilities]
-keys = ["native-windowing", "sealed-artifacts"]
-
-[plugin]
-id = "com.example.hawk2ui-app"
-name = "Hawk2UI App"
-
-[editor]
-width = 960
-height = 540
-
-[[parameters]]
-id = "gain"
-name = "Gain"
-param_id = 0
-default = 0.5
-
-[[parameters]]
-id = "mix"
-name = "Mix"
-param_id = 1
-default = 0.75
-
-[[assets]]
-id = "logo"
-kind = "vector"
-path = "assets/logo.svg"
-
-[[presets]]
-id = "init"
-name = "Init"
-
-[[targets]]
-kind = "desktop"
-name = "linux-wayland"
-
-[[targets]]
-kind = "plugin"
-name = "clap"
+    r#"{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.example.hawk2ui-app",
+    "name": "Hawk2UI App",
+    "version": "0.1.0",
+    "bundleId": "com.example.hawk2ui-app"
+  },
+  "app": {
+    "entry": "src/main.ts",
+    "style": "styles/main.hawk.css",
+    "script": "src/bootstrap.ts"
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "linux-wayland",
+        "platforms": ["linux-wayland"],
+        "window": {
+          "title": "Hawk2UI App",
+          "width": 960,
+          "height": 540
+        }
+      }
+    ],
+    "plugin": [
+      {
+        "name": "clap",
+        "formats": ["clap", "vst3", "au", "standalone"],
+        "editor": {
+          "width": 960,
+          "height": 540
+        }
+      }
+    ]
+  },
+  "plugin": {
+    "id": "com.example.hawk2ui-app",
+    "name": "Hawk2UI App",
+    "parameters": [
+      {
+        "id": "gain",
+        "paramId": 0,
+        "name": "Gain",
+        "default": 0.5
+      },
+      {
+        "id": "mix",
+        "paramId": 1,
+        "name": "Mix",
+        "default": 0.75
+      }
+    ]
+  },
+  "assets": {
+    "entries": [
+      {
+        "id": "logo",
+        "kind": "vector",
+        "path": "assets/logo.svg"
+      }
+    ]
+  },
+  "presets": [
+    {
+      "id": "init",
+      "name": "Init"
+    }
+  ],
+  "permissions": {
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  }
+}
 "#
 }
 

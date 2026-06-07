@@ -1,0 +1,28 @@
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.examples.solid-basic",
+    "name": "Hawk2UI Solid Basic",
+    "version": "0.1.0",
+    "bundleId": "com.hawk2ui.examples.solid-basic"
+  },
+  "app": {
+    "entry": "src/App.tsx",
+    "framework": "solid",
+    "style": "styles/main.hawk.css"
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "linux-wayland"
+      }
+    ]
+  },
+  "permissions": {
+    "capabilities": [
+      "native-windowing",
+      "sealed-artifacts"
+    ]
+  }
+}

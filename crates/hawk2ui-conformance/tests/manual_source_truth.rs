@@ -306,9 +306,9 @@ fn manual_plugin_examples_reference_code_backed_plugin_fixtures() {
     let guide = manual("manual/plugin-editors.md");
 
     for path in [
-        "examples/plugin-basic/manifest.hawk.toml",
-        "examples/plugin-synth-editor/manifest.hawk.toml",
-        "examples/plugin-meter-analyzer/manifest.hawk.toml",
+        "examples/plugin-basic/hawk.json",
+        "examples/plugin-synth-editor/hawk.json",
+        "examples/plugin-meter-analyzer/hawk.json",
     ] {
         let manifest = HawkManifest::parse(&read_workspace_file(path))
             .unwrap_or_else(|error| panic!("plugin fixture `{path}` must parse: {error:?}"));
@@ -548,18 +548,18 @@ fn manual_examples_index_tracks_repository_examples() {
     let examples = manual("manual/examples.md");
 
     for path in [
-        "examples/desktop-basic/manifest.hawk.toml",
-        "examples/desktop-dashboard/manifest.hawk.toml",
-        "examples/plugin-basic/manifest.hawk.toml",
-        "examples/plugin-synth-editor/manifest.hawk.toml",
-        "examples/plugin-meter-analyzer/manifest.hawk.toml",
-        "examples/style-gallery/manifest.hawk.toml",
-        "examples/security-denials/manifest.hawk.toml",
-        "examples/frameworks/svelte-basic/manifest.hawk.toml",
-        "examples/frameworks/react-basic/manifest.hawk.toml",
-        "examples/frameworks/vue-basic/manifest.hawk.toml",
-        "examples/frameworks/solid-basic/manifest.hawk.toml",
-        "examples/frameworks/native-basic/manifest.hawk.toml",
+        "examples/desktop-basic/hawk.json",
+        "examples/desktop-dashboard/hawk.json",
+        "examples/plugin-basic/hawk.json",
+        "examples/plugin-synth-editor/hawk.json",
+        "examples/plugin-meter-analyzer/hawk.json",
+        "examples/style-gallery/hawk.json",
+        "examples/security-denials/hawk.json",
+        "examples/frameworks/svelte-basic/hawk.json",
+        "examples/frameworks/react-basic/hawk.json",
+        "examples/frameworks/vue-basic/hawk.json",
+        "examples/frameworks/solid-basic/hawk.json",
+        "examples/frameworks/native-basic/hawk.json",
     ] {
         assert!(
             workspace_path(path).is_file(),

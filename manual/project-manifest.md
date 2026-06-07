@@ -2,7 +2,7 @@
 
 `hawk.json` is the canonical project manifest for Hawk2UI applications. It is the project contract in the same sense that `package.json` is the contract for a JavaScript package and `Cargo.toml` is the contract for a Rust crate: every build, launch, package, plugin editor, asset pipeline, permission decision, and release artifact starts from this file.
 
-The legacy `manifest.hawk.toml` format remains a migration input while existing fixtures and code paths are converted. It is not a parallel long-term format. New project documentation, schemas, and CLI behavior should target `hawk.json`.
+The legacy `manifest.hawk.toml` format remains a migration input. It is not a parallel long-term format. New project documentation, schemas, examples, and CLI behavior target `hawk.json`.
 
 ## Design Rules
 
@@ -344,7 +344,7 @@ The manifest validator must reject:
 
 ## CLI Resolution
 
-All project commands should resolve `hawk.json` from the current directory or the nearest parent project root:
+All project commands resolve `hawk.json` from the current project directory. Legacy `manifest.hawk.toml` is used only when `hawk.json` is absent:
 
 ```bash
 hawk2ui validate
@@ -356,10 +356,11 @@ hawk2ui verify-artifact
 hawk2ui diagnostics
 ```
 
-Commands should accept an explicit manifest path only as an override:
+Convert a legacy project explicitly:
 
 ```bash
-hawk2ui validate --manifest path/to/hawk.json
+hawk2ui migrate-manifest
+hawk2ui migrate-manifest --force
 ```
 
 ## TOML Migration
@@ -381,4 +382,4 @@ hawk2ui validate --manifest path/to/hawk.json
 | `[[assets]]` | `assets` declarations |
 | `[[presets]]` | `plugin.presets[]` |
 
-The migration command should read legacy TOML, emit `hawk.json`, preserve stable ids and pinned `param_id` values as `paramId`, and refuse to overwrite an existing `hawk.json` unless the user passes an explicit force flag.
+The migration command reads legacy TOML, emits `hawk.json`, preserves stable ids and pinned `param_id` values as `paramId`, and refuses to overwrite an existing `hawk.json` unless the user passes `--force`.

@@ -6,9 +6,9 @@ Plugin editors are Hawk2UI projects with a manifest target whose `kind` is `plug
 
 The implemented plugin fixtures are:
 
-- `examples/plugin-basic/manifest.hawk.toml`: target `vst3-clap`, parameters `gain` and `mix`, editor size `960 x 540`.
-- `examples/plugin-synth-editor/manifest.hawk.toml`: target `clap-vst3`, parameters `osc.mix` and `filter.cutoff`, editor size `960 x 540`.
-- `examples/plugin-meter-analyzer/manifest.hawk.toml`: target `clap-vst3`, capability `realtime-visuals`, editor size `960 x 540`.
+- `examples/plugin-basic/hawk.json`: target `vst3-clap`, parameters `gain` and `mix`, editor size `960 x 540`.
+- `examples/plugin-synth-editor/hawk.json`: target `clap-vst3`, parameters `osc.mix` and `filter.cutoff`, editor size `960 x 540`.
+- `examples/plugin-meter-analyzer/hawk.json`: target `clap-vst3`, capability `realtime-visuals`, editor size `960 x 540`.
 
 A plugin manifest can include:
 

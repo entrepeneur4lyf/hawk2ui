@@ -18,7 +18,7 @@ The repository includes security-denial fixtures that define the expected reject
 - `fixtures/security/missing-asset.manifest`
 - `fixtures/security/malformed-manifest.toml`
 
-The example manifest `examples/security-denials/manifest.hawk.toml` exercises this domain from a user project shape.
+The example manifest `examples/security-denials/hawk.json` exercises this domain from a user project shape.
 
 ## Release Key Management
 

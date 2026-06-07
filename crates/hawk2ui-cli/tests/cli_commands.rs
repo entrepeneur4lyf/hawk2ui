@@ -26,6 +26,7 @@ fn cli_commands_help_lists_required_workflows() {
         "export-schemas",
         "export-params",
         "pin-ids",
+        "migrate-manifest",
         "diagnostics",
         "explain",
     ] {
@@ -58,6 +59,16 @@ fn cli_commands_parse_known_commands_and_reject_invalid_command() {
     assert_eq!(
         catalog.parse(["hawk2ui", "pin-ids"]).unwrap(),
         CliCommand::PinIds
+    );
+    assert_eq!(
+        catalog.parse(["hawk2ui", "migrate-manifest"]).unwrap(),
+        CliCommand::MigrateManifest { force: false }
+    );
+    assert_eq!(
+        catalog
+            .parse(["hawk2ui", "migrate-manifest", "--force"])
+            .unwrap(),
+        CliCommand::MigrateManifest { force: true }
     );
     assert_eq!(
         catalog
@@ -177,7 +188,7 @@ fn workspace_new_project_creates_buildable_desktop_and_plugin_scaffold() {
 
     assert_eq!(created.exit_code, CliExitCode::Success);
     for path in [
-        "manifest.hawk.toml",
+        "hawk.json",
         "src/main.ts",
         "src/bootstrap.ts",
         "styles/main.hawk.css",
@@ -187,12 +198,13 @@ fn workspace_new_project_creates_buildable_desktop_and_plugin_scaffold() {
         assert!(root.join(path).is_file(), "scaffold missing {path}");
     }
 
-    let manifest = fs::read_to_string(root.join("manifest.hawk.toml"))
-        .expect("generated manifest should be readable");
-    assert!(manifest.contains("kind = \"desktop\""));
-    assert!(manifest.contains("kind = \"plugin\""));
-    assert!(manifest.contains("[[parameters]]"));
-    assert!(manifest.contains("[[assets]]"));
+    let manifest =
+        fs::read_to_string(root.join("hawk.json")).expect("generated manifest should be readable");
+    assert!(manifest.contains("\"schemaVersion\": 1"));
+    assert!(manifest.contains("\"desktop\""));
+    assert!(manifest.contains("\"plugin\""));
+    assert!(manifest.contains("\"parameters\""));
+    assert!(manifest.contains("\"entries\""));
 
     let validate = WorkspaceCommandRunner::new(&root).execute(CliCommand::Validate);
     assert_eq!(validate.exit_code, CliExitCode::Success);
@@ -210,6 +222,66 @@ fn workspace_new_project_creates_buildable_desktop_and_plugin_scaffold() {
             .stdout
             .contains("layout-verification-status: passed")
     );
+}
+
+#[test]
+fn workspace_migrate_manifest_writes_canonical_hawk_json() {
+    let root = temp_cli_workspace("migrate-manifest");
+    write_file(
+        &root.join("manifest.hawk.toml"),
+        r#"
+[identity]
+id = "com.hawk2ui.cli-migrate"
+name = "CLI Migrate"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[capabilities]
+keys = ["native-windowing"]
+
+[[targets]]
+kind = "desktop"
+name = "standalone"
+
+[plugin]
+id = "com.hawk2ui.cli-migrate"
+name = "CLI Migrate"
+
+[editor]
+width = 800
+height = 480
+
+[[parameters]]
+id = "gain"
+param_id = 11
+name = "Gain"
+default = 0.5
+"#,
+    );
+    write_file(&root.join("src/main.ts"), "export const app = 'migrated';");
+
+    let execution =
+        WorkspaceCommandRunner::new(&root).execute(CliCommand::MigrateManifest { force: false });
+
+    assert_eq!(execution.exit_code, CliExitCode::Success);
+    assert!(
+        execution
+            .stdout
+            .contains("migrated manifest.hawk.toml to hawk.json")
+    );
+    assert!(root.join("manifest.hawk.toml").is_file());
+    let migrated = fs::read_to_string(root.join("hawk.json")).expect("hawk.json should be written");
+    let value: serde_json::Value = serde_json::from_str(&migrated).expect("hawk.json is JSON");
+    assert_eq!(value["schemaVersion"], 1);
+    assert_eq!(value["package"]["id"], "com.hawk2ui.cli-migrate");
+    assert_eq!(value["targets"]["desktop"][0]["name"], "standalone");
+    assert_eq!(value["plugin"]["parameters"][0]["paramId"], 11);
+
+    let validate = WorkspaceCommandRunner::new(&root).execute(CliCommand::Validate);
+    assert_eq!(validate.exit_code, CliExitCode::Success);
+    assert!(validate.stdout.contains("com.hawk2ui.cli-migrate"));
 }
 
 #[test]

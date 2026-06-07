@@ -64,4 +64,4 @@ Each computed node receives every production property. Explicit declarations win
 
 Preference hook tokens can be redirected with `StyleRuntimeEnvironment::with_preference_override(...)`. A changed theme or preference environment is compared through `RuntimeStyleTable::diff_from(...)`, which returns affected node IDs for render invalidation.
 
-Use `examples/style-gallery/manifest.hawk.toml` as the repository-backed style fixture.
+Use `examples/style-gallery/hawk.json` as the repository-backed style fixture.

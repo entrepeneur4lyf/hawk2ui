@@ -23,6 +23,8 @@ const MAX_DECLARED_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const FRAMEWORK_COMPILER_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_FRAMEWORK_COMPILER_OUTPUT_BYTES: usize = 1024 * 1024;
 const MAX_FRAMEWORK_COMPILER_OUTPUT_READ_BYTES: u64 = 1024 * 1024 + 1;
+const CANONICAL_MANIFEST_FILE: &str = "hawk.json";
+const LEGACY_MANIFEST_FILE: &str = "manifest.hawk.toml";
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -65,22 +67,19 @@ pub struct BuildWorkspaceOutput {
 }
 
 impl BuildWorkspace {
-    /// Loads and validates a Hawk project workspace from a directory containing `manifest.hawk.toml`.
+    /// Loads and validates a Hawk project workspace from a directory containing `hawk.json`.
+    ///
+    /// Legacy `manifest.hawk.toml` is accepted as a migration input when the
+    /// canonical JSON manifest is not present.
     ///
     /// # Errors
     ///
     /// Returns [`BuildWorkspaceError`] when the manifest file is missing, unreadable, or invalid.
     pub fn load(root: impl AsRef<Path>) -> Result<Self, BuildWorkspaceError> {
         let requested_root = root.as_ref();
-        let manifest_path = requested_root.join("manifest.hawk.toml");
-        if !manifest_path.is_file() {
-            return Err(BuildWorkspaceError::MissingFile(
-                "manifest.hawk.toml".into(),
-            ));
-        }
-        let manifest_source =
-            String::from_utf8(read_bounded_file(&manifest_path, "manifest.hawk.toml")?)
-                .map_err(|_| BuildWorkspaceError::UnreadableFile("manifest.hawk.toml".into()))?;
+        let (manifest_path, manifest_label) = manifest_path_for_root(requested_root)?;
+        let manifest_source = String::from_utf8(read_bounded_file(&manifest_path, manifest_label)?)
+            .map_err(|_| BuildWorkspaceError::UnreadableFile(manifest_label.into()))?;
         let manifest =
             HawkManifest::parse(&manifest_source).map_err(BuildWorkspaceError::ManifestInvalid)?;
         let root = requested_root
@@ -323,6 +322,20 @@ impl BuildWorkspace {
         }
         report
     }
+}
+
+fn manifest_path_for_root(root: &Path) -> Result<(PathBuf, &'static str), BuildWorkspaceError> {
+    let canonical = root.join(CANONICAL_MANIFEST_FILE);
+    if canonical.is_file() {
+        return Ok((canonical, CANONICAL_MANIFEST_FILE));
+    }
+    let legacy = root.join(LEGACY_MANIFEST_FILE);
+    if legacy.is_file() {
+        return Ok((legacy, LEGACY_MANIFEST_FILE));
+    }
+    Err(BuildWorkspaceError::MissingFile(format!(
+        "{CANONICAL_MANIFEST_FILE} or {LEGACY_MANIFEST_FILE}"
+    )))
 }
 
 fn read_bounded_file(path: &Path, display_path: &str) -> Result<Vec<u8>, BuildWorkspaceError> {

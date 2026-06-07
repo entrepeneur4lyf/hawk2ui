@@ -16,9 +16,8 @@ fn workspace_path(path: &str) -> PathBuf {
 
 #[test]
 fn source_to_render_compiles_manifest_authoring_scene_runtime_and_plugin_paths() {
-    let manifest_source =
-        fs::read_to_string(workspace_path("examples/plugin-basic/manifest.hawk.toml"))
-            .expect("plugin manifest fixture");
+    let manifest_source = fs::read_to_string(workspace_path("examples/plugin-basic/hawk.json"))
+        .expect("plugin manifest fixture");
     let manifest = HawkManifest::parse(&manifest_source).expect("plugin manifest parses");
 
     assert!(manifest.has_target(PackageTarget::Plugin));
