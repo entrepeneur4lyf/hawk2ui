@@ -1,6 +1,7 @@
 //! Production `winit` desktop event-loop runtime.
 
 use std::{
+    collections::BTreeMap,
     num::NonZeroU32,
     sync::{Arc, mpsc::Receiver},
     time::{Duration, Instant},
@@ -12,7 +13,7 @@ use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_runtime::{
     AnimationCadencePolicy, AnimationFrameScheduler, EntryNode, RuntimeEvent, RuntimeSceneBridge,
     RuntimeSceneFrame, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
-    RuntimeVisual,
+    RuntimeVisual, StructuredValue as RuntimeStructuredValue,
 };
 use hawk2ui_script::{
     FrameInput, FrameworkRuntimeController, HostCallPolicy, HostSnapshot, ScriptBackend,
@@ -1314,6 +1315,7 @@ fn framework_events_from_host_event(
             } else {
                 "keyboard.key-up"
             },
+            |target| keyboard_event_payload(target, keyboard),
         ),
         DesktopHostEvent::FocusChanged(focused) => framework_events_for_targets(
             controller,
@@ -1322,11 +1324,18 @@ fn framework_events_from_host_event(
             } else {
                 "focus.focus-out"
             },
+            |target| focus_event_payload(target, *focused),
         ),
         DesktopHostEvent::ImeInput(value) if value.starts_with("commit:") => {
-            framework_events_for_targets(controller, "keyboard.text-input")
+            framework_events_for_targets(controller, "keyboard.text-input", |target| {
+                text_input_event_payload(target, value)
+            })
         }
-        DesktopHostEvent::Resized(_) => framework_events_for_targets(controller, "resize"),
+        DesktopHostEvent::Resized(metrics) => {
+            framework_events_for_targets(controller, "resize", |target| {
+                resize_event_payload(target, *metrics)
+            })
+        }
         DesktopHostEvent::WindowCreated(_)
         | DesktopHostEvent::CloseRequested(_)
         | DesktopHostEvent::ModeChanged(_)
@@ -1346,12 +1355,119 @@ fn framework_events_from_host_event(
 fn framework_events_for_targets(
     controller: &FrameworkRuntimeController,
     event_name: &'static str,
+    payload_for_target: impl Fn(&str) -> RuntimeStructuredValue,
 ) -> Vec<RuntimeEvent> {
     controller
         .event_targets(event_name)
         .into_iter()
-        .map(|target| RuntimeEvent::ui(target, event_name))
+        .map(|target| {
+            RuntimeEvent::new(
+                hawk2ui_runtime::RuntimeEventKind::Ui,
+                target.as_str(),
+                event_name,
+                payload_for_target(&target),
+            )
+        })
         .collect()
+}
+
+fn base_event_payload(target: &str, event_name: &str) -> BTreeMap<String, RuntimeStructuredValue> {
+    BTreeMap::from([
+        (
+            "name".to_string(),
+            RuntimeStructuredValue::String(event_name.to_string()),
+        ),
+        (
+            "target".to_string(),
+            RuntimeStructuredValue::String(target.to_string()),
+        ),
+    ])
+}
+
+fn pointer_event_payload(
+    target: &str,
+    event_name: &str,
+    pointer: &PointerInput,
+) -> RuntimeStructuredValue {
+    let mut payload = base_event_payload(target, event_name);
+    payload.insert("x".to_string(), RuntimeStructuredValue::Number(pointer.x));
+    payload.insert("y".to_string(), RuntimeStructuredValue::Number(pointer.y));
+    payload.insert(
+        "button".to_string(),
+        RuntimeStructuredValue::String(pointer.button.clone()),
+    );
+    if let Some((delta_x, delta_y)) = pointer_wheel_delta(&pointer.button) {
+        payload.insert(
+            "delta_x".to_string(),
+            RuntimeStructuredValue::Number(delta_x),
+        );
+        payload.insert(
+            "delta_y".to_string(),
+            RuntimeStructuredValue::Number(delta_y),
+        );
+    }
+    RuntimeStructuredValue::Object(payload)
+}
+
+fn keyboard_event_payload(
+    target: &str,
+    keyboard: &hawk2ui_host::KeyboardInput,
+) -> RuntimeStructuredValue {
+    let event_name = if keyboard.pressed {
+        "keyboard.key-down"
+    } else {
+        "keyboard.key-up"
+    };
+    let mut payload = base_event_payload(target, event_name);
+    payload.insert(
+        "key".to_string(),
+        RuntimeStructuredValue::String(keyboard.key.clone()),
+    );
+    payload.insert(
+        "pressed".to_string(),
+        RuntimeStructuredValue::Bool(keyboard.pressed),
+    );
+    RuntimeStructuredValue::Object(payload)
+}
+
+fn text_input_event_payload(target: &str, value: &str) -> RuntimeStructuredValue {
+    let mut payload = base_event_payload(target, "keyboard.text-input");
+    payload.insert(
+        "value".to_string(),
+        RuntimeStructuredValue::String(value.strip_prefix("commit:").unwrap_or(value).to_string()),
+    );
+    RuntimeStructuredValue::Object(payload)
+}
+
+fn focus_event_payload(target: &str, focused: bool) -> RuntimeStructuredValue {
+    let event_name = if focused {
+        "focus.focus-in"
+    } else {
+        "focus.focus-out"
+    };
+    let mut payload = base_event_payload(target, event_name);
+    payload.insert("focused".to_string(), RuntimeStructuredValue::Bool(focused));
+    RuntimeStructuredValue::Object(payload)
+}
+
+fn resize_event_payload(
+    target: &str,
+    metrics: hawk2ui_host::SurfaceMetrics,
+) -> RuntimeStructuredValue {
+    let mut payload = base_event_payload(target, "resize");
+    payload.insert(
+        "width".to_string(),
+        RuntimeStructuredValue::Number(metrics.logical_width),
+    );
+    payload.insert(
+        "height".to_string(),
+        RuntimeStructuredValue::Number(metrics.logical_height),
+    );
+    payload.insert(
+        "scale_factor".to_string(),
+        RuntimeStructuredValue::Number(metrics.scale_factor),
+    );
+    RuntimeStructuredValue::Object(payload)
 }
 
 fn framework_event_from_pointer_input(
@@ -1368,7 +1484,14 @@ fn framework_event_from_pointer_input(
             geometry_contains(*geometry, pointer.x, pointer.y)
                 && controller.has_event_handler(id.as_str(), event_name)
         })
-        .map(|(id, _)| RuntimeEvent::ui(id.as_str(), event_name))
+        .map(|(id, _)| {
+            RuntimeEvent::new(
+                hawk2ui_runtime::RuntimeEventKind::Ui,
+                id.as_str(),
+                event_name,
+                pointer_event_payload(id.as_str(), event_name, pointer),
+            )
+        })
 }
 
 fn framework_pointer_event_name(button: &str) -> Option<&'static str> {
@@ -1394,6 +1517,14 @@ fn framework_pointer_event_name(button: &str) -> Option<&'static str> {
         return Some("pointer.wheel");
     }
     None
+}
+
+fn pointer_wheel_delta(button: &str) -> Option<(f64, f64)> {
+    let values = button
+        .strip_prefix("wheel-lines:")
+        .or_else(|| button.strip_prefix("wheel-pixels:"))?;
+    let (x, y) = values.split_once(':')?;
+    Some((x.parse().ok()?, y.parse().ok()?))
 }
 
 fn geometry_contains(geometry: hawk2ui_render::Geometry, x: f64, y: f64) -> bool {
@@ -1697,7 +1828,10 @@ mod tests {
         DesktopHostEvent, DesktopWindowConfig, KeyboardInput, PointerInput, SurfaceMetrics,
     };
     use hawk2ui_layout::Viewport;
-    use hawk2ui_runtime::{RuntimeDrawCommand, RuntimeSceneBridge, RuntimeViewId, RuntimeVisual};
+    use hawk2ui_runtime::{
+        RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId, RuntimeVisual,
+        StructuredValue,
+    };
     use hawk2ui_script::{FrameInput, FrameworkRuntimeController, HostSnapshot};
 
     use super::{
@@ -2011,11 +2145,35 @@ export function mount(host) {
             .unwrap_or_else(|| panic!("{button_label} should map to {expected_name}"));
             assert_eq!(event.target, "button");
             assert_eq!(event.name, expected_name);
+            let StructuredValue::Object(payload) = &event.payload else {
+                panic!("pointer events should carry object payloads");
+            };
+            assert_eq!(
+                payload.get("name"),
+                Some(&StructuredValue::String(expected_name.to_string()))
+            );
+            assert_eq!(
+                payload.get("target"),
+                Some(&StructuredValue::String("button".to_string()))
+            );
+            assert_eq!(
+                payload.get("button"),
+                Some(&StructuredValue::String(button_label.to_string()))
+            );
+            assert_eq!(payload.get("x"), Some(&StructuredValue::Number(16.0)));
+            assert_eq!(payload.get("y"), Some(&StructuredValue::Number(16.0)));
+            if button_label == "wheel-lines:0:1" {
+                assert_eq!(payload.get("delta_x"), Some(&StructuredValue::Number(0.0)));
+                assert_eq!(payload.get("delta_y"), Some(&StructuredValue::Number(1.0)));
+            }
+            if button_label == "wheel-pixels:0:16" {
+                assert_eq!(payload.get("delta_x"), Some(&StructuredValue::Number(0.0)));
+                assert_eq!(payload.get("delta_y"), Some(&StructuredValue::Number(16.0)));
+            }
         }
     }
 
-    #[test]
-    fn framework_host_events_route_keyboard_focus_and_resize_handlers() {
+    fn framework_host_event_payload_fixture() -> (FrameworkRuntimeController, RuntimeSceneFrame) {
         let program = FrameworkNativeProgram::new(
             FrameworkNativeNode::new("root", ElementKind::View)
                 .with_prop("width", PropValue::Number(320.0))
@@ -2029,6 +2187,11 @@ export function mount(host) {
                     EventKind::Keyboard(hawk2ui_authoring::KeyboardEventKind::KeyUp),
                     HandlerRef::new("handleKeyboard"),
                     [EventPayloadField::Key],
+                )
+                .with_event(
+                    EventKind::Keyboard(hawk2ui_authoring::KeyboardEventKind::TextInput),
+                    HandlerRef::new("handleKeyboard"),
+                    [EventPayloadField::Value],
                 )
                 .with_event(
                     EventKind::Focus(hawk2ui_authoring::FocusEventKind::FocusIn),
@@ -2071,7 +2234,12 @@ export function mount(host) {
         let scene = RuntimeSceneBridge::new(Viewport::new(320.0, 200.0))
             .build(controller.runtime_tree())
             .unwrap_or_else(|error| panic!("scene builds: {error:?}"));
+        (controller, scene)
+    }
 
+    #[test]
+    fn framework_host_events_route_keyboard_focus_and_resize_handlers() {
+        let (controller, scene) = framework_host_event_payload_fixture();
         for (host_event, expected_name) in [
             (
                 DesktopHostEvent::KeyboardInput(KeyboardInput::new("KeyA", true)),
@@ -2092,7 +2260,69 @@ export function mount(host) {
             assert_eq!(events.len(), 1);
             assert_eq!(events[0].target, "root");
             assert_eq!(events[0].name, expected_name);
+            let StructuredValue::Object(payload) = &events[0].payload else {
+                panic!("framework host events should carry object payloads");
+            };
+            assert_eq!(
+                payload.get("name"),
+                Some(&StructuredValue::String(expected_name.to_string()))
+            );
+            assert_eq!(
+                payload.get("target"),
+                Some(&StructuredValue::String("root".to_string()))
+            );
+            match (&host_event, expected_name) {
+                (DesktopHostEvent::KeyboardInput(keyboard), _) => {
+                    assert_eq!(
+                        payload.get("key"),
+                        Some(&StructuredValue::String(keyboard.key.clone()))
+                    );
+                    assert_eq!(
+                        payload.get("pressed"),
+                        Some(&StructuredValue::Bool(keyboard.pressed))
+                    );
+                }
+                (DesktopHostEvent::FocusChanged(focused), _) => {
+                    assert_eq!(
+                        payload.get("focused"),
+                        Some(&StructuredValue::Bool(*focused))
+                    );
+                }
+                (DesktopHostEvent::Resized(metrics), _) => {
+                    assert_eq!(
+                        payload.get("width"),
+                        Some(&StructuredValue::Number(metrics.logical_width))
+                    );
+                    assert_eq!(
+                        payload.get("height"),
+                        Some(&StructuredValue::Number(metrics.logical_height))
+                    );
+                    assert_eq!(
+                        payload.get("scale_factor"),
+                        Some(&StructuredValue::Number(metrics.scale_factor))
+                    );
+                }
+                _ => {}
+            }
         }
+
+        let text_events = framework_events_from_host_event(
+            &scene,
+            &DesktopHostEvent::ImeInput("commit:hello".to_string()),
+            &controller,
+        );
+        assert_eq!(text_events.len(), 1);
+        let StructuredValue::Object(payload) = &text_events[0].payload else {
+            panic!("text input events should carry object payloads");
+        };
+        assert_eq!(
+            payload.get("name"),
+            Some(&StructuredValue::String("keyboard.text-input".to_string()))
+        );
+        assert_eq!(
+            payload.get("value"),
+            Some(&StructuredValue::String("hello".to_string()))
+        );
     }
 
     #[test]

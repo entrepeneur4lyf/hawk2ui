@@ -97,6 +97,28 @@ test("React compiler lowers useState setter handler actions", () => {
   ]);
 });
 
+test("React compiler preserves event payload handler expressions", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'import { useState } from "react"; export function App() { const [label, setLabel] = useState("Idle"); function handlePress(event: { x: number; y: number }) { setLabel(event.x + ":" + event.y); } return <hawk-view id="root" onPointerDown={handlePress}><hawk-text id="title">{label}</hawk-text></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.event_handlers).toEqual([
+    {
+      name: "handlePress",
+      actions: [
+        {
+          type: "set_dynamic_expression",
+          name: "label",
+          expression: "event.x + \":\" + event.y",
+          dependencies: ["event"],
+        },
+      ],
+    },
+  ]);
+});
+
 test("React compiler lowers the complete native event and lifecycle contract from JSX props", () => {
   const output = compileHawkReact({
     filename: "App.tsx",

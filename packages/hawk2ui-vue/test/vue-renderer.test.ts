@@ -69,6 +69,28 @@ test("Vue compiler emits executable pointer handler actions", () => {
   ]);
 });
 
+test("Vue compiler preserves event payload handler expressions", () => {
+  const output = compileHawkVue({
+    filename: "App.vue",
+    source:
+      '<script setup>const label = ref("Idle"); function handlePress(event: { x: number; y: number }) { label.value = event.x + ":" + event.y; }</script><template><hawk-view id="root" @pointerdown="handlePress"><hawk-text id="title">{{ label }}</hawk-text></hawk-view></template>',
+  });
+
+  expect(output.compilerArtifact.event_handlers).toEqual([
+    {
+      name: "handlePress",
+      actions: [
+        {
+          type: "set_dynamic_expression",
+          name: "label",
+          expression: 'event.x + ":" + event.y',
+          dependencies: ["event"],
+        },
+      ],
+    },
+  ]);
+});
+
 test("Vue compiler lowers the complete native event and lifecycle contract from template directives", () => {
   const output = compileHawkVue({
     filename: "App.vue",

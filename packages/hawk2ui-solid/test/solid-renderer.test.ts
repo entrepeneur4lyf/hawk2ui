@@ -70,6 +70,28 @@ test("Solid compiler emits executable pointer handler actions", () => {
   ]);
 });
 
+test("Solid compiler preserves event payload handler expressions", () => {
+  const output = compileHawkSolid({
+    filename: "App.tsx",
+    source:
+      'const [label, setLabel] = createSignal("Idle"); function handlePress(event: { x: number; y: number }) { setLabel(event.x + ":" + event.y); } export function App() { return <hawk-view id="root" onPointerDown={handlePress}><hawk-text id="title">{label()}</hawk-text></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.event_handlers).toEqual([
+    {
+      name: "handlePress",
+      actions: [
+        {
+          type: "set_dynamic_expression",
+          name: "label",
+          expression: "event.x + \":\" + event.y",
+          dependencies: ["event"],
+        },
+      ],
+    },
+  ]);
+});
+
 test("Solid compiler lowers the complete native event and lifecycle contract from JSX props", () => {
   const output = compileHawkSolid({
     filename: "App.tsx",

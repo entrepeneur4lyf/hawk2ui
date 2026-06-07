@@ -89,6 +89,28 @@ test("Svelte compiler emits executable pointer handler actions", () => {
   ]);
 });
 
+test("Svelte compiler preserves event payload handler expressions", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let label = "Idle"; function handlePress(event) { label = event.x + ":" + event.y; }</script><hawk-view id="root" on:pointerdown={handlePress}><hawk-text id="title">{label}</hawk-text></hawk-view>',
+  });
+
+  expect(output.compilerArtifact.event_handlers).toEqual([
+    {
+      name: "handlePress",
+      actions: [
+        {
+          type: "set_dynamic_expression",
+          name: "label",
+          expression: 'event.x + ":" + event.y',
+          dependencies: ["event"],
+        },
+      ],
+    },
+  ]);
+});
+
 test("Svelte compiler lowers the complete native event and lifecycle contract from directives", () => {
   const output = compileHawkSvelte({
     filename: "App.svelte",
