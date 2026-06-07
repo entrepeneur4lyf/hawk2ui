@@ -276,3 +276,83 @@ test("compilerArtifactForApp preserves executable event handler artifacts", () =
     }),
   ).toThrow("native.event-handler.unreferenced");
 });
+
+test("compilerArtifactForApp accepts the complete stable native event and lifecycle contract", () => {
+  const artifact = compilerArtifactForApp({
+    name: "native-event-contract",
+    root: {
+      id: "root",
+      kind: "view",
+      events: [
+        { kind: "pointer.press", handler: "handlePointerPress" },
+        { kind: "pointer.release", handler: "handlePointerRelease" },
+        { kind: "pointer.move", handler: "handlePointerMove" },
+        { kind: "pointer.drag", handler: "handlePointerDrag" },
+        { kind: "pointer.enter", handler: "handlePointerEnter" },
+        { kind: "pointer.leave", handler: "handlePointerLeave" },
+        { kind: "pointer.wheel", handler: "handlePointerWheel" },
+        { kind: "keyboard.key-down", handler: "handleKeyDown" },
+        { kind: "keyboard.key-up", handler: "handleKeyUp" },
+        { kind: "keyboard.text-input", handler: "handleTextInput" },
+        { kind: "focus.focus-in", handler: "handleFocusIn" },
+        { kind: "focus.focus-out", handler: "handleFocusOut" },
+        { kind: "input.value-changed", handler: "handleValueChanged" },
+        { kind: "input.value-committed", handler: "handleValueCommitted" },
+        { kind: "resize", handler: "handleResize" },
+      ],
+      lifecycle: [
+        { phase: "mounted", handler: "handleMounted" },
+        { phase: "suspended", handler: "handleSuspended" },
+        { phase: "resumed", handler: "handleResumed" },
+        { phase: "hot-reloaded", handler: "handleHotReloaded" },
+        { phase: "error-boundary", handler: "handleErrorBoundary" },
+        { phase: "shutdown", handler: "handleShutdown" },
+        { phase: "unmounted", handler: "handleUnmounted" },
+      ],
+    },
+  });
+
+  expect(artifact.root.events.map((event) => event.kind)).toEqual([
+    "pointer.press",
+    "pointer.release",
+    "pointer.move",
+    "pointer.drag",
+    "pointer.enter",
+    "pointer.leave",
+    "pointer.wheel",
+    "keyboard.key-down",
+    "keyboard.key-up",
+    "keyboard.text-input",
+    "focus.focus-in",
+    "focus.focus-out",
+    "input.value-changed",
+    "input.value-committed",
+    "resize",
+  ]);
+  expect(artifact.root.events.map((event) => event.payload_fields)).toEqual([
+    ["position"],
+    ["position"],
+    ["position"],
+    ["position", "delta"],
+    ["position"],
+    ["position"],
+    ["position", "delta"],
+    ["key"],
+    ["key"],
+    ["value"],
+    [],
+    [],
+    ["value"],
+    ["value"],
+    [],
+  ]);
+  expect(artifact.root.lifecycle.map((lifecycle) => lifecycle.event)).toEqual([
+    "mounted",
+    "suspended",
+    "resumed",
+    "hot-reloaded",
+    "error-boundary",
+    "shutdown",
+    "unmounted",
+  ]);
+});

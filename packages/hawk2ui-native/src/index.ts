@@ -1,5 +1,35 @@
 export type HawkElementKind = "view" | "text" | "button" | "custom-surface";
 
+export type HawkEventKind =
+  | "pointer.press"
+  | "pointer.release"
+  | "pointer.move"
+  | "pointer.drag"
+  | "pointer.enter"
+  | "pointer.leave"
+  | "pointer.wheel"
+  | "keyboard.key-down"
+  | "keyboard.key-up"
+  | "keyboard.text-input"
+  | "focus.focus-in"
+  | "focus.focus-out"
+  | "input.value-changed"
+  | "input.value-committed"
+  | "resize"
+  | `component.${string}`
+  | `plugin-parameter.${string}`;
+
+export type HawkLifecyclePhase =
+  | "mounted"
+  | "suspended"
+  | "resumed"
+  | "hot-reloaded"
+  | "error-boundary"
+  | "shutdown"
+  | "unmounted";
+
+export type HawkCompilerEventPayloadFieldWire = "position" | "delta" | "value" | "key";
+
 export interface HawkElementSpec {
   readonly id: string;
   readonly kind: HawkElementKind;
@@ -19,12 +49,12 @@ export interface HawkAppSpec {
 }
 
 export interface HawkEventSpec {
-  readonly kind: "pointer.press";
+  readonly kind: HawkEventKind;
   readonly handler: string;
 }
 
 export interface HawkLifecycleSpec {
-  readonly phase: "mounted" | "unmounted";
+  readonly phase: HawkLifecyclePhase;
   readonly handler: string;
 }
 
@@ -44,13 +74,13 @@ export interface HawkCompilerAssetWire {
 }
 
 export interface HawkCompilerEventWire {
-  readonly kind: "pointer.press";
+  readonly kind: HawkEventKind;
   readonly handler: string;
-  readonly payload_fields: readonly ("position" | "delta" | "value" | "key")[];
+  readonly payload_fields: readonly HawkCompilerEventPayloadFieldWire[];
 }
 
 export interface HawkCompilerLifecycleWire {
-  readonly event: "mounted" | "unmounted";
+  readonly event: HawkLifecyclePhase;
   readonly handler: string;
 }
 
@@ -285,11 +315,11 @@ function elementToWire(element: HawkElementSpec): HawkCompilerNodeWire {
     refs: [...(element.refs ?? [])],
     style_refs: [...(element.styleRefs ?? [])],
     asset_refs: (element.assetRefs ?? []).map((asset) => ({ ...asset })),
-    events: (element.events ?? []).map((event) => ({
-      kind: event.kind,
-      handler: event.handler,
-      payload_fields: ["position"],
-    })),
+      events: (element.events ?? []).map((event) => ({
+        kind: event.kind,
+        handler: event.handler,
+        payload_fields: [...payloadFieldsForEvent(event.kind)],
+      })),
     lifecycle: (element.lifecycle ?? []).map((lifecycle) => ({
       event: lifecycle.phase,
       handler: lifecycle.handler,
@@ -318,6 +348,75 @@ function propValueToWire(
   return { type: "number", value };
 }
 
+const HAWK_EVENT_KINDS = new Set<string>([
+  "pointer.press",
+  "pointer.release",
+  "pointer.move",
+  "pointer.drag",
+  "pointer.enter",
+  "pointer.leave",
+  "pointer.wheel",
+  "keyboard.key-down",
+  "keyboard.key-up",
+  "keyboard.text-input",
+  "focus.focus-in",
+  "focus.focus-out",
+  "input.value-changed",
+  "input.value-committed",
+  "resize",
+]);
+
+const HAWK_LIFECYCLE_PHASES = new Set<string>([
+  "mounted",
+  "suspended",
+  "resumed",
+  "hot-reloaded",
+  "error-boundary",
+  "shutdown",
+  "unmounted",
+]);
+
+function isHawkEventKind(value: unknown): value is HawkEventKind {
+  if (typeof value !== "string") return false;
+  if (HAWK_EVENT_KINDS.has(value)) return true;
+  return hasStableEventSuffix(value, "component.") || hasStableEventSuffix(value, "plugin-parameter.");
+}
+
+function hasStableEventSuffix(value: string, prefix: string): boolean {
+  return value.startsWith(prefix) && value.slice(prefix.length).trim().length > 0;
+}
+
+function isHawkLifecyclePhase(value: unknown): value is HawkLifecyclePhase {
+  return typeof value === "string" && HAWK_LIFECYCLE_PHASES.has(value);
+}
+
+function payloadFieldsForEvent(kind: HawkEventKind): readonly HawkCompilerEventPayloadFieldWire[] {
+  switch (kind) {
+    case "pointer.drag":
+    case "pointer.wheel":
+      return ["position", "delta"];
+    case "pointer.press":
+    case "pointer.release":
+    case "pointer.move":
+    case "pointer.enter":
+    case "pointer.leave":
+      return ["position"];
+    case "keyboard.key-down":
+    case "keyboard.key-up":
+      return ["key"];
+    case "keyboard.text-input":
+    case "input.value-changed":
+    case "input.value-committed":
+      return ["value"];
+    case "focus.focus-in":
+    case "focus.focus-out":
+    case "resize":
+      return [];
+    default:
+      return [];
+  }
+}
+
 function validateElement(element: HawkElementSpec): void {
   const record = element as unknown;
   if (!isObjectRecord(record)) {
@@ -333,19 +432,19 @@ function validateElement(element: HawkElementSpec): void {
   validateStringArray(record.styleRefs, "native.style-refs.invalid", `style refs on \`${record.id}\` must be an array of stable strings.`);
   validateProps(record.props, record.id);
 
-  for (const event of validateRecordArray(record.events, "native.events.invalid", `events on \`${record.id}\` must be an array of records.`)) {
-    if (event.kind !== "pointer.press") {
-      throw new Error(`native.event.kind-invalid: event on \`${record.id}\` has unsupported kind \`${String(event.kind)}\`.`);
+    for (const event of validateRecordArray(record.events, "native.events.invalid", `events on \`${record.id}\` must be an array of records.`)) {
+      if (!isHawkEventKind(event.kind)) {
+        throw new Error(`native.event.kind-invalid: event on \`${record.id}\` has unsupported kind \`${String(event.kind)}\`.`);
+      }
+      if (typeof event.handler !== "string" || !event.handler.trim()) {
+        throw new Error(`native.event.handler-invalid: event on \`${record.id}\` requires a stable handler name.`);
+      }
     }
-    if (typeof event.handler !== "string" || !event.handler.trim()) {
-      throw new Error(`native.event.handler-invalid: event on \`${record.id}\` requires a stable handler name.`);
-    }
-  }
 
-  for (const lifecycle of validateRecordArray(record.lifecycle, "native.lifecycle.invalid", `lifecycle on \`${record.id}\` must be an array of records.`)) {
-    if (lifecycle.phase !== "mounted" && lifecycle.phase !== "unmounted") {
-      throw new Error(`native.lifecycle.phase-invalid: lifecycle on \`${record.id}\` has unsupported phase \`${String(lifecycle.phase)}\`.`);
-    }
+    for (const lifecycle of validateRecordArray(record.lifecycle, "native.lifecycle.invalid", `lifecycle on \`${record.id}\` must be an array of records.`)) {
+      if (!isHawkLifecyclePhase(lifecycle.phase)) {
+        throw new Error(`native.lifecycle.phase-invalid: lifecycle on \`${record.id}\` has unsupported phase \`${String(lifecycle.phase)}\`.`);
+      }
     if (typeof lifecycle.handler !== "string" || !lifecycle.handler.trim()) {
       throw new Error(`native.lifecycle.handler-invalid: lifecycle on \`${record.id}\` requires a stable handler name.`);
     }

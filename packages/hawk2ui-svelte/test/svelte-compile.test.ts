@@ -89,6 +89,41 @@ test("Svelte compiler emits executable pointer handler actions", () => {
   ]);
 });
 
+test("Svelte compiler lowers the complete native event and lifecycle contract from directives", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let status = "idle"; function markPointerPress() { status = "pointer.press"; } function markPointerRelease() { status = "pointer.release"; } function markPointerMove() { status = "pointer.move"; } function markPointerDrag() { status = "pointer.drag"; } function markPointerEnter() { status = "pointer.enter"; } function markPointerLeave() { status = "pointer.leave"; } function markPointerWheel() { status = "pointer.wheel"; } function markKeyDown() { status = "keyboard.key-down"; } function markKeyUp() { status = "keyboard.key-up"; } function markTextInput() { status = "keyboard.text-input"; } function markFocusIn() { status = "focus.focus-in"; } function markFocusOut() { status = "focus.focus-out"; } function markValueChanged() { status = "input.value-changed"; } function markValueCommitted() { status = "input.value-committed"; } function markResize() { status = "resize"; } function markMounted() { status = "mounted"; } function markSuspended() { status = "suspended"; } function markResumed() { status = "resumed"; } function markHotReloaded() { status = "hot-reloaded"; } function markErrorBoundary() { status = "error-boundary"; } function markShutdown() { status = "shutdown"; } function markUnmounted() { status = "unmounted"; }</script><hawk-view id="root" on:pointerdown={markPointerPress} on:pointerup={markPointerRelease} on:pointermove={markPointerMove} on:pointerdrag={markPointerDrag} on:pointerenter={markPointerEnter} on:pointerleave={markPointerLeave} on:wheel={markPointerWheel} on:keydown={markKeyDown} on:keyup={markKeyUp} on:textinput={markTextInput} on:focus={markFocusIn} on:blur={markFocusOut} on:input={markValueChanged} on:change={markValueCommitted} on:resize={markResize} on:mount={markMounted} on:suspend={markSuspended} on:resume={markResumed} on:hot-reloaded={markHotReloaded} on:error-boundary={markErrorBoundary} on:shutdown={markShutdown} on:destroy={markUnmounted}></hawk-view>',
+  });
+
+  expect(output.compilerArtifact.root.events.map((event) => event.kind)).toEqual([
+    "pointer.press",
+    "pointer.release",
+    "pointer.move",
+    "pointer.drag",
+    "pointer.enter",
+    "pointer.leave",
+    "pointer.wheel",
+    "keyboard.key-down",
+    "keyboard.key-up",
+    "keyboard.text-input",
+    "focus.focus-in",
+    "focus.focus-out",
+    "input.value-changed",
+    "input.value-committed",
+    "resize",
+  ]);
+  expect(output.compilerArtifact.root.lifecycle.map((lifecycle) => lifecycle.event)).toEqual([
+    "mounted",
+    "suspended",
+    "resumed",
+    "hot-reloaded",
+    "error-boundary",
+    "shutdown",
+    "unmounted",
+  ]);
+});
+
 test("Svelte compiler preserves dynamic layout prop bindings from template expressions", () => {
   const output = compileHawkSvelte({
     filename: "App.svelte",

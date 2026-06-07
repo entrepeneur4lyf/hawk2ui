@@ -343,6 +343,12 @@ fn component_records_keep_custom_controls_and_surfaces_distinct() {
 fn event_records_cover_native_event_domains() {
     let events = [
         hawk2ui_authoring::EventKind::Pointer(hawk2ui_authoring::PointerEventKind::Press),
+        hawk2ui_authoring::EventKind::Pointer(hawk2ui_authoring::PointerEventKind::Release),
+        hawk2ui_authoring::EventKind::Pointer(hawk2ui_authoring::PointerEventKind::Move),
+        hawk2ui_authoring::EventKind::Pointer(hawk2ui_authoring::PointerEventKind::Drag),
+        hawk2ui_authoring::EventKind::Pointer(hawk2ui_authoring::PointerEventKind::Enter),
+        hawk2ui_authoring::EventKind::Pointer(hawk2ui_authoring::PointerEventKind::Leave),
+        hawk2ui_authoring::EventKind::Pointer(hawk2ui_authoring::PointerEventKind::Wheel),
         hawk2ui_authoring::EventKind::Keyboard(hawk2ui_authoring::KeyboardEventKind::KeyDown),
         hawk2ui_authoring::EventKind::Focus(hawk2ui_authoring::FocusEventKind::FocusIn),
         hawk2ui_authoring::EventKind::Input(hawk2ui_authoring::InputEventKind::ValueChanged),
@@ -369,6 +375,12 @@ fn event_records_cover_native_event_domains() {
         keys,
         [
             "pointer.press",
+            "pointer.release",
+            "pointer.move",
+            "pointer.drag",
+            "pointer.enter",
+            "pointer.leave",
+            "pointer.wheel",
             "keyboard.key-down",
             "focus.focus-in",
             "input.value-changed",
@@ -510,6 +522,13 @@ fn compile_basic_fixture_emits_component_text_children_and_click_event() {
 fn source_compiler_parses_all_stable_event_domains() {
     let source = r"
 component EventSink id=event-sink {
+  on pointer.press handlePointerPress
+  on pointer.release handlePointerRelease
+  on pointer.move handlePointerMove
+  on pointer.drag handlePointerDrag
+  on pointer.enter handlePointerEnter
+  on pointer.leave handlePointerLeave
+  on pointer.wheel handlePointerWheel
   on keyboard.key-down handleKeyDown
   on keyboard.key-up handleKeyUp
   on keyboard.text-input handleText
@@ -541,6 +560,13 @@ component EventSink id=event-sink {
             .map(|event| event.event().stable_key())
             .collect::<Vec<_>>(),
         [
+            "pointer.press",
+            "pointer.release",
+            "pointer.move",
+            "pointer.drag",
+            "pointer.enter",
+            "pointer.leave",
+            "pointer.wheel",
             "keyboard.key-down",
             "keyboard.key-up",
             "keyboard.text-input",

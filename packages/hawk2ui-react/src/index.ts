@@ -50,6 +50,32 @@ interface ReturnedJsxElement {
 }
 
 const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
+const REACT_EVENT_PROPS: ReadonlyArray<readonly [string, HawkEventSpec["kind"]]> = [
+  ["onPointerDown", "pointer.press"],
+  ["onPointerUp", "pointer.release"],
+  ["onPointerMove", "pointer.move"],
+  ["onPointerDrag", "pointer.drag"],
+  ["onPointerEnter", "pointer.enter"],
+  ["onPointerLeave", "pointer.leave"],
+  ["onWheel", "pointer.wheel"],
+  ["onKeyDown", "keyboard.key-down"],
+  ["onKeyUp", "keyboard.key-up"],
+  ["onTextInput", "keyboard.text-input"],
+  ["onFocus", "focus.focus-in"],
+  ["onBlur", "focus.focus-out"],
+  ["onInput", "input.value-changed"],
+  ["onChange", "input.value-committed"],
+  ["onResize", "resize"],
+];
+const REACT_LIFECYCLE_PROPS: ReadonlyArray<readonly [string, HawkLifecycleSpec["phase"]]> = [
+  ["onMount", "mounted"],
+  ["onSuspend", "suspended"],
+  ["onResume", "resumed"],
+  ["onHotReload", "hot-reloaded"],
+  ["onErrorBoundary", "error-boundary"],
+  ["onShutdown", "shutdown"],
+  ["onUnmount", "unmounted"],
+];
 
 export function compileHawkReact(input: HawkReactCompileInput): HawkReactCompileOutput {
   if (!/\.[jt]sx$/.test(input.filename)) {
@@ -215,17 +241,20 @@ function mapCallbackBody(callback: AstNode | undefined): AstNode | undefined {
 }
 
 function reactEvents(node: AstNode): readonly HawkEventSpec[] {
-  return hasJsxAttribute(node, "onPointerDown")
-    ? [{ kind: "pointer.press", handler: handlerName(jsxRawAttributeValue(node, "onPointerDown")) }]
-    : [];
+  const events: HawkEventSpec[] = [];
+  for (const [attribute, kind] of REACT_EVENT_PROPS) {
+    const value = jsxRawAttributeValue(node, attribute);
+    if (value) events.push({ kind, handler: handlerName(value) });
+  }
+  return events;
 }
 
 function reactLifecycle(node: AstNode): readonly HawkLifecycleSpec[] {
   const lifecycle: HawkLifecycleSpec[] = [];
-  const mounted = jsxRawAttributeValue(node, "onMount");
-  if (mounted) lifecycle.push({ phase: "mounted", handler: handlerName(mounted) });
-  const unmounted = jsxRawAttributeValue(node, "onUnmount");
-  if (unmounted) lifecycle.push({ phase: "unmounted", handler: handlerName(unmounted) });
+  for (const [attribute, phase] of REACT_LIFECYCLE_PROPS) {
+    const value = jsxRawAttributeValue(node, attribute);
+    if (value) lifecycle.push({ phase, handler: handlerName(value) });
+  }
   return lifecycle;
 }
 
@@ -791,10 +820,6 @@ function collectExpressionDependencies(node: AstNode | undefined, dependencies: 
 function literalString(node: AstNode | undefined): string | undefined {
   const value = literalValue(node);
   return typeof value === "string" ? value : undefined;
-}
-
-function hasJsxAttribute(node: AstNode, name: string): boolean {
-  return Boolean(jsxRawAttributeValue(node, name));
 }
 
 function isHawkJsxElement(node: AstNode | undefined): boolean {

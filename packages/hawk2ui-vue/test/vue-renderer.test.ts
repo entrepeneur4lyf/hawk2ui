@@ -69,6 +69,41 @@ test("Vue compiler emits executable pointer handler actions", () => {
   ]);
 });
 
+test("Vue compiler lowers the complete native event and lifecycle contract from template directives", () => {
+  const output = compileHawkVue({
+    filename: "App.vue",
+    source:
+      '<script setup>const status = ref("idle"); function markPointerPress() { status.value = "pointer.press"; } function markPointerRelease() { status.value = "pointer.release"; } function markPointerMove() { status.value = "pointer.move"; } function markPointerDrag() { status.value = "pointer.drag"; } function markPointerEnter() { status.value = "pointer.enter"; } function markPointerLeave() { status.value = "pointer.leave"; } function markPointerWheel() { status.value = "pointer.wheel"; } function markKeyDown() { status.value = "keyboard.key-down"; } function markKeyUp() { status.value = "keyboard.key-up"; } function markTextInput() { status.value = "keyboard.text-input"; } function markFocusIn() { status.value = "focus.focus-in"; } function markFocusOut() { status.value = "focus.focus-out"; } function markValueChanged() { status.value = "input.value-changed"; } function markValueCommitted() { status.value = "input.value-committed"; } function markResize() { status.value = "resize"; } function markMounted() { status.value = "mounted"; } function markSuspended() { status.value = "suspended"; } function markResumed() { status.value = "resumed"; } function markHotReloaded() { status.value = "hot-reloaded"; } function markErrorBoundary() { status.value = "error-boundary"; } function markShutdown() { status.value = "shutdown"; } function markUnmounted() { status.value = "unmounted"; }</script><template><hawk-view id="root" @pointerdown="markPointerPress" @pointerup="markPointerRelease" @pointermove="markPointerMove" @pointerdrag="markPointerDrag" @pointerenter="markPointerEnter" @pointerleave="markPointerLeave" @wheel="markPointerWheel" @keydown="markKeyDown" @keyup="markKeyUp" @textinput="markTextInput" @focus="markFocusIn" @blur="markFocusOut" @input="markValueChanged" @change="markValueCommitted" @resize="markResize" @mounted="markMounted" @suspended="markSuspended" @resumed="markResumed" @hot-reloaded="markHotReloaded" @error-boundary="markErrorBoundary" @shutdown="markShutdown" @unmounted="markUnmounted"></hawk-view></template>',
+  });
+
+  expect(output.compilerArtifact.root.events.map((event) => event.kind)).toEqual([
+    "pointer.press",
+    "pointer.release",
+    "pointer.move",
+    "pointer.drag",
+    "pointer.enter",
+    "pointer.leave",
+    "pointer.wheel",
+    "keyboard.key-down",
+    "keyboard.key-up",
+    "keyboard.text-input",
+    "focus.focus-in",
+    "focus.focus-out",
+    "input.value-changed",
+    "input.value-committed",
+    "resize",
+  ]);
+  expect(output.compilerArtifact.root.lifecycle.map((lifecycle) => lifecycle.event)).toEqual([
+    "mounted",
+    "suspended",
+    "resumed",
+    "hot-reloaded",
+    "error-boundary",
+    "shutdown",
+    "unmounted",
+  ]);
+});
+
 test("Vue compiler preserves dynamic layout prop bindings from template bindings", () => {
   const output = compileHawkVue({
     filename: "App.vue",

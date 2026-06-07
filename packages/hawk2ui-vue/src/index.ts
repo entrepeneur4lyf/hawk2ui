@@ -45,6 +45,32 @@ interface VueLoweringContext {
 }
 
 const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
+const VUE_EVENT_DIRECTIVES = new Map<string, HawkEventSpec["kind"]>([
+  ["pointerdown", "pointer.press"],
+  ["pointerup", "pointer.release"],
+  ["pointermove", "pointer.move"],
+  ["pointerdrag", "pointer.drag"],
+  ["pointerenter", "pointer.enter"],
+  ["pointerleave", "pointer.leave"],
+  ["wheel", "pointer.wheel"],
+  ["keydown", "keyboard.key-down"],
+  ["keyup", "keyboard.key-up"],
+  ["textinput", "keyboard.text-input"],
+  ["focus", "focus.focus-in"],
+  ["blur", "focus.focus-out"],
+  ["input", "input.value-changed"],
+  ["change", "input.value-committed"],
+  ["resize", "resize"],
+]);
+const VUE_LIFECYCLE_DIRECTIVES = new Map<string, HawkLifecycleSpec["phase"]>([
+  ["mounted", "mounted"],
+  ["suspended", "suspended"],
+  ["resumed", "resumed"],
+  ["hot-reloaded", "hot-reloaded"],
+  ["error-boundary", "error-boundary"],
+  ["shutdown", "shutdown"],
+  ["unmounted", "unmounted"],
+]);
 
 export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput {
   if (!input.filename.endsWith(".vue")) {
@@ -170,9 +196,10 @@ function vueEvents(node: AstNode): readonly HawkEventSpec[] {
   const events: HawkEventSpec[] = [];
   for (const directive of vueDirectives(node, "on")) {
     const event = stringField(directive.arg as AstNode | undefined, "content");
-    if (event === "pointerdown") {
-      events.push({ kind: "pointer.press", handler: vueHandlerName(directive) });
-    } else if (event !== "mounted" && event !== "unmounted") {
+    const eventKind = VUE_EVENT_DIRECTIVES.get(event);
+    if (eventKind) {
+      events.push({ kind: eventKind, handler: vueHandlerName(directive) });
+    } else if (!VUE_LIFECYCLE_DIRECTIVES.has(event)) {
       throw new Error(`vue.event.unsupported: Vue event \`${event}\` is not part of the native event contract.`);
     }
   }
@@ -183,8 +210,8 @@ function vueLifecycle(node: AstNode): readonly HawkLifecycleSpec[] {
   const lifecycle: HawkLifecycleSpec[] = [];
   for (const directive of vueDirectives(node, "on")) {
     const event = stringField(directive.arg as AstNode | undefined, "content");
-    if (event === "mounted") lifecycle.push({ phase: "mounted", handler: vueHandlerName(directive) });
-    if (event === "unmounted") lifecycle.push({ phase: "unmounted", handler: vueHandlerName(directive) });
+    const phase = VUE_LIFECYCLE_DIRECTIVES.get(event);
+    if (phase) lifecycle.push({ phase, handler: vueHandlerName(directive) });
   }
   return lifecycle;
 }

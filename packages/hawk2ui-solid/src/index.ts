@@ -56,6 +56,32 @@ interface ReturnedJsxElement {
 }
 
 const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
+const SOLID_EVENT_PROPS: ReadonlyArray<readonly [string, HawkEventSpec["kind"]]> = [
+  ["onPointerDown", "pointer.press"],
+  ["onPointerUp", "pointer.release"],
+  ["onPointerMove", "pointer.move"],
+  ["onPointerDrag", "pointer.drag"],
+  ["onPointerEnter", "pointer.enter"],
+  ["onPointerLeave", "pointer.leave"],
+  ["onWheel", "pointer.wheel"],
+  ["onKeyDown", "keyboard.key-down"],
+  ["onKeyUp", "keyboard.key-up"],
+  ["onTextInput", "keyboard.text-input"],
+  ["onFocus", "focus.focus-in"],
+  ["onBlur", "focus.focus-out"],
+  ["onInput", "input.value-changed"],
+  ["onChange", "input.value-committed"],
+  ["onResize", "resize"],
+];
+const SOLID_LIFECYCLE_PROPS: ReadonlyArray<readonly [string, HawkLifecycleSpec["phase"]]> = [
+  ["onMount", "mounted"],
+  ["onSuspend", "suspended"],
+  ["onResume", "resumed"],
+  ["onHotReload", "hot-reloaded"],
+  ["onErrorBoundary", "error-boundary"],
+  ["onShutdown", "shutdown"],
+  ["onCleanup", "unmounted"],
+];
 
 export function compileHawkSolid(input: HawkSolidCompileInput): HawkSolidCompileOutput {
   if (!/\.[jt]sx$/.test(input.filename)) {
@@ -209,17 +235,20 @@ function expandSolidFor(node: AstNode, context: SolidLoweringContext): readonly 
 }
 
 function solidEvents(node: AstNode): readonly HawkEventSpec[] {
-  return hasJsxAttribute(node, "onPointerDown")
-    ? [{ kind: "pointer.press", handler: handlerName(jsxRawAttributeValue(node, "onPointerDown")) }]
-    : [];
+  const events: HawkEventSpec[] = [];
+  for (const [attribute, kind] of SOLID_EVENT_PROPS) {
+    const value = jsxRawAttributeValue(node, attribute);
+    if (value) events.push({ kind, handler: handlerName(value) });
+  }
+  return events;
 }
 
 function solidLifecycle(node: AstNode): readonly HawkLifecycleSpec[] {
   const lifecycle: HawkLifecycleSpec[] = [];
-  const mounted = jsxRawAttributeValue(node, "onMount");
-  if (mounted) lifecycle.push({ phase: "mounted", handler: handlerName(mounted) });
-  const cleanup = jsxRawAttributeValue(node, "onCleanup");
-  if (cleanup) lifecycle.push({ phase: "unmounted", handler: handlerName(cleanup) });
+  for (const [attribute, phase] of SOLID_LIFECYCLE_PROPS) {
+    const value = jsxRawAttributeValue(node, attribute);
+    if (value) lifecycle.push({ phase, handler: handlerName(value) });
+  }
   return lifecycle;
 }
 
@@ -775,10 +804,6 @@ function collectExpressionDependencies(node: AstNode | undefined, dependencies: 
 function literalString(node: AstNode | undefined): string | undefined {
   const value = literalValue(node);
   return typeof value === "string" ? value : undefined;
-}
-
-function hasJsxAttribute(node: AstNode, name: string): boolean {
-  return Boolean(jsxRawAttributeValue(node, name));
 }
 
 function isHawkJsxElement(node: AstNode | undefined): boolean {

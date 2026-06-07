@@ -1035,15 +1035,7 @@ impl RuntimeApplication {
         if self.config.framework_controller.is_none() {
             return Ok(false);
         }
-        let pointer_inputs = translated
-            .events
-            .iter()
-            .filter_map(|event| match event {
-                DesktopHostEvent::PointerInput(pointer) => Some(pointer),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        if pointer_inputs.is_empty() {
+        if translated.events.is_empty() {
             return Ok(false);
         }
         let Some(window) = self.window.clone() else {
@@ -1051,34 +1043,35 @@ impl RuntimeApplication {
         };
         let size = window.inner_size();
         let mut changed = false;
-        for pointer in pointer_inputs {
+        for host_event in &translated.events {
             let scene = self.build_runtime_scene_for_window(&window, size)?;
-            let Some(event) = self
-                .config
-                .framework_controller
-                .as_ref()
-                .and_then(|controller| {
-                    framework_event_from_pointer_input(&scene, pointer, controller)
-                })
-            else {
-                continue;
+            let events = {
+                let Some(controller) = self.config.framework_controller.as_ref() else {
+                    continue;
+                };
+                framework_events_from_host_event(&scene, host_event, controller)
             };
+            if events.is_empty() {
+                continue;
+            }
             let Some(controller) = self.config.framework_controller.as_mut() else {
                 continue;
             };
-            let handled = controller.dispatch_runtime_event(&event).map_err(|error| {
-                WinitHostError::new(
-                    "desktop.framework-handler.execute-failed",
-                    format!(
-                        "failed to execute desktop framework handler ({}): {}",
-                        error.rule(),
-                        error.message()
-                    ),
-                )
-            })?;
-            if handled {
-                self.config.runtime_tree = Some(controller.runtime_tree().clone());
-                changed = true;
+            for event in events {
+                let handled = controller.dispatch_runtime_event(&event).map_err(|error| {
+                    WinitHostError::new(
+                        "desktop.framework-handler.execute-failed",
+                        format!(
+                            "failed to execute desktop framework handler ({}): {}",
+                            error.rule(),
+                            error.message()
+                        ),
+                    )
+                })?;
+                if handled {
+                    self.config.runtime_tree = Some(controller.runtime_tree().clone());
+                    changed = true;
+                }
             }
         }
         Ok(changed)
@@ -1303,23 +1296,104 @@ fn desktop_frame_inputs_from_host_events(events: &[DesktopHostEvent]) -> Vec<Fra
         .collect()
 }
 
+fn framework_events_from_host_event(
+    scene: &RuntimeSceneFrame,
+    host_event: &DesktopHostEvent,
+    controller: &FrameworkRuntimeController,
+) -> Vec<RuntimeEvent> {
+    match host_event {
+        DesktopHostEvent::PointerInput(pointer) => {
+            framework_event_from_pointer_input(scene, pointer, controller)
+                .into_iter()
+                .collect()
+        }
+        DesktopHostEvent::KeyboardInput(keyboard) => framework_events_for_targets(
+            controller,
+            if keyboard.pressed {
+                "keyboard.key-down"
+            } else {
+                "keyboard.key-up"
+            },
+        ),
+        DesktopHostEvent::FocusChanged(focused) => framework_events_for_targets(
+            controller,
+            if *focused {
+                "focus.focus-in"
+            } else {
+                "focus.focus-out"
+            },
+        ),
+        DesktopHostEvent::ImeInput(value) if value.starts_with("commit:") => {
+            framework_events_for_targets(controller, "keyboard.text-input")
+        }
+        DesktopHostEvent::Resized(_) => framework_events_for_targets(controller, "resize"),
+        DesktopHostEvent::WindowCreated(_)
+        | DesktopHostEvent::CloseRequested(_)
+        | DesktopHostEvent::ModeChanged(_)
+        | DesktopHostEvent::ImeInput(_)
+        | DesktopHostEvent::FileDragDrop(_)
+        | DesktopHostEvent::WindowOcclusionChanged(_)
+        | DesktopHostEvent::ClipboardCapabilityChanged(_)
+        | DesktopHostEvent::DpiChanged(_)
+        | DesktopHostEvent::RendererTargetRecreateRequested
+        | DesktopHostEvent::RepaintRequested(_)
+        | DesktopHostEvent::ClipboardRequested(_)
+        | DesktopHostEvent::DialogRequested(_)
+        | DesktopHostEvent::FramePresented { .. } => Vec::new(),
+    }
+}
+
+fn framework_events_for_targets(
+    controller: &FrameworkRuntimeController,
+    event_name: &'static str,
+) -> Vec<RuntimeEvent> {
+    controller
+        .event_targets(event_name)
+        .into_iter()
+        .map(|target| RuntimeEvent::ui(target, event_name))
+        .collect()
+}
+
 fn framework_event_from_pointer_input(
     scene: &RuntimeSceneFrame,
     pointer: &PointerInput,
     controller: &FrameworkRuntimeController,
 ) -> Option<RuntimeEvent> {
-    if pointer.button != "left-down" {
-        return None;
-    }
+    let event_name = framework_pointer_event_name(&pointer.button)?;
     scene
         .geometry_entries()
         .iter()
         .rev()
         .find(|(id, geometry)| {
             geometry_contains(*geometry, pointer.x, pointer.y)
-                && controller.has_event_handler(id.as_str(), "pointer.press")
+                && controller.has_event_handler(id.as_str(), event_name)
         })
-        .map(|(id, _)| RuntimeEvent::ui(id.as_str(), "pointer.press"))
+        .map(|(id, _)| RuntimeEvent::ui(id.as_str(), event_name))
+}
+
+fn framework_pointer_event_name(button: &str) -> Option<&'static str> {
+    if button.ends_with("-down") || button.starts_with("touch-started:") {
+        return Some("pointer.press");
+    }
+    if button.ends_with("-up") || button.starts_with("touch-ended:") {
+        return Some("pointer.release");
+    }
+    if button == "move" || button.starts_with("touch-moved:") {
+        return Some("pointer.move");
+    }
+    if button == "drag" || button.ends_with("-drag") {
+        return Some("pointer.drag");
+    }
+    if button == "enter" {
+        return Some("pointer.enter");
+    }
+    if button == "leave" || button.starts_with("touch-cancelled:") {
+        return Some("pointer.leave");
+    }
+    if button.starts_with("wheel-lines:") || button.starts_with("wheel-pixels:") {
+        return Some("pointer.wheel");
+    }
+    None
 }
 
 fn geometry_contains(geometry: hawk2ui_render::Geometry, x: f64, y: f64) -> bool {
@@ -1629,7 +1703,8 @@ mod tests {
     use super::{
         RuntimeApplication, RuntimeLifecycle, SoftwareFrameRenderer, WinitDesktopRuntimeConfig,
         WinitDesktopScriptEntry, WinitHostError, desktop_frame_inputs_from_host_events,
-        framework_event_from_pointer_input, logical_size_to_f32, run_script_entry_frame,
+        framework_event_from_pointer_input, framework_events_from_host_event, logical_size_to_f32,
+        run_script_entry_frame,
     };
 
     #[test]
@@ -1871,6 +1946,153 @@ export function mount(host) {
             &controller,
         );
         assert!(outside.is_none());
+    }
+
+    #[test]
+    fn framework_pointer_input_maps_supported_native_pointer_labels() {
+        let mut button = FrameworkNativeNode::new("button", ElementKind::Button)
+            .with_prop("width", PropValue::Number(120.0))
+            .with_prop("height", PropValue::Number(48.0));
+        for event in [
+            EventKind::Pointer(PointerEventKind::Press),
+            EventKind::Pointer(PointerEventKind::Release),
+            EventKind::Pointer(PointerEventKind::Move),
+            EventKind::Pointer(PointerEventKind::Drag),
+            EventKind::Pointer(PointerEventKind::Enter),
+            EventKind::Pointer(PointerEventKind::Leave),
+            EventKind::Pointer(PointerEventKind::Wheel),
+        ] {
+            button = button.with_event(
+                event,
+                HandlerRef::new("handlePointer"),
+                [EventPayloadField::Position],
+            );
+        }
+        let program = FrameworkNativeProgram::new(
+            FrameworkNativeNode::new("root", ElementKind::View)
+                .with_prop("width", PropValue::Number(320.0))
+                .with_prop("height", PropValue::Number(200.0))
+                .with_child("button", button),
+        )
+        .with_event_handler(FrameworkEventHandler::new("handlePointer").with_action(
+            FrameworkEventHandlerAction::set_dynamic_value(
+                "label",
+                FrameworkDynamicValue::String("Handled".to_string()),
+            ),
+        ));
+        let native = program
+            .to_native_authoring_artifact("App.tsx", true)
+            .unwrap_or_else(|error| panic!("program finalizes: {error:?}"));
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact(&native)
+            .unwrap_or_else(|error| panic!("program bridges: {error:?}"));
+        let controller = FrameworkRuntimeController::from_program(&program, runtime)
+            .unwrap_or_else(|error| panic!("controller builds: {error:?}"));
+        let scene = RuntimeSceneBridge::new(Viewport::new(320.0, 200.0))
+            .build(controller.runtime_tree())
+            .unwrap_or_else(|error| panic!("scene builds: {error:?}"));
+
+        for (button_label, expected_name) in [
+            ("left-down", "pointer.press"),
+            ("left-up", "pointer.release"),
+            ("move", "pointer.move"),
+            ("drag", "pointer.drag"),
+            ("left-drag", "pointer.drag"),
+            ("enter", "pointer.enter"),
+            ("leave", "pointer.leave"),
+            ("wheel-lines:0:1", "pointer.wheel"),
+            ("wheel-pixels:0:16", "pointer.wheel"),
+        ] {
+            let event = framework_event_from_pointer_input(
+                &scene,
+                &PointerInput::new(16.0, 16.0, button_label),
+                &controller,
+            )
+            .unwrap_or_else(|| panic!("{button_label} should map to {expected_name}"));
+            assert_eq!(event.target, "button");
+            assert_eq!(event.name, expected_name);
+        }
+    }
+
+    #[test]
+    fn framework_host_events_route_keyboard_focus_and_resize_handlers() {
+        let program = FrameworkNativeProgram::new(
+            FrameworkNativeNode::new("root", ElementKind::View)
+                .with_prop("width", PropValue::Number(320.0))
+                .with_prop("height", PropValue::Number(200.0))
+                .with_event(
+                    EventKind::Keyboard(hawk2ui_authoring::KeyboardEventKind::KeyDown),
+                    HandlerRef::new("handleKeyboard"),
+                    [EventPayloadField::Key],
+                )
+                .with_event(
+                    EventKind::Keyboard(hawk2ui_authoring::KeyboardEventKind::KeyUp),
+                    HandlerRef::new("handleKeyboard"),
+                    [EventPayloadField::Key],
+                )
+                .with_event(
+                    EventKind::Focus(hawk2ui_authoring::FocusEventKind::FocusIn),
+                    HandlerRef::new("handleFocus"),
+                    [],
+                )
+                .with_event(
+                    EventKind::Focus(hawk2ui_authoring::FocusEventKind::FocusOut),
+                    HandlerRef::new("handleFocus"),
+                    [],
+                )
+                .with_event(EventKind::Resize, HandlerRef::new("handleResize"), []),
+        )
+        .with_event_handler(FrameworkEventHandler::new("handleKeyboard").with_action(
+            FrameworkEventHandlerAction::set_dynamic_value(
+                "label",
+                FrameworkDynamicValue::String("Keyboard".to_string()),
+            ),
+        ))
+        .with_event_handler(FrameworkEventHandler::new("handleFocus").with_action(
+            FrameworkEventHandlerAction::set_dynamic_value(
+                "label",
+                FrameworkDynamicValue::String("Focus".to_string()),
+            ),
+        ))
+        .with_event_handler(FrameworkEventHandler::new("handleResize").with_action(
+            FrameworkEventHandlerAction::set_dynamic_value(
+                "label",
+                FrameworkDynamicValue::String("Resize".to_string()),
+            ),
+        ));
+        let native = program
+            .to_native_authoring_artifact("App.tsx", true)
+            .unwrap_or_else(|error| panic!("program finalizes: {error:?}"));
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact(&native)
+            .unwrap_or_else(|error| panic!("program bridges: {error:?}"));
+        let controller = FrameworkRuntimeController::from_program(&program, runtime)
+            .unwrap_or_else(|error| panic!("controller builds: {error:?}"));
+        let scene = RuntimeSceneBridge::new(Viewport::new(320.0, 200.0))
+            .build(controller.runtime_tree())
+            .unwrap_or_else(|error| panic!("scene builds: {error:?}"));
+
+        for (host_event, expected_name) in [
+            (
+                DesktopHostEvent::KeyboardInput(KeyboardInput::new("KeyA", true)),
+                "keyboard.key-down",
+            ),
+            (
+                DesktopHostEvent::KeyboardInput(KeyboardInput::new("KeyA", false)),
+                "keyboard.key-up",
+            ),
+            (DesktopHostEvent::FocusChanged(true), "focus.focus-in"),
+            (DesktopHostEvent::FocusChanged(false), "focus.focus-out"),
+            (
+                DesktopHostEvent::Resized(SurfaceMetrics::new(640.0, 480.0, 1.0)),
+                "resize",
+            ),
+        ] {
+            let events = framework_events_from_host_event(&scene, &host_event, &controller);
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].target, "root");
+            assert_eq!(events[0].name, expected_name);
+        }
     }
 
     #[test]

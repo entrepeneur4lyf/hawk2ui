@@ -70,6 +70,41 @@ test("Solid compiler emits executable pointer handler actions", () => {
   ]);
 });
 
+test("Solid compiler lowers the complete native event and lifecycle contract from JSX props", () => {
+  const output = compileHawkSolid({
+    filename: "App.tsx",
+    source:
+      'let status = "idle"; function markPointerPress() { status = "pointer.press"; } function markPointerRelease() { status = "pointer.release"; } function markPointerMove() { status = "pointer.move"; } function markPointerDrag() { status = "pointer.drag"; } function markPointerEnter() { status = "pointer.enter"; } function markPointerLeave() { status = "pointer.leave"; } function markPointerWheel() { status = "pointer.wheel"; } function markKeyDown() { status = "keyboard.key-down"; } function markKeyUp() { status = "keyboard.key-up"; } function markTextInput() { status = "keyboard.text-input"; } function markFocusIn() { status = "focus.focus-in"; } function markFocusOut() { status = "focus.focus-out"; } function markValueChanged() { status = "input.value-changed"; } function markValueCommitted() { status = "input.value-committed"; } function markResize() { status = "resize"; } function markMounted() { status = "mounted"; } function markSuspended() { status = "suspended"; } function markResumed() { status = "resumed"; } function markHotReloaded() { status = "hot-reloaded"; } function markErrorBoundary() { status = "error-boundary"; } function markShutdown() { status = "shutdown"; } function markUnmounted() { status = "unmounted"; } export function App() { return <hawk-view id="root" onPointerDown={markPointerPress} onPointerUp={markPointerRelease} onPointerMove={markPointerMove} onPointerDrag={markPointerDrag} onPointerEnter={markPointerEnter} onPointerLeave={markPointerLeave} onWheel={markPointerWheel} onKeyDown={markKeyDown} onKeyUp={markKeyUp} onTextInput={markTextInput} onFocus={markFocusIn} onBlur={markFocusOut} onInput={markValueChanged} onChange={markValueCommitted} onResize={markResize} onMount={markMounted} onSuspend={markSuspended} onResume={markResumed} onHotReload={markHotReloaded} onErrorBoundary={markErrorBoundary} onShutdown={markShutdown} onCleanup={markUnmounted}></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.root.events.map((event) => event.kind)).toEqual([
+    "pointer.press",
+    "pointer.release",
+    "pointer.move",
+    "pointer.drag",
+    "pointer.enter",
+    "pointer.leave",
+    "pointer.wheel",
+    "keyboard.key-down",
+    "keyboard.key-up",
+    "keyboard.text-input",
+    "focus.focus-in",
+    "focus.focus-out",
+    "input.value-changed",
+    "input.value-committed",
+    "resize",
+  ]);
+  expect(output.compilerArtifact.root.lifecycle.map((lifecycle) => lifecycle.event)).toEqual([
+    "mounted",
+    "suspended",
+    "resumed",
+    "hot-reloaded",
+    "error-boundary",
+    "shutdown",
+    "unmounted",
+  ]);
+});
+
 test("Solid compiler preserves dynamic layout prop bindings from signal expressions", () => {
   const output = compileHawkSolid({
     filename: "App.tsx",

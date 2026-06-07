@@ -13,6 +13,12 @@ pub enum PointerEventKind {
     Move,
     /// Pointer drag.
     Drag,
+    /// Pointer entered the target.
+    Enter,
+    /// Pointer left the target.
+    Leave,
+    /// Pointer wheel or scroll delta.
+    Wheel,
 }
 
 impl PointerEventKind {
@@ -22,6 +28,9 @@ impl PointerEventKind {
             Self::Release => "pointer.release",
             Self::Move => "pointer.move",
             Self::Drag => "pointer.drag",
+            Self::Enter => "pointer.enter",
+            Self::Leave => "pointer.leave",
+            Self::Wheel => "pointer.wheel",
         }
     }
 }
@@ -163,6 +172,9 @@ impl std::str::FromStr for EventKind {
             "pointer.release" => Ok(Self::Pointer(PointerEventKind::Release)),
             "pointer.move" => Ok(Self::Pointer(PointerEventKind::Move)),
             "pointer.drag" => Ok(Self::Pointer(PointerEventKind::Drag)),
+            "pointer.enter" => Ok(Self::Pointer(PointerEventKind::Enter)),
+            "pointer.leave" => Ok(Self::Pointer(PointerEventKind::Leave)),
+            "pointer.wheel" => Ok(Self::Pointer(PointerEventKind::Wheel)),
             "keyboard.key-down" => Ok(Self::Keyboard(KeyboardEventKind::KeyDown)),
             "keyboard.key-up" => Ok(Self::Keyboard(KeyboardEventKind::KeyUp)),
             "keyboard.text-input" => Ok(Self::Keyboard(KeyboardEventKind::TextInput)),

@@ -37,6 +37,33 @@ interface SvelteLoweringContext {
 }
 
 const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
+const SVELTE_EVENT_DIRECTIVES = new Map<string, HawkEventSpec["kind"]>([
+  ["press", "pointer.press"],
+  ["pointerdown", "pointer.press"],
+  ["pointerup", "pointer.release"],
+  ["pointermove", "pointer.move"],
+  ["pointerdrag", "pointer.drag"],
+  ["pointerenter", "pointer.enter"],
+  ["pointerleave", "pointer.leave"],
+  ["wheel", "pointer.wheel"],
+  ["keydown", "keyboard.key-down"],
+  ["keyup", "keyboard.key-up"],
+  ["textinput", "keyboard.text-input"],
+  ["focus", "focus.focus-in"],
+  ["blur", "focus.focus-out"],
+  ["input", "input.value-changed"],
+  ["change", "input.value-committed"],
+  ["resize", "resize"],
+]);
+const SVELTE_LIFECYCLE_DIRECTIVES = new Map<string, HawkLifecycleSpec["phase"]>([
+  ["mount", "mounted"],
+  ["suspend", "suspended"],
+  ["resume", "resumed"],
+  ["hot-reloaded", "hot-reloaded"],
+  ["error-boundary", "error-boundary"],
+  ["shutdown", "shutdown"],
+  ["destroy", "unmounted"],
+]);
 
 export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteCompileOutput {
   if (!input.filename.endsWith(".svelte")) {
@@ -155,18 +182,18 @@ function eventHandlers(node: AstNode): {
   const events: HawkEventSpec[] = [];
   const lifecycle: HawkLifecycleSpec[] = [];
   for (const attribute of attributesOf(node)) {
-    if (attribute.type !== "EventHandler") continue;
-    const name = stringField(attribute, "name");
-    const handler = handlerName(attribute.expression as AstNode | undefined);
-    if (name === "press") {
-      events.push({ kind: "pointer.press", handler });
-    } else if (name === "mount") {
-      lifecycle.push({ phase: "mounted", handler });
-    } else if (name === "destroy") {
-      lifecycle.push({ phase: "unmounted", handler });
-    } else {
-      throw new Error(`svelte.event.unsupported: Svelte event \`${name}\` is not part of the native event contract.`);
-    }
+      if (attribute.type !== "EventHandler") continue;
+      const name = stringField(attribute, "name");
+      const handler = handlerName(attribute.expression as AstNode | undefined);
+      const eventKind = SVELTE_EVENT_DIRECTIVES.get(name);
+      const lifecyclePhase = SVELTE_LIFECYCLE_DIRECTIVES.get(name);
+      if (eventKind) {
+        events.push({ kind: eventKind, handler });
+      } else if (lifecyclePhase) {
+        lifecycle.push({ phase: lifecyclePhase, handler });
+      } else {
+        throw new Error(`svelte.event.unsupported: Svelte event \`${name}\` is not part of the native event contract.`);
+      }
   }
   return { events, lifecycle };
 }
