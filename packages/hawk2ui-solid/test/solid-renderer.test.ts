@@ -92,6 +92,23 @@ test("Solid compiler preserves event payload handler expressions", () => {
   ]);
 });
 
+test("Solid compiler expands local components with props and forwarded children", () => {
+  const output = compileHawkSolid({
+    filename: "App.tsx",
+    source:
+      'function Card(props: { id: string; title: string; children?: unknown }) { return <hawk-view id={props.id} class="card"><hawk-text id="card-title">{props.title}</hawk-text>{props.children}</hawk-view>; } export function App() { return <hawk-view id="root"><Card id="panel" title="Panel"><hawk-button id="cta">Go</hawk-button></Card></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.root.children).toHaveLength(1);
+  const card = output.compilerArtifact.root.children[0].node;
+  expect(card.id).toBe("panel");
+  expect(card.kind).toBe("view");
+  expect(card.style_refs).toEqual(["card"]);
+  expect(card.children.map((child) => child.node.id)).toEqual(["card-title", "cta"]);
+  expect(card.children[0].node.props).toEqual([{ name: "text", value: { type: "string", value: "Panel" } }]);
+  expect(card.children[1].node.props).toEqual([{ name: "text", value: { type: "string", value: "Go" } }]);
+});
+
 test("Solid compiler lowers the complete native event and lifecycle contract from JSX props", () => {
   const output = compileHawkSolid({
     filename: "App.tsx",

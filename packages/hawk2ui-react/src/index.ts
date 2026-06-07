@@ -38,8 +38,12 @@ type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 
 interface ReactLoweringContext {
   readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
+  readonly components: ReadonlyMap<string, ReactComponentDefinition>;
   readonly initialDynamicValues: ReadonlyMap<string, HawkCompilerInitialDynamicValueWire>;
   readonly locals: ReadonlyMap<string, LiteralRecord>;
+  readonly scalars: ReadonlyMap<string, string | number | boolean>;
+  readonly childSlots: ReadonlyMap<string, readonly AstNode[]>;
+  readonly componentStack: readonly string[];
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
 }
 
@@ -47,6 +51,11 @@ interface ReturnedJsxElement {
   readonly element: AstNode;
   readonly scope: AstNode | undefined;
   readonly entrypoint: string;
+}
+
+interface ReactComponentDefinition {
+  readonly element: AstNode;
+  readonly propsParam: AstNode | undefined;
 }
 
 const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
@@ -103,8 +112,12 @@ export function compileHawkReact(input: HawkReactCompileInput): HawkReactCompile
 
   const context: ReactLoweringContext = {
     arrays: literalArraysFromProgram(program, returned.scope),
+    components: componentDefinitionsFromProgram(program),
     initialDynamicValues: initialDynamicValuesFromProgram(program, returned.scope),
     locals: new Map(),
+    scalars: new Map(),
+    childSlots: new Map(),
+    componentStack: [],
     dynamicBindings: [],
   };
   const root = jsxElementToSpec(returned.element, context);
@@ -139,21 +152,50 @@ export function compileHawkReact(input: HawkReactCompileInput): HawkReactCompile
   }
 
 function returnedJsxElement(program: AstNode): ReturnedJsxElement | undefined {
+  const exported = returnedJsxCandidates(program, true);
+  if (exported.length > 0) return exported[0];
+  const fallback = returnedJsxCandidates(program, false);
+  return fallback[0];
+}
+
+function returnedJsxCandidates(program: AstNode, exportedOnly: boolean): ReturnedJsxElement[] {
+  const candidates: ReturnedJsxElement[] = [];
   for (const statement of arrayField(program, "body")) {
     const declaration = statement.declaration as AstNode | undefined;
-    const candidate = statement.type === "ExportNamedDeclaration" && declaration ? declaration : statement;
-    if (candidate.type === "FunctionDeclaration") {
-        const returned = returnArgument(candidate.body as AstNode | undefined);
-        if (returned && isHawkJsxElement(returned)) {
-          return {
-            element: returned,
-            scope: candidate.body as AstNode | undefined,
-            entrypoint: identifierName(candidate.id as AstNode | undefined) ?? "default",
-          };
-        }
-      }
+    const isExported = statement.type === "ExportNamedDeclaration" || statement.type === "ExportDefaultDeclaration";
+    if (exportedOnly !== isExported) continue;
+    const candidate = isExported && declaration ? declaration : statement;
+    for (const returned of returnedJsxElementsFromCandidate(candidate)) candidates.push(returned);
   }
-  return undefined;
+  return candidates;
+}
+
+function returnedJsxElementsFromCandidate(candidate: AstNode): ReturnedJsxElement[] {
+  if (candidate.type === "FunctionDeclaration") {
+    const returned = returnArgument(candidate.body as AstNode | undefined);
+    return returned?.type === "JSXElement"
+      ? [{
+        element: returned,
+        scope: candidate.body as AstNode | undefined,
+        entrypoint: identifierName(candidate.id as AstNode | undefined) ?? "default",
+      }]
+      : [];
+  }
+  if (candidate.type !== "VariableDeclaration") return [];
+  const returned: ReturnedJsxElement[] = [];
+  for (const declaration of arrayField(candidate, "declarations")) {
+    const name = identifierName(declaration.id as AstNode | undefined);
+    const init = declaration.init as AstNode | undefined;
+    const element = jsxElementFromFunctionLike(init);
+    if (name && element) {
+      returned.push({
+        element,
+        scope: functionBodyScope(init),
+        entrypoint: name,
+      });
+    }
+  }
+  return returned;
 }
 
 function returnArgument(block: AstNode | undefined): AstNode | undefined {
@@ -165,6 +207,7 @@ function returnArgument(block: AstNode | undefined): AstNode | undefined {
 
 function jsxElementToSpec(node: AstNode, context: ReactLoweringContext): HawkElementSpec {
   const tag = jsxTagName(node);
+  if (!isHawkTag(tag)) return reactComponentElementToSpec(node, context);
   const id = requiredString(jsxAttributeValue(node, "id", context), tag, "id");
   const style = optionalString(jsxAttributeValue(node, "className", context));
   const assetPath = optionalString(jsxAttributeValue(node, "data-asset", context));
@@ -194,16 +237,19 @@ function jsxElementToSpec(node: AstNode, context: ReactLoweringContext): HawkEle
 function reactChildSpecs(node: AstNode, context: ReactLoweringContext): readonly HawkElementSpec[] {
   const children: HawkElementSpec[] = [];
   for (const child of arrayField(node, "children")) {
-    if (isHawkJsxElement(child)) {
-      children.push(jsxElementToSpec(child, context));
-    } else if (child.type === "JSXExpressionContainer") {
-      const expression = child.expression as AstNode | undefined;
-      if (expression && isMapCall(expression)) {
-        children.push(...expandMapCall(expression, context));
-      }
-    }
+    children.push(...reactChildNodeSpecs(child, context));
   }
   return children;
+}
+
+function reactChildNodeSpecs(child: AstNode, context: ReactLoweringContext): readonly HawkElementSpec[] {
+  if (child.type === "JSXElement") return [jsxElementToSpec(child, context)];
+  if (child.type !== "JSXExpressionContainer") return [];
+  const expression = child.expression as AstNode | undefined;
+  if (expression && isMapCall(expression)) return expandMapCall(expression, context);
+  const slotName = componentChildSlotName(expression, context);
+  if (!slotName) return [];
+  return (context.childSlots.get(slotName) ?? []).flatMap((slotChild) => reactChildNodeSpecs(slotChild, context));
 }
 
 function expandMapCall(expression: AstNode, context: ReactLoweringContext): readonly HawkElementSpec[] {
@@ -217,12 +263,12 @@ function expandMapCall(expression: AstNode, context: ReactLoweringContext): read
   const items = context.arrays.get(source);
   if (!items) {
     throw new Error(`react.map.source-unresolved: React map source \`${source}\` must be a literal array.`);
-  }
-  return items.map((item) =>
-    jsxElementToSpec(template, {
-      ...context,
-      locals: new Map([...context.locals, [itemName, item]]),
-    }),
+    }
+    return items.map((item) =>
+      jsxElementToSpec(template, {
+        ...context,
+        locals: new Map([...context.locals, [itemName, item]]),
+      }),
   );
 }
 
@@ -235,9 +281,153 @@ function isMapCall(expression: AstNode | undefined): boolean {
 
 function mapCallbackBody(callback: AstNode | undefined): AstNode | undefined {
   if (!callback) return undefined;
-  if (isHawkJsxElement(callback.body as AstNode | undefined)) return callback.body as AstNode;
+  if ((callback.body as AstNode | undefined)?.type === "JSXElement") return callback.body as AstNode;
   const returned = returnArgument(callback.body as AstNode | undefined);
-  return returned && isHawkJsxElement(returned) ? returned : undefined;
+  return returned?.type === "JSXElement" ? returned : undefined;
+}
+
+function reactComponentElementToSpec(node: AstNode, context: ReactLoweringContext): HawkElementSpec {
+  const name = jsxTagName(node);
+  const definition = context.components.get(name);
+  if (!definition) {
+    throw new Error(`react.component.unresolved: local component \`${name}\` is not defined in this source file.`);
+  }
+  if (context.componentStack.includes(name)) {
+    throw new Error(`react.component.cycle: local component \`${name}\` recursively expands itself.`);
+  }
+  const scoped = scopedComponentContext(node, definition, context);
+  return jsxElementToSpec(definition.element, scoped);
+}
+
+function scopedComponentContext(
+  node: AstNode,
+  definition: ReactComponentDefinition,
+  context: ReactLoweringContext,
+): ReactLoweringContext {
+  const props = componentPropsFromJsx(node, context);
+  const children = arrayField(node, "children");
+  const locals = new Map(context.locals);
+  const scalars = new Map(context.scalars);
+  const childSlots = new Map(context.childSlots);
+  bindComponentProps(definition.propsParam, props, children, locals, scalars, childSlots);
+  return {
+    ...context,
+    locals,
+    scalars,
+    childSlots,
+    componentStack: [...context.componentStack, jsxTagName(node)],
+  };
+}
+
+function bindComponentProps(
+  propsParam: AstNode | undefined,
+  props: LiteralRecord,
+  children: readonly AstNode[],
+  locals: Map<string, LiteralRecord>,
+  scalars: Map<string, string | number | boolean>,
+  childSlots: Map<string, readonly AstNode[]>,
+): void {
+  if (!propsParam) return;
+  if (propsParam.type === "Identifier") {
+    const name = identifierName(propsParam);
+    if (!name) return;
+    locals.set(name, props);
+    childSlots.set(name, children);
+    return;
+  }
+  if (propsParam.type !== "ObjectPattern") {
+    throw new Error("react.component.props-unsupported: component props must use an identifier or object destructuring.");
+  }
+  for (const property of arrayField(propsParam, "properties")) {
+    const key = identifierName(property.key as AstNode | undefined) ?? literalString(property.key as AstNode | undefined);
+    const binding = identifierName(property.value as AstNode | undefined) ?? key;
+    if (!key || !binding) {
+      throw new Error("react.component.props-unsupported: destructured component props must bind stable identifiers.");
+    }
+    if (key === "children") {
+      childSlots.set(binding, children);
+      continue;
+    }
+    const value = props[key];
+    if (value !== undefined) scalars.set(binding, value);
+  }
+}
+
+function componentPropsFromJsx(node: AstNode, context: ReactLoweringContext): LiteralRecord {
+  const props: Record<string, string | number | boolean> = {};
+  for (const attribute of arrayField(node.openingElement as AstNode | undefined, "attributes")) {
+    if (attribute.type !== "JSXAttribute") {
+      throw new Error("react.component.props-unsupported: component prop spreads are not supported in compiler artifacts.");
+    }
+    const name = jsxName(attribute.name as AstNode | undefined);
+    if (!name || name === "key") continue;
+    props[name] = jsxAttributeValue(node, name, context) ?? true;
+  }
+  return props;
+}
+
+function componentDefinitionsFromProgram(program: AstNode): ReadonlyMap<string, ReactComponentDefinition> {
+  const components = new Map<string, ReactComponentDefinition>();
+  for (const statement of arrayField(program, "body")) {
+    const declaration = statement.declaration as AstNode | undefined;
+    const candidate = declaration ?? statement;
+    collectComponentDefinitionsFromCandidate(candidate, components);
+  }
+  return components;
+}
+
+function collectComponentDefinitionsFromCandidate(
+  candidate: AstNode,
+  components: Map<string, ReactComponentDefinition>,
+): void {
+  if (candidate.type === "FunctionDeclaration") {
+    const name = identifierName(candidate.id as AstNode | undefined);
+    const element = jsxElementFromFunctionLike(candidate);
+    if (name && isComponentTag(name) && element) {
+      components.set(name, { element, propsParam: arrayField(candidate, "params")[0] });
+    }
+    return;
+  }
+  if (candidate.type !== "VariableDeclaration") return;
+  for (const declaration of arrayField(candidate, "declarations")) {
+    const name = identifierName(declaration.id as AstNode | undefined);
+    const init = declaration.init as AstNode | undefined;
+    const element = jsxElementFromFunctionLike(init);
+    if (name && isComponentTag(name) && element) {
+      components.set(name, { element, propsParam: arrayField(init, "params")[0] });
+    }
+  }
+}
+
+function jsxElementFromFunctionLike(node: AstNode | undefined): AstNode | undefined {
+  if (!node) return undefined;
+  if (
+    node.type !== "FunctionDeclaration"
+    && node.type !== "FunctionExpression"
+    && node.type !== "ArrowFunctionExpression"
+  ) {
+    return undefined;
+  }
+  const body = node.body as AstNode | undefined;
+  if (body?.type === "JSXElement") return body;
+  const returned = returnArgument(body);
+  return returned?.type === "JSXElement" ? returned : undefined;
+}
+
+function functionBodyScope(node: AstNode | undefined): AstNode | undefined {
+  const body = node?.body as AstNode | undefined;
+  return body?.type === "BlockStatement" ? body : undefined;
+}
+
+function componentChildSlotName(expression: AstNode | undefined, context: ReactLoweringContext): string | undefined {
+  if (expression?.type === "Identifier") {
+    const name = identifierName(expression);
+    return name && context.childSlots.has(name) ? name : undefined;
+  }
+  if (expression?.type !== "MemberExpression") return undefined;
+  const object = identifierName(expression.object as AstNode | undefined);
+  const property = identifierName(expression.property as AstNode | undefined);
+  return object && property === "children" && context.childSlots.has(object) ? object : undefined;
 }
 
 function reactEvents(node: AstNode): readonly HawkEventSpec[] {
@@ -464,6 +654,11 @@ function staticTextExpressionValue(
 ): string | number | boolean | undefined {
   const literal = literalValue(expression);
   if (literal !== undefined) return literal;
+  if (expression?.type === "Identifier") {
+    const name = identifierName(expression);
+    const value = name ? context.scalars.get(name) : undefined;
+    if (value !== undefined) return value;
+  }
   if (expression?.type === "MemberExpression") {
     const object = identifierName(expression.object as AstNode | undefined);
     const property = identifierName(expression.property as AstNode | undefined);
@@ -720,7 +915,11 @@ function evaluateExpression(
 ): string | number | boolean {
   const literal = literalValue(expression);
   if (literal !== undefined) return literal;
-  if (expression?.type === "Identifier") return identifierName(expression) ?? "";
+  if (expression?.type === "Identifier") {
+    const name = identifierName(expression);
+    const value = name ? context.scalars.get(name) : undefined;
+    return value !== undefined ? value : name ?? "";
+  }
   if (expression?.type === "MemberExpression") {
     const object = identifierName(expression.object as AstNode | undefined);
     const property = identifierName(expression.property as AstNode | undefined);
@@ -862,6 +1061,10 @@ function kindForTag(tag: string): HawkElementSpec["kind"] {
 
 function isHawkTag(tag: string): boolean {
   return tag.startsWith("hawk-");
+}
+
+function isComponentTag(tag: string): boolean {
+  return /^[A-Z]/.test(tag);
 }
 
 function isUnsafeAssetPath(path: string): boolean {
