@@ -39,9 +39,18 @@ type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 
 interface VueLoweringContext {
   readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
+  readonly components: ReadonlyMap<string, VueComponentDefinition>;
   readonly initialDynamicValues: ReadonlyMap<string, HawkCompilerInitialDynamicValueWire>;
   readonly locals: ReadonlyMap<string, LiteralRecord>;
+  readonly scalars: ReadonlyMap<string, string | number | boolean>;
+  readonly slots: ReadonlyMap<string, readonly AstNode[]>;
+  readonly componentStack: readonly string[];
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
+}
+
+interface VueComponentDefinition {
+  readonly props: readonly string[];
+  readonly root: AstNode;
 }
 
 const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
@@ -97,8 +106,12 @@ export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput
   const script = parsed.descriptor.scriptSetup?.content ?? parsed.descriptor.script?.content ?? "";
   const context: VueLoweringContext = {
     arrays: literalArraysFromScript(script),
+    components: componentDefinitionsFromScript(script),
     initialDynamicValues: initialDynamicValuesFromScript(script),
     locals: new Map(),
+    scalars: scalarValuesFromScript(script),
+    slots: new Map(),
+    componentStack: [],
     dynamicBindings: [],
   };
   const root = vueElementToSpec(rootNode, context);
@@ -129,6 +142,7 @@ export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput
 
 function vueElementToSpec(node: AstNode, context: VueLoweringContext): HawkElementSpec {
   const tag = stringField(node, "tag");
+  if (!isHawkTag(tag)) return vueComponentElementToSpec(node, context);
   const id = requiredString(vueAttributeValue(node, "id", context), tag, "id");
   const style = optionalString(vueAttributeValue(node, "class", context));
   const assetPath = optionalString(vueAttributeValue(node, "data-asset", context));
@@ -158,15 +172,50 @@ function vueElementToSpec(node: AstNode, context: VueLoweringContext): HawkEleme
 function vueChildSpecs(node: AstNode, context: VueLoweringContext): readonly HawkElementSpec[] {
   const children: HawkElementSpec[] = [];
   for (const child of arrayField(node, "children")) {
-    if (!isVueHawkElement(child)) continue;
-    const forDirective = vueDirective(child, "for");
-    if (forDirective) {
-      children.push(...expandVueFor(child, forDirective, context));
-    } else {
-      children.push(vueElementToSpec(child, context));
-    }
+    children.push(...vueChildNodeSpecs(child, context));
   }
   return children;
+}
+
+function vueChildNodeSpecs(child: AstNode, context: VueLoweringContext): readonly HawkElementSpec[] {
+  if (isVueSlotElement(child)) return (context.slots.get("default") ?? []).flatMap((slotChild) => vueChildNodeSpecs(slotChild, context));
+  if (!isVueElement(child)) return [];
+  const forDirective = vueDirective(child, "for");
+  if (forDirective) return expandVueFor(child, forDirective, context);
+  if (isVueHawkElement(child) || isComponentTag(stringField(child, "tag"))) return [vueElementToSpec(child, context)];
+  return [];
+}
+
+function vueComponentElementToSpec(node: AstNode, context: VueLoweringContext): HawkElementSpec {
+  const name = stringField(node, "tag");
+  const definition = context.components.get(name);
+  if (!definition) {
+    throw new Error(`vue.component.unresolved: local component \`${name}\` is not defined in this SFC script.`);
+  }
+  if (context.componentStack.includes(name)) {
+    throw new Error(`vue.component.cycle: local component \`${name}\` recursively expands itself.`);
+  }
+  const scoped = scopedComponentContext(name, node, definition, context);
+  return vueElementToSpec(definition.root, scoped);
+}
+
+function scopedComponentContext(
+  name: string,
+  node: AstNode,
+  definition: VueComponentDefinition,
+  context: VueLoweringContext,
+): VueLoweringContext {
+  const scalars = new Map(context.scalars);
+  for (const prop of definition.props) {
+    const value = vueAttributeValue(node, prop, context);
+    if (value !== undefined) scalars.set(prop, value);
+  }
+  return {
+    ...context,
+    scalars,
+    slots: new Map([...context.slots, ["default", arrayField(node, "children")]]),
+    componentStack: [...context.componentStack, name],
+  };
 }
 
 function expandVueFor(
@@ -551,6 +600,15 @@ function literalArraysFromScript(source: string): ReadonlyMap<string, readonly L
   return literalArraysFromProgram(ast.program as AstNode);
 }
 
+function componentDefinitionsFromScript(source: string): ReadonlyMap<string, VueComponentDefinition> {
+  if (!source.trim()) return new Map();
+  const ast = parseScript(source, {
+    sourceType: "module",
+    plugins: ["typescript"],
+  }) as unknown as AstNode;
+  return componentDefinitionsFromProgram(ast.program as AstNode);
+}
+
 function initialDynamicValuesFromScript(source: string): ReadonlyMap<string, HawkCompilerInitialDynamicValueWire> {
   if (!source.trim()) return new Map();
   const ast = parseScript(source, {
@@ -558,6 +616,70 @@ function initialDynamicValuesFromScript(source: string): ReadonlyMap<string, Haw
     plugins: ["typescript"],
   }) as unknown as AstNode;
   return initialDynamicValuesFromProgram(ast.program as AstNode);
+}
+
+function scalarValuesFromScript(source: string): ReadonlyMap<string, string | number | boolean> {
+  if (!source.trim()) return new Map();
+  const ast = parseScript(source, {
+    sourceType: "module",
+    plugins: ["typescript"],
+  }) as unknown as AstNode;
+  const values = new Map<string, string | number | boolean>();
+  for (const statement of arrayField(ast.program as AstNode | undefined, "body")) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of arrayField(statement, "declarations")) {
+      const name = identifierName(declaration.id as AstNode | undefined);
+      const value = literalValue(declaration.init as AstNode | undefined);
+      if (name && value !== undefined) values.set(name, value);
+    }
+  }
+  return values;
+}
+
+function componentDefinitionsFromProgram(program: AstNode): ReadonlyMap<string, VueComponentDefinition> {
+  const components = new Map<string, VueComponentDefinition>();
+  for (const statement of arrayField(program, "body")) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of arrayField(statement, "declarations")) {
+      const name = identifierName(declaration.id as AstNode | undefined);
+      const definition = vueComponentDefinition(declaration.init as AstNode | undefined);
+      if (name && isComponentTag(name) && definition) components.set(name, definition);
+    }
+  }
+  return components;
+}
+
+function vueComponentDefinition(node: AstNode | undefined): VueComponentDefinition | undefined {
+  if (node?.type !== "ObjectExpression") return undefined;
+  let template: string | undefined;
+  let props: readonly string[] = [];
+  for (const property of arrayField(node, "properties")) {
+    const key = identifierName(property.key as AstNode | undefined) ?? literalString(property.key as AstNode | undefined);
+    if (key === "template") {
+      const value = literalValue(property.value as AstNode | undefined);
+      if (typeof value === "string") template = value;
+    } else if (key === "props") {
+      props = stringArrayLiteral(property.value as AstNode | undefined);
+    }
+  }
+  if (!template) return undefined;
+  const parsed = parseTemplate(template) as unknown as AstNode;
+  const root = arrayField(parsed, "children").find(isVueHawkElement);
+  if (!root) {
+    throw new Error("vue.component.template-invalid: local component templates must render one hawk root element.");
+  }
+  return { props, root };
+}
+
+function stringArrayLiteral(node: AstNode | undefined): readonly string[] {
+  if (node?.type !== "ArrayExpression") return [];
+  return arrayField(node, "elements").map((element) => {
+    const value = literalValue(element);
+    if (typeof value !== "string") {
+      throw new Error("vue.component.props-unsupported: local component props arrays must contain strings.");
+    }
+    return value;
+  });
 }
 
 function literalArraysFromProgram(program: AstNode): ReadonlyMap<string, readonly LiteralRecord[]> {
@@ -666,6 +788,8 @@ function evaluateVueExpression(
   }
   const literal = literalExpressionValue(expression);
   if (literal !== undefined) return literal;
+  const scalar = context.scalars.get(expression);
+  if (scalar !== undefined) return scalar;
   const [object, property] = expression.split(".");
   const record = object ? context.locals.get(object) : undefined;
   const value = property ? record?.[property] : undefined;
@@ -767,8 +891,16 @@ function firstVueHawkElement(nodes: readonly AstNode[]): AstNode | undefined {
   return nodes.find(isVueHawkElement);
 }
 
+function isVueElement(node: AstNode): boolean {
+  return node.type === 1;
+}
+
 function isVueHawkElement(node: AstNode): boolean {
   return node.type === 1 && isHawkTag(stringField(node, "tag"));
+}
+
+function isVueSlotElement(node: AstNode): boolean {
+  return node.type === 1 && stringField(node, "tag") === "slot";
 }
 
 function identifierName(node: AstNode | undefined): string | undefined {
@@ -803,6 +935,10 @@ function kindForTag(tag: string): HawkElementSpec["kind"] {
 
 function isHawkTag(tag: string): boolean {
   return tag.startsWith("hawk-");
+}
+
+function isComponentTag(tag: string): boolean {
+  return /^[A-Z]/.test(tag);
 }
 
 function isUnsafeAssetPath(path: string): boolean {

@@ -31,9 +31,19 @@ type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 interface SvelteLoweringContext {
   readonly source: string;
   readonly arrays: ReadonlyMap<string, readonly LiteralRecord[]>;
+  readonly snippets: ReadonlyMap<string, SvelteSnippetDefinition>;
   readonly initialDynamicValues: ReadonlyMap<string, HawkCompilerInitialDynamicValueWire>;
   readonly locals: ReadonlyMap<string, LiteralRecord>;
+  readonly globals: ReadonlyMap<string, string | number | boolean>;
+  readonly scalars: ReadonlyMap<string, string | number | boolean>;
+  readonly snippetSlots: ReadonlyMap<string, readonly AstNode[]>;
+  readonly snippetStack: readonly string[];
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
+}
+
+interface SvelteSnippetDefinition {
+  readonly parameters: readonly AstNode[];
+  readonly children: readonly AstNode[];
 }
 
 const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
@@ -82,8 +92,13 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
   const context: SvelteLoweringContext = {
     source: input.source,
     arrays: literalArraysFromProgram(instanceProgram),
+    snippets: snippetDefinitionsFromNodes(childrenOf(ast.html as AstNode | undefined)),
     initialDynamicValues: initialDynamicValuesFromProgram(instanceProgram),
     locals: new Map(),
+    globals: scalarValuesFromProgram(instanceProgram),
+    scalars: new Map(),
+    snippetSlots: new Map(),
+    snippetStack: [],
     dynamicBindings: [],
   };
   const root = svelteElementToSpec(rootNode, context);
@@ -148,9 +163,79 @@ function childSpecs(node: AstNode, context: SvelteLoweringContext): readonly Haw
       children.push(svelteElementToSpec(child, context));
     } else if (child.type === "EachBlock") {
       children.push(...expandEachBlock(child, context));
+    } else if (child.type === "RenderTag") {
+      children.push(...expandRenderTag(child, context));
     }
   }
   return children;
+}
+
+function expandRenderTag(tag: AstNode, context: SvelteLoweringContext): readonly HawkElementSpec[] {
+  const call = tag.expression as AstNode | undefined;
+  if (call?.type !== "CallExpression") {
+    throw new Error("svelte.render.unsupported: render tags must call a Svelte 5 snippet.");
+  }
+  const name = identifierName(call.callee as AstNode | undefined);
+  if (!name) {
+    throw new Error("svelte.render.unsupported: render tags must call a stable snippet identifier.");
+  }
+  const slot = context.snippetSlots.get(name);
+  if (slot) return slot.flatMap((child) => childSpecs({ children: [child] }, context));
+  const definition = context.snippets.get(name);
+  if (!definition) {
+    throw new Error(`svelte.render.unresolved: snippet \`${name}\` must be declared in this component.`);
+  }
+  if (context.snippetStack.includes(name)) {
+    throw new Error(`svelte.render.cycle: snippet \`${name}\` recursively renders itself.`);
+  }
+  const scoped = scopedSnippetContext(name, definition, arrayField(call, "arguments"), context);
+  return childSpecs({ children: definition.children }, scoped);
+}
+
+function scopedSnippetContext(
+  name: string,
+  definition: SvelteSnippetDefinition,
+  args: readonly AstNode[],
+  context: SvelteLoweringContext,
+): SvelteLoweringContext {
+  const scalars = new Map(context.scalars);
+  const snippetSlots = new Map(context.snippetSlots);
+  definition.parameters.forEach((parameter, index) => {
+    const parameterName = identifierName(parameter);
+    if (!parameterName) {
+      throw new Error("svelte.snippet.parameter-unsupported: snippet parameters must be stable identifiers.");
+    }
+    const argument = args[index];
+    const slotName = identifierName(argument);
+    const slotDefinition = slotName ? context.snippets.get(slotName) : undefined;
+    if (slotDefinition) {
+      snippetSlots.set(parameterName, slotDefinition.children);
+      return;
+    }
+    scalars.set(parameterName, evaluateSnippetArgument(argument, context));
+  });
+  return {
+    ...context,
+    scalars,
+    snippetSlots,
+    snippetStack: [...context.snippetStack, name],
+  };
+}
+
+function evaluateSnippetArgument(
+  expression: AstNode | undefined,
+  context: SvelteLoweringContext,
+): string | number | boolean {
+  const literal = literalValue(expression);
+  if (literal !== undefined) return literal;
+  if (expression?.type === "Identifier") {
+    const name = identifierName(expression);
+    const local = name ? context.scalars.get(name) : undefined;
+    if (local !== undefined) return local;
+    const global = name ? context.globals.get(name) : undefined;
+    if (global !== undefined) return global;
+  }
+  return evaluateExpression(expression, context);
 }
 
 function expandEachBlock(block: AstNode, context: SvelteLoweringContext): readonly HawkElementSpec[] {
@@ -531,6 +616,35 @@ function initialDynamicValuesFromProgram(
   return values;
 }
 
+function scalarValuesFromProgram(program: AstNode | undefined): ReadonlyMap<string, string | number | boolean> {
+  const values = new Map<string, string | number | boolean>();
+  for (const statement of Array.isArray(program?.body) ? (program.body as AstNode[]) : []) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of Array.isArray(statement.declarations) ? (statement.declarations as AstNode[]) : []) {
+      const name = identifierName(declaration.id as AstNode | undefined);
+      const value = literalValue(declaration.init as AstNode | undefined);
+      if (name && value !== undefined) values.set(name, value);
+    }
+  }
+  return values;
+}
+
+function snippetDefinitionsFromNodes(nodes: readonly AstNode[]): ReadonlyMap<string, SvelteSnippetDefinition> {
+  const snippets = new Map<string, SvelteSnippetDefinition>();
+  for (const node of nodes) {
+    if (node.type !== "SnippetBlock") continue;
+    const name = identifierName(node.expression as AstNode | undefined);
+    if (!name) {
+      throw new Error("svelte.snippet.unsupported: snippets must use stable identifiers.");
+    }
+    snippets.set(name, {
+      parameters: arrayField(node, "parameters"),
+      children: childrenOf(node),
+    });
+  }
+  return snippets;
+}
+
 function literalObjectArray(node: AstNode | undefined): readonly LiteralRecord[] | undefined {
   if (!node || node.type !== "ArrayExpression" || !Array.isArray(node.elements)) return undefined;
   return node.elements.map((item) => {
@@ -587,6 +701,11 @@ function evaluateExpression(
 ): string | number | boolean {
   const literal = literalValue(expression);
   if (literal !== undefined) return literal;
+  if (expression?.type === "Identifier") {
+    const name = identifierName(expression);
+    const value = name ? context.scalars.get(name) : undefined;
+    if (value !== undefined) return value;
+  }
   if (expression?.type === "MemberExpression") {
     const object = identifierName(expression.object as AstNode | undefined);
     const property = identifierName(expression.property as AstNode | undefined);

@@ -111,6 +111,23 @@ test("Svelte compiler preserves event payload handler expressions", () => {
   ]);
 });
 
+test("Svelte compiler expands Svelte 5 snippets with scalar parameters and child snippets", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let title = "Panel";</script>{#snippet Card(id, title, children)}<hawk-view id={id} class="card"><hawk-text id="card-title">{title}</hawk-text>{@render children()}</hawk-view>{/snippet}{#snippet body()}<hawk-button id="cta">Go</hawk-button>{/snippet}<hawk-view id="root">{@render Card("panel", title, body)}</hawk-view>',
+  });
+
+  expect(output.compilerArtifact.root.children).toHaveLength(1);
+  const card = output.compilerArtifact.root.children[0].node;
+  expect(card.id).toBe("panel");
+  expect(card.kind).toBe("view");
+  expect(card.style_refs).toEqual(["card"]);
+  expect(card.children.map((child) => child.node.id)).toEqual(["card-title", "cta"]);
+  expect(card.children[0].node.props).toEqual([{ name: "text", value: { type: "string", value: "Panel" } }]);
+  expect(card.children[1].node.props).toEqual([{ name: "text", value: { type: "string", value: "Go" } }]);
+});
+
 test("Svelte compiler lowers the complete native event and lifecycle contract from directives", () => {
   const output = compileHawkSvelte({
     filename: "App.svelte",

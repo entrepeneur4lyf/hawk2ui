@@ -91,6 +91,24 @@ test("Vue compiler preserves event payload handler expressions", () => {
   ]);
 });
 
+test("Vue compiler expands local component templates with props and default slots", () => {
+  const cardTemplate = '<hawk-view :id="id" class="card"><hawk-text id="card-title">{{ title }}</hawk-text><slot /></hawk-view>';
+  const output = compileHawkVue({
+    filename: "App.vue",
+    source:
+      `<script setup>const Card = { props: ["id", "title"], template: ${JSON.stringify(cardTemplate)} };</script><template><hawk-view id="root"><Card id="panel" title="Panel"><hawk-button id="cta">Go</hawk-button></Card></hawk-view></template>`,
+  });
+
+  expect(output.compilerArtifact.root.children).toHaveLength(1);
+  const card = output.compilerArtifact.root.children[0].node;
+  expect(card.id).toBe("panel");
+  expect(card.kind).toBe("view");
+  expect(card.style_refs).toEqual(["card"]);
+  expect(card.children.map((child) => child.node.id)).toEqual(["card-title", "cta"]);
+  expect(card.children[0].node.props).toEqual([{ name: "text", value: { type: "string", value: "Panel" } }]);
+  expect(card.children[1].node.props).toEqual([{ name: "text", value: { type: "string", value: "Go" } }]);
+});
+
 test("Vue compiler lowers the complete native event and lifecycle contract from template directives", () => {
   const output = compileHawkVue({
     filename: "App.vue",
