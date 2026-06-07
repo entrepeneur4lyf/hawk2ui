@@ -12,15 +12,14 @@ use hawk2ui_render_skia::{SkiaFrameSnapshot, SkiaRendererBackend};
 use hawk2ui_runtime::{
     BindingExecution, BindingLifecycleAvailability, BindingSchema, HostBindingRecord,
     HostBindingRegistry, HostCallRecord, LifecycleHook, LifecyclePhase, LifecycleRegistry,
-    PromiseId, RecordingScriptEngine, RuntimeCapability, RuntimeDrawCommand, RuntimeError,
-    RuntimeEvent, RuntimeEventDispatcher, RuntimeEventKind, RuntimeEventPayload,
-    RuntimeEventPropagation, RuntimeExecutionContext, RuntimeGuardOperation,
-    RuntimePersistenceStore, RuntimeSafetyGuard, RuntimeSceneBridge, RuntimeSceneError,
-    RuntimeSceneFrame, RuntimeScheduler, RuntimeShaderEffectVisual, RuntimeStateEntry,
-    RuntimeStateMigration, RuntimeStateScope, RuntimeStateSnapshot, RuntimeStoragePath,
-    RuntimeTextVisual, RuntimeViewId, RuntimeViewNode, RuntimeViewTree, RuntimeVisual,
-    ScriptEngine, ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord, StructuredValue,
-    TimerJob,
+    PromiseId, RuntimeCapability, RuntimeDrawCommand, RuntimeError, RuntimeEvent,
+    RuntimeEventDispatcher, RuntimeEventKind, RuntimeEventPayload, RuntimeEventPropagation,
+    RuntimeExecutionContext, RuntimeGuardOperation, RuntimePersistenceStore, RuntimeSafetyGuard,
+    RuntimeSceneBridge, RuntimeSceneError, RuntimeSceneFrame, RuntimeScheduler,
+    RuntimeShaderEffectVisual, RuntimeStateEntry, RuntimeStateMigration, RuntimeStateScope,
+    RuntimeStateSnapshot, RuntimeStoragePath, RuntimeTextVisual, RuntimeViewId, RuntimeViewNode,
+    RuntimeViewTree, RuntimeVisual, ScriptEngine, ScriptEngineOperation, ScriptModuleKind,
+    ScriptModuleRecord, StructuredValue, TimerJob, testkit::RecordingScriptEngine,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -875,6 +874,76 @@ fn runtime_view_tree_preserves_parent_child_order_and_rejects_duplicates() {
         .expect_err("duplicate view IDs must be rejected");
 
     assert_eq!(error, RuntimeSceneError::DuplicateNode("meter".into()));
+}
+
+#[test]
+fn runtime_view_tree_inserts_children_before_static_anchors() {
+    let root = RuntimeViewNode::new(
+        RuntimeViewId::new("root"),
+        LayoutStyle::flex_container(FlexDirection::Column),
+        RuntimeVisual::None,
+    );
+    let header = RuntimeViewNode::new(
+        RuntimeViewId::new("header"),
+        LayoutStyle::custom_measured(),
+        RuntimeVisual::None,
+    );
+    let footer = RuntimeViewNode::new(
+        RuntimeViewId::new("footer"),
+        LayoutStyle::custom_measured(),
+        RuntimeVisual::None,
+    );
+    let alpha = RuntimeViewNode::new(
+        RuntimeViewId::new("alpha"),
+        LayoutStyle::custom_measured(),
+        RuntimeVisual::None,
+    );
+    let beta = RuntimeViewNode::new(
+        RuntimeViewId::new("beta"),
+        LayoutStyle::custom_measured(),
+        RuntimeVisual::None,
+    );
+
+    let tree = RuntimeViewTree::new(root)
+        .with_child(&RuntimeViewId::new("root"), header)
+        .expect("header attaches to root")
+        .with_child(&RuntimeViewId::new("root"), footer)
+        .expect("footer attaches to root")
+        .insert_child_before(
+            &RuntimeViewId::new("root"),
+            &RuntimeViewId::new("footer"),
+            alpha,
+        )
+        .expect("alpha inserts before footer")
+        .insert_child_before(
+            &RuntimeViewId::new("root"),
+            &RuntimeViewId::new("footer"),
+            beta,
+        )
+        .expect("beta inserts before footer");
+
+    assert_eq!(
+        tree.children_of(&RuntimeViewId::new("root"))
+            .iter()
+            .map(RuntimeViewId::as_str)
+            .collect::<Vec<_>>(),
+        vec!["header", "alpha", "beta", "footer"]
+    );
+
+    let orphan = RuntimeViewNode::new(
+        RuntimeViewId::new("orphan"),
+        LayoutStyle::custom_measured(),
+        RuntimeVisual::None,
+    );
+    let error = tree
+        .insert_child_before(
+            &RuntimeViewId::new("missing"),
+            &RuntimeViewId::new("footer"),
+            orphan,
+        )
+        .expect_err("missing parent is rejected");
+
+    assert_eq!(error, RuntimeSceneError::MissingParent("missing".into()));
 }
 
 #[test]

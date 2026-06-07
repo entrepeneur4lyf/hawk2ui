@@ -41,12 +41,16 @@ use skia_safe::{
         surfaces,
     },
 };
-#[cfg(target_os = "linux")]
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
-use std::{collections::BTreeMap, ffi::c_void, fmt::Write as _, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    ffi::c_void,
+    fmt::{self, Write as _},
+    path::PathBuf,
+};
 #[cfg(target_os = "linux")]
 use x11rb::{
     connection::Connection,
@@ -922,6 +926,40 @@ impl Drop for GlProcAddressLoader {
 pub type EditorSceneProducer = Box<dyn FnMut() -> RuntimeSceneFrame + Send>;
 
 #[cfg(target_os = "linux")]
+#[derive(Clone, Debug)]
+struct SharedRuntimeSceneProducer {
+    scene: Arc<Mutex<RuntimeSceneFrame>>,
+}
+
+#[cfg(target_os = "linux")]
+impl SharedRuntimeSceneProducer {
+    fn new(scene: RuntimeSceneFrame) -> Self {
+        Self {
+            scene: Arc::new(Mutex::new(scene)),
+        }
+    }
+
+    fn replace(&self, scene: RuntimeSceneFrame) {
+        match self.scene.lock() {
+            Ok(mut current) => *current = scene,
+            Err(poisoned) => *poisoned.into_inner() = scene,
+        }
+    }
+
+    fn current(&self) -> RuntimeSceneFrame {
+        match self.scene.lock() {
+            Ok(current) => current.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    fn scene_producer(&self) -> EditorSceneProducer {
+        let shared = self.clone();
+        Box::new(move || shared.current())
+    }
+}
+
+#[cfg(target_os = "linux")]
 pub struct BaseviewGlSkiaFrameHandler {
     backend: SkiaRendererBackend,
     context: Option<DirectContext>,
@@ -1317,6 +1355,200 @@ impl Drop for BaseviewEditorWindowHandle {
     }
 }
 
+/// Presentation backend for a CLAP runtime editor window.
+///
+/// The production backend opens a real Baseview child window. Tests can provide
+/// a recording implementation so lifecycle wiring is verified without requiring
+/// a real DAW parent window.
+pub trait BaseviewRuntimeWindowBackend: fmt::Debug + Send {
+    /// Opens the live runtime editor window for `scene`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the native child window cannot be opened.
+    fn open(
+        &mut self,
+        adapter: &BaseviewPluginAdapter,
+        scene: RuntimeSceneFrame,
+    ) -> Result<(), BaseviewHostError>;
+
+    /// Presents a runtime scene frame through the backend and returns a frame snapshot for host
+    /// response metadata and deterministic verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the live window is unavailable or rendering fails.
+    fn present(
+        &mut self,
+        adapter: &mut BaseviewPluginAdapter,
+        scene: &RuntimeSceneFrame,
+    ) -> Result<SkiaFrameSnapshot, BaseviewHostError>;
+
+    /// Closes the live runtime editor window.
+    fn close(&mut self);
+
+    /// Returns whether the live runtime editor window is open.
+    fn is_open(&self) -> bool;
+
+    /// Returns the number of frames presented through this backend.
+    fn presented_frame_count(&self) -> u64;
+
+    /// Drains host events produced by the live window backend.
+    fn drain_events(&mut self) -> Vec<PluginHostEvent> {
+        Vec::new()
+    }
+}
+
+/// Production runtime-window backend backed by a real Baseview GPU child window.
+pub struct BaseviewGpuRuntimeWindowBackend {
+    window: Option<BaseviewEditorWindowHandle>,
+    #[cfg(target_os = "linux")]
+    live_scene: Option<SharedRuntimeSceneProducer>,
+    presented_frames: Arc<AtomicU64>,
+    last_error: Arc<Mutex<Option<BaseviewHostError>>>,
+    event_sink: Arc<Mutex<Vec<PluginHostEvent>>>,
+    host_presented_frames: u64,
+}
+
+impl fmt::Debug for BaseviewGpuRuntimeWindowBackend {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BaseviewGpuRuntimeWindowBackend")
+            .field("window_open", &self.is_open())
+            .field("presented_frame_count", &self.presented_frame_count())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for BaseviewGpuRuntimeWindowBackend {
+    fn default() -> Self {
+        Self {
+            window: None,
+            #[cfg(target_os = "linux")]
+            live_scene: None,
+            presented_frames: Arc::new(AtomicU64::new(0)),
+            last_error: Arc::new(Mutex::new(None)),
+            event_sink: Arc::new(Mutex::new(Vec::new())),
+            host_presented_frames: 0,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl BaseviewGpuRuntimeWindowBackend {
+    fn install_live_scene_producer(&mut self, scene: RuntimeSceneFrame) -> EditorSceneProducer {
+        let live_scene = SharedRuntimeSceneProducer::new(scene);
+        let scene_producer = live_scene.scene_producer();
+        self.live_scene = Some(live_scene);
+        scene_producer
+    }
+
+    fn update_live_scene(&self, scene: &RuntimeSceneFrame) -> Result<(), BaseviewHostError> {
+        let Some(live_scene) = self.live_scene.as_ref() else {
+            return Err(BaseviewHostError::new(
+                "baseview.runtime-window.scene-producer-missing",
+                "Baseview GPU runtime window is open without a live scene producer",
+            ));
+        };
+        live_scene.replace(scene.clone());
+        Ok(())
+    }
+}
+
+impl BaseviewRuntimeWindowBackend for BaseviewGpuRuntimeWindowBackend {
+    fn open(
+        &mut self,
+        adapter: &BaseviewPluginAdapter,
+        scene: RuntimeSceneFrame,
+    ) -> Result<(), BaseviewHostError> {
+        if self.is_open() {
+            return Ok(());
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let scene_producer = self.install_live_scene_producer(scene);
+            let initial_scene = self.live_scene.as_ref().ok_or_else(|| {
+                BaseviewHostError::new(
+                    "baseview.runtime-window.scene-producer-missing",
+                    "Baseview GPU runtime window could not install its live scene producer",
+                )
+            })?;
+            let window = adapter.open_gpu_editor_window(
+                initial_scene.current(),
+                Some(scene_producer),
+                Arc::clone(&self.presented_frames),
+                Arc::clone(&self.last_error),
+                Arc::clone(&self.event_sink),
+            );
+            let window = match window {
+                Ok(window) => window,
+                Err(error) => {
+                    self.live_scene = None;
+                    return Err(error);
+                }
+            };
+            self.window = Some(window);
+            Ok(())
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (adapter, scene);
+            Err(BaseviewHostError::new(
+                "baseview.runtime-window.unsupported-platform",
+                "Baseview runtime editor live windows are currently implemented for Linux; Windows and macOS remain release-gated targets",
+            ))
+        }
+    }
+
+    fn present(
+        &mut self,
+        adapter: &mut BaseviewPluginAdapter,
+        scene: &RuntimeSceneFrame,
+    ) -> Result<SkiaFrameSnapshot, BaseviewHostError> {
+        if self.is_open() {
+            #[cfg(target_os = "linux")]
+            self.update_live_scene(scene)?;
+        } else {
+            self.open(adapter, scene.clone())?;
+        }
+        let frame_id = self.presented_frame_count();
+        let snapshot = render_scene_to_skia_snapshot(scene, adapter.metrics(), frame_id)?;
+        self.host_presented_frames = self.host_presented_frames.saturating_add(1);
+        Ok(snapshot)
+    }
+
+    fn close(&mut self) {
+        if let Some(mut window) = self.window.take() {
+            window.close();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.live_scene = None;
+        }
+    }
+
+    fn is_open(&self) -> bool {
+        self.window
+            .as_ref()
+            .is_some_and(BaseviewEditorWindowHandle::is_open)
+    }
+
+    fn presented_frame_count(&self) -> u64 {
+        self.presented_frames
+            .load(Ordering::SeqCst)
+            .max(self.host_presented_frames)
+    }
+
+    fn drain_events(&mut self) -> Vec<PluginHostEvent> {
+        match self.event_sink.lock() {
+            Ok(mut events) => std::mem::take(&mut *events),
+            Err(_) => Vec::new(),
+        }
+    }
+}
+
 /// Headless-safe Baseview plugin adapter.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaseviewPluginAdapter {
@@ -1653,6 +1885,8 @@ impl BaseviewPluginAdapter {
 pub struct BaseviewClapRuntimeEditor {
     session: ClapRuntimeEditorSession,
     adapter: BaseviewPluginAdapter,
+    window_backend: Box<dyn BaseviewRuntimeWindowBackend>,
+    last_presented_frame: Option<SkiaFrameSnapshot>,
 }
 
 impl BaseviewClapRuntimeEditor {
@@ -1668,6 +1902,29 @@ impl BaseviewClapRuntimeEditor {
         linux_display_handle: Option<u64>,
         parent_fixture_id: &'static str,
     ) -> Result<Self, BaseviewHostError> {
+        Self::attach_with_window_backend(
+            session,
+            parent,
+            linux_display_handle,
+            parent_fixture_id,
+            Box::<BaseviewGpuRuntimeWindowBackend>::default(),
+        )
+    }
+
+    /// Attaches a verified CLAP runtime editor with an explicit runtime-window backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaseviewHostError`] when the CLAP parent cannot be represented for Baseview, the
+    /// adapter rejects the configuration, the runtime scene cannot be built, or the backend cannot
+    /// open the live editor window.
+    pub fn attach_with_window_backend(
+        session: ClapRuntimeEditorSession,
+        parent: ClapGuiParentHandle,
+        linux_display_handle: Option<u64>,
+        parent_fixture_id: &'static str,
+        mut window_backend: Box<dyn BaseviewRuntimeWindowBackend>,
+    ) -> Result<Self, BaseviewHostError> {
         let host_config = session
             .baseview_host_config(parent, linux_display_handle)
             .map_err(|diagnostic| baseview_error_from_package_diagnostic(&diagnostic))?;
@@ -1677,7 +1934,16 @@ impl BaseviewClapRuntimeEditor {
         );
         let adapter =
             BaseviewPluginAdapter::attach(host_config.editor_config().clone(), parent_fixture)?;
-        Ok(Self { session, adapter })
+        let initial_scene = session
+            .runtime_scene_frame()
+            .map_err(|error| baseview_error_from_materialization_error(&error))?;
+        window_backend.open(&adapter, initial_scene)?;
+        Ok(Self {
+            session,
+            adapter,
+            window_backend,
+            last_presented_frame: None,
+        })
     }
 
     /// Returns the verified CLAP runtime editor session.
@@ -1690,6 +1956,12 @@ impl BaseviewClapRuntimeEditor {
     #[must_use]
     pub const fn adapter(&self) -> &BaseviewPluginAdapter {
         &self.adapter
+    }
+
+    /// Returns whether the live runtime window backend has an open child window.
+    #[must_use]
+    pub fn live_window_opened(&self) -> bool {
+        self.window_backend.is_open()
     }
 
     /// Returns the current editor metrics.
@@ -1712,8 +1984,8 @@ impl BaseviewClapRuntimeEditor {
 
     /// Returns the number of runtime scene frames presented by the live editor.
     #[must_use]
-    pub const fn presented_frame_count(&self) -> u64 {
-        self.adapter.presented_frame_count()
+    pub fn presented_frame_count(&self) -> u64 {
+        self.window_backend.presented_frame_count()
     }
 
     /// Presents the verified sealed runtime scene into the attached Baseview surface.
@@ -1723,11 +1995,24 @@ impl BaseviewClapRuntimeEditor {
     /// Returns [`BaseviewHostError`] when the sealed runtime scene cannot be built or the Baseview
     /// surface cannot render the frame.
     pub fn present_runtime_frame(&mut self) -> Result<&SkiaFrameSnapshot, BaseviewHostError> {
+        if self.adapter.destroyed() {
+            return Err(BaseviewHostError::new(
+                "baseview.editor.destroyed",
+                "baseview editor has already been destroyed",
+            ));
+        }
         let frame = self
             .session
             .runtime_scene_frame()
             .map_err(|error| baseview_error_from_materialization_error(&error))?;
-        self.adapter.render_scene_frame(&frame)
+        let snapshot = self.window_backend.present(&mut self.adapter, &frame)?;
+        self.last_presented_frame = Some(snapshot);
+        self.last_presented_frame.as_ref().ok_or_else(|| {
+            BaseviewHostError::new(
+                "baseview.runtime-window.snapshot-missing",
+                "runtime window backend presented without returning frame metadata",
+            )
+        })
     }
 
     /// Handles a host-driven resize for the attached live editor.
@@ -1767,25 +2052,45 @@ impl BaseviewClapRuntimeEditor {
     /// Destroys the live editor safely.
     pub fn destroy_editor(&mut self, reason: impl Into<String>) {
         self.adapter.destroy_editor(reason);
+        self.window_backend.close();
     }
 
     /// Drains host events emitted by the attached editor.
     pub fn drain_events(&mut self) -> Vec<PluginHostEvent> {
-        self.adapter.drain_events()
+        let mut events = self.adapter.drain_events();
+        events.extend(self.window_backend.drain_events());
+        events
     }
 }
 
+type BaseviewRuntimeWindowBackendFactory =
+    Arc<dyn Fn() -> Box<dyn BaseviewRuntimeWindowBackend> + Send + Sync>;
+
 /// Host-side CLAP GUI lifecycle bridge for a runtime-backed `Baseview` editor.
-#[derive(Debug)]
 pub struct BaseviewClapRuntimeEditorHost {
     plugin_path: PathBuf,
     release_verifier: ArtifactSignatureVerifier,
     linux_display_handle: Option<u64>,
+    runtime_window_backend_factory: BaseviewRuntimeWindowBackendFactory,
     session: Option<ClapRuntimeEditorSession>,
     editor: Option<BaseviewClapRuntimeEditor>,
     created_api: Option<ClapGuiWindowApi>,
     parameter_values: BTreeMap<String, ParameterValue>,
     latest_realtime_packets: Vec<RealtimeVisualPacket>,
+}
+
+impl fmt::Debug for BaseviewClapRuntimeEditorHost {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BaseviewClapRuntimeEditorHost")
+            .field("plugin_path", &self.plugin_path)
+            .field("linux_display_handle", &self.linux_display_handle)
+            .field("created_api", &self.created_api)
+            .field("attached", &self.attached())
+            .field("parameter_values", &self.parameter_values)
+            .field("latest_realtime_packets", &self.latest_realtime_packets)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Typed command surface for driving a CLAP runtime editor host bridge from an embedding layer.
@@ -2002,6 +2307,9 @@ impl BaseviewClapRuntimeEditorHost {
             plugin_path: plugin_path.into(),
             release_verifier: ArtifactSignatureVerifier::default(),
             linux_display_handle,
+            runtime_window_backend_factory: Arc::new(|| {
+                Box::<BaseviewGpuRuntimeWindowBackend>::default()
+            }),
             session: None,
             editor: None,
             created_api: None,
@@ -2014,6 +2322,16 @@ impl BaseviewClapRuntimeEditorHost {
     #[must_use]
     pub fn with_release_verifier(mut self, verifier: ArtifactSignatureVerifier) -> Self {
         self.release_verifier = verifier;
+        self
+    }
+
+    /// Supplies the runtime-window backend factory used when CLAP set-parent attaches the editor.
+    #[must_use]
+    pub fn with_runtime_window_backend_factory(
+        mut self,
+        factory: impl Fn() -> Box<dyn BaseviewRuntimeWindowBackend> + Send + Sync + 'static,
+    ) -> Self {
+        self.runtime_window_backend_factory = Arc::new(factory);
         self
     }
 
@@ -2035,6 +2353,14 @@ impl BaseviewClapRuntimeEditorHost {
         self.editor
             .as_ref()
             .is_some_and(BaseviewClapRuntimeEditor::visible)
+    }
+
+    /// Returns whether the attached runtime editor has an open live child window.
+    #[must_use]
+    pub fn live_window_opened(&self) -> bool {
+        self.editor
+            .as_ref()
+            .is_some_and(BaseviewClapRuntimeEditor::live_window_opened)
     }
 
     /// Returns the number of runtime scene frames presented by the live editor.
@@ -2179,11 +2505,12 @@ impl BaseviewClapRuntimeEditorHost {
             ));
         }
         let session = self.session.clone().ok_or_else(not_created_error)?;
-        let editor = BaseviewClapRuntimeEditor::attach(
+        let editor = BaseviewClapRuntimeEditor::attach_with_window_backend(
             session,
             parent,
             self.linux_display_handle,
             parent_fixture_id,
+            (self.runtime_window_backend_factory)(),
         )?;
         self.editor = Some(editor);
         Ok(())
@@ -3107,6 +3434,11 @@ impl PluginHostAdapter for BaseviewPluginAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
+    use hawk2ui_runtime::{
+        RuntimeDrawCommand, RuntimeSceneBridge, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
+        RuntimeVisual,
+    };
 
     #[test]
     fn exposes_crate_identity() {
@@ -3158,5 +3490,85 @@ mod tests {
             take_gpu_editor_open_error(&errors).is_none(),
             "GPU editor open error should only be reported once"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shared_runtime_scene_producer_returns_latest_presented_scene() {
+        let producer = SharedRuntimeSceneProducer::new(runtime_scene_frame(
+            320.0,
+            180.0,
+            Color::rgba(12, 34, 56, 255),
+        ));
+        let mut render_loop = producer.scene_producer();
+
+        assert_eq!(
+            first_fill_color(&render_loop()),
+            Some(Color::rgba(12, 34, 56, 255))
+        );
+
+        producer.replace(runtime_scene_frame(
+            320.0,
+            180.0,
+            Color::rgba(90, 120, 30, 255),
+        ));
+
+        assert_eq!(
+            first_fill_color(&render_loop()),
+            Some(Color::rgba(90, 120, 30, 255))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gpu_runtime_window_backend_updates_live_render_loop_scene() {
+        let mut backend = BaseviewGpuRuntimeWindowBackend::default();
+        let mut render_loop = backend.install_live_scene_producer(runtime_scene_frame(
+            320.0,
+            180.0,
+            Color::rgba(12, 34, 56, 255),
+        ));
+
+        assert_eq!(
+            first_fill_color(&render_loop()),
+            Some(Color::rgba(12, 34, 56, 255))
+        );
+
+        backend
+            .update_live_scene(&runtime_scene_frame(
+                320.0,
+                180.0,
+                Color::rgba(90, 120, 30, 255),
+            ))
+            .expect("open GPU backend updates its render-loop scene");
+
+        assert_eq!(
+            first_fill_color(&render_loop()),
+            Some(Color::rgba(90, 120, 30, 255))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn runtime_scene_frame(width: f32, height: f32, color: Color) -> RuntimeSceneFrame {
+        let tree = RuntimeViewTree::new(RuntimeViewNode::new(
+            RuntimeViewId::new("root"),
+            LayoutStyle::flex_container(FlexDirection::Column)
+                .with_size(LayoutSizing::fixed(width, height)),
+            RuntimeVisual::Fill(color),
+        ));
+        RuntimeSceneBridge::new(Viewport::new(width, height))
+            .build(&tree)
+            .expect("runtime scene frame builds")
+    }
+
+    #[cfg(target_os = "linux")]
+    fn first_fill_color(frame: &RuntimeSceneFrame) -> Option<Color> {
+        frame.draw_commands().iter().find_map(|command| {
+            if let RuntimeDrawCommand::Fill { color, .. } = command {
+                Some(*color)
+            } else {
+                None
+            }
+        })
     }
 }

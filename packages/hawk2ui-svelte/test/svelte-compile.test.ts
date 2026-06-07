@@ -163,6 +163,82 @@ test("Svelte compiler lowers the complete native event and lifecycle contract fr
   ]);
 });
 
+test("Svelte compiler lowers onMount and onDestroy API calls to root lifecycle", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>import { onMount, onDestroy } from "svelte"; function mounted() {} function destroyed() {} onMount(mounted); onDestroy(destroyed);</script><hawk-view id="root"></hawk-view>',
+  });
+
+  expect(output.compilerArtifact.root.lifecycle).toContainEqual({ event: "mounted", handler: "mounted" });
+  expect(output.compilerArtifact.root.lifecycle).toContainEqual({ event: "unmounted", handler: "destroyed" });
+});
+
+test("Svelte compiler preserves reactive declaration initial dynamic values", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let ready = true; $: label = "Ready";</script><hawk-text id="root">{label}</hawk-text>',
+  });
+
+  expect(output.compilerArtifact.initial_dynamic_values).toContainEqual({
+    name: "label",
+    mode: "value",
+    value: { type: "string", value: "Ready" },
+  });
+});
+
+test("Svelte compiler emits runtime list templates for dynamic keyed each blocks", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let items = [{ id: "alpha", label: "Alpha" }, { id: "beta", label: "Beta" }]; function handleItemPress() { items = [{ id: "gamma", label: "Gamma" }]; }</script><hawk-view id="root">{#each items as item (item.id)}<hawk-text id={item.id} on:pointerdown={handleItemPress}>{item.label}</hawk-text>{/each}</hawk-view>',
+  });
+
+  expect(output.compilerArtifact.root.children).toEqual([]);
+  expect(output.compilerArtifact.list_templates).toEqual([
+    {
+      id: "root:items",
+      parent_id: "root",
+      source: "items",
+      item: "item",
+      key: "item.id",
+      node: {
+        id: { type: "expression", expression: "item.id" },
+        kind: "text",
+        key: { type: "expression", expression: "item.id" },
+        props: [{ name: "text", value: { type: "expression", expression: "item.label" } }],
+        refs: [],
+        style_refs: [],
+        asset_refs: [],
+          events: [{ kind: "pointer.press", handler: "handleItemPress", payload_fields: ["position"] }],
+          lifecycle: [],
+          children: [],
+        },
+      },
+    ]);
+    expect(output.compilerArtifact.event_handlers.map((handler) => handler.name)).toEqual(["handleItemPress"]);
+  });
+
+test("Svelte compiler anchors runtime list templates before the next static sibling", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let items = [{ id: "alpha", label: "Alpha" }];</script><hawk-view id="root"><hawk-text id="header">Header</hawk-text>{#each items as item (item.id + "-row")}<hawk-text id={item.id + "-row"}>{item.label + "!"}</hawk-text>{/each}<hawk-text id="footer">Footer</hawk-text></hawk-view>',
+  });
+
+  expect(output.compilerArtifact.root.children.map((child) => child.node.id)).toEqual(["header", "footer"]);
+  expect(output.compilerArtifact.list_templates[0]?.anchor_before).toBe("footer");
+  expect(output.compilerArtifact.list_templates[0]?.key).toBe('item.id + "-row"');
+  expect(output.compilerArtifact.list_templates[0]?.node.id).toEqual({
+    type: "expression",
+    expression: 'item.id + "-row"',
+  });
+  expect(output.compilerArtifact.list_templates[0]?.node.props).toEqual([
+    { name: "text", value: { type: "expression", expression: 'item.label + "!"' } },
+  ]);
+});
+
 test("Svelte compiler preserves dynamic layout prop bindings from template expressions", () => {
   const output = compileHawkSvelte({
     filename: "App.svelte",
@@ -215,6 +291,119 @@ test("Svelte compiler preserves dynamic visual prop bindings from template expre
   ]);
 });
 
+test("Svelte compiler passes through arbitrary scalar props and dynamic prop bindings", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let role = getRole();</script><hawk-view id="root"><hawk-button id="cta" aria_label="Start" tab_index={2} selected={true} data_role={role}>Go</hawk-button></hawk-view>',
+  });
+  const button = output.compilerArtifact.root.children[0].node;
+
+  expect(button.props).toContainEqual({ name: "aria_label", value: { type: "string", value: "Start" } });
+  expect(button.props).toContainEqual({ name: "tab_index", value: { type: "number", value: 2 } });
+  expect(button.props).toContainEqual({ name: "selected", value: { type: "bool", value: true } });
+  expect(output.compilerArtifact.dynamic_bindings).toContainEqual({
+    node_id: "cta",
+    target: { type: "prop", name: "data_role" },
+    expression: "role",
+    dependencies: ["role"],
+  });
+});
+
+test("Svelte compiler maps on:click to pointer press", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let label = "Idle"; function handleClick() { label = "Clicked"; }</script><hawk-view id="root"><hawk-button id="cta" on:click={handleClick}>Go</hawk-button></hawk-view>',
+  });
+
+  expect(output.compilerArtifact.root.children[0].node.events).toEqual([
+    { kind: "pointer.press", handler: "handleClick", payload_fields: ["position"] },
+  ]);
+});
+
+test("Svelte compiler lowers hawk-surface to a custom surface node", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source: '<hawk-view id="root"><hawk-surface id="meter" surface_id="level-meter" /></hawk-view>',
+  });
+
+  const surface = output.compilerArtifact.root.children[0].node;
+  expect(surface.kind).toBe("custom-surface");
+  expect(surface.props).toContainEqual({ name: "surface_id", value: { type: "string", value: "level-meter" } });
+});
+
+test("Svelte compiler lowers if blocks to visible dynamic bindings", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let showTitle = true;</script><hawk-view id="root">{#if showTitle}<hawk-text id="title">Title</hawk-text>{/if}</hawk-view>',
+  });
+
+  expect(output.compilerArtifact.root.children[0].node.id).toBe("title");
+  expect(output.compilerArtifact.dynamic_bindings).toContainEqual({
+    node_id: "title",
+    target: { type: "prop", name: "visible" },
+    expression: "showTitle",
+    dependencies: ["showTitle"],
+  });
+});
+
+test("Svelte compiler lowers else blocks to negated visible bindings", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let showTitle = true;</script><hawk-view id="root">{#if showTitle}<hawk-text id="title">Title</hawk-text>{:else}<hawk-text id="fallback">Fallback</hawk-text>{/if}</hawk-view>',
+  });
+
+  expect(output.compilerArtifact.root.children.map((child) => child.node.id)).toEqual(["title", "fallback"]);
+  expect(output.compilerArtifact.dynamic_bindings).toContainEqual({
+    node_id: "fallback",
+    target: { type: "prop", name: "visible" },
+    expression: "!(showTitle)",
+    dependencies: ["showTitle"],
+  });
+});
+
+test("Svelte compiler lowers else-if chains to combined visible bindings", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source:
+      '<script>let showTitle = getShowTitle(); let showAlt = getShowAlt();</script><hawk-view id="root">{#if showTitle}<hawk-text id="title">Title</hawk-text>{:else if showAlt}<hawk-text id="alt">Alt</hawk-text>{:else}<hawk-text id="fallback">Fallback</hawk-text>{/if}</hawk-view>',
+  });
+
+  expect(output.compilerArtifact.root.children.map((child) => child.node.id)).toEqual(["title", "alt", "fallback"]);
+  expect(output.compilerArtifact.dynamic_bindings.filter((binding) => binding.node_id === "alt")).toEqual([
+    {
+      node_id: "alt",
+      target: { type: "prop", name: "visible" },
+      expression: "(showAlt) && (!(showTitle))",
+      dependencies: ["showAlt", "showTitle"],
+    },
+  ]);
+  expect(output.compilerArtifact.dynamic_bindings.filter((binding) => binding.node_id === "fallback")).toEqual([
+    {
+      node_id: "fallback",
+      target: { type: "prop", name: "visible" },
+      expression: "(!(showAlt)) && (!(showTitle))",
+      dependencies: ["showAlt", "showTitle"],
+    },
+  ]);
+});
+
+test("Svelte compiler accepts standard element aliases for native nodes", () => {
+  const output = compileHawkSvelte({
+    filename: "App.svelte",
+    source: '<div id="root"><button id="cta">Go</button><p id="copy">Copy</p></div>',
+  });
+
+  expect(output.compilerArtifact.root.kind).toBe("view");
+  expect(output.compilerArtifact.root.children.map((child) => [child.node.id, child.node.kind])).toEqual([
+    ["cta", "button"],
+    ["copy", "text"],
+  ]);
+});
+
 test("Svelte compiler rejects duplicate child ids", () => {
   expect(() =>
     compileHawkSvelte({
@@ -222,4 +411,10 @@ test("Svelte compiler rejects duplicate child ids", () => {
       source: '<hawk-view id="root"><hawk-text id="title">A</hawk-text><hawk-text id="title">B</hawk-text></hawk-view>',
     }),
   ).toThrow("svelte.child-id.duplicate");
+});
+
+test("Svelte compiler parses with the modern AST contract", async () => {
+  const source = await Bun.file("packages/hawk2ui-svelte/src/index.ts").text();
+
+  expect(source).toContain("modern: true");
 });

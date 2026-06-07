@@ -194,7 +194,7 @@ pub struct GeneratedParameterMetadata {
 /// at or above `2^24` for meters (its `METER_ID_BASE`), so a parameter id must
 /// be strictly below it. Duplicated here rather than imported because this crate
 /// is deliberately truce-free; see
-/// `reference/truce-0.49.14/crates/truce-derive/src/lib.rs` ("Auto-assign meter
+/// `reference/truce-0.56.0/crates/truce-derive/src/lib.rs` ("Auto-assign meter
 /// IDs").
 pub const METER_ID_BASE: u32 = 1 << 24;
 

@@ -55,8 +55,25 @@ Runtime secret sources must be explicit and must not require plaintext developer
 
 Database APIs must be capability-scoped and must support migrations, transactions, and safe storage paths.
 
+## Extended Host API Requirements
+
+The platform API surface must also provide policy-checked execution for:
+
+- host-managed audio cue playback,
+- AI provider requests,
+- MCP tool calls,
+- notification sends,
+- global shortcut registration,
+- localization bundle reads,
+- message dialogs,
+- file pickers.
+
+These APIs must execute through backends after policy approval. Request-record-only implementations are not sufficient for production readiness.
+
 ## Acceptance Criteria
 
 - No platform API is available without declared capability.
 - Denied access produces structured diagnostics.
 - Plugin contexts expose only host-safe API subsets.
+- Approved operations reach executable backends with auditable results.
+- Denied operations do not mutate backend state.

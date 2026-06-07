@@ -24,7 +24,9 @@ A release must require passing evidence for:
 - artifact verification,
 - smoke applications,
 - documentation checks,
-- package verification.
+- package verification,
+- Windows native desktop and plugin-host coverage,
+- macOS native desktop and plugin-host coverage.
 
 ## Version Requirements
 
@@ -45,8 +47,7 @@ Version mismatches must fail release validation.
 Release packaging must verify:
 
 - sealed artifacts,
-- desktop bundles,
-- plugin bundles,
+- release-backed CLAP/VST3 plugin bundles,
 - package metadata,
 - target metadata,
 - asset hashes,
@@ -55,6 +56,8 @@ Release packaging must verify:
 - signing status where applicable,
 - notarization status where applicable,
 - verification report inclusion.
+
+Windows and macOS release packaging must include the platform-specific evidence required by their package formats, including Windows signing and macOS signing/notarization where applicable.
 
 ## Release Evidence Requirements
 
@@ -75,3 +78,4 @@ Release evidence must include:
 - Packages cannot ship without verification reports.
 - Version mismatches block release.
 - Release evidence identifies every required gate and result.
+- No public production release announcement is valid until Windows and macOS native coverage gates pass.

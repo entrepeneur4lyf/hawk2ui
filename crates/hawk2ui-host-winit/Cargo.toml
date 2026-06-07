@@ -22,20 +22,29 @@ pedantic = "warn"
 
 [dependencies]
 arboard = "3.6.1"
+ashpd = { version = "0.13.11", default-features = false, features = ["tokio", "global_shortcuts"] }
+global-hotkey = "0.8.0"
 glutin = { version = "0.32.3", default-features = false, features = ["egl", "glx", "wayland", "x11"] }
 glutin-winit = { version = "0.5.0", default-features = false, features = ["egl", "glx", "wayland", "x11"] }
 hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
 hawk2ui-assets = { version = "0.1.0", path = "../hawk2ui-assets" }
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
+hawk2ui-platform = { version = "0.1.0", path = "../hawk2ui-platform" }
 hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
 hawk2ui-render-skia = { version = "0.1.0", path = "../hawk2ui-render-skia" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
 hawk2ui-script = { version = "0.1.0", path = "../hawk2ui-script" }
 rfd = { version = "0.17.2", default-features = true }
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "wav", "vorbis", "mp3", "flac"] }
 skia-safe = { version = "0.97.2", features = ["binary-cache", "gl"] }
 softbuffer = "0.4.8"
+tokio = { version = "1.52.3", features = ["rt", "time"] }
+url.workspace = true
 winit = "0.30.12"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly"))'.dependencies]
+notify-rust = "4.17.0"
 
 [dev-dependencies]
 hawk2ui-authoring = { version = "0.1.0", path = "../hawk2ui-authoring" }

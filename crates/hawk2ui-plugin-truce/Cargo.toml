@@ -21,8 +21,8 @@ all = "warn"
 pedantic = "warn"
 
 [dependencies]
-truce-core = "0.49.14"
-truce-params = "0.49.14"
+truce-core = "0.56.0"
+truce-params = "0.56.0"
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-host-baseview = { version = "0.1.0", path = "../hawk2ui-host-baseview" }
 hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
@@ -40,5 +40,5 @@ hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
 # native editor smoke. `default-features = false` keeps the format/SDK wrappers
 # out. `x11rb` creates a real X11 parent window for that test.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-truce = { version = "0.49.14", default-features = false }
+truce = { version = "0.56.0", default-features = false }
 x11rb = "0.13.2"

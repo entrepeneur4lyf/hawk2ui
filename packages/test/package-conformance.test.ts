@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { createHawkApp } from "../hawk2ui-native/src/index.ts";
-import { createHawkReactRoot } from "../hawk2ui-react/src/index.ts";
-import { renderHawkSolid } from "../hawk2ui-solid/src/index.ts";
+import { compileHawkReact } from "../hawk2ui-react/src/index.ts";
+import { compileHawkSolid } from "../hawk2ui-solid/src/index.ts";
 import { compileHawkSvelte } from "../hawk2ui-svelte/src/index.ts";
-import { createHawkVueRenderer } from "../hawk2ui-vue/src/index.ts";
+import { compileHawkVue } from "../hawk2ui-vue/src/index.ts";
 
 const expectedRecords = [
   "mount-element:root",
@@ -38,46 +38,42 @@ test("framework packages emit equivalent native records for the shared fixture",
       '<script>let status = "idle"; function handlePress() { status = "pressed"; } const items = [{ id: "title" }, { id: "cta" }];</script><hawk-view id="root" use:root_ref class="surface.card" data-asset="assets/logo.svg" on:press={handlePress}>{#each items as item (item.id)}<hawk-text id={item.id}></hawk-text>{/each}</hawk-view>',
   });
 
-  const react = createHawkReactRoot({ id: "root" });
-  react.render({
-    props: {
-      id: "root",
-      ref: "root_ref",
-      className: "surface.card",
-      "data-asset": "assets/logo.svg",
-      onPointerDown: "handlePress",
-    },
-    children: [{ id: "title" }, { id: "cta" }],
+  const react = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'export function App() { let status = "idle"; function handlePress() { status = "pressed"; } return <hawk-view id="root" ref="root_ref" className="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress}><hawk-text id="title" /><hawk-button id="cta" /></hawk-view>; }',
   });
 
-  const vue = createHawkVueRenderer();
-  vue.render(
-    {
-      id: "root",
-      ref: "root_ref",
-      class: "surface.card",
-      asset: "assets/logo.svg",
-      on: ["pointer.press"],
-      children: [{ id: "title" }, { id: "cta" }],
-    },
-    { id: "root" },
-  );
+  const vue = compileHawkVue({
+    filename: "App.vue",
+    source:
+      '<script setup>const status = ref("idle"); function handlePress() { status.value = "pressed"; }</script><template><hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" @pointerdown="handlePress"><hawk-text id="title" /><hawk-button id="cta" /></hawk-view></template>',
+  });
 
-  const solid = renderHawkSolid(
-    () => ({
-      id: "root",
-      ref: "root_ref",
-      class: "surface.card",
-      asset: "assets/logo.svg",
-      on: ["pointer.press"],
-      children: [{ id: "title" }, { id: "cta" }],
-    }),
-    { target: { id: "root" } },
-  );
+  const solid = compileHawkSolid({
+    filename: "App.tsx",
+    source:
+      'export function App() { let status = "idle"; function handlePress() { status = "pressed"; } return <hawk-view id="root" ref="root_ref" class="surface.card" data-asset="assets/logo.svg" onPointerDown={handlePress}><hawk-text id="title" /><hawk-button id="cta" /></hawk-view>; }',
+  });
 
   expect(native.records).toEqual(expectedRecords);
   expect(svelte.records).toEqual(expectedRecords);
   expect(react.records).toEqual(expectedRecords);
   expect(vue.records).toEqual(expectedRecords);
   expect(solid.records).toEqual(expectedRecords);
+  expect(react.compilerArtifact.root.children.map((child) => child.node.kind)).toEqual([
+    "text",
+    "button",
+  ]);
+  expect(vue.compilerArtifact.root.children.map((child) => child.node.kind)).toEqual([
+    "text",
+    "button",
+  ]);
+  expect(solid.compilerArtifact.root.children.map((child) => child.node.kind)).toEqual([
+    "text",
+    "button",
+  ]);
+  expect(react.compilerArtifact.root.events.map((event) => event.handler)).toEqual([
+    "handlePress",
+  ]);
 });

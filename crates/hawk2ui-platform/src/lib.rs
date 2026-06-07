@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
-//! Capability-scoped platform APIs for filesystem, network, clipboard, secrets, and database access in `Hawk2UI`.
+//! Capability-scoped platform APIs for filesystem, network, clipboard, secrets, AI, audio,
+//! dialogs, localization, MCP, notifications, shortcuts, and database access in `Hawk2UI`.
 
 pub mod ai;
 pub mod audio;
@@ -19,9 +20,15 @@ pub mod shortcuts;
 pub use ai::{AiDenied, AiManifest, AiPolicy, AiProviderRequest};
 pub use audio::{AudioDenied, AudioManifest, AudioPlaybackRequest, AudioPolicy};
 pub use backend::{
-    ClipboardReadResult, FilesystemReadResult, FilesystemWriteResult, NetworkBackend,
-    NetworkResponse, NetworkResponsePayload, PlatformBackendError, PlatformBackends,
-    StaticNetworkBackend, UreqNetworkBackend,
+    AiProviderResponse, AudioCueBinding, AudioPlaybackResult, AudioPlaybackSink,
+    ClipboardReadResult, DatabaseMigrationResult, DatabaseReadResult, DatabaseTransactionResult,
+    DatabaseWriteResult, DialogOpenResult, FilesystemLocalizationHostBackend, FilesystemReadResult,
+    FilesystemWriteResult, GlobalShortcutSink, HostCapabilityRouter, HostDataPayload,
+    HostDialogResponse, HttpProviderHostBackend, LocalizationBundleResult, McpToolResponse,
+    NetworkBackend, NetworkResponse, NetworkResponsePayload, NotificationBinding,
+    NotificationSendResult, NotificationSink, PlatformBackendError, PlatformBackends,
+    PlatformHostBackend, ShortcutBinding, ShortcutRegistrationResult, StaticNetworkBackend,
+    UnsupportedPlatformHost, UreqNetworkBackend,
 };
 pub use capability::{
     CapabilityDenied, CapabilityRecord, CapabilitySchema, CapabilityTable, PlatformContext,
@@ -30,7 +37,7 @@ pub use capability::{
 pub use clipboard::{
     ClipboardAccess, ClipboardDataType, ClipboardDenied, ClipboardManifest, ClipboardPolicy,
 };
-pub use database::{DatabaseDenied, DatabaseMigration, DatabasePolicy};
+pub use database::{DatabaseDenied, DatabaseManifest, DatabaseMigration, DatabasePolicy};
 pub use dialogs::{DialogDenied, DialogKind, DialogManifest, DialogPolicy, DialogRequest};
 pub use filesystem::{
     FilesystemAccess, FilesystemDenied, FilesystemGrant, FilesystemPolicy, FilesystemScope,

@@ -1,5 +1,7 @@
 //! Native authoring to runtime view bridge.
 
+use std::collections::BTreeMap;
+
 use hawk2ui_api::Diagnostic;
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, LayoutValue};
 use hawk2ui_render::{
@@ -14,10 +16,13 @@ use hawk2ui_style::{
     CompiledStyleSheet, PropertyId, RuntimeStyleError, RuntimeStyleTable, StyleValue, TokenSet,
 };
 
-use crate::adapter::{FrameworkDynamicBinding, FrameworkDynamicBindingTarget};
+use crate::adapter::{
+    FrameworkDynamicBinding, FrameworkDynamicBindingTarget, FrameworkDynamicValue,
+    FrameworkListTemplate, FrameworkListTemplateNode, FrameworkTemplateScalar,
+};
 use crate::{
     AuthoringArtifact, ElementKind, NativeAuthoringArtifact, NativeAuthoringElement, NativeChild,
-    PropValue, StyleRef,
+    NativeLifecycleEvent, PropValue, StyleRef,
 };
 use crate::{limits::MAX_AUTHORING_TREE_DEPTH, operation_keys};
 
@@ -239,6 +244,7 @@ impl NativeRuntimeBridge {
             metadata,
             operation_keys: element_operation_keys(root),
             dynamic_bindings: Vec::new(),
+            list_instances: BTreeMap::new(),
         })
     }
 
@@ -263,6 +269,7 @@ pub struct NativeRuntimeBridgeArtifact {
     metadata: Vec<NativeRuntimeNodeMetadata>,
     operation_keys: Vec<String>,
     dynamic_bindings: Vec<FrameworkDynamicBinding>,
+    list_instances: BTreeMap<String, Vec<RuntimeViewId>>,
 }
 
 impl NativeRuntimeBridgeArtifact {
@@ -352,6 +359,12 @@ impl NativeRuntimeBridgeArtifact {
                     apply_dynamic_background(self.runtime_tree, binding.node_id(), color)?;
                 Ok(self)
             }
+            FrameworkDynamicBindingTarget::Prop { name } if name == "visible" => {
+                let visible = dynamic_value_bool(&value, name)?;
+                self.runtime_tree =
+                    apply_dynamic_visibility(self.runtime_tree, binding.node_id(), visible)?;
+                Ok(self)
+            }
             FrameworkDynamicBindingTarget::Prop { name } => Err(NativeRuntimeBridgeError::new(
                 "native-runtime.dynamic-binding.unsupported-target",
                 format!(
@@ -360,6 +373,70 @@ impl NativeRuntimeBridgeArtifact {
                 ),
             )),
         }
+    }
+
+    /// Applies one keyed-list template source value to the retained runtime tree.
+    ///
+    /// Existing materialized children for the same template are removed before the replacement list
+    /// is appended to the template parent, preserving keyed runtime identity and preventing stale
+    /// nodes from surviving list updates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeRuntimeBridgeError`] when the source is not an array, an item expression
+    /// cannot be evaluated to a scalar, or runtime tree mutation fails.
+    pub fn apply_list_template(
+        mut self,
+        template: &FrameworkListTemplate,
+        value: &FrameworkDynamicValue,
+    ) -> Result<Self, NativeRuntimeBridgeError> {
+        let FrameworkDynamicValue::Array(items) = value else {
+            return Err(NativeRuntimeBridgeError::new(
+                "native-runtime.list-template.source-invalid",
+                format!("list template `{}` requires an array source", template.id()),
+            ));
+        };
+        let previous = self
+            .list_instances
+            .remove(template.id())
+            .unwrap_or_default();
+        self.metadata
+            .retain(|metadata| !previous.iter().any(|id| id.as_str() == metadata.node_id()));
+        self.runtime_tree = self.runtime_tree.remove_subtrees(&previous)?;
+
+        let parent_id = RuntimeViewId::new(template.parent_id());
+        let anchor_before = template.anchor_before().map(RuntimeViewId::new);
+        let mut materialized_roots = Vec::new();
+        for item in items {
+            let key = evaluate_template_expression(template.key(), template.item(), item)?;
+            let key = dynamic_scalar_to_string(&key, "list template key")?;
+            let element = materialize_template_node(template.node(), template.item(), item)?;
+            let root_id = RuntimeViewId::new(element.id().as_str());
+            let node = runtime_node(&element, false, None)?;
+            self.runtime_tree = if let Some(anchor_id) = anchor_before.as_ref() {
+                self.runtime_tree
+                    .insert_child_before(&parent_id, anchor_id, node)?
+            } else {
+                self.runtime_tree.with_child(&parent_id, node)?
+            };
+            self.metadata.push(metadata_for(&element));
+            for child in element.children() {
+                self.runtime_tree = bridge_child(
+                    element.id().as_str(),
+                    child.element(),
+                    self.runtime_tree,
+                    &mut self.metadata,
+                    None,
+                    1,
+                )?;
+            }
+            materialized_roots.push(root_id);
+            self.operation_keys
+                .push(format!("materialize-list-item:{}:{key}", template.id()));
+        }
+        self.list_instances
+            .insert(template.id().to_string(), materialized_roots);
+        Ok(self)
     }
 }
 
@@ -497,6 +574,15 @@ fn apply_dynamic_background(
         .map_err(NativeRuntimeBridgeError::from)
 }
 
+fn apply_dynamic_visibility(
+    tree: RuntimeViewTree,
+    node_id: &str,
+    visible: bool,
+) -> Result<RuntimeViewTree, NativeRuntimeBridgeError> {
+    tree.update_visibility(&RuntimeViewId::new(node_id), visible)
+        .map_err(NativeRuntimeBridgeError::from)
+}
+
 fn rebuild_text_visual(
     text_visual: &RuntimeTextVisual,
     font_size: f32,
@@ -514,6 +600,16 @@ fn dynamic_value_text(value: PropValue) -> Result<String, NativeRuntimeBridgeErr
         PropValue::Number(_) => Err(NativeRuntimeBridgeError::new(
             "native-runtime.dynamic-binding.value-invalid",
             "dynamic text binding numeric value must be finite",
+        )),
+    }
+}
+
+fn dynamic_value_bool(value: &PropValue, name: &str) -> Result<bool, NativeRuntimeBridgeError> {
+    match value {
+        PropValue::Bool(value) => Ok(*value),
+        PropValue::String(_) | PropValue::Number(_) => Err(NativeRuntimeBridgeError::new(
+            "native-runtime.dynamic-binding.value-invalid",
+            format!("dynamic boolean binding `{name}` requires a bool value"),
         )),
     }
 }
@@ -566,6 +662,506 @@ fn dynamic_value_layout_number(
     }
 }
 
+fn materialize_template_node(
+    node: &FrameworkListTemplateNode,
+    item_name: &str,
+    item: &FrameworkDynamicValue,
+) -> Result<NativeAuthoringElement, NativeRuntimeBridgeError> {
+    let id_value = evaluate_template_scalar(node.id(), item_name, item)?;
+    let id = dynamic_scalar_to_string(&id_value, "list template node id")?;
+    let mut element = NativeAuthoringElement::new(id, node.kind());
+    for (name, value) in node.props() {
+        let value = evaluate_template_scalar(value, item_name, item)?;
+        element = element.with_prop(name.clone(), dynamic_value_to_prop(value)?);
+    }
+    for reference in node.refs() {
+        element = element.with_ref(reference.clone());
+    }
+    for style_ref in node.style_refs() {
+        element = element.with_style(style_ref.clone());
+    }
+    for asset_ref in node.asset_refs() {
+        element = element.with_asset(asset_ref.clone());
+    }
+    for (event, handler, payload_fields) in node.events() {
+        element = element.with_event(
+            event.clone(),
+            handler.as_str(),
+            payload_fields.iter().copied(),
+        );
+    }
+    for (event, handler) in node.lifecycle() {
+        element = element.with_lifecycle(*event, handler.as_str());
+    }
+    for child in node.children() {
+        let child_element = materialize_template_node(child, item_name, item)?;
+        let key_value = if let Some(key) = child.key() {
+            evaluate_template_scalar(key, item_name, item)?
+        } else {
+            FrameworkDynamicValue::String(child_element.id().as_str().to_string())
+        };
+        let key = dynamic_scalar_to_string(&key_value, "list template child key")?;
+        element = element.with_child(NativeChild::keyed(key, child_element));
+    }
+    Ok(element)
+}
+
+fn evaluate_template_scalar(
+    scalar: &FrameworkTemplateScalar,
+    item_name: &str,
+    item: &FrameworkDynamicValue,
+) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+    match scalar {
+        FrameworkTemplateScalar::Literal(value) => Ok(prop_to_dynamic_value(value)),
+        FrameworkTemplateScalar::Expression(expression) => {
+            evaluate_template_expression(expression, item_name, item)
+        }
+    }
+}
+
+fn evaluate_template_expression(
+    expression: &str,
+    item_name: &str,
+    item: &FrameworkDynamicValue,
+) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+    TemplateExpressionParser::new(expression, item_name, item).parse()
+}
+
+struct TemplateExpressionParser<'a> {
+    expression: &'a str,
+    item_name: &'a str,
+    item: &'a FrameworkDynamicValue,
+    chars: Vec<char>,
+    position: usize,
+}
+
+impl<'a> TemplateExpressionParser<'a> {
+    fn new(expression: &'a str, item_name: &'a str, item: &'a FrameworkDynamicValue) -> Self {
+        Self {
+            expression,
+            item_name,
+            item,
+            chars: expression.chars().collect(),
+            position: 0,
+        }
+    }
+
+    fn parse(mut self) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+        let value = self.parse_additive()?;
+        self.skip_whitespace();
+        if self.peek().is_some() {
+            return Err(self.invalid("contains trailing tokens"));
+        }
+        Ok(value)
+    }
+
+    fn parse_additive(&mut self) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+        let mut value = self.parse_multiplicative()?;
+        loop {
+            self.skip_whitespace();
+            if self.consume('+') {
+                let right = self.parse_multiplicative()?;
+                value = add_template_values(&value, &right, self.expression)?;
+            } else if self.consume('-') {
+                let right = self.parse_multiplicative()?;
+                value = numeric_template_binary(
+                    &value,
+                    &right,
+                    self.expression,
+                    "subtract",
+                    |left, right| left - right,
+                )?;
+            } else {
+                return Ok(value);
+            }
+        }
+    }
+
+    fn parse_multiplicative(&mut self) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+        let mut value = self.parse_unary()?;
+        loop {
+            self.skip_whitespace();
+            if self.consume('*') {
+                let right = self.parse_unary()?;
+                value = numeric_template_binary(
+                    &value,
+                    &right,
+                    self.expression,
+                    "multiply",
+                    |left, right| left * right,
+                )?;
+            } else if self.consume('/') {
+                let right = self.parse_unary()?;
+                let divisor = template_number(&right, self.expression, "divide")?;
+                if divisor == 0.0 {
+                    return Err(self.invalid("divides by zero"));
+                }
+                let dividend = template_number(&value, self.expression, "divide")?;
+                value = FrameworkDynamicValue::Number(dividend / divisor);
+            } else {
+                return Ok(value);
+            }
+        }
+    }
+
+    fn parse_unary(&mut self) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+        self.skip_whitespace();
+        if self.consume('-') {
+            let value = self.parse_unary()?;
+            return Ok(FrameworkDynamicValue::Number(-template_number(
+                &value,
+                self.expression,
+                "negate",
+            )?));
+        }
+        self.parse_primary()
+    }
+
+    fn parse_primary(&mut self) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+        self.skip_whitespace();
+        match self.peek() {
+            Some('(') => {
+                self.advance();
+                let value = self.parse_additive()?;
+                self.skip_whitespace();
+                if !self.consume(')') {
+                    return Err(self.invalid("has an unterminated parenthesized expression"));
+                }
+                Ok(value)
+            }
+            Some('"' | '\'') => self.parse_string(),
+            Some(ch) if ch.is_ascii_digit() => self.parse_number(),
+            Some(ch) if is_identifier_start(ch) => self.parse_identifier_or_path(),
+            Some(ch) => Err(self.unsupported(format!("contains unsupported token `{ch}`"))),
+            None => Err(self.invalid("is empty")),
+        }
+    }
+
+    fn parse_string(&mut self) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+        let Some(quote) = self.advance() else {
+            return Err(self.invalid("is empty"));
+        };
+        let mut value = String::new();
+        while let Some(ch) = self.advance() {
+            if ch == quote {
+                return Ok(FrameworkDynamicValue::String(value));
+            }
+            if ch == '\\' {
+                let Some(escaped) = self.advance() else {
+                    return Err(self.invalid("has an unterminated string escape"));
+                };
+                match escaped {
+                    '"' => value.push('"'),
+                    '\'' => value.push('\''),
+                    '\\' => value.push('\\'),
+                    'n' => value.push('\n'),
+                    'r' => value.push('\r'),
+                    't' => value.push('\t'),
+                    other => {
+                        return Err(self.unsupported(format!(
+                            "contains unsupported string escape `\\{other}`"
+                        )));
+                    }
+                }
+            } else {
+                value.push(ch);
+            }
+        }
+        Err(self.invalid("has an unterminated string literal"))
+    }
+
+    fn parse_number(&mut self) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+        let mut value = String::new();
+        while let Some(ch) = self.peek() {
+            if ch.is_ascii_digit() {
+                value.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        if self.consume('.') {
+            value.push('.');
+            while let Some(ch) = self.peek() {
+                if ch.is_ascii_digit() {
+                    value.push(ch);
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        if matches!(self.peek(), Some('e' | 'E')) {
+            let Some(exponent_marker) = self.advance() else {
+                return Err(self.invalid(format!("contains invalid numeric literal `{value}`")));
+            };
+            value.push(exponent_marker);
+            if matches!(self.peek(), Some('+' | '-')) {
+                let Some(exponent_sign) = self.advance() else {
+                    return Err(self.invalid(format!("contains invalid numeric literal `{value}`")));
+                };
+                value.push(exponent_sign);
+            }
+            let exponent_start = value.len();
+            while let Some(ch) = self.peek() {
+                if ch.is_ascii_digit() {
+                    value.push(ch);
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            if value.len() == exponent_start {
+                return Err(self.invalid(format!("contains invalid numeric literal `{value}`")));
+            }
+        }
+        let parsed = value
+            .parse::<f64>()
+            .map_err(|_| self.invalid(format!("contains invalid numeric literal `{value}`")))?;
+        if !parsed.is_finite() {
+            return Err(self.invalid(format!("contains non-finite numeric literal `{value}`")));
+        }
+        Ok(FrameworkDynamicValue::Number(parsed))
+    }
+
+    fn parse_identifier_or_path(
+        &mut self,
+    ) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+        let identifier = self.parse_identifier();
+        match identifier.as_str() {
+            "true" => return Ok(FrameworkDynamicValue::Bool(true)),
+            "false" => return Ok(FrameworkDynamicValue::Bool(false)),
+            "null" => return Ok(FrameworkDynamicValue::Null),
+            _ => {}
+        }
+        if identifier != self.item_name {
+            return Err(
+                self.unsupported(format!("references unsupported identifier `{identifier}`"))
+            );
+        }
+        let mut current = self.item;
+        while self.consume('.') {
+            let segment = self.parse_identifier();
+            if segment.is_empty() {
+                return Err(self.invalid("contains an empty path segment"));
+            }
+            let FrameworkDynamicValue::Object(object) = current else {
+                return Err(self.invalid("traverses a non-object value"));
+            };
+            let Some(next) = object.get(&segment) else {
+                return Err(self.missing(format!("references missing field `{segment}`")));
+            };
+            current = next;
+        }
+        Ok(current.clone())
+    }
+
+    fn parse_identifier(&mut self) -> String {
+        let mut value = String::new();
+        while let Some(ch) = self.peek() {
+            if is_identifier_continue(ch) {
+                value.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        value
+    }
+
+    fn skip_whitespace(&mut self) {
+        while matches!(self.peek(), Some(ch) if ch.is_whitespace()) {
+            self.advance();
+        }
+    }
+
+    fn consume(&mut self, expected: char) -> bool {
+        if self.peek() == Some(expected) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn advance(&mut self) -> Option<char> {
+        let ch = self.peek()?;
+        self.position += 1;
+        Some(ch)
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.position).copied()
+    }
+
+    fn unsupported(&self, detail: impl AsRef<str>) -> NativeRuntimeBridgeError {
+        NativeRuntimeBridgeError::new(
+            "native-runtime.list-template.expression-unsupported",
+            format!(
+                "list template expression `{}` {}",
+                self.expression,
+                detail.as_ref()
+            ),
+        )
+    }
+
+    fn invalid(&self, detail: impl AsRef<str>) -> NativeRuntimeBridgeError {
+        NativeRuntimeBridgeError::new(
+            "native-runtime.list-template.expression-invalid",
+            format!(
+                "list template expression `{}` {}",
+                self.expression,
+                detail.as_ref()
+            ),
+        )
+    }
+
+    fn missing(&self, detail: impl AsRef<str>) -> NativeRuntimeBridgeError {
+        NativeRuntimeBridgeError::new(
+            "native-runtime.list-template.expression-missing",
+            format!(
+                "list template expression `{}` {}",
+                self.expression,
+                detail.as_ref()
+            ),
+        )
+    }
+}
+
+fn add_template_values(
+    left: &FrameworkDynamicValue,
+    right: &FrameworkDynamicValue,
+    expression: &str,
+) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+    match (left, right) {
+        (FrameworkDynamicValue::Number(left), FrameworkDynamicValue::Number(right)) => {
+            Ok(FrameworkDynamicValue::Number(left + right))
+        }
+        _ => Ok(FrameworkDynamicValue::String(format!(
+            "{}{}",
+            template_value_to_string(left, expression)?,
+            template_value_to_string(right, expression)?
+        ))),
+    }
+}
+
+fn numeric_template_binary(
+    left: &FrameworkDynamicValue,
+    right: &FrameworkDynamicValue,
+    expression: &str,
+    operation: &str,
+    apply: impl FnOnce(f64, f64) -> f64,
+) -> Result<FrameworkDynamicValue, NativeRuntimeBridgeError> {
+    let left = template_number(left, expression, operation)?;
+    let right = template_number(right, expression, operation)?;
+    Ok(FrameworkDynamicValue::Number(apply(left, right)))
+}
+
+fn template_number(
+    value: &FrameworkDynamicValue,
+    expression: &str,
+    operation: &str,
+) -> Result<f64, NativeRuntimeBridgeError> {
+    let FrameworkDynamicValue::Number(value) = value else {
+        return Err(NativeRuntimeBridgeError::new(
+            "native-runtime.list-template.expression-invalid",
+            format!(
+                "list template expression `{expression}` requires numeric operands for {operation}"
+            ),
+        ));
+    };
+    if !value.is_finite() {
+        return Err(NativeRuntimeBridgeError::new(
+            "native-runtime.list-template.expression-invalid",
+            format!("list template expression `{expression}` evaluated to a non-finite number"),
+        ));
+    }
+    Ok(*value)
+}
+
+fn template_value_to_string(
+    value: &FrameworkDynamicValue,
+    expression: &str,
+) -> Result<String, NativeRuntimeBridgeError> {
+    match value {
+        FrameworkDynamicValue::String(value) => Ok(value.clone()),
+        FrameworkDynamicValue::Bool(value) => Ok(value.to_string()),
+        FrameworkDynamicValue::Number(value) if value.is_finite() => Ok(value.to_string()),
+        FrameworkDynamicValue::Null => Ok("null".to_string()),
+        FrameworkDynamicValue::Number(_) => Err(NativeRuntimeBridgeError::new(
+            "native-runtime.list-template.expression-invalid",
+            format!("list template expression `{expression}` evaluated to a non-finite number"),
+        )),
+        FrameworkDynamicValue::Array(_) | FrameworkDynamicValue::Object(_) => {
+            Err(NativeRuntimeBridgeError::new(
+                "native-runtime.list-template.expression-invalid",
+                format!(
+                    "list template expression `{expression}` cannot concatenate array or object values"
+                ),
+            ))
+        }
+    }
+}
+
+fn is_identifier_start(ch: char) -> bool {
+    ch == '_' || ch == '$' || ch.is_ascii_alphabetic()
+}
+
+fn is_identifier_continue(ch: char) -> bool {
+    is_identifier_start(ch) || ch.is_ascii_digit()
+}
+
+fn prop_to_dynamic_value(value: &PropValue) -> FrameworkDynamicValue {
+    match value {
+        PropValue::String(value) => FrameworkDynamicValue::String(value.clone()),
+        PropValue::Bool(value) => FrameworkDynamicValue::Bool(*value),
+        PropValue::Number(value) => FrameworkDynamicValue::Number(*value),
+    }
+}
+
+fn dynamic_value_to_prop(
+    value: FrameworkDynamicValue,
+) -> Result<PropValue, NativeRuntimeBridgeError> {
+    match value {
+        FrameworkDynamicValue::Bool(value) => Ok(PropValue::Bool(value)),
+        FrameworkDynamicValue::Number(value) if value.is_finite() => Ok(PropValue::Number(value)),
+        FrameworkDynamicValue::Number(_) => Err(NativeRuntimeBridgeError::new(
+            "native-runtime.list-template.value-invalid",
+            "list template numeric values must be finite",
+        )),
+        FrameworkDynamicValue::String(value) => Ok(PropValue::String(value)),
+        FrameworkDynamicValue::Null
+        | FrameworkDynamicValue::Array(_)
+        | FrameworkDynamicValue::Object(_) => Err(NativeRuntimeBridgeError::new(
+            "native-runtime.list-template.value-unsupported",
+            "list template scalar values must evaluate to string, bool, or finite number",
+        )),
+    }
+}
+
+fn dynamic_scalar_to_string(
+    value: &FrameworkDynamicValue,
+    label: &str,
+) -> Result<String, NativeRuntimeBridgeError> {
+    match value {
+        FrameworkDynamicValue::String(value) if !value.trim().is_empty() => Ok(value.clone()),
+        FrameworkDynamicValue::Bool(value) => Ok(value.to_string()),
+        FrameworkDynamicValue::Number(value) if value.is_finite() => Ok(value.to_string()),
+        FrameworkDynamicValue::String(_) | FrameworkDynamicValue::Number(_) => {
+            Err(NativeRuntimeBridgeError::new(
+                "native-runtime.list-template.key-invalid",
+                format!("{label} must evaluate to a non-empty finite scalar"),
+            ))
+        }
+        FrameworkDynamicValue::Null
+        | FrameworkDynamicValue::Array(_)
+        | FrameworkDynamicValue::Object(_) => Err(NativeRuntimeBridgeError::new(
+            "native-runtime.list-template.value-unsupported",
+            format!("{label} must evaluate to a scalar"),
+        )),
+    }
+}
+
 /// Non-render metadata preserved for framework and host integration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeRuntimeNodeMetadata {
@@ -573,6 +1169,8 @@ pub struct NativeRuntimeNodeMetadata {
     refs: Vec<String>,
     style_refs: Vec<String>,
     asset_paths: Vec<String>,
+    event_bindings: Vec<(String, String)>,
+    lifecycle_bindings: Vec<(String, String)>,
 }
 
 impl NativeRuntimeNodeMetadata {
@@ -598,6 +1196,18 @@ impl NativeRuntimeNodeMetadata {
     #[must_use]
     pub fn asset_paths(&self) -> &[String] {
         &self.asset_paths
+    }
+
+    /// Returns runtime event bindings as `(event_name, handler_name)` pairs.
+    #[must_use]
+    pub fn event_bindings(&self) -> &[(String, String)] {
+        &self.event_bindings
+    }
+
+    /// Returns lifecycle bindings as `(event_name, handler_name)` pairs.
+    #[must_use]
+    pub fn lifecycle_bindings(&self) -> &[(String, String)] {
+        &self.lifecycle_bindings
     }
 }
 
@@ -1374,6 +1984,31 @@ fn metadata_for(element: &NativeAuthoringElement) -> NativeRuntimeNodeMetadata {
             .iter()
             .map(|asset| asset.path().to_string())
             .collect(),
+        event_bindings: element
+            .event_bindings()
+            .map(|(event, handler, _)| (event.stable_key(), handler.as_str().to_string()))
+            .collect(),
+        lifecycle_bindings: element
+            .lifecycle_bindings()
+            .map(|(event, handler)| {
+                (
+                    native_lifecycle_event_name(event).to_string(),
+                    handler.as_str().to_string(),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn native_lifecycle_event_name(event: NativeLifecycleEvent) -> &'static str {
+    match event {
+        NativeLifecycleEvent::Mounted => "lifecycle.mounted",
+        NativeLifecycleEvent::Suspended => "lifecycle.suspended",
+        NativeLifecycleEvent::Resumed => "lifecycle.resumed",
+        NativeLifecycleEvent::HotReloaded => "lifecycle.hot-reloaded",
+        NativeLifecycleEvent::ErrorBoundary => "lifecycle.error-boundary",
+        NativeLifecycleEvent::Shutdown => "lifecycle.shutdown",
+        NativeLifecycleEvent::Unmounted => "lifecycle.unmounted",
     }
 }
 

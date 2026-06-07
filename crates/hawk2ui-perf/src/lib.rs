@@ -216,6 +216,45 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_suite_rejects_synthetic_measurements_for_release_gates() {
+        let budgets = PerformanceBudgets::parse(
+            r#"
+            [[budgets]]
+            name = "scene-node-count"
+            category = "rendering"
+            unit = "count"
+            target = 128
+            maximum = 256
+            release_gate = true
+            fixture = "examples/desktop-dashboard"
+        "#,
+        )
+        .expect("performance budgets parse");
+        let suite = BenchmarkSuite::new("render").with_case(
+            BenchmarkCase::new(
+                "scene-node-count",
+                "examples/desktop-dashboard",
+                BenchmarkKind::Rendering,
+            )
+            .with_measurement(BenchmarkMeasurement::from_count(128)),
+        );
+
+        assert_eq!(
+            suite.validate_against(&budgets),
+            Err(BenchmarkError::SyntheticMeasurementUsedForReleaseGate(
+                "scene-node-count".to_owned()
+            ))
+        );
+        let report = suite.evaluate_against(&budgets);
+        assert_eq!(report.failed_count(), 1);
+        assert!(
+            report
+                .artifact_payload()
+                .contains("failure = \"synthetic-measurement\"")
+        );
+    }
+
+    #[test]
     fn release_gate_budget_file_uses_only_deterministic_units() {
         let budgets = PerformanceBudgets::parse(BUDGETS).expect("performance budgets parse");
 
@@ -308,7 +347,7 @@ mod tests {
                     budget.fixture.clone(),
                     kind_for_category(budget.category),
                 )
-                .with_measurement(BenchmarkMeasurement::new(budget.target)),
+                .with_measurement(observed_measurement_for_budget(budget)),
             );
         }
         BenchmarkSuite::validate_release_gate_coverage(&budgets, [&complete])
@@ -476,6 +515,16 @@ mod tests {
             PerformanceCategory::Package => BenchmarkKind::Package,
             PerformanceCategory::Host => BenchmarkKind::Host,
             PerformanceCategory::Realtime => BenchmarkKind::Realtime,
+        }
+    }
+
+    fn observed_measurement_for_budget(budget: &PerformanceBudget) -> BenchmarkMeasurement {
+        match budget.unit {
+            BudgetUnit::Bytes => BenchmarkMeasurement::observed_bytes(budget.target),
+            BudgetUnit::Count => BenchmarkMeasurement::observed_count(budget.target),
+            BudgetUnit::Milliseconds | BudgetUnit::Microseconds => {
+                BenchmarkMeasurement::observed(budget.target)
+            }
         }
     }
 }

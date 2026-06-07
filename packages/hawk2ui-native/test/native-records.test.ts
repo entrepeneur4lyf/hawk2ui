@@ -274,10 +274,52 @@ test("compilerArtifactForApp preserves executable event handler artifacts", () =
         },
       ],
     }),
-  ).toThrow("native.event-handler.unreferenced");
-});
+    ).toThrow("native.event-handler.unreferenced");
+  });
 
-test("compilerArtifactForApp accepts the complete stable native event and lifecycle contract", () => {
+  test("compilerArtifactForApp treats list template event handlers as referenced", () => {
+    const spec = { name: "native-template-events", root: { id: "root", kind: "view" as const } };
+    const artifact = compilerArtifactForApp(spec, [], [], [], {
+      eventHandlers: [
+        {
+          name: "handleItemPress",
+          actions: [
+            {
+              type: "set_dynamic_value",
+              name: "selected",
+              value: { type: "string", value: "selected" },
+            },
+          ],
+        },
+      ],
+      listTemplates: [
+        {
+          id: "root:items",
+          parent_id: "root",
+          source: "items",
+          item: "item",
+          key: "item.id",
+          node: {
+            id: { type: "expression", expression: "item.id" },
+            kind: "button",
+            key: { type: "expression", expression: "item.id" },
+            props: [],
+            refs: [],
+            style_refs: [],
+            asset_refs: [],
+            events: [{ kind: "pointer.press", handler: "handleItemPress", payload_fields: ["position"] }],
+            lifecycle: [],
+            children: [],
+          },
+        },
+      ],
+    });
+
+    expect(artifact.event_handlers.map((handler) => handler.name)).toEqual(["handleItemPress"]);
+    expect(artifact.list_templates[0].node.events.map((event) => event.handler)).toEqual(["handleItemPress"]);
+  });
+
+  test("compilerArtifactForApp accepts the complete stable native event and lifecycle contract", () => {
   const artifact = compilerArtifactForApp({
     name: "native-event-contract",
     root: {

@@ -7,13 +7,14 @@ pub mod custom_surface;
 pub mod export;
 pub mod layer;
 pub mod scene;
+pub mod testkit;
 
 pub use assets::{
     AssetDiagnostic, AssetDrawRecord, AssetError, AssetKind, BackendRequirement, CompiledAsset,
 };
 pub use backend::{
-    BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, RecordingBackend,
-    RendererBackend, RendererCacheInvalidator, ShaderEffectChildInput, ShaderEffectUniform,
+    BackendCacheHandle, BackendCapabilities, BackendDiagnostic, BackendError, RendererBackend,
+    RendererCacheInvalidator, ShaderEffectChildInput, ShaderEffectUniform,
     ShaderEffectUniformValue,
 };
 pub use custom_surface::{

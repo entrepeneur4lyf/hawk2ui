@@ -7,7 +7,7 @@ use hawk2ui_api::Diagnostic;
 use crate::adapter::FrameworkDynamicBinding;
 use crate::{
     AuthoringDiagnostic, AuthoringDiagnosticSeverity, ElementId, ElementKind, ElementNode,
-    EventBinding, EventKind, HandlerRef, LifecycleEventKind, PropValue,
+    EventBinding, EventKind, EventPayloadField, HandlerRef, LifecycleEventKind, PropValue,
 };
 use crate::{limits::MAX_AUTHORING_TREE_DEPTH, operation_keys};
 
@@ -301,6 +301,26 @@ impl NativeAuthoringElement {
     #[must_use]
     pub fn refs(&self) -> &[NativeRef] {
         &self.refs
+    }
+
+    /// Returns event bindings in declaration order.
+    pub fn event_bindings(
+        &self,
+    ) -> impl Iterator<Item = (&EventKind, &HandlerRef, &[EventPayloadField])> {
+        self.events.iter().map(|binding| {
+            (
+                &binding.event,
+                &binding.handler,
+                binding.payload_fields.as_slice(),
+            )
+        })
+    }
+
+    /// Returns lifecycle bindings in declaration order.
+    pub fn lifecycle_bindings(&self) -> impl Iterator<Item = (NativeLifecycleEvent, &HandlerRef)> {
+        self.lifecycle
+            .iter()
+            .map(|binding| (binding.event, &binding.handler))
     }
 
     /// Returns keyed child names in declaration order, skipping unkeyed children.

@@ -23,7 +23,7 @@ fn skia_backend_matches_recording_backend_for_core_frame_commands() {
         .with_text(true)
         .with_images(true)
         .with_runtime_effects(true);
-    let mut recording = hawk2ui_render::RecordingBackend::new(capabilities);
+    let mut recording = hawk2ui_render::testkit::RecordingBackend::new(capabilities);
     let mut skia = SkiaRendererBackend::new();
     skia.register_image_asset("hero", ONE_BY_ONE_PNG).unwrap();
 

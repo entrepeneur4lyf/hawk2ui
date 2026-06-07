@@ -3,8 +3,8 @@
 //!
 //! The package adapter layer emits deterministic package layouts and buildable `CLAP`/`VST3`
 //! `cdylib` scaffolds; the CLI release path compiles those scaffolds into host-loadable package
-//! binaries. AU, standalone, and desktop outputs currently materialize deterministic bundle layouts
-//! and launch metadata.
+//! binaries. AU, standalone, and desktop package formats are rejected during planning until their
+//! real host-loadable binary materializers are implemented.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -12,6 +12,7 @@ use std::{
     fs,
     path::Component,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use clap_sys::ext::params::{
@@ -701,6 +702,70 @@ fn validate_clap_runtime_editor_package_trust(
     PackageTrustValidator::new(CLAP_RUNTIME_EDITOR_ARTIFACT_SCHEMA_MAJOR)
         .validate(&record)
         .map_err(clap_runtime_editor_package_trust_error)
+}
+
+fn runtime_artifact_trust_diagnostics(
+    package_root: &Path,
+    verifier: &ArtifactSignatureVerifier,
+) -> Vec<PackageDiagnostic> {
+    let artifact_path = package_root
+        .join("Contents")
+        .join("Resources")
+        .join("hawk2ui-runtime-artifact.json");
+    let source = match fs::read_to_string(&artifact_path) {
+        Ok(source) => source,
+        Err(error) => {
+            return vec![PackageDiagnostic::new(
+                "package.runtime-artifact.read-failed",
+                format!(
+                    "runtime artifact {} could not be read for trust verification: {error}",
+                    artifact_path.display()
+                ),
+            )];
+        }
+    };
+    let value: serde_json::Value = match serde_json::from_str(&source) {
+        Ok(value) => value,
+        Err(error) => {
+            return vec![PackageDiagnostic::new(
+                "package.runtime-artifact.parse-failed",
+                format!("runtime artifact JSON could not be parsed: {error}"),
+            )];
+        }
+    };
+    if let Err(error) = SealedArtifact::validate_json(&value) {
+        return vec![PackageDiagnostic::new(
+            "package.runtime-artifact.schema-invalid",
+            sealed_artifact_error_message(&error),
+        )];
+    }
+    let artifact: SealedArtifact = match serde_json::from_value(value) {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            return vec![PackageDiagnostic::new(
+                "package.runtime-artifact.parse-failed",
+                format!("runtime artifact JSON could not be decoded: {error}"),
+            )];
+        }
+    };
+    let record = PackageTrustRecord::from_trusted_sealed_artifact(
+        &artifact,
+        verifier,
+        VerificationReportStatus::Present,
+    );
+    match PackageTrustValidator::new(CLAP_RUNTIME_EDITOR_ARTIFACT_SCHEMA_MAJOR).validate(&record) {
+        Ok(()) => Vec::new(),
+        Err(violation) => {
+            let diagnostic = Diagnostic::from(violation);
+            vec![PackageDiagnostic::new(
+                format!("package.runtime-artifact.{}", diagnostic.rule.as_str()),
+                format!(
+                    "runtime artifact package trust validation failed: {}",
+                    diagnostic.message
+                ),
+            )]
+        }
+    }
 }
 
 fn clap_runtime_editor_package_trust_error(
@@ -3529,19 +3594,140 @@ impl PackageTargetPlan {
         files
     }
 
-    fn verify_materialized_output(&self, output: &MaterializedPackageOutput) -> bool {
+    fn materialized_output_diagnostics(
+        &self,
+        output: &MaterializedPackageOutput,
+    ) -> Vec<PackageDiagnostic> {
         let output_path = Path::new(&output.output_path);
         let resources_path = output_path.join("Contents").join("Resources");
         let hash_manifest_path = Path::new(&output.hash_manifest_path);
-        output_path.is_dir()
-            && Path::new(&output.manifest_path).is_file()
-            && Path::new(&output.artifact_descriptor_path).is_file()
-            && hash_manifest_path.is_file()
-            && self
-                .required_package_files(output_path, &resources_path)
-                .iter()
-                .all(|path| path.is_file())
-            && hash_manifest_matches(output_path, hash_manifest_path)
+        let mut diagnostics = Vec::new();
+        if !output_path.is_dir() {
+            diagnostics.push(PackageDiagnostic::new(
+                "package.output.missing",
+                format!(
+                    "package output directory {} is missing",
+                    output_path.display()
+                ),
+            ));
+        }
+        let manifest_path = Path::new(&output.manifest_path);
+        if !manifest_path.is_file() {
+            diagnostics.push(PackageDiagnostic::new(
+                "package.manifest.missing",
+                format!("package manifest {} is missing", manifest_path.display()),
+            ));
+        }
+        let artifact_descriptor_path = Path::new(&output.artifact_descriptor_path);
+        if !artifact_descriptor_path.is_file() {
+            diagnostics.push(PackageDiagnostic::new(
+                "package.artifact-descriptor.missing",
+                format!(
+                    "package artifact descriptor {} is missing",
+                    artifact_descriptor_path.display()
+                ),
+            ));
+        }
+        if !hash_manifest_path.is_file() {
+            diagnostics.push(PackageDiagnostic::new(
+                "package.hash-manifest.missing",
+                format!(
+                    "package hash manifest {} is missing",
+                    hash_manifest_path.display()
+                ),
+            ));
+        }
+        diagnostics.extend(
+            self.required_package_files(output_path, &resources_path)
+                .into_iter()
+                .filter(|path| !path.is_file())
+                .map(|path| {
+                    PackageDiagnostic::new(
+                        "package.required-file.missing",
+                        format!("required package file {} is missing", path.display()),
+                    )
+                }),
+        );
+        if hash_manifest_path.is_file() && !hash_manifest_matches(output_path, hash_manifest_path) {
+            diagnostics.push(PackageDiagnostic::new(
+                "package.hash-manifest.invalid",
+                format!(
+                    "package hash manifest {} does not match package files",
+                    hash_manifest_path.display()
+                ),
+            ));
+        }
+        if let Some(binary_path) = self.host_binary_slot_path(output_path) {
+            if host_binary_slot_has_native_library_magic(&binary_path) {
+                diagnostics.extend(self.host_binary_export_diagnostics(&binary_path));
+            } else {
+                diagnostics.push(PackageDiagnostic::new(
+                    "package.binary-slot.not-loadable",
+                    format!(
+                        "host binary slot {} does not contain a native loadable library",
+                        binary_path.display()
+                    ),
+                ));
+            }
+        }
+        diagnostics
+    }
+
+    fn host_binary_slot_path(&self, output_path: &Path) -> Option<PathBuf> {
+        match self.format {
+            PackageFormat::Clap => {
+                Some(output_path.join(format!("{}.clap", self.metadata.display_name)))
+            }
+            PackageFormat::Vst3 => Some(
+                output_path
+                    .join("Contents")
+                    .join("x86_64-linux")
+                    .join(format!("{}.vst3", self.metadata.display_name)),
+            ),
+            PackageFormat::Au | PackageFormat::Standalone | PackageFormat::DesktopBundle => Some(
+                output_path
+                    .join("Contents")
+                    .join("MacOS")
+                    .join(&self.metadata.display_name),
+            ),
+            PackageFormat::SealedArtifact => None,
+        }
+    }
+
+    fn host_binary_export_diagnostics(&self, binary_path: &Path) -> Vec<PackageDiagnostic> {
+        let Ok(bytes) = fs::read(binary_path) else {
+            return vec![PackageDiagnostic::new(
+                "package.binary-slot.not-loadable",
+                format!("host binary slot {} cannot be read", binary_path.display()),
+            )];
+        };
+        let mut diagnostics: Vec<_> = self
+            .expected_host_export_symbols()
+            .into_iter()
+            .filter(|symbol| !binary_contains_symbol(&bytes, symbol))
+            .map(|symbol| {
+                PackageDiagnostic::new(
+                    "package.binary-slot.missing-export-symbol",
+                    format!(
+                        "host binary slot {} is missing required export symbol {symbol}",
+                        binary_path.display()
+                    ),
+                )
+            })
+            .collect();
+        diagnostics.extend(host_binary_dynamic_load_diagnostics(binary_path));
+        diagnostics
+    }
+
+    fn expected_host_export_symbols(&self) -> Vec<&'static str> {
+        match self.format {
+            PackageFormat::Clap => vec!["clap_entry"],
+            PackageFormat::Vst3 => vec!["GetPluginFactory"],
+            PackageFormat::Au
+            | PackageFormat::Standalone
+            | PackageFormat::DesktopBundle
+            | PackageFormat::SealedArtifact => Vec::new(),
+        }
     }
 
     fn write_clap_cdylib_scaffold(
@@ -3647,6 +3833,7 @@ impl PackagePlan {
             .map(|target| VerificationEntry {
                 target,
                 status: VerificationStatus::Passed,
+                diagnostics: Vec::new(),
             })
             .collect();
         VerificationReport { entries }
@@ -3661,15 +3848,63 @@ impl PackagePlan {
             .iter()
             .cloned()
             .map(|target| {
-                let status = outputs
+                let diagnostics = outputs
                     .iter()
                     .find(|output| output.format == target.format)
-                    .filter(|output| target.verify_materialized_output(output))
-                    .map_or(VerificationStatus::Failed, |_| VerificationStatus::Passed);
-                VerificationEntry { target, status }
+                    .map_or_else(
+                        || {
+                            vec![PackageDiagnostic::new(
+                                "package.output.missing",
+                                format!(
+                                    "materialized output for {:?} target is missing",
+                                    target.format
+                                ),
+                            )]
+                        },
+                        |output| target.materialized_output_diagnostics(output),
+                    );
+                let status = if diagnostics.is_empty() {
+                    VerificationStatus::Passed
+                } else {
+                    VerificationStatus::Failed
+                };
+                VerificationEntry {
+                    target,
+                    status,
+                    diagnostics,
+                }
             })
             .collect();
         VerificationReport { entries }
+    }
+
+    /// Verifies materialized package outputs and validates embedded runtime artifact trust.
+    #[must_use]
+    pub fn verify_trusted_materialized(
+        &self,
+        outputs: &[MaterializedPackageOutput],
+        verifier: &ArtifactSignatureVerifier,
+    ) -> VerificationReport {
+        let mut report = self.verify_materialized(outputs);
+        for entry in &mut report.entries {
+            if entry.target.runtime_artifact.is_none() {
+                continue;
+            }
+            let Some(output) = outputs
+                .iter()
+                .find(|output| output.format == entry.target.format)
+            else {
+                continue;
+            };
+            entry.diagnostics.extend(runtime_artifact_trust_diagnostics(
+                Path::new(&output.output_path),
+                verifier,
+            ));
+            if !entry.diagnostics.is_empty() {
+                entry.status = VerificationStatus::Failed;
+            }
+        }
+        report
     }
 }
 
@@ -3784,6 +4019,7 @@ pub enum VerificationStatus {
 pub struct VerificationEntry {
     target: PackageTargetPlan,
     status: VerificationStatus,
+    diagnostics: Vec<PackageDiagnostic>,
 }
 
 impl VerificationEntry {
@@ -3803,6 +4039,12 @@ impl VerificationEntry {
     #[must_use]
     pub const fn status(&self) -> VerificationStatus {
         self.status
+    }
+
+    /// Returns verification diagnostics recorded for this target.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[PackageDiagnostic] {
+        &self.diagnostics
     }
 }
 
@@ -3862,7 +4104,8 @@ impl VerificationReport {
 }
 
 /// Package planning diagnostic.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageDiagnostic {
     rule: String,
     message: String,
@@ -3918,6 +4161,20 @@ fn validate_request(request: &PackageRequest) -> Result<(), PackagePlanningError
             "package.formats.empty",
             "at least one package format is required",
         ));
+    }
+    for format in &request.formats {
+        if matches!(
+            format,
+            PackageFormat::Au | PackageFormat::Standalone | PackageFormat::DesktopBundle
+        ) {
+            diagnostics.push(PackageDiagnostic::new(
+                "package.format.unsupported",
+                format!(
+                    "{} does not have production binary materialization yet",
+                    format.manifest_key()
+                ),
+            ));
+        }
     }
     if request.output.path.trim().is_empty() {
         diagnostics.push(PackageDiagnostic::new(
@@ -4575,6 +4832,118 @@ fn package_regular_files(root: &Path, excluded_relative: &str) -> Option<BTreeSe
     let mut files = BTreeSet::new();
     visit(root, root, excluded_relative, &mut files)?;
     Some(files)
+}
+
+fn host_binary_slot_has_native_library_magic(path: &Path) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    is_native_library_magic(&bytes)
+}
+
+fn binary_contains_symbol(bytes: &[u8], symbol: &str) -> bool {
+    let symbol = symbol.as_bytes();
+    !symbol.is_empty() && bytes.windows(symbol.len()).any(|window| window == symbol)
+}
+
+fn host_binary_dynamic_load_diagnostics(binary_path: &Path) -> Vec<PackageDiagnostic> {
+    match platform_dynamic_loader_probe(binary_path) {
+        Ok(()) => Vec::new(),
+        Err(error) => vec![PackageDiagnostic::new(
+            "package.binary-slot.dynamic-load-failed",
+            format!(
+                "host binary slot {} failed dynamic loader validation: {error}",
+                binary_path.display()
+            ),
+        )],
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn platform_dynamic_loader_probe(binary_path: &Path) -> Result<(), String> {
+    let output = Command::new("ldd")
+        .arg(binary_path)
+        .output()
+        .map_err(|error| format!("failed to execute ldd: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(command_failure_message("ldd", &output))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn platform_dynamic_loader_probe(binary_path: &Path) -> Result<(), String> {
+    let output = Command::new("otool")
+        .arg("-L")
+        .arg(binary_path)
+        .output()
+        .map_err(|error| format!("failed to execute otool -L: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(command_failure_message("otool -L", &output))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn platform_dynamic_loader_probe(binary_path: &Path) -> Result<(), String> {
+    let script = r#"
+$path = $args[0]
+try {
+    $handle = [System.Runtime.InteropServices.NativeLibrary]::Load($path)
+    [System.Runtime.InteropServices.NativeLibrary]::Free($handle)
+    exit 0
+} catch {
+    Write-Error $_
+    exit 1
+}
+"#;
+    let output = Command::new("powershell")
+        .arg("-NoProfile")
+        .arg("-NonInteractive")
+        .arg("-Command")
+        .arg(script)
+        .arg(binary_path)
+        .output()
+        .map_err(|error| format!("failed to execute PowerShell NativeLibrary probe: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(command_failure_message(
+            "PowerShell NativeLibrary probe",
+            &output,
+        ))
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn platform_dynamic_loader_probe(_binary_path: &Path) -> Result<(), String> {
+    Err("dynamic loader validation is not implemented for this platform".to_owned())
+}
+
+fn command_failure_message(command_name: &str, output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = if !stderr.trim().is_empty() {
+        stderr.trim()
+    } else if !stdout.trim().is_empty() {
+        stdout.trim()
+    } else {
+        "process produced no diagnostic output"
+    };
+    format!("{command_name} exited with {}: {detail}", output.status)
+}
+
+fn is_native_library_magic(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x7fELF")
+        || bytes.starts_with(b"MZ")
+        || bytes.starts_with(&[0xfe, 0xed, 0xfa, 0xce])
+        || bytes.starts_with(&[0xfe, 0xed, 0xfa, 0xcf])
+        || bytes.starts_with(&[0xce, 0xfa, 0xed, 0xfe])
+        || bytes.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
+        || bytes.starts_with(&[0xca, 0xfe, 0xba, 0xbe])
+        || bytes.starts_with(&[0xbe, 0xba, 0xfe, 0xca])
 }
 
 fn is_safe_relative_path(path: &Path) -> bool {

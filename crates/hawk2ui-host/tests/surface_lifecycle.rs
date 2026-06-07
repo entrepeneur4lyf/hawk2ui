@@ -5,9 +5,12 @@ use hawk2ui_host::{
     ClipboardCapability, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig, FramePresenter,
     HostCapabilities, HostCapability, HostPlatformHandle, HostSurface, KeyboardInput,
     PluginEditorConfig, PluginHostAdapter, PluginHostEvent, PluginParentHandle, PointerInput,
-    RecordingDesktopAdapter, RecordingFramePresenter, RecordingHostSurface, RecordingPluginAdapter,
     RepaintRequest, SurfaceClipboardRequest, SurfaceEvent, SurfaceMetrics, SurfaceOwnership,
     SurfaceWindowCommand, SurfaceWindowMode, WindowMode,
+    testkit::{
+        RecordingDesktopAdapter, RecordingFramePresenter, RecordingHostSurface,
+        RecordingPluginAdapter,
+    },
 };
 
 #[test]

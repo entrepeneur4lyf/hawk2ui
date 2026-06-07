@@ -1,7 +1,11 @@
 #![allow(dead_code)]
 
-use std::collections::HashSet;
-use std::process::Command;
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use serde::Deserialize;
 
@@ -29,7 +33,23 @@ fn run_full_release_check() -> Result<(), String> {
     validate_repository_dependency_policy()?;
     validate_repository_release_evidence()?;
     validate_repository_changelog()?;
-    run_script("scripts/check.sh")
+    run_repository_release_evidence_commands()
+}
+
+fn run_repository_release_evidence_commands() -> Result<(), String> {
+    let criteria = ReleaseCriteria::parse(include_str!("../../release/release-criteria.toml"))
+        .map_err(|error| format!("release criteria validation failed: {error:?}"))?;
+    let targets = PackageTargets::parse(include_str!("../../release/package-targets.toml"))
+        .map_err(|error| format!("package target validation failed: {error:?}"))?;
+    let commands = release_evidence_commands(&criteria, &targets);
+    run_release_evidence_commands_in_workspace(&workspace_root(), &commands)
+}
+
+fn workspace_root() -> PathBuf {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .map_or_else(|| manifest_dir.to_path_buf(), Path::to_path_buf)
 }
 
 fn validate_repository_release_criteria() -> Result<(), String> {
@@ -85,6 +105,125 @@ fn run_script(script: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("{script} failed with {status}"))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReleaseEvidenceCommand {
+    kind: &'static str,
+    id: String,
+    command: String,
+    evidence: String,
+}
+
+impl ReleaseEvidenceCommand {
+    fn new(
+        kind: &'static str,
+        id: impl Into<String>,
+        command: impl Into<String>,
+        evidence: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            id: id.into(),
+            command: command.into(),
+            evidence: evidence.into(),
+        }
+    }
+}
+
+fn release_evidence_commands(
+    criteria: &ReleaseCriteria,
+    targets: &PackageTargets,
+) -> Vec<ReleaseEvidenceCommand> {
+    let mut commands: Vec<_> = criteria
+        .release_blockers()
+        .map(|criterion| {
+            ReleaseEvidenceCommand::new(
+                "criterion",
+                criterion.id.clone(),
+                criterion.command.clone(),
+                criterion.evidence.clone(),
+            )
+        })
+        .collect();
+    commands.extend(targets.release_blockers().map(|target| {
+        ReleaseEvidenceCommand::new(
+            "target",
+            target.id.clone(),
+            target.command.clone(),
+            target.evidence.clone(),
+        )
+    }));
+    commands
+}
+
+fn run_release_evidence_commands_in_workspace(
+    workspace: &Path,
+    commands: &[ReleaseEvidenceCommand],
+) -> Result<(), String> {
+    for command in commands {
+        run_release_evidence_command(workspace, command)?;
+    }
+    Ok(())
+}
+
+fn run_release_evidence_command(
+    workspace: &Path,
+    command: &ReleaseEvidenceCommand,
+) -> Result<(), String> {
+    let output = Command::new("bash")
+        .arg("-lc")
+        .arg(&command.command)
+        .current_dir(workspace)
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to launch release evidence command {} `{}`: {error}",
+                command.id, command.command
+            )
+        })?;
+    let evidence_path = workspace.join(&command.evidence);
+    if let Some(parent) = evidence_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create release evidence directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let status = if output.status.success() {
+        "success"
+    } else {
+        "failure"
+    };
+    let exit_code = output.status.code().map_or_else(
+        || "terminated-by-signal".to_owned(),
+        |code| code.to_string(),
+    );
+    let payload = format!(
+        "kind={}\nid={}\ncommand={}\nstatus={status}\nexit_code={exit_code}\n\n[stdout]\n{}\n[stderr]\n{}\n",
+        command.kind,
+        command.id,
+        command.command,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    fs::write(&evidence_path, payload).map_err(|error| {
+        format!(
+            "failed to write release evidence file {}: {error}",
+            evidence_path.display()
+        )
+    })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "release evidence command {} `{}` failed with status {exit_code}; evidence written to {}",
+            command.id,
+            command.command,
+            evidence_path.display()
+        ))
     }
 }
 
@@ -795,6 +934,7 @@ evidence = "target/release-evidence/manuals.txt"
             "ci-pass",
             "dependency-health",
             "compatibility-matrix",
+            "framework-compilers",
             "performance-budgets",
             "visual-regression",
             "plugin-realtime-safety",
@@ -945,6 +1085,9 @@ compatibility_notes_required = true
             "taffy",
             "skia-safe",
             "notify",
+            "truce",
+            "truce-core",
+            "truce-params",
         ] {
             assert!(
                 policy.contains(dependency),
@@ -966,6 +1109,17 @@ compatibility_notes_required = true
                 .all(|entry| entry.source != DependencySource::Git),
             "Git dependencies must be removed or isolated before release"
         );
+        for dependency in ["truce", "truce-core", "truce-params"] {
+            let entry = policy
+                .dependencies
+                .iter()
+                .find(|entry| entry.name == dependency)
+                .unwrap_or_else(|| panic!("missing dependency policy entry for {dependency}"));
+            assert_eq!(
+                entry.version, "0.56.0",
+                "{dependency} must track the accepted truce.audio 0.56.0 line"
+            );
+        }
     }
 
     #[test]
@@ -1061,6 +1215,52 @@ release_gate = true
             include_str!("../../release/package-targets.toml"),
         )
         .expect("repository release evidence must link public claims to release metadata");
+    }
+
+    #[test]
+    fn release_evidence_command_writes_success_artifact_from_real_command() {
+        let root = temp_release_root("success");
+        let command = ReleaseEvidenceCommand::new(
+            "criterion",
+            "api-stability",
+            "printf 'proof\\n'",
+            "target/release-evidence/api-stability.txt",
+        );
+
+        run_release_evidence_commands_in_workspace(&root, &[command])
+            .expect("successful evidence command should pass");
+
+        let evidence =
+            std::fs::read_to_string(root.join("target/release-evidence/api-stability.txt"))
+                .expect("evidence file should be written");
+        assert!(evidence.contains("kind=criterion"));
+        assert!(evidence.contains("id=api-stability"));
+        assert!(evidence.contains("command=printf 'proof\\n'"));
+        assert!(evidence.contains("status=success"));
+        assert!(evidence.contains("proof"));
+    }
+
+    #[test]
+    fn release_evidence_command_writes_failure_artifact_and_returns_error() {
+        let root = temp_release_root("failure");
+        let command = ReleaseEvidenceCommand::new(
+            "target",
+            "plugin-vst3",
+            "printf 'bad\\n'; exit 7",
+            "target/release-evidence/plugin-vst3.txt",
+        );
+
+        let error = run_release_evidence_commands_in_workspace(&root, &[command])
+            .expect_err("failing evidence command should fail release evidence");
+
+        assert!(error.contains("plugin-vst3"));
+        let evidence =
+            std::fs::read_to_string(root.join("target/release-evidence/plugin-vst3.txt"))
+                .expect("failure evidence file should be written");
+        assert!(evidence.contains("kind=target"));
+        assert!(evidence.contains("id=plugin-vst3"));
+        assert!(evidence.contains("status=failure"));
+        assert!(evidence.contains("bad"));
     }
 
     #[test]
@@ -1165,5 +1365,18 @@ Verification Evidence: target/release-evidence/
             Changelog::parse(input).expect_err("a changelog missing required sections must fail");
 
         assert_eq!(error, ChangelogError::MissingSection("Changed".to_owned()));
+    }
+
+    fn temp_release_root(label: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "hawk2ui-xtask-release-evidence-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp release root should be created");
+        root
     }
 }

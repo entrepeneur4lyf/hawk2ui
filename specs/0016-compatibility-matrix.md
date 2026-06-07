@@ -39,6 +39,8 @@ The matrix must cover:
 - X11/XCB behavior,
 - XWayland behavior.
 
+Windows and macOS rows are mandatory release targets. They must not be treated as optional future compatibility, and release tooling must block public release if either platform lacks runtime, packaging, manual, or evidence coverage.
+
 ## Renderer Compatibility Requirements
 
 Renderer compatibility must track support for:
@@ -75,3 +77,4 @@ Plugin compatibility must track:
 - Build tooling can validate target compatibility.
 - Release gates can query compatibility data.
 - Unsupported targets fail with actionable diagnostics.
+- Windows and macOS compatibility entries are backed by release evidence before announcement.

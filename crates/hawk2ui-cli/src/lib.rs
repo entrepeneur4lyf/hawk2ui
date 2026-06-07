@@ -5,18 +5,19 @@ pub mod commands;
 pub mod dev_loop;
 pub mod diagnostics;
 pub mod executor;
+pub mod testkit;
 
-pub use commands::{
-    BuildCommandResult, BuildCommandRunner, BuildCommandScenario, CliCommand, CliError,
-    CliExitCode, CliPresentationBackend, CommandCatalog,
-};
+pub use commands::{CliCommand, CliError, CliExitCode, CliPresentationBackend, CommandCatalog};
 pub use dev_loop::{
-    DevChangeClassifier, DevErrorOverlay, DevLoop, DevLoopEvent, DevLoopReport, DevPatchKind,
-    DevPatchPlan, DevWatchKind, DevWatchedPath, DevWatcherError, FileSystemWatcher,
-    NotifyFileSystemWatcher, RecordingReloadTarget, RecordingWatcher,
+    DevChangeBatch, DevChangeClassifier, DevErrorOverlay, DevLoop, DevLoopEvent, DevLoopReport,
+    DevPatchKind, DevPatchPlan, DevReloadAcknowledgement, DevSurfaceReloader, DevWatchKind,
+    DevWatchedPath, DevWatcherError, FileSystemWatcher, NotifyFileSystemWatcher,
 };
 pub use diagnostics::{CliDiagnostic, DiagnosticSeverity, SourceSpan};
-pub use executor::{CommandExecution, WorkspaceCommandRunner};
+pub use executor::{
+    CommandExecution, WorkspaceCommandRunner, run_packaged_desktop_from_default_location,
+    run_packaged_desktop_from_descriptor_path,
+};
 
 /// The canonical Cargo package name for this crate.
 pub const CRATE_NAME: &str = "hawk2ui-cli";

@@ -5,6 +5,7 @@ use hawk2ui_cli::{
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -22,6 +23,7 @@ fn cli_commands_help_lists_required_workflows() {
         "build-release",
         "verify-artifact",
         "run-desktop",
+        "package-desktop",
         "package-plugin",
         "export-schemas",
         "export-params",
@@ -31,6 +33,16 @@ fn cli_commands_help_lists_required_workflows() {
         "explain",
     ] {
         assert!(help.contains(command), "help missing command: {command}");
+    }
+    assert!(
+        help.contains("CLAP and VST3"),
+        "package-plugin help must advertise only release-backed plugin binary formats"
+    );
+    for unsupported in ["AU", "standalone", "desktop bundle"] {
+        assert!(
+            !help.contains(unsupported),
+            "package-plugin help must not advertise unsupported target: {unsupported}"
+        );
     }
 }
 
@@ -113,6 +125,10 @@ fn cli_commands_parse_known_commands_and_reject_invalid_command() {
             presentation_backend: CliPresentationBackend::GpuPreferred,
         }
     );
+    assert_eq!(
+        catalog.parse(["hawk2ui", "package-desktop"]).unwrap(),
+        CliCommand::PackageDesktop
+    );
 
     let error = catalog
         .parse(["hawk2ui", "nope"])
@@ -173,7 +189,14 @@ path = "assets/logo.svg"
 
     let execution = WorkspaceCommandRunner::new(&root).execute(CliCommand::Dev);
 
-    assert_eq!(execution.exit_code, CliExitCode::Success);
+    assert_eq!(
+        execution.exit_code,
+        CliExitCode::Success,
+        "package-desktop should succeed\nstdout:\n{}\nstderr:\n{}\ndiagnostics:\n{:#?}",
+        execution.stdout,
+        execution.stderr,
+        execution.diagnostics
+    );
     assert!(execution.stdout.contains("src/main.ts"));
     assert!(execution.stdout.contains("src/bootstrap.ts"));
     assert!(execution.stdout.contains("styles/main.hawk.css"));
@@ -504,7 +527,7 @@ fn diagnostics_render_warning_error_capability_denial_and_target_incompatibility
     assert!(target.render().contains("target=plugin:vst3"));
 }
 
-use hawk2ui_cli::{BuildCommandRunner, BuildCommandScenario};
+use hawk2ui_cli::testkit::{BuildCommandRunner, BuildCommandScenario};
 
 #[test]
 fn build_commands_return_success_validation_failure_and_verification_failure_codes() {
@@ -814,7 +837,7 @@ fn workspace_package_plugin_materializes_plugin_outputs() {
             .stdout
             .contains("host-loadable-binaries: produced=2")
     );
-    for extension in ["clap", "vst3", "component", "app"] {
+    for extension in ["clap", "vst3"] {
         let package_root = root
             .join("target/hawk2ui")
             .join(format!("com-hawk2ui-cli-plugin.{extension}"));
@@ -858,6 +881,16 @@ fn workspace_package_plugin_materializes_plugin_outputs() {
             ArtifactSignatureStatus::Verified
         );
     }
+    for extension in ["component", "app"] {
+        let package_root = root
+            .join("target/hawk2ui")
+            .join(format!("com-hawk2ui-cli-plugin.{extension}"));
+        assert!(
+            !package_root.exists(),
+            "{} should not be emitted until package-plugin can compile a real host binary for it",
+            package_root.display()
+        );
+    }
 
     #[cfg(target_os = "linux")]
     {
@@ -881,6 +914,119 @@ fn workspace_package_plugin_materializes_plugin_outputs() {
             );
         }
     }
+}
+
+#[test]
+fn workspace_package_desktop_materializes_signed_native_launcher_bundle() {
+    let root = temp_cli_workspace("package-desktop");
+    write_desktop_project(
+        &root,
+        "com.hawk2ui.cli-desktop-package",
+        "CLI Desktop Package",
+    );
+
+    let execution = signed_runner(&root).execute(CliCommand::PackageDesktop);
+
+    assert_eq!(execution.exit_code, CliExitCode::Success);
+    assert!(execution.stdout.contains("materialized desktop package"));
+    assert!(
+        execution
+            .stdout
+            .contains("launcher-verification-status: passed")
+    );
+    let package_root = root
+        .join("target/hawk2ui")
+        .join("com-hawk2ui-cli-desktop-package.AppDir");
+    let launcher = package_root.join("usr/bin/CLI Desktop Package");
+    let artifact_path = package_root.join("usr/share/hawk2ui/hawk2ui-artifact.hawk");
+    let manifest_path = package_root.join("hawk2ui-desktop-package.json");
+    let hash_manifest_path = package_root.join("usr/share/hawk2ui/hawk2ui-hashes.json");
+    let generated_target_dir = package_root.join("usr/share/hawk2ui/generated-launcher/target");
+
+    assert!(launcher.is_file(), "desktop launcher should exist");
+    assert!(artifact_path.is_file(), "signed artifact should be bundled");
+    assert!(
+        manifest_path.is_file(),
+        "desktop package manifest should exist"
+    );
+    assert!(
+        hash_manifest_path.is_file(),
+        "desktop package hash manifest should exist"
+    );
+    assert!(
+        !generated_target_dir.exists(),
+        "desktop package must not retain generated Cargo build cache"
+    );
+
+    let artifact: SealedArtifact =
+        serde_json::from_str(&fs::read_to_string(&artifact_path).expect("desktop artifact reads"))
+            .expect("desktop artifact decodes as sealed artifact");
+    assert_eq!(artifact.signature.status, ArtifactSignatureStatus::Verified);
+
+    #[cfg(target_os = "linux")]
+    {
+        let bytes = fs::read(&launcher).expect("launcher binary reads");
+        assert!(
+            bytes.starts_with(b"\x7fELF"),
+            "{} must be an ELF native executable, not a script placeholder",
+            launcher.display()
+        );
+    }
+
+    let launch = Command::new(&launcher)
+        .env("HAWK2UI_EXIT_AFTER_FIRST_FRAME", "1")
+        .output()
+        .expect("packaged launcher should execute");
+    assert!(
+        launch.status.success(),
+        "packaged launcher should run the native desktop runtime: stdout={} stderr={}",
+        String::from_utf8_lossy(&launch.stdout),
+        String::from_utf8_lossy(&launch.stderr)
+    );
+}
+
+#[test]
+fn workspace_package_desktop_writes_json_metadata_values() {
+    let root = temp_cli_workspace("package-desktop-escaping");
+    let display_name = "CLI \"Quoted\" Desktop";
+    write_desktop_project(&root, "com.hawk2ui.cli-desktop-escaping", display_name);
+
+    let execution = signed_runner(&root).execute(CliCommand::PackageDesktop);
+
+    assert_eq!(
+        execution.exit_code,
+        CliExitCode::Success,
+        "package-desktop should succeed for quoted names\nstdout:\n{}\nstderr:\n{}\ndiagnostics:\n{:#?}",
+        execution.stdout,
+        execution.stderr,
+        execution.diagnostics
+    );
+    let package_root = root
+        .join("target/hawk2ui")
+        .join("com-hawk2ui-cli-desktop-escaping.AppDir");
+    let manifest_path = package_root.join("hawk2ui-desktop-package.json");
+    let hash_manifest_path = package_root.join("usr/share/hawk2ui/hawk2ui-hashes.json");
+    let manifest_source =
+        fs::read_to_string(&manifest_path).expect("desktop package manifest should read");
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_source)
+        .expect("desktop package manifest should be valid JSON");
+    let hash_manifest_source =
+        fs::read_to_string(&hash_manifest_path).expect("desktop hash manifest should read");
+    let hash_manifest: serde_json::Value = serde_json::from_str(&hash_manifest_source)
+        .expect("desktop hash manifest should be valid JSON");
+
+    assert_eq!(manifest["displayName"].as_str(), Some(display_name));
+    assert_eq!(
+        manifest["entry"].as_str(),
+        Some("usr/bin/CLI \"Quoted\" Desktop")
+    );
+    assert!(hash_manifest["files"].as_array().is_some_and(|files| {
+        files.iter().any(|file| {
+            file["path"]
+                .as_str()
+                .is_some_and(|path| path == "usr/bin/CLI \"Quoted\" Desktop")
+        })
+    }));
 }
 
 #[test]
@@ -973,7 +1119,10 @@ path = "assets/logo.svg"
     assert!(execution.stderr.contains("assets/logo.svg"));
 }
 
-use hawk2ui_cli::{DevLoop, DevLoopEvent, RecordingReloadTarget, RecordingWatcher};
+use hawk2ui_cli::{
+    DevLoop, DevLoopEvent,
+    testkit::{RecordingReloadTarget, RecordingWatcher},
+};
 
 #[test]
 fn dev_loop_watches_rebuilds_validates_reloads_and_preserves_state() {
@@ -1074,13 +1223,15 @@ fn signed_runner(root: &Path) -> WorkspaceCommandRunner {
 }
 
 fn write_desktop_project(root: &Path, id: &str, name: &str) {
+    let id = test_toml_string(id);
+    let name = test_toml_string(name);
     write_file(
         &root.join("manifest.hawk.toml"),
         &format!(
             r#"
 [identity]
-id = "{id}"
-name = "{name}"
+id = {id}
+name = {name}
 version = "1.0.0"
 
 [source]
@@ -1101,6 +1252,18 @@ name = "linux-wayland"
         &root.join("styles/main.hawk.css"),
         ".root { display: flex; font-size: 18px; background-color: token(color.surface); }",
     );
+}
+
+fn test_toml_string(value: &str) -> String {
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+    )
 }
 
 fn write_desktop_project_with_asset(root: &Path, id: &str, name: &str) {

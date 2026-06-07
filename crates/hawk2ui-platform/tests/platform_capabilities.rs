@@ -1,17 +1,23 @@
 use hawk2ui_platform::{
-    AiManifest, AiPolicy, AudioManifest, AudioPolicy, CapabilityRecord, CapabilitySchema,
-    CapabilityTable, ClipboardDataType, ClipboardManifest, ClipboardPolicy, DatabaseMigration,
-    DatabasePolicy, DialogKind, DialogManifest, DialogPolicy, FilesystemGrant, FilesystemPolicy,
-    FilesystemScope, LocalizationManifest, LocalizationPolicy, McpManifest, McpPolicy,
-    NetworkManifest, NetworkPolicy, NetworkResponsePayload, NotificationManifest,
-    NotificationPolicy, PlatformBackends, PlatformContext, PlatformDiagnostic, PlatformOperation,
-    PlatformSecretManifest, PlatformSecretPolicy, RuntimeAvailability, ShortcutManifest,
-    ShortcutPolicy, StaticNetworkBackend,
+    AiManifest, AiPolicy, AudioCueBinding, AudioManifest, AudioPlaybackSink, AudioPolicy,
+    CapabilityRecord, CapabilitySchema, CapabilityTable, ClipboardDataType, ClipboardManifest,
+    ClipboardPolicy, DatabaseManifest, DatabaseMigration, DatabasePolicy, DialogKind,
+    DialogManifest, DialogPolicy, FilesystemGrant, FilesystemLocalizationHostBackend,
+    FilesystemPolicy, FilesystemScope, GlobalShortcutSink, HostCapabilityRouter,
+    HttpProviderHostBackend, LocalizationManifest, LocalizationPolicy, McpManifest, McpPolicy,
+    NetworkManifest, NetworkPolicy, NetworkResponsePayload, NotificationBinding,
+    NotificationManifest, NotificationPolicy, NotificationSink, PlatformBackends, PlatformContext,
+    PlatformDiagnostic, PlatformHostBackend, PlatformOperation, PlatformSecretManifest,
+    PlatformSecretPolicy, RuntimeAvailability, ShortcutBinding, ShortcutManifest, ShortcutPolicy,
+    StaticNetworkBackend,
 };
 use std::{
     fs,
+    io::{Read, Write},
+    net::TcpListener,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[test]
@@ -541,6 +547,28 @@ fn platform_backends_execute_policy_checked_io_network_clipboard_and_secret_stor
 }
 
 #[test]
+fn system_platform_backends_require_explicit_host_backend_for_host_capabilities() {
+    let capabilities = CapabilityTable::new([CapabilityRecord::new("clipboard.text")
+        .allow(PlatformOperation::ClipboardWrite)
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)
+        .plugin(true)]);
+    let manifest = ClipboardManifest::new("clipboard.text", [ClipboardDataType::Text]).plugin(true);
+    let mut backend = PlatformBackends::system();
+
+    let error = backend
+        .write_clipboard(
+            &capabilities,
+            &manifest,
+            PlatformContext::Desktop,
+            "copied text",
+        )
+        .expect_err("system backend must require an explicit clipboard host adapter");
+
+    assert_eq!(error.diagnostic.rule, "platform.host-backend.unsupported");
+}
+
+#[test]
 fn clipboard_capabilities_deny_unsupported_image_missing_capability_and_plugin_context() {
     let table = CapabilityTable::new([CapabilityRecord::new("clipboard.write")
         .allow(PlatformOperation::ClipboardWrite)
@@ -903,4 +931,627 @@ fn extended_platform_domains_enforce_capabilities_and_manifest_allowlists() {
         .rule,
         "capability.missing"
     );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn platform_backends_execute_all_policy_checked_extended_domains() {
+    let database_dir = unique_temp_dir("hawk2ui-platform-database-backend");
+    fs::create_dir_all(&database_dir).expect("temporary database directory is created");
+    let database_grant = FilesystemGrant::new(
+        FilesystemScope::AppData,
+        database_dir.to_string_lossy().into_owned(),
+    );
+    let capabilities = CapabilityTable::new([
+        CapabilityRecord::new("audio.playback")
+            .allow(PlatformOperation::AudioPlayback)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(true),
+        CapabilityRecord::new("ai.provider")
+            .allow(PlatformOperation::AiProviderRequest)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("mcp.call")
+            .allow(PlatformOperation::McpToolCall)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("notifications.send")
+            .allow(PlatformOperation::NotificationSend)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("shortcuts.register")
+            .allow(PlatformOperation::GlobalShortcutRegister)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("localization.load")
+            .allow(PlatformOperation::LocalizationRead)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(true),
+        CapabilityRecord::new("dialogs.open")
+            .allow(PlatformOperation::DialogOpen)
+            .allow(PlatformOperation::FilePickerOpen)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("database.local")
+            .allow(PlatformOperation::DatabaseMigration)
+            .allow(PlatformOperation::DatabaseQuery)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(true),
+    ]);
+
+    let mut backend = PlatformBackends::new(StaticNetworkBackend::default())
+        .with_ai_text_response(
+            "openai",
+            "summarize",
+            "application/json",
+            r#"{"summary":"ok"}"#,
+        )
+        .with_mcp_text_response(
+            "design-server",
+            "snapshot",
+            "application/json",
+            r#"{"nodes":2}"#,
+        )
+        .with_localization_text_bundle("en-US", "application/json", r#"{"hello":"Hello"}"#)
+        .with_dialog_response(DialogKind::Message, true, std::iter::empty::<&str>())
+        .with_dialog_response(DialogKind::FilePicker, true, ["preset.hawk"]);
+
+    let audio = backend
+        .play_audio(
+            &capabilities,
+            &AudioManifest::new("audio.playback", ["meter-click"]),
+            "meter-click",
+            PlatformContext::Plugin,
+        )
+        .expect("audio playback executes after policy approval");
+    let ai = backend
+        .ai_request(
+            &capabilities,
+            &AiManifest::new("ai.provider", ["openai"], ["summarize"]),
+            "openai",
+            "summarize",
+            PlatformContext::Desktop,
+        )
+        .expect("AI request executes after policy approval");
+    let mcp = backend
+        .call_mcp(
+            &capabilities,
+            &McpManifest::new("mcp.call", ["design-server"], ["snapshot"]),
+            "design-server",
+            "snapshot",
+            PlatformContext::Desktop,
+        )
+        .expect("MCP call executes after policy approval");
+    let localization = backend
+        .load_localization(
+            &capabilities,
+            &LocalizationManifest::new("localization.load", ["en-US"]),
+            "en-US",
+            PlatformContext::Plugin,
+        )
+        .expect("localization bundle loads after policy approval");
+    let dialog = backend
+        .open_dialog(
+            &capabilities,
+            &DialogManifest::new(
+                "dialogs.open",
+                [DialogKind::Message, DialogKind::FilePicker],
+            ),
+            DialogKind::Message,
+            PlatformContext::Desktop,
+        )
+        .expect("dialog opens after policy approval");
+    let picker = backend
+        .open_file_picker(
+            &capabilities,
+            &DialogManifest::new(
+                "dialogs.open",
+                [DialogKind::Message, DialogKind::FilePicker],
+            ),
+            PlatformContext::Desktop,
+        )
+        .expect("file picker opens after policy approval");
+    let notification = backend
+        .send_notification(
+            &capabilities,
+            &NotificationManifest::new("notifications.send", ["build"]),
+            "build",
+            PlatformContext::Desktop,
+        )
+        .expect("notification sends after policy approval");
+    let shortcut = backend
+        .register_shortcut(
+            &capabilities,
+            &ShortcutManifest::new("shortcuts.register", ["CommandOrControl+K"]),
+            "CommandOrControl+K",
+            PlatformContext::Desktop,
+        )
+        .expect("shortcut registers after policy approval");
+
+    let database_manifest = DatabaseManifest::new(
+        "database.local",
+        database_grant.clone(),
+        "state.json",
+        [
+            DatabaseMigration::new(1, "create_settings"),
+            DatabaseMigration::new(2, "add_presets"),
+        ],
+    );
+    let migration = backend
+        .migrate_database(&capabilities, &database_manifest, PlatformContext::Plugin)
+        .expect("database migrations execute after policy approval");
+    let written = backend
+        .put_database_value(
+            &capabilities,
+            &database_manifest,
+            "theme",
+            serde_json::json!("carbon"),
+            PlatformContext::Plugin,
+        )
+        .expect("database writes execute after policy approval");
+    let loaded = backend
+        .get_database_value(
+            &capabilities,
+            &database_manifest,
+            "theme",
+            PlatformContext::Plugin,
+        )
+        .expect("database reads execute after policy approval");
+    let transaction = backend
+        .commit_database_transaction(
+            &capabilities,
+            &database_manifest,
+            [
+                ("accent".to_owned(), serde_json::json!("ember")),
+                ("density".to_owned(), serde_json::json!("compact")),
+            ],
+            PlatformContext::Plugin,
+        )
+        .expect("database transactions execute atomically after policy approval");
+    let invalid_transaction = backend
+        .commit_database_transaction(
+            &capabilities,
+            &database_manifest,
+            [
+                ("safe".to_owned(), serde_json::json!(true)),
+                ("unsafe/key".to_owned(), serde_json::json!(false)),
+            ],
+            PlatformContext::Plugin,
+        )
+        .expect_err("invalid transaction keys must reject the whole transaction");
+    let safe_after_rejected_transaction = backend
+        .get_database_value(
+            &capabilities,
+            &database_manifest,
+            "safe",
+            PlatformContext::Plugin,
+        )
+        .expect("database remains queryable after rejected transaction");
+
+    assert_eq!(audio.request.cue_id, "meter-click");
+    assert_eq!(backend.played_audio_cues(), ["meter-click"]);
+    assert_eq!(ai.request.provider_id, "openai");
+    assert_eq!(ai.content_type.as_deref(), Some("application/json"));
+    assert_eq!(ai.body, br#"{"summary":"ok"}"#);
+    assert_eq!(mcp.request.tool_name, "snapshot");
+    assert_eq!(mcp.body, br#"{"nodes":2}"#);
+    assert_eq!(localization.request.locale, "en-US");
+    assert_eq!(localization.body, br#"{"hello":"Hello"}"#);
+    assert!(dialog.accepted);
+    assert_eq!(picker.selected_paths, ["preset.hawk"]);
+    assert_eq!(notification.request.channel, "build");
+    assert_eq!(backend.sent_notification_channels(), ["build"]);
+    assert_eq!(shortcut.registration.accelerator, "CommandOrControl+K");
+    assert_eq!(backend.registered_shortcuts(), ["CommandOrControl+K"]);
+    assert_eq!(
+        migration.applied_migrations,
+        [
+            DatabaseMigration::new(1, "create_settings"),
+            DatabaseMigration::new(2, "add_presets"),
+        ]
+    );
+    assert_eq!(written.value, serde_json::json!("carbon"));
+    assert_eq!(loaded.value, Some(serde_json::json!("carbon")));
+    assert_eq!(transaction.written_keys, ["accent", "density"]);
+    assert_eq!(invalid_transaction.diagnostic.rule, "database.key.invalid");
+    assert_eq!(safe_after_rejected_transaction.value, None);
+
+    let before_denied_ai = backend.ai_requests().len();
+    let denied_ai = backend
+        .ai_request(
+            &capabilities,
+            &AiManifest::new("ai.provider", ["openai"], ["summarize"]),
+            "evil-ai",
+            "summarize",
+            PlatformContext::Desktop,
+        )
+        .expect_err("denied AI requests must not reach backend execution");
+
+    assert_eq!(denied_ai.diagnostic.rule, "ai.provider.denied");
+    assert_eq!(backend.ai_requests().len(), before_denied_ai);
+
+    fs::remove_dir_all(database_dir).expect("temporary database directory is removed");
+}
+
+#[derive(Debug, Default)]
+struct ExplicitHostBackend {
+    ai_calls: usize,
+    dialogs: usize,
+    notifications: usize,
+}
+
+impl PlatformHostBackend for ExplicitHostBackend {
+    fn request_ai(
+        &mut self,
+        request: &hawk2ui_platform::AiProviderRequest,
+    ) -> Result<hawk2ui_platform::HostDataPayload, hawk2ui_platform::PlatformBackendError> {
+        self.ai_calls += 1;
+        Ok(hawk2ui_platform::HostDataPayload::text(
+            "application/json",
+            format!(
+                r#"{{"provider":"{}","operation":"{}"}}"#,
+                request.provider_id, request.operation
+            ),
+        ))
+    }
+
+    fn open_dialog(
+        &mut self,
+        request: &hawk2ui_platform::DialogRequest,
+    ) -> Result<hawk2ui_platform::HostDialogResponse, hawk2ui_platform::PlatformBackendError> {
+        self.dialogs += 1;
+        Ok(hawk2ui_platform::HostDialogResponse::accepted(
+            request.kind,
+            ["chosen.hawk"],
+        ))
+    }
+
+    fn send_notification(
+        &mut self,
+        _request: &hawk2ui_platform::NotificationRequest,
+    ) -> Result<(), hawk2ui_platform::PlatformBackendError> {
+        self.notifications += 1;
+        Ok(())
+    }
+}
+
+#[test]
+fn platform_backends_delegate_extended_domains_to_explicit_host_backend() {
+    let capabilities = CapabilityTable::new([
+        CapabilityRecord::new("ai.provider")
+            .allow(PlatformOperation::AiProviderRequest)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("dialogs.open")
+            .allow(PlatformOperation::DialogOpen)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("notifications.send")
+            .allow(PlatformOperation::NotificationSend)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+    ]);
+    let mut backend = PlatformBackends::with_host(
+        StaticNetworkBackend::default(),
+        ExplicitHostBackend::default(),
+    );
+
+    let ai = backend
+        .ai_request(
+            &capabilities,
+            &AiManifest::new("ai.provider", ["openai"], ["summarize"]),
+            "openai",
+            "summarize",
+            PlatformContext::Desktop,
+        )
+        .expect("AI request delegates to host backend after policy approval");
+    let dialog = backend
+        .open_dialog(
+            &capabilities,
+            &DialogManifest::new("dialogs.open", [DialogKind::Message]),
+            DialogKind::Message,
+            PlatformContext::Desktop,
+        )
+        .expect("dialog delegates to host backend after policy approval");
+    backend
+        .send_notification(
+            &capabilities,
+            &NotificationManifest::new("notifications.send", ["build"]),
+            "build",
+            PlatformContext::Desktop,
+        )
+        .expect("notification delegates to host backend after policy approval");
+
+    assert_eq!(ai.body, br#"{"provider":"openai","operation":"summarize"}"#);
+    assert_eq!(dialog.selected_paths, ["chosen.hawk"]);
+    assert_eq!(backend.host().ai_calls, 1);
+    assert_eq!(backend.host().dialogs, 1);
+    assert_eq!(backend.host().notifications, 1);
+}
+
+#[test]
+fn filesystem_localization_host_loads_policy_approved_locale_bundle() {
+    let locale_root = unique_temp_dir("hawk2ui-platform-localization-backend");
+    fs::create_dir_all(&locale_root).expect("temporary locale directory is created");
+    fs::write(
+        locale_root.join("en-US.json"),
+        br#"{"title":"Hawk2UI","status":"ready"}"#,
+    )
+    .expect("locale fixture is written");
+    let capabilities = CapabilityTable::new([CapabilityRecord::new("localization.load")
+        .allow(PlatformOperation::LocalizationRead)
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)
+        .plugin(true)]);
+    let manifest = LocalizationManifest::new("localization.load", ["en-US"]);
+    let mut backend = PlatformBackends::with_host(
+        StaticNetworkBackend::default(),
+        FilesystemLocalizationHostBackend::new(&locale_root),
+    );
+
+    let result = backend
+        .load_localization(&capabilities, &manifest, "en-US", PlatformContext::Desktop)
+        .expect("policy-approved locale bundle loads from filesystem host backend");
+
+    assert_eq!(result.request.locale, "en-US");
+    assert_eq!(result.content_type.as_deref(), Some("application/json"));
+    assert_eq!(
+        result.body,
+        br#"{"title":"Hawk2UI","status":"ready"}"#.to_vec()
+    );
+}
+
+#[test]
+fn http_provider_host_executes_policy_approved_ai_and_mcp_requests() {
+    let ai_url = serve_http_once(r#"{"provider":"openai","operation":"summarize"}"#);
+    let mcp_url = serve_http_once(r#"{"server":"local","tool":"ping"}"#);
+    let capabilities = CapabilityTable::new([
+        CapabilityRecord::new("ai.provider")
+            .allow(PlatformOperation::AiProviderRequest)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("mcp.call")
+            .allow(PlatformOperation::McpToolCall)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+    ]);
+    let mut backend = PlatformBackends::with_host(
+        StaticNetworkBackend::default(),
+        HttpProviderHostBackend::new(Duration::from_secs(5))
+            .with_ai_endpoint("openai", "summarize", ai_url)
+            .with_mcp_endpoint("local", "ping", mcp_url),
+    );
+
+    let ai = backend
+        .ai_request(
+            &capabilities,
+            &AiManifest::new("ai.provider", ["openai"], ["summarize"]),
+            "openai",
+            "summarize",
+            PlatformContext::Desktop,
+        )
+        .expect("AI request executes through explicit HTTP endpoint");
+    let mcp = backend
+        .call_mcp(
+            &capabilities,
+            &McpManifest::new("mcp.call", ["local"], ["ping"]),
+            "local",
+            "ping",
+            PlatformContext::Desktop,
+        )
+        .expect("MCP tool call executes through explicit HTTP endpoint");
+
+    assert_eq!(ai.content_type.as_deref(), Some("application/json"));
+    assert_eq!(
+        ai.body,
+        br#"{"provider":"openai","operation":"summarize"}"#.to_vec()
+    );
+    assert_eq!(mcp.content_type.as_deref(), Some("application/json"));
+    assert_eq!(mcp.body, br#"{"server":"local","tool":"ping"}"#.to_vec());
+}
+
+#[derive(Debug, Default)]
+struct RecordingAudioSink {
+    played: Vec<AudioCueBinding>,
+}
+
+impl AudioPlaybackSink for RecordingAudioSink {
+    fn play_audio_cue(
+        &mut self,
+        binding: &AudioCueBinding,
+    ) -> Result<(), hawk2ui_platform::PlatformBackendError> {
+        self.played.push(binding.clone());
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+struct RecordingNotificationSink {
+    sent: Vec<NotificationBinding>,
+}
+
+impl NotificationSink for RecordingNotificationSink {
+    fn send_notification(
+        &mut self,
+        binding: &NotificationBinding,
+    ) -> Result<(), hawk2ui_platform::PlatformBackendError> {
+        self.sent.push(binding.clone());
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+struct RecordingShortcutSink {
+    registered: Vec<ShortcutBinding>,
+}
+
+impl GlobalShortcutSink for RecordingShortcutSink {
+    fn register_shortcut(
+        &mut self,
+        binding: &ShortcutBinding,
+    ) -> Result<(), hawk2ui_platform::PlatformBackendError> {
+        self.registered.push(binding.clone());
+        Ok(())
+    }
+}
+
+#[test]
+fn routed_host_backend_executes_mapped_audio_notification_and_shortcut_adapters() {
+    let capabilities = CapabilityTable::new([
+        CapabilityRecord::new("audio.playback")
+            .allow(PlatformOperation::AudioPlayback)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(true),
+        CapabilityRecord::new("notifications.send")
+            .allow(PlatformOperation::NotificationSend)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("shortcuts.register")
+            .allow(PlatformOperation::GlobalShortcutRegister)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+    ]);
+    let host = HostCapabilityRouter::new(
+        hawk2ui_platform::UnsupportedPlatformHost,
+        RecordingAudioSink::default(),
+        RecordingNotificationSink::default(),
+        RecordingShortcutSink::default(),
+    )
+    .with_audio_cue(AudioCueBinding::new(
+        "meter-click",
+        "asset://audio/meter-click.wav",
+    ))
+    .with_notification(NotificationBinding::new(
+        "build",
+        "Build complete",
+        "The Hawk2UI package is ready.",
+    ))
+    .with_shortcut(ShortcutBinding::new(
+        "CommandOrControl+K",
+        "command-palette",
+    ));
+    let mut backend = PlatformBackends::with_host(StaticNetworkBackend::default(), host);
+
+    backend
+        .play_audio(
+            &capabilities,
+            &AudioManifest::new("audio.playback", ["meter-click"]),
+            "meter-click",
+            PlatformContext::Desktop,
+        )
+        .expect("mapped audio cue executes through the configured audio sink");
+    backend
+        .send_notification(
+            &capabilities,
+            &NotificationManifest::new("notifications.send", ["build"]),
+            "build",
+            PlatformContext::Desktop,
+        )
+        .expect("mapped notification executes through the configured notification sink");
+    backend
+        .register_shortcut(
+            &capabilities,
+            &ShortcutManifest::new("shortcuts.register", ["CommandOrControl+K"]),
+            "CommandOrControl+K",
+            PlatformContext::Desktop,
+        )
+        .expect("mapped shortcut executes through the configured shortcut sink");
+
+    assert_eq!(
+        backend.host().audio_sink().played,
+        [AudioCueBinding::new(
+            "meter-click",
+            "asset://audio/meter-click.wav"
+        )]
+    );
+    assert_eq!(
+        backend.host().notification_sink().sent,
+        [NotificationBinding::new(
+            "build",
+            "Build complete",
+            "The Hawk2UI package is ready."
+        )]
+    );
+    assert_eq!(
+        backend.host().shortcut_sink().registered,
+        [ShortcutBinding::new(
+            "CommandOrControl+K",
+            "command-palette"
+        )]
+    );
+}
+
+#[test]
+fn routed_host_backend_rejects_policy_approved_requests_without_explicit_mapping() {
+    let capabilities = CapabilityTable::new([CapabilityRecord::new("audio.playback")
+        .allow(PlatformOperation::AudioPlayback)
+        .availability(RuntimeAvailability::Runtime)
+        .desktop(true)
+        .plugin(true)]);
+    let host = HostCapabilityRouter::new(
+        hawk2ui_platform::UnsupportedPlatformHost,
+        RecordingAudioSink::default(),
+        RecordingNotificationSink::default(),
+        RecordingShortcutSink::default(),
+    );
+    let mut backend = PlatformBackends::with_host(StaticNetworkBackend::default(), host);
+
+    let error = backend
+        .play_audio(
+            &capabilities,
+            &AudioManifest::new("audio.playback", ["missing-cue"]),
+            "missing-cue",
+            PlatformContext::Desktop,
+        )
+        .expect_err("policy approval is not enough without an explicit host audio route");
+
+    assert_eq!(error.diagnostic.rule, "audio.backend.cue-unmapped");
+    assert!(backend.host().audio_sink().played.is_empty());
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "{prefix}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ))
+}
+
+fn serve_http_once(body: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("local HTTP fixture binds");
+    let address = listener
+        .local_addr()
+        .expect("local HTTP fixture address resolves");
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("local HTTP fixture accepts");
+        let mut request = [0_u8; 1024];
+        let _ = stream
+            .read(&mut request)
+            .expect("local HTTP fixture reads request");
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .expect("local HTTP fixture writes response");
+    });
+    format!("http://{address}/")
 }

@@ -22,7 +22,9 @@ fn main() {
                 dashboard_fixture,
                 BenchmarkKind::Rendering,
             )
-            .with_measurement(common::measure_tree_file_count(dashboard_fixture)),
+            .with_measurement(common::measure_dashboard_smoke_scene_node_count(
+                dashboard_fixture,
+            )),
         )
         .with_case(
             BenchmarkCase::new(
@@ -30,7 +32,7 @@ fn main() {
                 style_fixture,
                 BenchmarkKind::Rendering,
             )
-            .with_measurement(common::measure_tree_file_count(style_fixture)),
+            .with_measurement(common::measure_runtime_paint_command_count(style_fixture)),
         )
         .with_case(
             BenchmarkCase::new(
@@ -38,7 +40,7 @@ fn main() {
                 runtime_fixture,
                 BenchmarkKind::Runtime,
             )
-            .with_measurement(common::measure_operation_count(1024)),
+            .with_measurement(common::measure_runtime_dispatch_operation_count(1024)),
         )
         .with_case(
             BenchmarkCase::new(
@@ -46,11 +48,15 @@ fn main() {
                 dashboard_fixture,
                 BenchmarkKind::Memory,
             )
-            .with_measurement(common::measure_directory_bytes(dashboard_fixture)),
+            .with_measurement(common::measure_dashboard_smoke_frame_bytes(
+                dashboard_fixture,
+            )),
         )
         .with_case(
             BenchmarkCase::new("package-size", runtime_fixture, BenchmarkKind::Package)
-                .with_measurement(common::measure_directory_bytes(runtime_fixture)),
+                .with_measurement(common::measure_build_artifact_payload_bytes(
+                    runtime_fixture,
+                )),
         )
         .with_case(
             BenchmarkCase::new(
@@ -58,7 +64,7 @@ fn main() {
                 plugin_fixture,
                 BenchmarkKind::Realtime,
             )
-            .with_measurement(BenchmarkMeasurement::from_count(
+            .with_measurement(BenchmarkMeasurement::observed_count(
                 u64::try_from(realtime_report.telemetry.allocation_attempts).unwrap_or(u64::MAX),
             )),
         );

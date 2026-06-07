@@ -18,7 +18,9 @@ fn main() {
         )
         .with_case(
             BenchmarkCase::new("scene-node-count", scene_fixture, BenchmarkKind::Rendering)
-                .with_measurement(common::measure_tree_file_count(scene_fixture)),
+                .with_measurement(common::measure_dashboard_smoke_scene_node_count(
+                    scene_fixture,
+                )),
         )
         .with_case(
             BenchmarkCase::new(
@@ -26,7 +28,7 @@ fn main() {
                 frame_fixture,
                 BenchmarkKind::Rendering,
             )
-            .with_measurement(common::measure_tree_file_count(frame_fixture)),
+            .with_measurement(common::measure_runtime_paint_command_count(frame_fixture)),
         );
 
     common::finish_suite(&suite, &budgets);

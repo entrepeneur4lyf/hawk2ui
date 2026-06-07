@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 //! Runtime core for `Hawk2UI`: host-binding validation, event dispatch, scheduling, runtime safety,
 //! state persistence, and the view→render bridge. Script engines and lifecycle hooks are modeled
-//! here as boundaries (a recording engine and a hook registry); script execution and lifecycle
-//! sequencing are supplied by the host, not performed in this crate.
+//! here as host boundaries; script execution and lifecycle sequencing are supplied by the host,
+//! not performed in this crate.
 
 pub mod bindings;
 pub mod entry_tree;
@@ -13,6 +13,7 @@ pub mod safety;
 pub mod scene_payload;
 pub mod scheduler;
 pub mod script;
+pub mod testkit;
 pub mod view;
 
 pub use bindings::{
@@ -41,9 +42,8 @@ pub use scheduler::{
     RuntimeScheduleError, RuntimeScheduler, TimerJob,
 };
 pub use script::{
-    HostCallRecord, PromiseId, RecordingScriptEngine, RuntimeCapability, RuntimeError,
-    ScriptEngine, ScriptEngineError, ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord,
-    StructuredValue,
+    HostCallRecord, PromiseId, RuntimeCapability, RuntimeError, ScriptEngine, ScriptEngineError,
+    ScriptEngineOperation, ScriptModuleKind, ScriptModuleRecord, StructuredValue,
 };
 pub use view::{
     RuntimeCustomSurfaceVisual, RuntimeDrawCommand, RuntimeGlowEffect, RuntimeLinearGradient,

@@ -11,7 +11,7 @@
     "packages/hawk2ui-compiler"
   ],
   "scripts": {
-    "test:packages": "bun test packages/hawk2ui-native/test/native-records.test.ts packages/hawk2ui-svelte/test/svelte-compile.test.ts packages/hawk2ui-react/test/react-root.test.ts packages/hawk2ui-vue/test/vue-renderer.test.ts packages/hawk2ui-solid/test/solid-renderer.test.ts packages/hawk2ui-compiler/test/compiler.test.ts packages/test/package-conformance.test.ts",
+    "test:packages": "bun test packages/hawk2ui-native/test/native-records.test.ts packages/hawk2ui-svelte/test/svelte-compile.test.ts packages/hawk2ui-react/test/react-root.test.ts packages/hawk2ui-vue/test/vue-renderer.test.ts packages/hawk2ui-solid/test/solid-renderer.test.ts packages/hawk2ui-compiler/test/compiler.test.ts packages/test/package-conformance.test.ts packages/test/framework-production-api.test.ts",
     "typecheck:packages": "tsc -p tsconfig.packages.json --noEmit"
   },
   "dependencies": {},

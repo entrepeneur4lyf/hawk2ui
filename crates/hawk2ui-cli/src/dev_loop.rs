@@ -35,14 +35,14 @@ pub enum DevLoopEvent {
     },
 }
 
-/// Recording file watcher.
+/// One coalesced batch of project-relative file changes.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RecordingWatcher {
+pub struct DevChangeBatch {
     changed_files: Vec<String>,
 }
 
-impl RecordingWatcher {
-    /// Creates a recording watcher from changed file paths.
+impl DevChangeBatch {
+    /// Creates a changed-file batch from project-relative paths.
     #[must_use]
     pub fn new(files: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
@@ -236,6 +236,13 @@ impl FileSystemWatcher {
         changed
     }
 
+    /// Captures the current watched-file state without reporting those files as changes.
+    pub fn prime(&mut self) {
+        for file in &self.watched_files {
+            self.snapshots.insert(file.clone(), self.snapshot(file));
+        }
+    }
+
     /// Replaces the watched project file set while preserving snapshots for unchanged files.
     pub fn replace_watched_files(&mut self, files: impl IntoIterator<Item = impl Into<String>>) {
         let mut watched_files = files.into_iter().map(Into::into).collect::<Vec<_>>();
@@ -361,7 +368,7 @@ impl NotifyFileSystemWatcher {
         }
 
         let mut snapshot_watcher = FileSystemWatcher::new(&root, watched_files.iter().cloned());
-        let _ = snapshot_watcher.changed_files();
+        snapshot_watcher.prime();
 
         Ok(Self {
             root,
@@ -422,12 +429,6 @@ impl NotifyFileSystemWatcher {
         }
         Ok(changed)
     }
-}
-
-/// Recording runtime reload target.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RecordingReloadTarget {
-    reload_count: usize,
 }
 
 /// Host-ready development error overlay generated before a failed reload reaches the surface.
@@ -549,9 +550,23 @@ fn patch_kind_for_watch_kind(kind: DevWatchKind) -> DevPatchKind {
     }
 }
 
-impl RecordingReloadTarget {
-    fn reload(&mut self) {
-        self.reload_count += 1;
+/// Reload target used by the dev-loop coordinator.
+pub trait DevSurfaceReloader {
+    /// Reloads or acknowledges a validated dev-loop batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the target cannot accept the reload.
+    fn reload(&mut self, preserve_state: bool) -> Result<(), String>;
+}
+
+/// Reload acknowledgement for command paths that already rebuilt or queued the native reload.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DevReloadAcknowledgement;
+
+impl DevSurfaceReloader for DevReloadAcknowledgement {
+    fn reload(&mut self, _preserve_state: bool) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -566,21 +581,32 @@ pub struct DevLoopReport {
     pub error_overlay: Option<DevErrorOverlay>,
 }
 
-/// Recording development loop.
+/// Development loop coordinator for one validated changed-file batch.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DevLoop {
-    watcher: RecordingWatcher,
-    reload_target: RecordingReloadTarget,
+pub struct DevLoop<R = DevReloadAcknowledgement> {
+    change_batch: DevChangeBatch,
+    reload_target: R,
     preserve_state: bool,
     validation_failure_rule: Option<String>,
 }
 
-impl DevLoop {
+impl DevLoop<DevReloadAcknowledgement> {
+    /// Creates a development loop from a changed-file batch.
+    #[must_use]
+    pub fn from_changed_files(files: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::new(DevChangeBatch::new(files), DevReloadAcknowledgement)
+    }
+}
+
+impl<R> DevLoop<R>
+where
+    R: DevSurfaceReloader,
+{
     /// Creates a development loop.
     #[must_use]
-    pub fn new(watcher: RecordingWatcher, reload_target: RecordingReloadTarget) -> Self {
+    pub fn new(change_batch: DevChangeBatch, reload_target: R) -> Self {
         Self {
-            watcher,
+            change_batch,
             reload_target,
             preserve_state: false,
             validation_failure_rule: None,
@@ -607,11 +633,11 @@ impl DevLoop {
     ///
     /// Returns a string when no watched files are configured.
     pub fn run_once(&mut self) -> Result<DevLoopReport, String> {
-        if self.watcher.changed_files.is_empty() {
+        if self.change_batch.changed_files.is_empty() {
             return Err("development loop has no watched files".into());
         }
         let mut events: Vec<_> = self
-            .watcher
+            .change_batch
             .changed_files
             .iter()
             .cloned()
@@ -630,7 +656,7 @@ impl DevLoop {
         }
 
         events.push(DevLoopEvent::ValidationPassed);
-        self.reload_target.reload();
+        self.reload_target.reload(self.preserve_state)?;
         events.push(DevLoopEvent::NativeSurfaceReloaded {
             preserve_state: self.preserve_state,
         });
@@ -655,7 +681,7 @@ mod tests {
             .expect("test source writes");
 
         let mut watcher = FileSystemWatcher::new(&root, ["src/main.ts"]);
-        assert_eq!(watcher.changed_files(), vec!["src/main.ts".to_string()]);
+        watcher.prime();
         assert!(watcher.changed_files().is_empty());
 
         std::fs::write(root.join("src/main.ts"), "export const value = 2;\n")

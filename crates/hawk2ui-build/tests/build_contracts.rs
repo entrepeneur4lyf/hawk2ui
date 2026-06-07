@@ -1973,6 +1973,160 @@ name = "Output Level"
 }
 
 #[test]
+fn build_workspace_seals_real_framework_compiler_output_as_native_wire_artifact() {
+    let root = temp_build_workspace("real-framework-wire");
+    write_file(
+        &root.join("hawk.json"),
+        r#"
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.real-framework-wire",
+    "name": "Real Framework Wire",
+    "version": "1.0.0",
+    "bundleId": "com.hawk2ui.real-framework-wire"
+  },
+  "app": {
+    "framework": "svelte",
+    "entry": "src/App.svelte"
+  },
+  "permissions": {
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "standalone",
+        "platforms": ["linux-wayland"],
+        "window": {
+          "title": "Real Framework Wire",
+          "width": 640,
+          "height": 360
+        }
+      }
+    ]
+  }
+}
+"#,
+    );
+    write_file(
+        &root.join("src/App.svelte"),
+        r#"<script>let label = "Ready"; function handleClick() { label = "Clicked"; }</script><hawk-view id="root"><hawk-button id="cta" on:click={handleClick}>{label}</hawk-button></hawk-view>"#,
+    );
+
+    let output = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect("real Svelte compiler output should validate and seal as native wire");
+
+    assert_eq!(output.artifact.compiled_frameworks.len(), 1);
+    let framework = &output.artifact.compiled_frameworks[0];
+    let artifact: serde_json::Value = serde_json::from_str(&framework.compiler_artifact_json)
+        .expect("compiler artifact JSON should be valid");
+    assert_eq!(artifact["schema_version"], 1);
+    assert_eq!(artifact["compiler"]["framework"], "svelte");
+    assert_eq!(artifact["compiler"]["source_path"], "src/App.svelte");
+    assert_eq!(artifact["root"]["id"], "root");
+    assert_eq!(artifact["root"]["children"][0]["node"]["id"], "cta");
+    assert_eq!(
+        artifact["root"]["children"][0]["node"]["events"][0]["kind"],
+        "pointer.press"
+    );
+}
+
+#[test]
+fn build_workspace_seals_real_react_vue_solid_framework_outputs_as_native_wire_artifacts() {
+    for fixture in [
+        (
+            "react",
+            "src/App.tsx",
+            r#"import { useState } from "react";
+export function App() {
+  const [label, setLabel] = useState("Ready");
+  function handleClick() { setLabel("Clicked"); }
+  return <hawk-view id="root"><hawk-button id="cta" onClick={handleClick}>{label}</hawk-button></hawk-view>;
+}"#,
+        ),
+        (
+            "vue",
+            "src/App.vue",
+            r#"<script setup>
+const label = ref("Ready");
+function handleClick() { label.value = "Clicked"; }
+</script>
+<template>
+  <hawk-view id="root"><hawk-button id="cta" @click="handleClick">{{ label }}</hawk-button></hawk-view>
+</template>"#,
+        ),
+        (
+            "solid",
+            "src/App.tsx",
+            r#"const [label, setLabel] = createSignal("Ready");
+function handleClick() { setLabel("Clicked"); }
+export function App() {
+  return <hawk-view id="root"><hawk-button id="cta" onClick={handleClick}>{label()}</hawk-button></hawk-view>;
+}"#,
+        ),
+    ] {
+        let (framework_name, entry_path, source) = fixture;
+        let root = temp_build_workspace(&format!("real-framework-wire-{framework_name}"));
+        write_file(
+            &root.join("hawk.json"),
+            &format!(
+                r#"
+{{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {{
+    "id": "com.hawk2ui.real-framework-wire.{framework_name}",
+    "name": "Real Framework Wire {framework_name}",
+    "version": "1.0.0",
+    "bundleId": "com.hawk2ui.real-framework-wire.{framework_name}"
+  }},
+  "app": {{
+    "framework": "{framework_name}",
+    "entry": "{entry_path}"
+  }},
+  "permissions": {{
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  }},
+  "targets": {{
+    "desktop": [
+      {{
+        "name": "standalone",
+        "platforms": ["linux-wayland"]
+      }}
+    ]
+  }}
+}}
+"#
+            ),
+        );
+        write_file(&root.join(entry_path), source);
+
+        let output = BuildWorkspace::load(&root)
+            .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+            .unwrap_or_else(|error| {
+                panic!("real {framework_name} compiler output should validate and seal: {error:?}")
+            });
+
+        assert_eq!(output.artifact.compiled_frameworks.len(), 1);
+        let framework = &output.artifact.compiled_frameworks[0];
+        let artifact: serde_json::Value = serde_json::from_str(&framework.compiler_artifact_json)
+            .expect("compiler artifact JSON should be valid");
+        assert_eq!(artifact["schema_version"], 1);
+        assert_eq!(artifact["compiler"]["framework"], framework_name);
+        assert_eq!(artifact["compiler"]["source_path"], entry_path);
+        assert_eq!(artifact["root"]["id"], "root");
+        assert_eq!(artifact["root"]["children"][0]["node"]["id"], "cta");
+        assert_eq!(
+            artifact["root"]["children"][0]["node"]["events"][0]["kind"],
+            "pointer.press"
+        );
+    }
+}
+
+#[test]
 fn build_workspace_rejects_invalid_typescript_before_artifact_materialization() {
     let root = temp_build_workspace("invalid-typescript");
     write_file(

@@ -4,17 +4,19 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use hawk2ui_authoring::{
-    AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkNativeNode,
-    FrameworkNativeProgram, HandlerRef, NativeAuthoringElement, NativeAuthoringRuntime,
-    NativeChild, NativeLifecycleEvent, NativeRef, NativeRuntimeBridge, PointerEventKind, PropValue,
-    StyleRef,
+    AssetRef, ElementKind, EventKind, EventPayloadField, FrameworkNativeProgram,
+    FrameworkNativeProgramWire, NativeAuthoringElement, NativeAuthoringRuntime, NativeChild,
+    NativeLifecycleEvent, NativeRef, NativeRuntimeBridge, PointerEventKind, PropValue, StyleRef,
 };
 use hawk2ui_build::{
-    ArtifactSchemaVersion, BuildWorkspace, BuildWorkspaceError, BuildWorkspaceOutput,
+    ArtifactSchemaVersion, ArtifactSigningKey, BuildWorkspace, BuildWorkspaceError,
+    BuildWorkspaceOutput, CompiledFrameworkRecord, SourceFramework,
 };
+use hawk2ui_cli::{CliCommand, CliExitCode, CommandExecution, WorkspaceCommandRunner};
 use hawk2ui_framework_react::{ReactElementTree, ReactIntegration};
 use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
 use hawk2ui_framework_svelte::{SvelteComponentSource, SvelteIntegration};
@@ -96,6 +98,8 @@ pub struct SmokeBuildResult {
     pub artifact_verified: bool,
     /// Number of script payloads compiled into the sealed artifact.
     pub compiled_script_count: usize,
+    /// Number of framework compiler payloads embedded in the sealed artifact.
+    pub compiled_framework_count: usize,
     /// Number of style payloads compiled into the sealed artifact.
     pub compiled_style_count: usize,
     /// Number of asset payloads compiled into the sealed artifact.
@@ -106,6 +110,23 @@ pub struct SmokeBuildResult {
     pub generator: String,
     /// Build profile recorded in the sealed artifact.
     pub profile: String,
+}
+
+/// Compiler artifact evidence collected from a real framework example build.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FrameworkCompilerSmokeArtifact {
+    /// Framework label emitted by the framework compiler.
+    pub framework: String,
+    /// Compiler package or binary that produced the native artifact.
+    pub compiler: String,
+    /// Workspace-relative source path compiled by the framework compiler.
+    pub source_path: String,
+    /// Entrypoint lowered by the framework compiler.
+    pub entrypoint: String,
+    /// Artifact-local path used for the compiler payload.
+    pub artifact_path: String,
+    /// Compiler payload size in bytes.
+    pub artifact_bytes: usize,
 }
 
 /// Smoke scene export.
@@ -195,6 +216,8 @@ pub struct PluginEditorSmokeResult {
     pub fixture_name: String,
     /// Build result.
     pub build: SmokeBuildResult,
+    /// Project-relative trace file used as plugin lifecycle evidence.
+    pub trace_source_path: String,
     /// Editor lifecycle trace.
     pub editor_events: Vec<String>,
     /// Parameter update trace.
@@ -245,6 +268,8 @@ pub struct RealtimeVisualSmokeResult {
 pub struct StyleGallerySmokeResult {
     /// Gallery section names.
     pub sections: Vec<String>,
+    /// Project-relative source file that declared the section list.
+    pub section_source_path: String,
     /// Snapshot count.
     pub snapshot_count: usize,
     /// Whether snapshots are deterministic.
@@ -258,6 +283,8 @@ pub struct SecurityDenialSmokeResult {
     pub denials: Vec<String>,
     /// Whether a runtime surface was launched.
     pub runtime_surface_launched: bool,
+    /// Evidence line proving the launch gate remained closed.
+    pub launch_gate_evidence: String,
 }
 
 /// Normalized contract evidence for a public framework example.
@@ -273,8 +300,18 @@ pub struct FrameworkExampleContract {
     pub style_refs: Vec<String>,
     /// Asset paths produced by the integration.
     pub asset_paths: Vec<String>,
+    /// Verified sealed build output for this example.
+    pub build: SmokeBuildResult,
+    /// Real framework compiler artifact evidence, when the example uses a framework compiler.
+    pub compiler_artifact: Option<FrameworkCompilerSmokeArtifact>,
+    /// Number of runtime keyed-list templates emitted by the framework compiler.
+    pub list_template_count: usize,
+    /// Number of dynamic runtime bindings emitted by the framework compiler.
+    pub dynamic_binding_count: usize,
     /// Whether the source bridged into a runtime-ready view tree.
     pub runtime_bridged: bool,
+    /// Real software-rendered frame evidence from the framework runtime tree.
+    pub software_frame: SmokeSoftwareFrameEvidence,
 }
 
 /// Smoke result for public framework examples.
@@ -290,6 +327,36 @@ pub struct FrameworkExamplesSmokeResult {
     pub conformance_equivalent: bool,
     /// Normalized contract evidence emitted by the actual framework examples.
     pub contracts: Vec<FrameworkExampleContract>,
+}
+
+/// Smoke result for reusable CLI workflow execution over real examples.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CliEndToEndSmokeResult {
+    /// `build-release` status for the desktop example.
+    pub desktop_build_release: CliWorkflowStatus,
+    /// `verify-artifact` status for the signed desktop release artifact.
+    pub desktop_verify_artifact: CliWorkflowStatus,
+    /// `run-desktop` first-frame status.
+    pub desktop_run_first_frame: CliWorkflowStatus,
+    /// Number of frames reported by the desktop runtime summary.
+    pub desktop_frames_presented: u64,
+    /// `package-plugin` status for the plugin example.
+    pub plugin_package: CliWorkflowStatus,
+    /// Plugin package layout verification status.
+    pub plugin_layout_verification: CliWorkflowStatus,
+    /// Number of host-loadable CLAP/VST3 binaries reported by `package-plugin`.
+    pub plugin_host_loadable_binaries: usize,
+    /// Whether unsupported AU/standalone/desktop package outputs were absent from the package dir.
+    pub plugin_unsupported_outputs_absent: bool,
+}
+
+/// Pass/fail status for CLI smoke workflow steps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CliWorkflowStatus {
+    /// Workflow evidence passed.
+    Passed,
+    /// Workflow evidence failed.
+    Failed,
 }
 
 /// Smoke runner.
@@ -420,22 +487,10 @@ impl SmokeRunner {
         require_file(&root.join("hawk.json"))?;
         require_file(&root.join("src/editor.ts"))?;
         let build = build_workspace_verified(&root)?;
-        let trace = fs::read_to_string(root.join("artifacts/editor.trace"))
-            .map_err(|error| error.to_string())?;
-        for required in [
-            "created,attached,resized,dpi,destroyed",
-            "parameters=osc.mix=0.4,filter.cutoff=0.8",
-            "automation=begin:filter.cutoff,change:filter.cutoff,end:filter.cutoff",
-            "state_roundtrip=true",
-            "preset=factory.bright-pad",
-            "requested_process_quit=false",
-        ] {
-            if !trace.contains(required) {
-                return Err(format!(
-                    "plugin synth editor trace missing evidence: {required}"
-                ));
-            }
-        }
+        let trace_source_path = "artifacts/editor.trace";
+        let trace =
+            fs::read_to_string(root.join(trace_source_path)).map_err(|error| error.to_string())?;
+        let trace = parse_plugin_editor_trace(&trace)?;
         let mut adapter = BaseviewPluginAdapter::attach(
             PluginEditorConfig::new(
                 "plugin-synth-editor",
@@ -463,22 +518,13 @@ impl SmokeRunner {
         Ok(PluginEditorSmokeResult {
             fixture_name: fixture.name(),
             build,
-            editor_events: vec![
-                "created".into(),
-                "attached".into(),
-                "resized".into(),
-                "dpi".into(),
-                "destroyed".into(),
-            ],
-            parameter_updates: vec!["osc.mix=0.4".into(), "filter.cutoff=0.8".into()],
-            automation_events: vec![
-                "begin:filter.cutoff".into(),
-                "change:filter.cutoff".into(),
-                "end:filter.cutoff".into(),
-            ],
-            state_roundtrip: true,
-            preset_id: "factory.bright-pad".into(),
-            requested_process_quit: false,
+            trace_source_path: trace_source_path.to_string(),
+            editor_events: trace.editor_events,
+            parameter_updates: trace.parameter_updates,
+            automation_events: trace.automation_events,
+            state_roundtrip: trace.state_roundtrip,
+            preset_id: trace.preset_id,
+            requested_process_quit: trace.requested_process_quit,
             native_parent_backend: native_parent_backend_label(native_parent.backend()).into(),
             baseview_presented_frames: adapter.presented_frame_count(),
             baseview_surface_size: [snapshot.width(), snapshot.height()],
@@ -572,7 +618,10 @@ impl SmokeRunner {
         }
         let root = fixture.absolute_path();
         require_file(&root.join("hawk.json"))?;
-        require_file(&root.join("src/main.ts"))?;
+        let section_source_path = "src/main.ts";
+        let section_source = fs::read_to_string(root.join(section_source_path))
+            .map_err(|error| format!("style gallery source failed to read: {error}"))?;
+        let sections = parse_style_gallery_sections(&section_source)?;
         require_file(&root.join("styles/gallery.hawk.css"))?;
         require_file(&root.join("assets/vector.svg"))?;
         let _build = build_workspace_verified(&root)?;
@@ -580,24 +629,10 @@ impl SmokeRunner {
         let first = render_colored_scene(480, 270, Color::rgba(18, 24, 36, 255))?;
         let second = render_colored_scene(480, 270, Color::rgba(18, 24, 36, 255))?;
         require_visible_pixel(&first, 0x0012_1824, "style-gallery software frame")?;
-        let sections = vec![
-            "typography",
-            "color",
-            "borders",
-            "radii",
-            "shadows",
-            "transforms",
-            "opacity",
-            "overflow",
-            "transitions",
-            "tokens",
-            "image-layers",
-            "vector-layers",
-            "custom-draw",
-        ];
         Ok(StyleGallerySmokeResult {
-            sections: sections.into_iter().map(str::to_string).collect(),
-            snapshot_count: 13,
+            snapshot_count: sections.len(),
+            sections,
+            section_source_path: section_source_path.to_string(),
             deterministic: first.pixels() == second.pixels(),
         })
     }
@@ -662,18 +697,23 @@ impl SmokeRunner {
                     "framework example missing asset reference: {framework}"
                 ));
             }
+            let build_output = build_workspace_output_verified(&example)?;
             asset_references += 1;
             contracts.push(framework_contract(
                 framework,
                 &example.join(source_file),
                 &source,
+                &build_output,
             )?);
         }
         let conformance_equivalent = contracts.iter().all(|contract| {
             contract.root_id == "root"
-                && contract.keyed_children == ["title", "cta"]
+                && contract
+                    .keyed_children
+                    .starts_with(&["title".to_string(), "cta".to_string()])
                 && contract.style_refs == ["surface.card"]
                 && contract.asset_paths == ["assets/logo.svg"]
+                && contract.build.artifact_verified
                 && contract.runtime_bridged
         });
         Ok(FrameworkExamplesSmokeResult {
@@ -703,10 +743,58 @@ impl SmokeRunner {
         let root = fixture.absolute_path();
         require_file(&root.join("hawk.json"))?;
         require_file(&root.join("fixtures/denied.ts"))?;
+        let launch_gate = read_security_launch_gate(&root.join("fixtures/denials.txt"))?;
         let denials = observed_security_denials()?;
         Ok(SecurityDenialSmokeResult {
             denials: denials.into_iter().map(str::to_string).collect(),
-            runtime_surface_launched: false,
+            runtime_surface_launched: launch_gate.runtime_surface_launched,
+            launch_gate_evidence: launch_gate.evidence,
+        })
+    }
+
+    /// Runs CLI workflows against real desktop and plugin examples.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when any CLI command fails or omits required runtime/package evidence.
+    pub fn run_cli_end_to_end(&self) -> Result<CliEndToEndSmokeResult, String> {
+        let workspace = workspace_root();
+        let desktop_root = workspace.join("examples/desktop-basic");
+        let plugin_root = workspace.join("examples/plugin-synth-editor");
+        require_file(&desktop_root.join("hawk.json"))?;
+        require_file(&plugin_root.join("hawk.json"))?;
+
+        let desktop_runner = signed_cli_runner(&desktop_root).with_desktop_exit_after_first_frame();
+        let build = expect_cli_success(
+            desktop_runner.execute(CliCommand::BuildRelease),
+            "desktop build-release",
+        )?;
+        let verify = expect_cli_success(
+            signed_cli_runner(&desktop_root).execute(CliCommand::VerifyArtifact { path: None }),
+            "desktop verify-artifact",
+        )?;
+        let run_stdout = run_desktop_cli_process(&desktop_root)?;
+        let package = expect_cli_success(
+            signed_cli_runner(&plugin_root).execute(CliCommand::PackagePlugin),
+            "plugin package-plugin",
+        )?;
+        let frames_presented = parse_summary_u64(&run_stdout, "frames-presented")?;
+
+        Ok(CliEndToEndSmokeResult {
+            desktop_build_release: cli_status(build.exit_code == CliExitCode::Success),
+            desktop_verify_artifact: cli_status(verify.exit_code == CliExitCode::Success),
+            desktop_run_first_frame: cli_status(
+                run_stdout.contains("desktop runtime exited cleanly"),
+            ),
+            desktop_frames_presented: frames_presented,
+            plugin_package: cli_status(package.exit_code == CliExitCode::Success),
+            plugin_layout_verification: cli_status(
+                package
+                    .stdout
+                    .contains("layout-verification-status: passed"),
+            ),
+            plugin_host_loadable_binaries: parse_produced_binaries(&package.stdout)?,
+            plugin_unsupported_outputs_absent: unsupported_package_outputs_absent(&plugin_root)?,
         })
     }
 }
@@ -722,11 +810,254 @@ fn require_file(path: &Path) -> Result<(), String> {
     }
 }
 
+fn signed_cli_runner(root: &Path) -> WorkspaceCommandRunner {
+    let signing_key = ArtifactSigningKey::ed25519_sha256_v1("smoke-release-key", [9; 32]);
+    WorkspaceCommandRunner::new(root)
+        .with_release_signing_key(signing_key.clone())
+        .with_trusted_release_key(signing_key.verification_key())
+}
+
+const fn cli_status(passed: bool) -> CliWorkflowStatus {
+    if passed {
+        CliWorkflowStatus::Passed
+    } else {
+        CliWorkflowStatus::Failed
+    }
+}
+
+fn expect_cli_success(
+    execution: CommandExecution,
+    command_name: &str,
+) -> Result<CommandExecution, String> {
+    if execution.exit_code == CliExitCode::Success {
+        Ok(execution)
+    } else {
+        Err(format!(
+            "{command_name} failed with {:?}: {}{}",
+            execution.exit_code, execution.stdout, execution.stderr
+        ))
+    }
+}
+
+fn run_desktop_cli_process(root: &Path) -> Result<String, String> {
+    let workspace = workspace_root();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let output = Command::new(cargo)
+        .arg("run")
+        .arg("--manifest-path")
+        .arg(workspace.join("Cargo.toml"))
+        .arg("-q")
+        .arg("-p")
+        .arg("hawk2ui-cli")
+        .arg("--")
+        .arg("run-desktop")
+        .current_dir(root)
+        .env("HAWK2UI_EXIT_AFTER_FIRST_FRAME", "1")
+        .output()
+        .map_err(|error| format!("desktop run-desktop process failed to spawn: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Err(format!(
+            "desktop run-desktop process exited with {:?}: {stdout}{stderr}",
+            output.status.code()
+        ))
+    }
+}
+
+fn parse_summary_u64(source: &str, key: &str) -> Result<u64, String> {
+    source
+        .lines()
+        .find_map(|line| {
+            let (field, value) = line.split_once(':')?;
+            (field.trim() == key).then(|| value.trim())
+        })
+        .ok_or_else(|| format!("runtime summary missing {key}"))?
+        .parse::<u64>()
+        .map_err(|error| format!("runtime summary field {key} is not an integer: {error}"))
+}
+
+fn parse_produced_binaries(source: &str) -> Result<usize, String> {
+    source
+        .lines()
+        .find_map(|line| {
+            let (field, value) = line.split_once(':')?;
+            if field.trim() != "host-loadable-binaries" {
+                return None;
+            }
+            value.trim().strip_prefix("produced=")
+        })
+        .ok_or_else(|| "package-plugin output missing host-loadable binary count".to_string())?
+        .parse::<usize>()
+        .map_err(|error| format!("host-loadable binary count is not an integer: {error}"))
+}
+
+fn unsupported_package_outputs_absent(plugin_root: &Path) -> Result<bool, String> {
+    let package_dir = plugin_root.join("target").join("hawk2ui");
+    if !package_dir.is_dir() {
+        return Err(format!(
+            "plugin package directory is missing: {}",
+            package_dir.display()
+        ));
+    }
+    for entry in fs::read_dir(&package_dir).map_err(|error| {
+        format!(
+            "plugin package directory {} cannot be read: {error}",
+            package_dir.display()
+        )
+    })? {
+        let path = entry
+            .map_err(|error| format!("plugin package directory entry cannot be read: {error}"))?
+            .path();
+        let extension = path.extension().and_then(|extension| extension.to_str());
+        if matches!(extension, Some("component" | "app")) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+struct SecurityLaunchGate {
+    runtime_surface_launched: bool,
+    evidence: String,
+}
+
+fn read_security_launch_gate(path: &Path) -> Result<SecurityLaunchGate, String> {
+    require_file(path)?;
+    let source = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "security denial evidence file {} cannot be read: {error}",
+            path.display()
+        )
+    })?;
+    let evidence = source
+        .lines()
+        .find(|line| line.trim_start().starts_with("runtime_surface_launched="))
+        .ok_or_else(|| {
+            format!(
+                "security denial evidence file {} is missing runtime_surface_launched",
+                path.display()
+            )
+        })?
+        .trim()
+        .to_string();
+    let value = evidence
+        .split_once('=')
+        .map(|(_, value)| value.trim())
+        .ok_or_else(|| "runtime_surface_launched evidence is malformed".to_string())?;
+    let runtime_surface_launched = match value {
+        "true" => true,
+        "false" => false,
+        _ => {
+            return Err(format!(
+                "runtime_surface_launched evidence must be true or false, observed {value}"
+            ));
+        }
+    };
+    Ok(SecurityLaunchGate {
+        runtime_surface_launched,
+        evidence,
+    })
+}
+
+fn parse_style_gallery_sections(source: &str) -> Result<Vec<String>, String> {
+    let declaration = source
+        .lines()
+        .find(|line| line.contains("export const sections"))
+        .ok_or_else(|| "style gallery source is missing `export const sections`".to_string())?;
+    let (_, tail) = declaration
+        .split_once('[')
+        .ok_or_else(|| "style gallery sections declaration is missing `[`".to_string())?;
+    let (body, _) = tail
+        .split_once(']')
+        .ok_or_else(|| "style gallery sections declaration is missing `]`".to_string())?;
+    let sections = body
+        .split(',')
+        .map(str::trim)
+        .map(|part| part.trim_matches('"').trim_matches('\''))
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if sections.is_empty() {
+        Err("style gallery sections declaration did not contain sections".to_string())
+    } else {
+        Ok(sections)
+    }
+}
+
+struct PluginEditorTraceEvidence {
+    editor_events: Vec<String>,
+    parameter_updates: Vec<String>,
+    automation_events: Vec<String>,
+    state_roundtrip: bool,
+    preset_id: String,
+    requested_process_quit: bool,
+}
+
+fn parse_plugin_editor_trace(source: &str) -> Result<PluginEditorTraceEvidence, String> {
+    let mut lines = source.lines();
+    let editor_events = lines
+        .next()
+        .ok_or_else(|| "plugin editor trace is missing lifecycle events".to_string())?
+        .split(',')
+        .map(str::trim)
+        .filter(|event| !event.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if editor_events.is_empty() {
+        return Err("plugin editor trace contains no lifecycle events".to_string());
+    }
+    Ok(PluginEditorTraceEvidence {
+        editor_events,
+        parameter_updates: parse_trace_list(source, "parameters")?,
+        automation_events: parse_trace_list(source, "automation")?,
+        state_roundtrip: parse_trace_bool(source, "state_roundtrip")?,
+        preset_id: parse_trace_scalar(source, "preset")?,
+        requested_process_quit: parse_trace_bool(source, "requested_process_quit")?,
+    })
+}
+
+fn parse_trace_list(source: &str, key: &str) -> Result<Vec<String>, String> {
+    Ok(parse_trace_scalar(source, key)?
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn parse_trace_bool(source: &str, key: &str) -> Result<bool, String> {
+    match parse_trace_scalar(source, key)?.as_str() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        value => Err(format!(
+            "{key} trace value must be true or false, observed {value}"
+        )),
+    }
+}
+
+fn parse_trace_scalar(source: &str, key: &str) -> Result<String, String> {
+    let prefix = format!("{key}=");
+    source
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(&prefix))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("plugin editor trace missing {key} evidence"))
+}
+
 fn build_workspace_verified(root: &Path) -> Result<SmokeBuildResult, String> {
-    let output = BuildWorkspace::load(root)
-        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
-        .map_err(|error| format!("smoke build failed: {error:?}"))?;
+    let output = build_workspace_output_verified(root)?;
     Ok(smoke_build_result(&output))
+}
+
+fn build_workspace_output_verified(root: &Path) -> Result<BuildWorkspaceOutput, String> {
+    BuildWorkspace::load(root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .map_err(|error| format!("smoke build failed: {error:?}"))
 }
 
 fn smoke_build_result(output: &BuildWorkspaceOutput) -> SmokeBuildResult {
@@ -734,6 +1065,7 @@ fn smoke_build_result(output: &BuildWorkspaceOutput) -> SmokeBuildResult {
         built: true,
         artifact_verified: output.verification.is_release_ready(),
         compiled_script_count: output.artifact.compiled_scripts.len(),
+        compiled_framework_count: output.artifact.compiled_frameworks.len(),
         compiled_style_count: output.artifact.compiled_styles.len(),
         compiled_asset_count: output.artifact.compiled_assets.len(),
         target_count: output.artifact.target_metadata.len(),
@@ -782,6 +1114,14 @@ fn require_visible_pixel(frame: &SoftwareFrame, pixel: u32, label: &str) -> Resu
     }
 }
 
+fn require_any_visible_pixel(frame: &SoftwareFrame, label: &str) -> Result<(), String> {
+    if frame.pixels().iter().any(|pixel| *pixel != 0) {
+        Ok(())
+    } else {
+        Err(format!("{label} did not contain any visible pixels"))
+    }
+}
+
 fn software_frame_evidence(
     frame: &SoftwareFrame,
     pixel: u32,
@@ -790,6 +1130,23 @@ fn software_frame_evidence(
     require_visible_pixel(frame, pixel, label)?;
     Ok(SmokeSoftwareFrameEvidence {
         physical_size: [frame.width(), frame.height()],
+        visible_pixel: true,
+    })
+}
+
+fn render_runtime_tree_evidence(
+    tree: &RuntimeViewTree,
+    label: &str,
+) -> Result<SmokeSoftwareFrameEvidence, String> {
+    let frame = RuntimeSceneBridge::new(Viewport::new(320.0, 180.0))
+        .build(tree)
+        .map_err(|error| format!("{label} scene build failed: {error:?}"))?;
+    let software_frame = SoftwareFrameRenderer::default()
+        .render_scene_frame(&frame, 320, 180, 1.0)
+        .map_err(|error| format!("{label} software frame render failed: {}", error.rule()))?;
+    require_any_visible_pixel(&software_frame, label)?;
+    Ok(SmokeSoftwareFrameEvidence {
+        physical_size: [software_frame.width(), software_frame.height()],
         visible_pixel: true,
     })
 }
@@ -1046,18 +1403,23 @@ fn framework_contract(
     framework: &str,
     source_file: &Path,
     source: &str,
+    build_output: &BuildWorkspaceOutput,
 ) -> Result<FrameworkExampleContract, String> {
     match framework {
-        "native" => native_contract(source_file, source),
-        "svelte" => svelte_contract(source_file, source),
-        "react" => react_contract(source_file, source),
-        "vue" => vue_contract(source_file, source),
-        "solid" => solid_contract(source_file, source),
+        "native" => native_contract(source_file, source, build_output),
+        "svelte" => svelte_contract(source_file, build_output),
+        "react" => react_contract(source_file, build_output),
+        "vue" => vue_contract(source_file, build_output),
+        "solid" => solid_contract(source_file, build_output),
         _ => Err(format!("unsupported framework smoke example: {framework}")),
     }
 }
 
-fn native_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleContract, String> {
+fn native_contract(
+    source_file: &Path,
+    source: &str,
+    build_output: &BuildWorkspaceOutput,
+) -> Result<FrameworkExampleContract, String> {
     for required in [
         "createHawkApp",
         "surface.card",
@@ -1072,9 +1434,11 @@ fn native_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleC
     let mut runtime = NativeAuthoringRuntime::new(source_file.display().to_string());
     runtime.mount(native_root());
     let artifact = runtime.finish().map_err(|error| format!("{error:?}"))?;
-    NativeRuntimeBridge::new()
+    let bridged = NativeRuntimeBridge::new()
         .bridge_artifact(&artifact)
         .map_err(|error| format!("{error:?}"))?;
+    let software_frame =
+        render_runtime_tree_evidence(bridged.runtime_tree(), "native framework smoke")?;
     Ok(FrameworkExampleContract {
         framework: "native".into(),
         root_id: artifact.root().id().as_str().to_string(),
@@ -1096,7 +1460,12 @@ fn native_contract(source_file: &Path, source: &str) -> Result<FrameworkExampleC
             .iter()
             .map(|asset| asset.path().to_string())
             .collect(),
+        build: smoke_build_result(build_output),
+        compiler_artifact: None,
+        list_template_count: 0,
+        dynamic_binding_count: 0,
         runtime_bridged: true,
+        software_frame,
     })
 }
 
@@ -1133,146 +1502,185 @@ fn native_root() -> NativeAuthoringElement {
         .with_lifecycle(NativeLifecycleEvent::Unmounted, "onUnmount")
 }
 
-fn framework_example_program(asset_name: &str, unmounted: &str) -> FrameworkNativeProgram {
-    FrameworkNativeProgram::new(
-        FrameworkNativeNode::new("root", ElementKind::View)
-            .with_ref(NativeRef::new("root_ref"))
-            .with_style(StyleRef::new("surface.card"))
-            .with_asset(AssetRef::new(asset_name, "assets/logo.svg"))
-            .with_event(
-                EventKind::Pointer(PointerEventKind::Press),
-                HandlerRef::new("handlePress"),
-                [EventPayloadField::Position],
-            )
-            .with_lifecycle(NativeLifecycleEvent::Mounted, HandlerRef::new("onMount"))
-            .with_lifecycle(NativeLifecycleEvent::Unmounted, HandlerRef::new(unmounted))
-            .with_child(
-                "title",
-                FrameworkNativeNode::new("title", ElementKind::Text)
-                    .with_key("title")
-                    .with_prop("text", PropValue::String("title".to_string()))
-                    .with_prop("font_size", PropValue::Number(18.0)),
-            )
-            .with_child(
-                "cta",
-                FrameworkNativeNode::new("cta", ElementKind::Text)
-                    .with_key("cta")
-                    .with_prop("text", PropValue::String("cta".to_string()))
-                    .with_prop("font_size", PropValue::Number(18.0)),
-            ),
-    )
-}
-
-fn svelte_contract(source_file: &Path, _source: &str) -> Result<FrameworkExampleContract, String> {
+fn svelte_contract(
+    source_file: &Path,
+    build_output: &BuildWorkspaceOutput,
+) -> Result<FrameworkExampleContract, String> {
+    let (record, program) = compiled_framework_program(build_output, "svelte")?;
     let artifact = SvelteIntegration::new()
         .compile_to_runtime(SvelteComponentSource::from_native_program(
             source_file.display().to_string(),
-            framework_example_program("svelte.asset", "onDestroy"),
+            program.clone(),
         ))
         .map_err(|error| format!("{error:?}"))?;
-    Ok(FrameworkExampleContract {
-        framework: "svelte".into(),
-        root_id: artifact.compiled().root().id().as_str().to_string(),
-        keyed_children: artifact.compiled().keyed_children().to_vec(),
-        style_refs: artifact
-            .compiled()
-            .style_refs()
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        asset_paths: artifact
-            .compiled()
-            .asset_refs()
-            .iter()
-            .map(|asset| asset.path().to_string())
-            .collect(),
-        runtime_bridged: runtime_tree_has_example_children(artifact.runtime_tree()),
-    })
+    framework_program_contract(
+        "svelte",
+        build_output,
+        record,
+        &program,
+        artifact.runtime_tree(),
+    )
 }
 
-fn react_contract(source_file: &Path, _source: &str) -> Result<FrameworkExampleContract, String> {
+fn react_contract(
+    source_file: &Path,
+    build_output: &BuildWorkspaceOutput,
+) -> Result<FrameworkExampleContract, String> {
+    let (record, program) = compiled_framework_program(build_output, "react")?;
     let artifact = ReactIntegration::new()
         .render_to_runtime(ReactElementTree::from_native_program(
             source_file.display().to_string(),
-            framework_example_program("react.asset", "onUnmount"),
+            program.clone(),
         ))
         .map_err(|error| format!("{error:?}"))?;
-    Ok(FrameworkExampleContract {
-        framework: "react".into(),
-        root_id: artifact.rendered().root().id().as_str().to_string(),
-        keyed_children: artifact.rendered().keyed_children().to_vec(),
-        style_refs: artifact
-            .rendered()
-            .style_refs()
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        asset_paths: artifact
-            .rendered()
-            .asset_refs()
-            .iter()
-            .map(|asset| asset.path().to_string())
-            .collect(),
-        runtime_bridged: runtime_tree_has_example_children(artifact.runtime_tree()),
-    })
+    framework_program_contract(
+        "react",
+        build_output,
+        record,
+        &program,
+        artifact.runtime_tree(),
+    )
 }
 
-fn vue_contract(source_file: &Path, _source: &str) -> Result<FrameworkExampleContract, String> {
+fn vue_contract(
+    source_file: &Path,
+    build_output: &BuildWorkspaceOutput,
+) -> Result<FrameworkExampleContract, String> {
+    let (record, program) = compiled_framework_program(build_output, "vue")?;
     let artifact = VueIntegration::new()
         .render_to_runtime(VueSingleFileComponent::from_native_program(
             source_file.display().to_string(),
-            framework_example_program("vue.asset", "onUnmounted"),
+            program.clone(),
         ))
         .map_err(|error| format!("{error:?}"))?;
-    Ok(FrameworkExampleContract {
-        framework: "vue".into(),
-        root_id: artifact.rendered().root().id().as_str().to_string(),
-        keyed_children: artifact.rendered().keyed_children().to_vec(),
-        style_refs: artifact
-            .rendered()
-            .style_refs()
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        asset_paths: artifact
-            .rendered()
-            .asset_refs()
-            .iter()
-            .map(|asset| asset.path().to_string())
-            .collect(),
-        runtime_bridged: runtime_tree_has_example_children(artifact.runtime_tree()),
-    })
+    framework_program_contract(
+        "vue",
+        build_output,
+        record,
+        &program,
+        artifact.runtime_tree(),
+    )
 }
 
-fn solid_contract(source_file: &Path, _source: &str) -> Result<FrameworkExampleContract, String> {
+fn solid_contract(
+    source_file: &Path,
+    build_output: &BuildWorkspaceOutput,
+) -> Result<FrameworkExampleContract, String> {
+    let (record, program) = compiled_framework_program(build_output, "solid")?;
     let artifact = SolidIntegration::new()
         .render_to_runtime(SolidComponentSource::from_native_program(
             source_file.display().to_string(),
-            framework_example_program("solid.asset", "onCleanup"),
+            program.clone(),
         ))
         .map_err(|error| format!("{error:?}"))?;
+    framework_program_contract(
+        "solid",
+        build_output,
+        record,
+        &program,
+        artifact.runtime_tree(),
+    )
+}
+
+fn compiled_framework_program<'a>(
+    build_output: &'a BuildWorkspaceOutput,
+    expected_framework: &str,
+) -> Result<(&'a CompiledFrameworkRecord, FrameworkNativeProgram), String> {
+    let record = match build_output.artifact.compiled_frameworks.as_slice() {
+        [record] => record,
+        records => {
+            return Err(format!(
+                "framework smoke expected exactly one compiled framework artifact for {expected_framework}, found {}",
+                records.len()
+            ));
+        }
+    };
+    let actual_framework = source_framework_label(record.framework);
+    if actual_framework != expected_framework {
+        return Err(format!(
+            "compiled framework mismatch: expected {expected_framework}, got {actual_framework}"
+        ));
+    }
+    if record.compiler_artifact_json.trim().is_empty() {
+        return Err(format!(
+            "compiled framework artifact is empty for {expected_framework}"
+        ));
+    }
+    let wire = FrameworkNativeProgramWire::from_json(&record.compiler_artifact_json)
+        .map_err(|error| format!("{error:?}"))?;
+    let program = FrameworkNativeProgram::try_from(wire).map_err(|error| format!("{error:?}"))?;
+    if program.compiler().framework() != expected_framework {
+        return Err(format!(
+            "compiler metadata framework mismatch: expected {expected_framework}, got {}",
+            program.compiler().framework()
+        ));
+    }
+    if program.compiler().source_path() != record.source_path {
+        return Err(format!(
+            "compiler metadata source path mismatch: expected {}, got {}",
+            record.source_path,
+            program.compiler().source_path()
+        ));
+    }
+    Ok((record, program))
+}
+
+fn framework_program_contract(
+    framework: &str,
+    build_output: &BuildWorkspaceOutput,
+    record: &CompiledFrameworkRecord,
+    program: &FrameworkNativeProgram,
+    runtime_tree: &RuntimeViewTree,
+) -> Result<FrameworkExampleContract, String> {
+    let root = program.root();
+    let software_frame =
+        render_runtime_tree_evidence(runtime_tree, &format!("{framework} framework smoke"))?;
     Ok(FrameworkExampleContract {
-        framework: "solid".into(),
-        root_id: artifact.rendered().root().id().as_str().to_string(),
-        keyed_children: artifact.rendered().keyed_children().to_vec(),
-        style_refs: artifact
-            .rendered()
+        framework: framework.into(),
+        root_id: root.id().as_str().to_string(),
+        keyed_children: program.keyed_child_order(),
+        style_refs: root
             .style_refs()
-            .into_iter()
-            .map(str::to_string)
+            .iter()
+            .map(|style| style.name().to_string())
             .collect(),
-        asset_paths: artifact
-            .rendered()
+        asset_paths: root
             .asset_refs()
             .iter()
             .map(|asset| asset.path().to_string())
             .collect(),
-        runtime_bridged: runtime_tree_has_example_children(artifact.runtime_tree()),
+        build: smoke_build_result(build_output),
+        compiler_artifact: Some(FrameworkCompilerSmokeArtifact {
+            framework: program.compiler().framework().to_string(),
+            compiler: program.compiler().compiler().to_string(),
+            source_path: program.compiler().source_path().to_string(),
+            entrypoint: program.compiler().entrypoint().to_string(),
+            artifact_path: record.artifact_path.clone(),
+            artifact_bytes: record.compiler_artifact_json.len(),
+        }),
+        list_template_count: program.list_templates().len(),
+        dynamic_binding_count: program.dynamic_bindings().len(),
+        runtime_bridged: runtime_tree_has_example_children(runtime_tree),
+        software_frame,
     })
 }
 
+fn source_framework_label(framework: SourceFramework) -> &'static str {
+    match framework {
+        SourceFramework::Native => "native",
+        SourceFramework::React => "react",
+        SourceFramework::Solid => "solid",
+        SourceFramework::Svelte => "svelte",
+        SourceFramework::Vue => "vue",
+    }
+}
+
 fn runtime_tree_has_example_children(tree: &hawk2ui_runtime::RuntimeViewTree) -> bool {
-    tree.root_id().as_str() == "root" && tree.children_of(tree.root_id()).len() == 2
+    let children = tree.children_of(tree.root_id());
+    tree.root_id().as_str() == "root"
+        && children.len() >= 2
+        && children[0].as_str() == "title"
+        && children[1].as_str() == "cta"
 }
 
 fn plugin_editor_scene_frame() -> Result<RuntimeSceneFrame, String> {

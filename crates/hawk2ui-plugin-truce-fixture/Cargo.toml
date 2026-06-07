@@ -25,7 +25,7 @@ pedantic = "warn"
 # `PluginLogic` trait, and `#[derive(Params)]`. `default-features = false`
 # keeps the per-format SDK wrappers out: this fixture proves the editor
 # composition seam without linking CLAP/VST3/AU SDK wrappers.
-truce = { version = "0.49.14", default-features = false }
-truce-core = "0.49.14"
+truce = { version = "0.56.0", default-features = false }
+truce-core = "0.56.0"
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-plugin-truce = { version = "0.1.0", path = "../hawk2ui-plugin-truce" }

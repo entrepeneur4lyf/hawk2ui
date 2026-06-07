@@ -9,8 +9,9 @@ use hawk2ui_host::{
 use hawk2ui_host_baseview::{
     BaseviewCapabilities, BaseviewClapRuntimeEditor, BaseviewClapRuntimeEditorHost,
     BaseviewClapRuntimeEditorHostAbiBridge, BaseviewClapRuntimeEditorHostCommand,
-    BaseviewClapRuntimeEditorHostResponse, BaseviewEventTranslator, BaseviewNativeParent,
-    BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
+    BaseviewClapRuntimeEditorHostResponse, BaseviewEventTranslator, BaseviewHostError,
+    BaseviewNativeParent, BaseviewNativeParentBackend, BaseviewParentFixture,
+    BaseviewPluginAdapter, BaseviewRuntimeWindowBackend,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_plugin::{
@@ -690,14 +691,16 @@ fn baseview_clap_runtime_editor_attaches_presents_and_tears_down_live_session() 
     let session = ClapRuntimeEditorSession::load_from_package(&outputs[0].output_path)
         .expect("verified CLAP runtime editor session loads");
 
-    let mut editor = BaseviewClapRuntimeEditor::attach(
+    let mut editor = BaseviewClapRuntimeEditor::attach_with_window_backend(
         session,
         ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::X11, 42)
             .expect("CLAP parent handle validates"),
         Some(7),
         "clap-live-runtime-parent",
+        Box::<RecordingRuntimeWindowBackend>::default(),
     )
     .expect("live CLAP runtime editor attaches");
+    assert!(editor.live_window_opened());
     editor.drain_events();
 
     let snapshot = editor
@@ -726,6 +729,62 @@ fn baseview_clap_runtime_editor_attaches_presents_and_tears_down_live_session() 
         .present_runtime_frame()
         .expect_err("destroyed live editor must not render");
     assert_eq!(error.rule(), "baseview.editor.destroyed");
+}
+
+#[test]
+fn baseview_clap_runtime_editor_host_show_uses_live_window_backend() {
+    let sealed_artifact = SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &HawkManifest::parse(VALID_PLUGIN_MANIFEST).expect("valid plugin manifest parses"),
+    )
+    .with_runtime_scene_payload(serde_json::json!({
+        "viewport": { "width": 320.0, "height": 180.0 },
+        "root": {
+            "id": "runtime-root",
+            "width": 320.0,
+            "height": 180.0,
+            "visual": { "fill": [26, 111, 74, 255] },
+            "children": []
+        }
+    }));
+    let (runtime_artifact, verifier) = signed_runtime_artifact_value(sealed_artifact);
+    let output_root = temp_package_root("hawk2ui-baseview-clap-host-live-window");
+    let request = PackageRequest::new(
+        FormatMetadata::new("com.hawk2ui.host-live", "Host Live", "Hawk2UI"),
+        BundleOutput::new(output_root.to_string_lossy(), "HostLive"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let outputs = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds")
+        .materialize()
+        .expect("materialization succeeds");
+    let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostLive.clap");
+    let mut host = recording_runtime_editor_host(&clap_plugin_path)
+        .with_release_verifier(verifier)
+        .with_runtime_window_backend_factory(|| Box::<RecordingRuntimeWindowBackend>::default());
+
+    host.create(ClapGuiWindowApi::Wayland, false)
+        .expect("host create resolves verified runtime session");
+    host.set_parent(
+        ClapGuiParentHandle::from_raw_parts(ClapGuiWindowApi::Wayland, 42)
+            .expect("Wayland CLAP parent handle validates"),
+        "clap-host-live-window-parent",
+    )
+    .expect("host set-parent opens the live runtime window backend");
+    assert!(host.live_window_opened());
+
+    let snapshot = host
+        .show()
+        .expect("host show presents through the live runtime window backend");
+    assert_eq!((snapshot.width(), snapshot.height()), (320, 180));
+    assert_eq!(host.presented_frame_count(), 1);
 }
 
 #[test]
@@ -763,8 +822,7 @@ fn baseview_clap_runtime_editor_host_drives_callback_lifecycle_from_plugin_path(
         .materialize()
         .expect("materialization succeeds");
     let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostCallback.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
-        .with_release_verifier(verifier);
+    let mut host = recording_runtime_editor_host(&clap_plugin_path).with_release_verifier(verifier);
 
     let error = host.show().expect_err("show before create must fail");
     assert_eq!(error.rule(), "baseview.clap-runtime-editor.not-attached");
@@ -832,8 +890,7 @@ fn baseview_clap_runtime_editor_host_accepts_native_wayland_callback_lifecycle()
         .materialize()
         .expect("materialization succeeds");
     let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostWayland.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
-        .with_release_verifier(verifier);
+    let mut host = recording_runtime_editor_host(&clap_plugin_path).with_release_verifier(verifier);
 
     host.create(ClapGuiWindowApi::Wayland, false)
         .expect("native Wayland create resolves verified runtime session");
@@ -892,8 +949,7 @@ fn baseview_clap_runtime_editor_host_routes_wayland_resize_focus_and_input() {
         .expect("materialization succeeds");
     let clap_plugin_path =
         std::path::Path::new(&outputs[0].output_path).join("HostWaylandInput.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
-        .with_release_verifier(verifier);
+    let mut host = recording_runtime_editor_host(&clap_plugin_path).with_release_verifier(verifier);
 
     host.create(ClapGuiWindowApi::Wayland, false)
         .expect("native Wayland create resolves verified runtime session");
@@ -986,7 +1042,7 @@ fn baseview_clap_runtime_editor_host_requires_trusted_release_key() {
     let clap_plugin_path =
         std::path::Path::new(&outputs[0].output_path).join("HostTrustedRelease.clap");
 
-    let mut untrusted_host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7));
+    let mut untrusted_host = recording_runtime_editor_host(&clap_plugin_path);
     let error = untrusted_host
         .create(ClapGuiWindowApi::X11, false)
         .expect_err("host create must reject packages signed by unknown keys");
@@ -995,8 +1051,8 @@ fn baseview_clap_runtime_editor_host_requires_trusted_release_key() {
         "package.clap-runtime-editor.security.package.signature-invalid"
     );
 
-    let mut trusted_host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
-        .with_release_verifier(verifier);
+    let mut trusted_host =
+        recording_runtime_editor_host(&clap_plugin_path).with_release_verifier(verifier);
     trusted_host
         .create(ClapGuiWindowApi::X11, false)
         .expect("host create accepts trusted signed runtime package");
@@ -1039,8 +1095,7 @@ fn baseview_clap_runtime_editor_host_tracks_parameter_and_state_events() {
         .materialize()
         .expect("materialization succeeds");
     let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostState.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
-        .with_release_verifier(verifier);
+    let mut host = recording_runtime_editor_host(&clap_plugin_path).with_release_verifier(verifier);
 
     let error = host
         .apply_parameter_value("gain", ParameterValue::Float(0.5))
@@ -1164,8 +1219,7 @@ fn baseview_clap_runtime_editor_host_drains_realtime_visuals_with_frame_gate() {
         .materialize()
         .expect("materialization succeeds");
     let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostRealtime.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
-        .with_release_verifier(verifier);
+    let mut host = recording_runtime_editor_host(&clap_plugin_path).with_release_verifier(verifier);
     let (mut writer, mut reader) =
         RealtimeVisualTransport::split_preallocated(4, FrameDropPolicy::DropNewest);
     let mut gate = RealtimeVisualFrameGate::new(60).expect("valid realtime frame gate");
@@ -1257,8 +1311,7 @@ fn baseview_clap_runtime_editor_host_dispatches_typed_abi_commands() {
         .materialize()
         .expect("materialization succeeds");
     let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostCommand.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
-        .with_release_verifier(verifier);
+    let mut host = recording_runtime_editor_host(&clap_plugin_path).with_release_verifier(verifier);
 
     assert_eq!(
         host.dispatch(BaseviewClapRuntimeEditorHostCommand::Create {
@@ -1365,8 +1418,7 @@ fn baseview_clap_runtime_editor_host_binds_generated_text_abi_to_live_editor() {
         .materialize()
         .expect("materialization succeeds");
     let clap_plugin_path = std::path::Path::new(&outputs[0].output_path).join("HostTextAbi.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
-        .with_release_verifier(verifier);
+    let mut host = recording_runtime_editor_host(&clap_plugin_path).with_release_verifier(verifier);
     let bridge = BaseviewClapRuntimeEditorHostAbiBridge::new();
 
     assert!(
@@ -1540,8 +1592,7 @@ fn baseview_clap_runtime_editor_host_binds_wayland_generated_text_abi() {
         .expect("materialization succeeds");
     let clap_plugin_path =
         std::path::Path::new(&outputs[0].output_path).join("HostWaylandTextAbi.clap");
-    let mut host = BaseviewClapRuntimeEditorHost::new(&clap_plugin_path, Some(7))
-        .with_release_verifier(verifier);
+    let mut host = recording_runtime_editor_host(&clap_plugin_path).with_release_verifier(verifier);
     let bridge = BaseviewClapRuntimeEditorHostAbiBridge::new();
 
     assert_eq!(
@@ -1712,6 +1763,58 @@ fn runtime_scene_frame_with_missing_assets() -> RuntimeSceneFrame {
     RuntimeSceneBridge::new(Viewport::new(160.0, 96.0))
         .build(&tree)
         .expect("runtime scene frame with missing assets builds")
+}
+
+#[derive(Debug, Default)]
+struct RecordingRuntimeWindowBackend {
+    open: bool,
+    presented_frames: u64,
+}
+
+impl BaseviewRuntimeWindowBackend for RecordingRuntimeWindowBackend {
+    fn open(
+        &mut self,
+        _adapter: &BaseviewPluginAdapter,
+        _scene: RuntimeSceneFrame,
+    ) -> Result<(), BaseviewHostError> {
+        self.open = true;
+        Ok(())
+    }
+
+    fn present(
+        &mut self,
+        adapter: &mut BaseviewPluginAdapter,
+        scene: &RuntimeSceneFrame,
+    ) -> Result<hawk2ui_render_skia::SkiaFrameSnapshot, BaseviewHostError> {
+        if !self.open {
+            return Err(BaseviewHostError::new(
+                "test.runtime-window.not-open",
+                "recording runtime window must be opened before present",
+            ));
+        }
+        let snapshot = adapter.render_scene_frame(scene)?.clone();
+        self.presented_frames = self.presented_frames.saturating_add(1);
+        Ok(snapshot)
+    }
+
+    fn close(&mut self) {
+        self.open = false;
+    }
+
+    fn is_open(&self) -> bool {
+        self.open
+    }
+
+    fn presented_frame_count(&self) -> u64 {
+        self.presented_frames
+    }
+}
+
+fn recording_runtime_editor_host(
+    plugin_path: impl AsRef<std::path::Path>,
+) -> BaseviewClapRuntimeEditorHost {
+    BaseviewClapRuntimeEditorHost::new(plugin_path.as_ref(), Some(7))
+        .with_runtime_window_backend_factory(|| Box::<RecordingRuntimeWindowBackend>::default())
 }
 
 fn temp_package_root(prefix: &str) -> std::path::PathBuf {

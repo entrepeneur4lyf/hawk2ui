@@ -19,6 +19,7 @@ workspace = true
 [dependencies]
 ed25519-dalek.workspace = true
 hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
+hawk2ui-authoring = { version = "0.1.0", path = "../hawk2ui-authoring" }
 hawk2ui-assets = { version = "0.1.0", path = "../hawk2ui-assets" }
 hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }
 hawk2ui-script = { version = "0.1.0", path = "../hawk2ui-script" }
@@ -42,5 +43,5 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 # `for_test_params`, which needs the umbrella crate (for `::truce::` paths) and
 # `truce-core` (for the test bridge). `default-features = false` keeps the
 # format/SDK wrappers out.
-truce = { version = "0.49.14", default-features = false }
-truce-core = "0.49.14"
+truce = { version = "0.56.0", default-features = false }
+truce-core = "0.56.0"

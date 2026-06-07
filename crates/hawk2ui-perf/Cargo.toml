@@ -21,6 +21,13 @@ workspace = true
 serde.workspace = true
 toml.workspace = true
 
+[dev-dependencies]
+hawk2ui-build = { version = "0.1.0", path = "../hawk2ui-build" }
+hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
+hawk2ui-render = { version = "0.1.0", path = "../hawk2ui-render" }
+hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
+hawk2ui-smoke = { version = "0.1.0", path = "../hawk2ui-smoke" }
+
 [[bench]]
 name = "startup"
 harness = false

@@ -188,6 +188,7 @@ pub struct FrameworkNativeProgram {
     dynamic_bindings: Vec<FrameworkDynamicBinding>,
     initial_dynamic_values: Vec<FrameworkInitialDynamicValue>,
     event_handlers: Vec<FrameworkEventHandler>,
+    list_templates: Vec<FrameworkListTemplate>,
 }
 
 /// Compiler provenance attached to a framework native program.
@@ -222,6 +223,9 @@ pub struct FrameworkNativeProgramWire {
     /// Executable event handlers emitted by the framework compiler.
     #[serde(default)]
     pub event_handlers: Vec<FrameworkEventHandlerWire>,
+    /// Runtime keyed-list templates emitted by the compiler.
+    #[serde(default)]
+    pub list_templates: Vec<FrameworkListTemplateWire>,
 }
 
 /// Wire compiler provenance for source-fidelity checks.
@@ -480,6 +484,87 @@ pub struct FrameworkInitialDynamicValueWire {
     pub value: FrameworkDynamicValueWire,
 }
 
+/// Wire keyed-list template emitted by a framework compiler.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkListTemplateWire {
+    /// Stable template id.
+    pub id: String,
+    /// Parent node that receives materialized list item roots.
+    pub parent_id: String,
+    /// Optional static sibling that materialized roots are inserted before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_before: Option<String>,
+    /// Dynamic source expression/dependency name.
+    pub source: String,
+    /// Item binding name visible to template expressions.
+    pub item: String,
+    /// Key expression evaluated for each item.
+    pub key: String,
+    /// Root template node materialized for each item.
+    pub node: FrameworkListTemplateNodeWire,
+}
+
+/// Wire node inside a keyed-list template.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkListTemplateNodeWire {
+    /// Template expression or literal for the materialized node id.
+    pub id: FrameworkTemplateScalarWire,
+    /// Native element kind.
+    pub kind: FrameworkNativeElementKindWire,
+    /// Optional template expression or literal for the materialized key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<FrameworkTemplateScalarWire>,
+    /// Ordered template props.
+    #[serde(default)]
+    pub props: Vec<FrameworkTemplatePropWire>,
+    /// Ordered native refs.
+    #[serde(default)]
+    pub refs: Vec<String>,
+    /// Ordered style refs.
+    #[serde(default)]
+    pub style_refs: Vec<String>,
+    /// Ordered asset refs.
+    #[serde(default)]
+    pub asset_refs: Vec<FrameworkNativeAssetWire>,
+    /// Ordered event bindings.
+    #[serde(default)]
+    pub events: Vec<FrameworkNativeEventWire>,
+    /// Ordered lifecycle bindings.
+    #[serde(default)]
+    pub lifecycle: Vec<FrameworkNativeLifecycleWire>,
+    /// Ordered child template nodes.
+    #[serde(default)]
+    pub children: Vec<FrameworkListTemplateNodeWire>,
+}
+
+/// Wire template property.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkTemplatePropWire {
+    /// Property name.
+    pub name: String,
+    /// Literal or expression value.
+    pub value: FrameworkTemplateScalarWire,
+}
+
+/// Wire scalar used by keyed-list templates.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FrameworkTemplateScalarWire {
+    /// Literal scalar value.
+    Literal {
+        /// Literal scalar.
+        value: FrameworkNativePropValueWire,
+    },
+    /// Expression evaluated with the item binding in scope.
+    Expression {
+        /// Framework expression.
+        expression: String,
+    },
+}
+
 /// Wire initial dynamic value projection mode.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -567,6 +652,7 @@ impl FrameworkNativeProgram {
             dynamic_bindings: Vec::new(),
             initial_dynamic_values: Vec::new(),
             event_handlers: Vec::new(),
+            list_templates: Vec::new(),
         }
     }
 
@@ -617,6 +703,13 @@ impl FrameworkNativeProgram {
         self
     }
 
+    /// Adds a keyed-list template declared by the compiler boundary.
+    #[must_use]
+    pub fn with_list_template(mut self, template: FrameworkListTemplate) -> Self {
+        self.list_templates.push(template);
+        self
+    }
+
     /// Returns declared reactivity bindings in compiler order.
     #[must_use]
     pub fn reactivity(&self) -> &[FrameworkReactiveBinding] {
@@ -639,6 +732,12 @@ impl FrameworkNativeProgram {
     #[must_use]
     pub fn event_handlers(&self) -> &[FrameworkEventHandler] {
         &self.event_handlers
+    }
+
+    /// Returns keyed-list templates in compiler order.
+    #[must_use]
+    pub fn list_templates(&self) -> &[FrameworkListTemplate] {
+        &self.list_templates
     }
 
     /// Returns keyed direct children in compiler order.
@@ -794,6 +893,20 @@ impl TryFrom<FrameworkNativeProgramWire> for FrameworkNativeProgram {
                 ));
             }
             program = program.with_event_handler(handler);
+        }
+        let mut template_ids = BTreeSet::new();
+        for template in wire.list_templates {
+            let template = framework_list_template_from_wire(template)?;
+            if !template_ids.insert(template.id().to_string()) {
+                return Err(AdapterError::with_rule(
+                    "framework-native-program.list-template.duplicate",
+                    format!(
+                        "list template `{}` is declared more than once",
+                        template.id()
+                    ),
+                ));
+            }
+            program = program.with_list_template(template);
         }
         Ok(program)
     }
@@ -1083,6 +1196,162 @@ fn framework_initial_dynamic_value_from_wire(
     })
 }
 
+fn framework_list_template_from_wire(
+    template: FrameworkListTemplateWire,
+) -> Result<FrameworkListTemplate, AdapterError> {
+    validate_non_empty(
+        "framework-native-program.list-template.id-invalid",
+        "list template id",
+        &template.id,
+    )?;
+    validate_non_empty(
+        "framework-native-program.list-template.parent-id-invalid",
+        "list template parent id",
+        &template.parent_id,
+    )?;
+    if let Some(anchor_before) = template.anchor_before.as_ref() {
+        validate_non_empty(
+            "framework-native-program.list-template.anchor-before-invalid",
+            "list template anchor id",
+            anchor_before,
+        )?;
+    }
+    validate_non_empty(
+        "framework-native-program.list-template.source-invalid",
+        "list template source",
+        &template.source,
+    )?;
+    validate_non_empty(
+        "framework-native-program.list-template.item-invalid",
+        "list template item binding",
+        &template.item,
+    )?;
+    validate_non_empty(
+        "framework-native-program.list-template.key-invalid",
+        "list template key expression",
+        &template.key,
+    )?;
+    let mut list_template = FrameworkListTemplate::new(
+        template.id,
+        template.parent_id,
+        template.source,
+        template.item,
+        template.key,
+        framework_list_template_node_from_wire(template.node)?,
+    );
+    if let Some(anchor_before) = template.anchor_before {
+        list_template = list_template.with_anchor_before(anchor_before);
+    }
+    Ok(list_template)
+}
+
+fn framework_list_template_node_from_wire(
+    node: FrameworkListTemplateNodeWire,
+) -> Result<FrameworkListTemplateNode, AdapterError> {
+    let mut typed = FrameworkListTemplateNode::new(
+        framework_template_scalar_from_wire(node.id)?,
+        element_kind_from_wire(node.kind),
+    );
+    if let Some(key) = node.key {
+        typed = typed.with_key(framework_template_scalar_from_wire(key)?);
+    }
+    for prop in node.props {
+        validate_non_empty(
+            "framework-native-program.list-template.prop.name-invalid",
+            "list template property name",
+            &prop.name,
+        )?;
+        typed = typed.with_prop(prop.name, framework_template_scalar_from_wire(prop.value)?);
+    }
+    for reference in node.refs {
+        validate_non_empty(
+            "framework-native-program.list-template.ref.name-invalid",
+            "list template ref name",
+            &reference,
+        )?;
+        typed = typed.with_ref(NativeRef::new(reference));
+    }
+    for style_ref in node.style_refs {
+        validate_non_empty(
+            "framework-native-program.list-template.style-ref.name-invalid",
+            "list template style ref",
+            &style_ref,
+        )?;
+        typed = typed.with_style(StyleRef::new(style_ref));
+    }
+    for asset in node.asset_refs {
+        validate_non_empty(
+            "framework-native-program.list-template.asset.name-invalid",
+            "list template asset name",
+            &asset.name,
+        )?;
+        validate_non_empty(
+            "framework-native-program.list-template.asset.path-invalid",
+            "list template asset path",
+            &asset.path,
+        )?;
+        typed = typed.with_asset(AssetRef::new(asset.name, asset.path));
+    }
+    for event in node.events {
+        validate_non_empty(
+            "framework-native-program.list-template.event.handler-invalid",
+            "list template event handler",
+            &event.handler,
+        )?;
+        let event_kind = event.kind.parse::<EventKind>().map_err(|()| {
+            AdapterError::with_rule(
+                "framework-native-program.list-template.event.kind-invalid",
+                format!(
+                    "framework compiler emitted unsupported list template event kind `{}`",
+                    event.kind
+                ),
+            )
+        })?;
+        typed = typed.with_event(
+            event_kind,
+            HandlerRef::new(event.handler),
+            event
+                .payload_fields
+                .into_iter()
+                .map(event_payload_field_from_wire)
+                .collect(),
+        );
+    }
+    for lifecycle in node.lifecycle {
+        validate_non_empty(
+            "framework-native-program.list-template.lifecycle.handler-invalid",
+            "list template lifecycle handler",
+            &lifecycle.handler,
+        )?;
+        typed = typed.with_lifecycle(
+            lifecycle_event_from_wire(lifecycle.event),
+            HandlerRef::new(lifecycle.handler),
+        );
+    }
+    for child in node.children {
+        typed = typed.with_child(framework_list_template_node_from_wire(child)?);
+    }
+    Ok(typed)
+}
+
+fn framework_template_scalar_from_wire(
+    scalar: FrameworkTemplateScalarWire,
+) -> Result<FrameworkTemplateScalar, AdapterError> {
+    match scalar {
+        FrameworkTemplateScalarWire::Literal { value } => {
+            prop_value_from_wire(value).map(FrameworkTemplateScalar::Literal)
+        }
+        FrameworkTemplateScalarWire::Expression { expression } => {
+            validate_non_empty(
+                "framework-native-program.list-template.expression-invalid",
+                "list template expression",
+                &expression,
+            )?;
+            Ok(FrameworkTemplateScalar::Expression(expression))
+        }
+    }
+}
+
 fn framework_event_handler_from_wire(
     handler: FrameworkEventHandlerWire,
 ) -> Result<FrameworkEventHandler, AdapterError> {
@@ -1284,6 +1553,254 @@ pub enum FrameworkDynamicBindingTarget {
     },
     /// Bind the node text slot.
     Text,
+}
+
+/// Keyed-list template declared by a framework compiler boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameworkListTemplate {
+    id: String,
+    parent_id: String,
+    anchor_before: Option<String>,
+    source: String,
+    item: String,
+    key: String,
+    node: FrameworkListTemplateNode,
+}
+
+impl FrameworkListTemplate {
+    /// Creates a keyed-list template.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        parent_id: impl Into<String>,
+        source: impl Into<String>,
+        item: impl Into<String>,
+        key: impl Into<String>,
+        node: FrameworkListTemplateNode,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            parent_id: parent_id.into(),
+            anchor_before: None,
+            source: source.into(),
+            item: item.into(),
+            key: key.into(),
+            node,
+        }
+    }
+
+    /// Sets the optional static sibling that materialized roots are inserted before.
+    #[must_use]
+    pub fn with_anchor_before(mut self, anchor_before: impl Into<String>) -> Self {
+        self.anchor_before = Some(anchor_before.into());
+        self
+    }
+
+    /// Returns the stable template id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the parent node id.
+    #[must_use]
+    pub fn parent_id(&self) -> &str {
+        &self.parent_id
+    }
+
+    /// Returns the optional static sibling that materialized roots are inserted before.
+    #[must_use]
+    pub fn anchor_before(&self) -> Option<&str> {
+        self.anchor_before.as_deref()
+    }
+
+    /// Returns the dynamic list source.
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// Returns the item binding name.
+    #[must_use]
+    pub fn item(&self) -> &str {
+        &self.item
+    }
+
+    /// Returns the item key expression.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Returns the root template node.
+    #[must_use]
+    pub const fn node(&self) -> &FrameworkListTemplateNode {
+        &self.node
+    }
+}
+
+/// Node template materialized for each item in a keyed list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameworkListTemplateNode {
+    id: FrameworkTemplateScalar,
+    kind: ElementKind,
+    key: Option<FrameworkTemplateScalar>,
+    props: Vec<(String, FrameworkTemplateScalar)>,
+    refs: Vec<NativeRef>,
+    style_refs: Vec<StyleRef>,
+    asset_refs: Vec<AssetRef>,
+    events: Vec<(EventKind, HandlerRef, Vec<EventPayloadField>)>,
+    lifecycle: Vec<(NativeLifecycleEvent, HandlerRef)>,
+    children: Vec<FrameworkListTemplateNode>,
+}
+
+impl FrameworkListTemplateNode {
+    /// Creates a list template node.
+    #[must_use]
+    pub fn new(id: FrameworkTemplateScalar, kind: ElementKind) -> Self {
+        Self {
+            id,
+            kind,
+            key: None,
+            props: Vec::new(),
+            refs: Vec::new(),
+            style_refs: Vec::new(),
+            asset_refs: Vec::new(),
+            events: Vec::new(),
+            lifecycle: Vec::new(),
+            children: Vec::new(),
+        }
+    }
+
+    /// Sets the materialized key expression or literal.
+    #[must_use]
+    pub fn with_key(mut self, key: FrameworkTemplateScalar) -> Self {
+        self.key = Some(key);
+        self
+    }
+
+    /// Adds a template property.
+    #[must_use]
+    pub fn with_prop(mut self, name: impl Into<String>, value: FrameworkTemplateScalar) -> Self {
+        self.props.push((name.into(), value));
+        self
+    }
+
+    /// Adds a native ref copied to materialized nodes.
+    #[must_use]
+    pub fn with_ref(mut self, reference: NativeRef) -> Self {
+        self.refs.push(reference);
+        self
+    }
+
+    /// Adds a style ref copied to materialized nodes.
+    #[must_use]
+    pub fn with_style(mut self, style_ref: StyleRef) -> Self {
+        self.style_refs.push(style_ref);
+        self
+    }
+
+    /// Adds an asset ref copied to materialized nodes.
+    #[must_use]
+    pub fn with_asset(mut self, asset_ref: AssetRef) -> Self {
+        self.asset_refs.push(asset_ref);
+        self
+    }
+
+    /// Adds an event copied to materialized nodes.
+    #[must_use]
+    pub fn with_event(
+        mut self,
+        event: EventKind,
+        handler: HandlerRef,
+        payload_fields: Vec<EventPayloadField>,
+    ) -> Self {
+        self.events.push((event, handler, payload_fields));
+        self
+    }
+
+    /// Adds a lifecycle binding copied to materialized nodes.
+    #[must_use]
+    pub fn with_lifecycle(mut self, event: NativeLifecycleEvent, handler: HandlerRef) -> Self {
+        self.lifecycle.push((event, handler));
+        self
+    }
+
+    /// Adds a child template node.
+    #[must_use]
+    pub fn with_child(mut self, child: FrameworkListTemplateNode) -> Self {
+        self.children.push(child);
+        self
+    }
+
+    /// Returns the id scalar.
+    #[must_use]
+    pub const fn id(&self) -> &FrameworkTemplateScalar {
+        &self.id
+    }
+
+    /// Returns the element kind.
+    #[must_use]
+    pub const fn kind(&self) -> ElementKind {
+        self.kind
+    }
+
+    /// Returns the optional key scalar.
+    #[must_use]
+    pub const fn key(&self) -> Option<&FrameworkTemplateScalar> {
+        self.key.as_ref()
+    }
+
+    /// Returns template properties.
+    #[must_use]
+    pub fn props(&self) -> &[(String, FrameworkTemplateScalar)] {
+        &self.props
+    }
+
+    /// Returns refs.
+    #[must_use]
+    pub fn refs(&self) -> &[NativeRef] {
+        &self.refs
+    }
+
+    /// Returns style refs.
+    #[must_use]
+    pub fn style_refs(&self) -> &[StyleRef] {
+        &self.style_refs
+    }
+
+    /// Returns asset refs.
+    #[must_use]
+    pub fn asset_refs(&self) -> &[AssetRef] {
+        &self.asset_refs
+    }
+
+    /// Returns template events.
+    #[must_use]
+    pub fn events(&self) -> &[(EventKind, HandlerRef, Vec<EventPayloadField>)] {
+        &self.events
+    }
+
+    /// Returns lifecycle bindings.
+    #[must_use]
+    pub fn lifecycle(&self) -> &[(NativeLifecycleEvent, HandlerRef)] {
+        &self.lifecycle
+    }
+
+    /// Returns child template nodes.
+    #[must_use]
+    pub fn children(&self) -> &[FrameworkListTemplateNode] {
+        &self.children
+    }
+}
+
+/// Literal or expression scalar inside a framework list template.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FrameworkTemplateScalar {
+    /// Literal scalar.
+    Literal(PropValue),
+    /// Framework expression evaluated against the item binding.
+    Expression(String),
 }
 
 /// Initial value for a dynamic expression dependency.
@@ -1546,7 +2063,7 @@ pub enum NodeOperation {
 }
 
 impl NodeOperation {
-    fn stable_key(&self) -> String {
+    pub(crate) fn stable_key(&self) -> String {
         match self {
             Self::MountElement(node) => operation_keys::mount_element_key(node.id()),
             Self::MountComponent(component) => {
@@ -1895,61 +2412,6 @@ pub trait NativeRendererAdapter {
     ///
     /// Returns [`AdapterError`] when the adapter rejects the operation.
     fn apply(&mut self, operation: NodeOperation) -> Result<(), AdapterError>;
-}
-
-/// Recording adapter used by conformance and framework contract tests.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecordingNativeRendererAdapter {
-    framework_label: String,
-    operations: Vec<NodeOperation>,
-    operation_keys: Vec<String>,
-}
-
-impl RecordingNativeRendererAdapter {
-    /// Creates a recording adapter for a framework label.
-    #[must_use]
-    pub fn new(framework_label: impl Into<String>) -> Self {
-        Self {
-            framework_label: framework_label.into(),
-            operations: Vec::new(),
-            operation_keys: Vec::new(),
-        }
-    }
-
-    /// Applies a typed node operation and records its stable key.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AdapterError`] when the adapter rejects the operation.
-    pub fn apply(&mut self, operation: NodeOperation) -> Result<(), AdapterError> {
-        <Self as NativeRendererAdapter>::apply(self, operation)
-    }
-
-    /// Returns the framework label associated with this recording adapter.
-    #[must_use]
-    pub fn framework_label(&self) -> &str {
-        &self.framework_label
-    }
-
-    /// Returns stable operation keys in application order.
-    #[must_use]
-    pub fn operation_keys(&self) -> &[String] {
-        &self.operation_keys
-    }
-
-    /// Returns typed operations in application order.
-    #[must_use]
-    pub fn operations(&self) -> &[NodeOperation] {
-        &self.operations
-    }
-}
-
-impl NativeRendererAdapter for RecordingNativeRendererAdapter {
-    fn apply(&mut self, operation: NodeOperation) -> Result<(), AdapterError> {
-        self.operations.push(operation.clone());
-        self.operation_keys.push(operation.stable_key());
-        Ok(())
-    }
 }
 
 fn emit_node_operations(

@@ -153,4 +153,14 @@ mod tests {
         let boxed = PluginLogic::editor(&FixturePlugin::new(Arc::new(FixtureParams::default())));
         assert_eq!(boxed.size(), (320, 180));
     }
+
+    #[test]
+    fn truce_manifest_declares_vst3_subcategory_for_host_browsers() {
+        let manifest = include_str!("../truce.toml");
+
+        assert!(
+            manifest.contains("vst3_subcategory = \"Tools\""),
+            "truce.toml must emit the VST3 secondary category token so hosts do not bucket Hawk2UI plugins under Other"
+        );
+    }
 }

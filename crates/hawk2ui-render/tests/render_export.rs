@@ -414,7 +414,7 @@ fn layer_records_cover_required_layer_families() {
 
 #[test]
 fn backend_boundary_records_surface_lifecycle_and_frame_commands() {
-    let mut backend = hawk2ui_render::RecordingBackend::new(
+    let mut backend = hawk2ui_render::testkit::RecordingBackend::new(
         hawk2ui_render::BackendCapabilities::new()
             .with_gpu(true)
             .with_text(true)
@@ -487,7 +487,7 @@ fn backend_boundary_records_surface_lifecycle_and_frame_commands() {
 #[test]
 fn backend_boundary_reports_diagnostics_for_missing_capabilities() {
     let mut backend =
-        hawk2ui_render::RecordingBackend::new(hawk2ui_render::BackendCapabilities::new());
+        hawk2ui_render::testkit::RecordingBackend::new(hawk2ui_render::BackendCapabilities::new());
 
     let error = backend
         .draw_text("Hello")
@@ -499,7 +499,7 @@ fn backend_boundary_reports_diagnostics_for_missing_capabilities() {
 #[test]
 fn backend_boundary_records_backend_neutral_runtime_shader_effect_commands() {
     let capabilities = hawk2ui_render::BackendCapabilities::new().with_runtime_effects(true);
-    let mut backend = hawk2ui_render::RecordingBackend::new(capabilities);
+    let mut backend = hawk2ui_render::testkit::RecordingBackend::new(capabilities);
 
     backend
         .register_runtime_shader_effect(
@@ -525,7 +525,7 @@ fn backend_boundary_records_backend_neutral_runtime_shader_effect_commands() {
     );
 
     let mut unsupported =
-        hawk2ui_render::RecordingBackend::new(hawk2ui_render::BackendCapabilities::new());
+        hawk2ui_render::testkit::RecordingBackend::new(hawk2ui_render::BackendCapabilities::new());
     let error = unsupported
         .draw_runtime_effect("solid-red", Geometry::new(4.0, 6.0, 32.0, 18.0), &[], &[])
         .expect_err("runtime shader effects must require explicit backend support");
@@ -539,7 +539,7 @@ fn backend_boundary_records_backend_neutral_runtime_shader_effect_commands() {
 #[test]
 fn backend_boundary_rejects_invalid_surface_and_geometry_inputs() {
     let mut backend =
-        hawk2ui_render::RecordingBackend::new(hawk2ui_render::BackendCapabilities::new());
+        hawk2ui_render::testkit::RecordingBackend::new(hawk2ui_render::BackendCapabilities::new());
 
     let error = backend
         .create_surface("", 800, 600)

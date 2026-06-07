@@ -9,7 +9,7 @@ fn main() {
     let suite = BenchmarkSuite::new("package")
         .with_case(
             BenchmarkCase::new("package-size", fixture, BenchmarkKind::Package)
-                .with_measurement(common::measure_directory_bytes(fixture)),
+                .with_measurement(common::measure_build_artifact_payload_bytes(fixture)),
         )
         .with_case(
             BenchmarkCase::new("package-verify", fixture, BenchmarkKind::Package)

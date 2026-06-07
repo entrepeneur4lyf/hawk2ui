@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Capability-scoped platform APIs for filesystem, network, clipboard, secrets, and database access in Hawk2UI."
+description = "Capability-scoped platform APIs for filesystem, network, clipboard, secrets, AI, audio, dialogs, localization, MCP, notifications, shortcuts, and database access in Hawk2UI."
 
 [lib]
 name = "hawk2ui_platform"

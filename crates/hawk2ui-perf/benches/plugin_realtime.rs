@@ -14,7 +14,7 @@ fn main() {
         guard.audit((0..config.iterations()).map(|_| RealtimeOperation::PreallocatedWrite));
     let suite = BenchmarkSuite::new("plugin-realtime").with_case(
         BenchmarkCase::new("plugin-audio-allocation", fixture, BenchmarkKind::Realtime)
-            .with_measurement(BenchmarkMeasurement::from_count(
+            .with_measurement(BenchmarkMeasurement::observed_count(
                 u64::try_from(report.telemetry.allocation_attempts).unwrap_or(u64::MAX),
             )),
     );

@@ -5,9 +5,17 @@ use hawk2ui_host::{
     SurfaceClipboardRequest, SurfaceMetrics, WindowMode,
 };
 use hawk2ui_host_winit::{
-    ArboardClipboardBackend, WinitClipboardBackend, WinitClipboardBridge, WinitClipboardResponse,
-    WinitDesktopAdapter, WinitDialogBackend, WinitDialogBridge, WinitEventTranslator,
-    WinitPlatformFixture,
+    ArboardClipboardBackend, GlobalHotkeyShortcutBackend, WaylandPortalShortcutBackend,
+    WinitAudioBackend, WinitAudioSink, WinitClipboardBackend, WinitClipboardBridge,
+    WinitClipboardResponse, WinitDesktopAdapter, WinitDialogBackend, WinitDialogBridge,
+    WinitEventTranslator, WinitNotificationBackend, WinitNotificationSink, WinitPlatformFixture,
+    WinitPlatformHostBackend, WinitShortcutBackend, WinitShortcutSink, WinitWaylandShortcutPortal,
+};
+use hawk2ui_platform::{
+    AudioCueBinding, AudioManifest, CapabilityRecord, CapabilityTable, ClipboardDataType,
+    ClipboardManifest, DialogKind, DialogManifest, HostCapabilityRouter, NotificationBinding,
+    NotificationManifest, PlatformBackends, PlatformContext, PlatformOperation,
+    RuntimeAvailability, ShortcutBinding, ShortcutManifest, StaticNetworkBackend,
 };
 
 #[test]
@@ -422,6 +430,188 @@ fn winit_adapter_executes_dialog_requests_through_native_bridge() {
     );
 }
 
+#[test]
+fn winit_platform_host_backend_delegates_policy_checked_clipboard_and_dialogs() {
+    let capabilities = CapabilityTable::new([
+        CapabilityRecord::new("clipboard.text")
+            .allow(PlatformOperation::ClipboardRead)
+            .allow(PlatformOperation::ClipboardWrite)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("dialogs.open")
+            .allow(PlatformOperation::DialogOpen)
+            .allow(PlatformOperation::FilePickerOpen)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+    ]);
+    let clipboard_manifest = ClipboardManifest::new("clipboard.text", [ClipboardDataType::Text]);
+    let dialog_manifest = DialogManifest::new(
+        "dialogs.open",
+        [DialogKind::Message, DialogKind::FilePicker],
+    );
+    let host = WinitPlatformHostBackend::new(
+        ClipboardCapability::ReadWrite,
+        FakeClipboardBackend { text: None },
+        FakeDialogBackend {
+            next_open_file: Some("/tmp/preset.hawk".into()),
+            next_save_file: None,
+            messages: Vec::new(),
+        },
+    );
+    let mut platform = PlatformBackends::with_host(StaticNetworkBackend::default(), host);
+
+    platform
+        .write_clipboard(
+            &capabilities,
+            &clipboard_manifest,
+            PlatformContext::Desktop,
+            "from platform",
+        )
+        .expect("winit platform host writes clipboard text");
+    let clipboard = platform
+        .read_clipboard(&capabilities, &clipboard_manifest, PlatformContext::Desktop)
+        .expect("winit platform host reads clipboard text");
+    let message = platform
+        .open_dialog(
+            &capabilities,
+            &dialog_manifest,
+            DialogKind::Message,
+            PlatformContext::Desktop,
+        )
+        .expect("winit platform host opens a message dialog");
+    let picker = platform
+        .open_file_picker(&capabilities, &dialog_manifest, PlatformContext::Desktop)
+        .expect("winit platform host opens a file picker");
+
+    assert_eq!(clipboard.text.as_deref(), Some("from platform"));
+    assert!(message.accepted);
+    assert_eq!(picker.selected_paths, ["/tmp/preset.hawk".to_owned()]);
+}
+
+#[test]
+fn winit_platform_host_router_executes_native_audio_notification_and_shortcut_sinks() {
+    let capabilities = CapabilityTable::new([
+        CapabilityRecord::new("audio.playback")
+            .allow(PlatformOperation::AudioPlayback)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(true),
+        CapabilityRecord::new("notifications.send")
+            .allow(PlatformOperation::NotificationSend)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+        CapabilityRecord::new("shortcuts.register")
+            .allow(PlatformOperation::GlobalShortcutRegister)
+            .availability(RuntimeAvailability::Runtime)
+            .desktop(true)
+            .plugin(false),
+    ]);
+    let base_host = WinitPlatformHostBackend::new(
+        ClipboardCapability::ReadWrite,
+        FakeClipboardBackend { text: None },
+        FakeDialogBackend {
+            next_open_file: None,
+            next_save_file: None,
+            messages: Vec::new(),
+        },
+    );
+    let host = HostCapabilityRouter::new(
+        base_host,
+        WinitAudioSink::new(FakeAudioBackend::default()),
+        WinitNotificationSink::new(FakeNotificationBackend::default()),
+        WinitShortcutSink::new(FakeShortcutBackend::default()),
+    )
+    .with_audio_cue(AudioCueBinding::new(
+        "meter-click",
+        "file:///tmp/meter-click.wav",
+    ))
+    .with_notification(NotificationBinding::new(
+        "build",
+        "Build complete",
+        "Plugin bundle is ready.",
+    ))
+    .with_shortcut(ShortcutBinding::new(
+        "CommandOrControl+K",
+        "command-palette",
+    ));
+    let mut platform = PlatformBackends::with_host(StaticNetworkBackend::default(), host);
+
+    platform
+        .play_audio(
+            &capabilities,
+            &AudioManifest::new("audio.playback", ["meter-click"]),
+            "meter-click",
+            PlatformContext::Desktop,
+        )
+        .expect("mapped audio cue reaches Winit audio sink");
+    platform
+        .send_notification(
+            &capabilities,
+            &NotificationManifest::new("notifications.send", ["build"]),
+            "build",
+            PlatformContext::Desktop,
+        )
+        .expect("mapped notification reaches Winit notification sink");
+    platform
+        .register_shortcut(
+            &capabilities,
+            &ShortcutManifest::new("shortcuts.register", ["CommandOrControl+K"]),
+            "CommandOrControl+K",
+            PlatformContext::Desktop,
+        )
+        .expect("mapped shortcut reaches Winit shortcut sink");
+
+    assert_eq!(
+        platform.host().audio_sink().backend().played,
+        ["file:///tmp/meter-click.wav".to_owned()]
+    );
+    assert_eq!(
+        platform.host().notification_sink().backend().sent,
+        [(
+            "Build complete".to_owned(),
+            "Plugin bundle is ready.".to_owned()
+        )]
+    );
+    assert_eq!(
+        platform.host().shortcut_sink().backend().registered,
+        [(
+            "CommandOrControl+K".to_owned(),
+            "command-palette".to_owned()
+        )]
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn global_hotkey_shortcut_backend_rejects_native_wayland_sessions_explicitly() {
+    let Err(error) = GlobalHotkeyShortcutBackend::new(Some(LinuxWindowSystem::Wayland)) else {
+        panic!("global-hotkey crate does not provide native Wayland registration");
+    };
+
+    assert_eq!(error.rule(), "desktop.shortcut.wayland-unsupported");
+}
+
+#[test]
+fn wayland_portal_shortcut_backend_registers_action_with_preferred_trigger() {
+    let mut backend = WaylandPortalShortcutBackend::new(FakeWaylandShortcutPortal::default());
+
+    backend
+        .register_shortcut("CommandOrControl+K".into(), "command-palette".into())
+        .expect("Wayland portal shortcut backend registers through portal");
+
+    assert_eq!(
+        backend.portal().bindings,
+        [(
+            "CommandOrControl+K".to_owned(),
+            "command-palette".to_owned(),
+            Some("<Control>K".to_owned())
+        )]
+    );
+}
+
 #[derive(Clone, Debug)]
 struct FakeClipboardBackend {
     text: Option<String>,
@@ -478,6 +668,71 @@ impl WinitDialogBackend for FakeDialogBackend {
         _filters: Vec<DesktopDialogFileFilter>,
     ) -> Result<Option<std::path::PathBuf>, hawk2ui_host_winit::WinitHostError> {
         Ok(self.next_save_file.clone())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct FakeAudioBackend {
+    played: Vec<String>,
+}
+
+impl WinitAudioBackend for FakeAudioBackend {
+    fn play_source_uri(
+        &mut self,
+        source_uri: String,
+    ) -> Result<(), hawk2ui_host_winit::WinitHostError> {
+        self.played.push(source_uri);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct FakeNotificationBackend {
+    sent: Vec<(String, String)>,
+}
+
+impl WinitNotificationBackend for FakeNotificationBackend {
+    fn send_notification(
+        &mut self,
+        title: String,
+        body: String,
+    ) -> Result<(), hawk2ui_host_winit::WinitHostError> {
+        self.sent.push((title, body));
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct FakeShortcutBackend {
+    registered: Vec<(String, String)>,
+}
+
+impl WinitShortcutBackend for FakeShortcutBackend {
+    fn register_shortcut(
+        &mut self,
+        accelerator: String,
+        action_id: String,
+    ) -> Result<(), hawk2ui_host_winit::WinitHostError> {
+        self.registered.push((accelerator, action_id));
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct FakeWaylandShortcutPortal {
+    bindings: Vec<(String, String, Option<String>)>,
+}
+
+impl WinitWaylandShortcutPortal for FakeWaylandShortcutPortal {
+    fn bind_shortcut(
+        &mut self,
+        accelerator: String,
+        action_id: String,
+        preferred_trigger: Option<String>,
+    ) -> Result<(), hawk2ui_host_winit::WinitHostError> {
+        self.bindings
+            .push((accelerator, action_id, preferred_trigger));
+        Ok(())
     }
 }
 

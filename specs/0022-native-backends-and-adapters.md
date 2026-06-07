@@ -73,6 +73,8 @@ Production host adapters must implement:
 - repaint scheduling,
 - safe teardown.
 
+Production host adapters must cover Windows and macOS as first-class release targets. Windows adapters must support owned HWND windows and child HWND plugin attachment. macOS adapters must support owned native windows and embedded NSView/NSWindow plugin integration. Both platforms must produce release evidence for lifecycle, input, DPI, rendering, and teardown behavior.
+
 ## Script Backend Requirements
 
 A production script backend must implement:
@@ -106,3 +108,4 @@ Production package adapters must implement:
 - Recording adapters and production adapters share behavioral tests.
 - Backend capability gaps produce structured diagnostics.
 - Native surfaces and package outputs are covered by smoke applications.
+- Windows and macOS adapters are verified before public release.

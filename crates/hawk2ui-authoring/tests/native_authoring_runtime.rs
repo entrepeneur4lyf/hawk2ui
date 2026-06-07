@@ -511,6 +511,77 @@ fn framework_dynamic_background_binding_updates_runtime_fill() {
 }
 
 #[test]
+fn framework_dynamic_visible_binding_suppresses_and_restores_runtime_draw_commands() {
+    let compiler_json = r#"{
+        "schema_version": 1,
+        "root": {
+            "id": "root",
+            "kind": "view",
+            "children": [
+                {
+                    "key": "title",
+                    "node": {
+                        "id": "title",
+                        "kind": "text",
+                        "props": [
+                            {"name": "text", "value": {"type": "string", "value": "Visible Title"}},
+                            {"name": "width", "value": {"type": "number", "value": 160}},
+                            {"name": "height", "value": {"type": "number", "value": 32}}
+                        ]
+                    }
+                }
+            ]
+        },
+        "dynamic_bindings": [
+            {
+                "node_id": "title",
+                "target": {"type": "prop", "name": "visible"},
+                "expression": "showTitle",
+                "dependencies": ["showTitle"]
+            }
+        ]
+    }"#;
+    let program = FrameworkNativeProgram::try_from(
+        FrameworkNativeProgramWire::from_json(compiler_json).expect("compiler JSON parses"),
+    )
+    .expect("compiler artifact validates");
+    let artifact = program
+        .to_native_authoring_artifact("App.tsx", true)
+        .expect("framework program finalizes");
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact(&artifact)
+        .expect("framework artifact bridges");
+
+    let hidden = bridged
+        .clone()
+        .apply_dynamic_binding(&artifact.dynamic_bindings()[0], PropValue::Bool(false))
+        .expect("dynamic visibility false applies");
+    let hidden_frame = RuntimeSceneBridge::new(Viewport::new(180.0, 80.0))
+        .build(hidden.runtime_tree())
+        .expect("hidden runtime tree builds");
+    assert!(!hidden_frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Text { id, .. } if id.as_str() == "title"
+        )
+    }));
+
+    let shown = bridged
+        .apply_dynamic_binding(&artifact.dynamic_bindings()[0], PropValue::Bool(true))
+        .expect("dynamic visibility true applies");
+    let shown_frame = RuntimeSceneBridge::new(Viewport::new(180.0, 80.0))
+        .build(shown.runtime_tree())
+        .expect("shown runtime tree builds");
+    assert!(shown_frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Text { id, text, .. }
+                if id.as_str() == "title" && text == "Visible Title"
+        )
+    }));
+}
+
+#[test]
 fn native_runtime_bridge_lowers_source_compiled_components_to_runtime_tree() {
     let source = "\
 component CounterCard id=counter-card {

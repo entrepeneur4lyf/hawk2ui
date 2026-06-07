@@ -3,18 +3,22 @@ import generate from "@babel/generator";
 import { parse as parseTemplate } from "@vue/compiler-dom";
 import { compileTemplate, parse as parseSfc } from "@vue/compiler-sfc";
 import {
-  compilerArtifactForApp,
-  recordsForApp,
-    type HawkCompilerArtifact,
-    type HawkCompilerDynamicBindingWire,
-    type HawkCompilerDynamicValueWire,
-    type HawkCompilerEventHandlerActionWire,
-    type HawkCompilerEventHandlerWire,
-    type HawkCompilerInitialDynamicValueWire,
-    type HawkElementSpec,
-    type HawkEventSpec,
-  type HawkLifecycleSpec,
-} from "../../hawk2ui-native/src/index.ts";
+    compilerArtifactForApp,
+    recordsForApp,
+      type HawkCompilerArtifact,
+      type HawkCompilerDynamicBindingWire,
+      type HawkCompilerDynamicValueWire,
+      type HawkCompilerEventHandlerActionWire,
+      type HawkCompilerEventHandlerWire,
+      type HawkCompilerInitialDynamicValueWire,
+      type HawkCompilerListTemplateNodeWire,
+      type HawkCompilerListTemplateWire,
+      type HawkCompilerReactiveBindingWire,
+      type HawkCompilerTemplateScalarWire,
+      type HawkElementSpec,
+      type HawkEventSpec,
+    type HawkLifecycleSpec,
+  } from "../../hawk2ui-native/src/index.ts";
 
 export interface HawkVueCompileInput {
   readonly filename: string;
@@ -28,12 +32,6 @@ export interface HawkVueCompileOutput {
   readonly compilerArtifact: HawkCompilerArtifact;
 }
 
-export interface HawkVueRenderer {
-  readonly records: readonly string[];
-  readonly render: (component: unknown, target: { readonly id: string }) => void;
-  readonly unmount: (target: { readonly id: string }) => void;
-}
-
 type AstNode = Record<string, unknown>;
 type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 
@@ -43,9 +41,13 @@ interface VueLoweringContext {
   readonly initialDynamicValues: ReadonlyMap<string, HawkCompilerInitialDynamicValueWire>;
   readonly locals: ReadonlyMap<string, LiteralRecord>;
   readonly scalars: ReadonlyMap<string, string | number | boolean>;
-  readonly slots: ReadonlyMap<string, readonly AstNode[]>;
-  readonly componentStack: readonly string[];
+    readonly slots: ReadonlyMap<string, readonly AstNode[]>;
+    readonly componentStack: readonly string[];
+  readonly reactivity: HawkCompilerReactiveBindingWire[];
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
+  readonly listTemplates: HawkCompilerListTemplateWire[];
+  readonly syntheticEventHandlers: HawkCompilerEventHandlerWire[];
+  readonly pendingListTemplateAnchors: Map<string, string[]>;
 }
 
 interface VueComponentDefinition {
@@ -54,7 +56,10 @@ interface VueComponentDefinition {
 }
 
 const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
+const VIEW_ELEMENT_TAGS = new Set(["div", "section", "main", "article", "header", "footer", "nav", "aside", "form", "label", "ul", "ol", "li"]);
+const TEXT_ELEMENT_TAGS = new Set(["span", "p", "strong", "em", "small", "code", "h1", "h2", "h3", "h4", "h5", "h6"]);
 const VUE_EVENT_DIRECTIVES = new Map<string, HawkEventSpec["kind"]>([
+  ["click", "pointer.press"],
   ["pointerdown", "pointer.press"],
   ["pointerup", "pointer.release"],
   ["pointermove", "pointer.move"],
@@ -79,6 +84,16 @@ const VUE_LIFECYCLE_DIRECTIVES = new Map<string, HawkLifecycleSpec["phase"]>([
   ["error-boundary", "error-boundary"],
   ["shutdown", "shutdown"],
   ["unmounted", "unmounted"],
+]);
+const RESERVED_RUNTIME_PROP_NAMES = new Set<string>([
+  "id",
+  "key",
+  "ref",
+  "class",
+  "data-asset",
+  "width",
+  "height",
+  ...VISUAL_PROP_NAMES,
 ]);
 
 export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput {
@@ -110,21 +125,33 @@ export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput
     initialDynamicValues: initialDynamicValuesFromScript(script),
     locals: new Map(),
     scalars: scalarValuesFromScript(script),
-    slots: new Map(),
-    componentStack: [],
-    dynamicBindings: [],
-  };
-  const root = vueElementToSpec(rootNode, context);
+      slots: new Map(),
+      componentStack: [],
+      reactivity: vueWatchReactivityBindings(script),
+      dynamicBindings: [],
+      listTemplates: [],
+      syntheticEventHandlers: [],
+      pendingListTemplateAnchors: new Map(),
+    };
+    const root = withRootLifecycle(
+      vueElementToSpec(rootNode, context),
+      vueLifecycleApiCalls(script),
+    );
   validateUniqueChildKeys(root);
   const app = { name: input.filename, root };
-  const eventHandlers = eventHandlerArtifactsForSpec(root, script);
+  const eventHandlers = eventHandlerArtifactsForSpec(
+    root,
+    script,
+    context.listTemplates,
+    context.syntheticEventHandlers,
+  );
   return {
     framework: "vue",
     filename: input.filename,
     records: recordsForApp(app),
       compilerArtifact: compilerArtifactForApp(
         app,
-        [],
+        context.reactivity,
         context.dynamicBindings,
         [...context.initialDynamicValues.values()],
           {
@@ -135,6 +162,7 @@ export function compileHawkVue(input: HawkVueCompileInput): HawkVueCompileOutput
               entrypoint: "default",
             },
             eventHandlers,
+            listTemplates: context.listTemplates,
           },
         ),
       };
@@ -159,9 +187,9 @@ function vueElementToSpec(node: AstNode, context: VueLoweringContext): HawkEleme
       : [],
     styleRefs: style ? [style] : [],
     assetRefs: assetPath ? [{ name: "vue.asset", path: assetPath }] : [],
-    events: vueEvents(node),
+    events: vueEvents(node, context, id),
     lifecycle: vueLifecycle(node),
-    children: vueChildSpecs(node, context),
+    children: vueChildSpecs(node, context, id),
   };
   const props = runtimeProps(node, context, id, "vue");
   const text = vueTextContent(node, context, id);
@@ -169,20 +197,81 @@ function vueElementToSpec(node: AstNode, context: VueLoweringContext): HawkEleme
   return Object.keys(props).length > 0 ? { ...spec, props } : spec;
 }
 
-function vueChildSpecs(node: AstNode, context: VueLoweringContext): readonly HawkElementSpec[] {
+function vueChildSpecs(node: AstNode, context: VueLoweringContext, parentId: string): readonly HawkElementSpec[] {
   const children: HawkElementSpec[] = [];
+  let activeConditionalChain: readonly string[] = [];
   for (const child of arrayField(node, "children")) {
-    children.push(...vueChildNodeSpecs(child, context));
+    if (!isVueElement(child)) continue;
+    const elseIfDirective = vueDirective(child, "else-if");
+    const elseDirective = vueDirective(child, "else");
+    if (elseIfDirective || elseDirective) {
+      if (activeConditionalChain.length === 0) {
+        throw new Error("vue.conditional.chain-invalid: v-else and v-else-if require a preceding v-if or v-else-if sibling.");
+      }
+      let branchSpecs = vueChildNodeSpecs(child, context, parentId);
+      if (elseIfDirective) {
+        const condition = requiredVueDirectiveExpression(elseIfDirective, "else-if");
+        branchSpecs = withVueVisibilityBinding(
+          branchSpecs,
+          `(${negatedVueConditionChain(activeConditionalChain)}) && (${condition})`,
+          context,
+          false,
+        );
+        activeConditionalChain = [...activeConditionalChain, condition];
+      } else {
+        branchSpecs = withVueVisibilityBinding(
+          branchSpecs,
+          negatedVueConditionChain(activeConditionalChain),
+          context,
+          false,
+        );
+        activeConditionalChain = [];
+      }
+      for (const spec of branchSpecs) {
+        anchorPendingListTemplates(context, parentId, spec.id);
+        children.push(spec);
+      }
+      continue;
+    }
+    for (const spec of vueChildNodeSpecs(child, context, parentId)) {
+      anchorPendingListTemplates(context, parentId, spec.id);
+      children.push(spec);
+    }
+    const ifDirective = vueDirective(child, "if");
+    activeConditionalChain = ifDirective ? [requiredVueDirectiveExpression(ifDirective, "if")] : [];
   }
   return children;
 }
 
-function vueChildNodeSpecs(child: AstNode, context: VueLoweringContext): readonly HawkElementSpec[] {
-  if (isVueSlotElement(child)) return (context.slots.get("default") ?? []).flatMap((slotChild) => vueChildNodeSpecs(slotChild, context));
+function vueChildNodeSpecs(child: AstNode, context: VueLoweringContext, parentId: string): readonly HawkElementSpec[] {
+  if (isVueSlotElement(child)) {
+    return (context.slots.get("default") ?? []).flatMap((slotChild) => vueChildNodeSpecs(slotChild, context, parentId));
+  }
   if (!isVueElement(child)) return [];
   const forDirective = vueDirective(child, "for");
-  if (forDirective) return expandVueFor(child, forDirective, context);
-  if (isVueHawkElement(child) || isComponentTag(stringField(child, "tag"))) return [vueElementToSpec(child, context)];
+  if (forDirective) return expandVueFor(child, forDirective, context, parentId);
+  if (isVueHawkElement(child) || isComponentTag(stringField(child, "tag"))) {
+    let specs: readonly HawkElementSpec[] = [vueElementToSpec(child, context)];
+    const ifDirective = vueDirective(child, "if");
+    if (ifDirective) {
+      specs = withVueVisibilityBinding(
+        specs,
+        stringField(ifDirective.exp as AstNode | undefined, "content"),
+        context,
+        false,
+      );
+    }
+    const showDirective = vueDirective(child, "show");
+    if (showDirective) {
+      specs = withVueVisibilityBinding(
+        specs,
+        stringField(showDirective.exp as AstNode | undefined, "content"),
+        context,
+        false,
+      );
+    }
+    return specs;
+  }
   return [];
 }
 
@@ -222,6 +311,7 @@ function expandVueFor(
   template: AstNode,
   directive: AstNode,
   context: VueLoweringContext,
+  parentId: string,
 ): readonly HawkElementSpec[] {
   const parseResult = directive.forParseResult as AstNode | undefined;
   const source = stringField(parseResult?.source as AstNode | undefined, "content");
@@ -231,8 +321,23 @@ function expandVueFor(
   }
   const items = context.arrays.get(source);
   if (!items) {
-    throw new Error(`vue.for.source-unresolved: Vue v-for source \`${source}\` must be a literal array.`);
+    const initialValue = context.initialDynamicValues.get(source)?.value;
+    if (initialValue?.type !== "array") {
+      throw new Error(`vue.for.source-unresolved: Vue v-for source \`${source}\` must be a literal array or initial dynamic array.`);
+    }
+    pushVueReactivity(context, { kind: "keyed-for-each", name: source });
+    context.listTemplates.push({
+      id: `${parentId}:${source}`,
+      parent_id: parentId,
+      source,
+      item: itemName,
+      key: templateKeyExpression(template, itemName, "vue"),
+      node: vueElementToListTemplateNode(template, context, itemName),
+    });
+    queuePendingListTemplateAnchor(context, parentId, `${parentId}:${source}`);
+    return [];
   }
+  pushVueReactivity(context, { kind: "keyed-for-each", name: source });
   return items.map((item) =>
     vueElementToSpec(template, {
       ...context,
@@ -241,7 +346,302 @@ function expandVueFor(
   );
 }
 
-function vueEvents(node: AstNode): readonly HawkEventSpec[] {
+function queuePendingListTemplateAnchor(
+  context: VueLoweringContext,
+  parentId: string,
+  templateId: string,
+): void {
+  const pending = context.pendingListTemplateAnchors.get(parentId) ?? [];
+  pending.push(templateId);
+  context.pendingListTemplateAnchors.set(parentId, pending);
+}
+
+function anchorPendingListTemplates(
+  context: VueLoweringContext,
+  parentId: string,
+  anchorBefore: string,
+): void {
+  const pending = context.pendingListTemplateAnchors.get(parentId);
+  if (!pending || pending.length === 0) return;
+  for (const templateId of pending) {
+    const index = context.listTemplates.findIndex((template) => template.id === templateId);
+    const template = context.listTemplates[index];
+    if (!template || template.anchor_before !== undefined) continue;
+    context.listTemplates[index] = {
+      ...template,
+      anchor_before: anchorBefore,
+    };
+  }
+  context.pendingListTemplateAnchors.delete(parentId);
+}
+
+function vueElementToListTemplateNode(
+  node: AstNode,
+  context: VueLoweringContext,
+  itemName: string,
+): HawkCompilerListTemplateNodeWire {
+  const tag = stringField(node, "tag");
+  if (!isHawkTag(tag)) {
+    throw new Error(`vue.for.template-unsupported: Vue list templates must render native Hawk elements, found \`${tag}\`.`);
+  }
+  const id = templateScalarFromAttribute(node, "id", context, itemName, "vue");
+  const key = optionalTemplateScalarFromAttribute(node, "key", context, itemName, "vue") ?? id;
+  const classAttr = staticTemplateStringAttribute(node, "class", context, "vue");
+  const assetPath = staticTemplateStringAttribute(node, "data-asset", context, "vue");
+  if (assetPath && isUnsafeAssetPath(assetPath)) {
+    throw new Error(`vue.asset.path-invalid: asset path \`${assetPath}\` must be workspace-relative.`);
+  }
+  const props = templateProps(node, context, itemName, "vue");
+  const text = templateTextContent(node, context, itemName, "vue");
+  if (text) props.push({ name: "text", value: text });
+  return {
+    id,
+    kind: kindForTag(tag),
+    key,
+    props,
+    refs: staticTemplateStringAttribute(node, "ref", context, "vue")
+      ? [staticTemplateStringAttribute(node, "ref", context, "vue") as string]
+      : [],
+    style_refs: classAttr ? [classAttr] : [],
+    asset_refs: assetPath ? [{ name: "vue.asset", path: assetPath }] : [],
+    events: vueEvents(node, context, undefined).map((event) => ({
+      kind: event.kind,
+      handler: event.handler,
+      payload_fields: [...payloadFieldsForEvent(event.kind)],
+    })),
+    lifecycle: vueLifecycle(node).map((lifecycle) => ({
+      event: lifecycle.phase,
+      handler: lifecycle.handler,
+    })),
+    children: arrayField(node, "children")
+      .filter((child) => isVueElement(child) && isHawkTag(stringField(child, "tag")))
+      .map((child) => vueElementToListTemplateNode(child, context, itemName)),
+  };
+}
+
+function templateProps(
+  node: AstNode,
+  context: VueLoweringContext,
+  itemName: string,
+  framework: string,
+): { name: string; value: HawkCompilerTemplateScalarWire }[] {
+  const props: { name: string; value: HawkCompilerTemplateScalarWire }[] = [];
+  for (const name of ["width", "height", ...VISUAL_PROP_NAMES]) {
+    const value = optionalTemplateScalarFromAttribute(node, name, context, itemName, framework);
+    if (value) props.push({ name, value });
+  }
+  for (const attr of arrayField(node, "props").filter((prop) => prop.type === 6)) {
+    const name = stringField(attr, "name");
+    if (!name || RESERVED_RUNTIME_PROP_NAMES.has(name)) continue;
+    props.push({ name, value: templateScalarFromStaticAttribute(attr, framework) });
+  }
+  for (const directive of vueDirectives(node, "bind")) {
+    const name = stringField(directive.arg as AstNode | undefined, "content");
+    if (!name || RESERVED_RUNTIME_PROP_NAMES.has(name)) continue;
+    props.push({ name, value: templateScalarFromBinding(directive, context, itemName, framework) });
+  }
+  return props;
+}
+
+function templateTextContent(
+  node: AstNode,
+  context: VueLoweringContext,
+  itemName: string,
+  framework: string,
+): HawkCompilerTemplateScalarWire | undefined {
+  const children = arrayField(node, "children").filter((child) => child.type === 2 || child.type === 5);
+  if (children.length === 0) return undefined;
+  if (children.length === 1) {
+    const child = children[0];
+    if (!child) return undefined;
+    if (child.type === 2) {
+      const text = String(child.content ?? "").trim();
+      return text ? literalTemplateScalar(text) : undefined;
+    }
+    return templateScalarFromExpression(
+      stringField(child.content as AstNode | undefined, "content"),
+      context,
+      itemName,
+      framework,
+    );
+  }
+  return {
+    type: "expression",
+    expression: children
+      .map((child) =>
+        child.type === 2
+          ? JSON.stringify(String(child.content ?? ""))
+          : expressionSource(stringField(child.content as AstNode | undefined, "content"), framework),
+      )
+      .join(" + "),
+  };
+}
+
+function templateKeyExpression(node: AstNode, itemName: string, framework: string): string {
+  const key = boundTemplateExpression(node, "key");
+  if (key) return expressionSource(key, framework);
+  const staticKey = staticTemplateStringAttribute(node, "key", undefined, framework);
+  if (staticKey) return JSON.stringify(staticKey);
+  const id = boundTemplateExpression(node, "id");
+  if (id) return expressionSource(id, framework);
+  const staticId = staticTemplateStringAttribute(node, "id", undefined, framework);
+  if (staticId) return JSON.stringify(staticId);
+  return `${itemName}.id`;
+}
+
+function templateScalarFromAttribute(
+  node: AstNode,
+  name: string,
+  context: VueLoweringContext,
+  itemName: string,
+  framework: string,
+): HawkCompilerTemplateScalarWire {
+  const value = optionalTemplateScalarFromAttribute(node, name, context, itemName, framework);
+  if (!value) throw new Error(`${framework}.list-template.attribute-required: list template nodes require \`${name}\`.`);
+  return value;
+}
+
+function optionalTemplateScalarFromAttribute(
+  node: AstNode,
+  name: string,
+  context: VueLoweringContext,
+  itemName: string,
+  framework: string,
+): HawkCompilerTemplateScalarWire | undefined {
+  const staticAttr = arrayField(node, "props").find((prop) => prop.type === 6 && prop.name === name);
+  if (staticAttr) return templateScalarFromStaticAttribute(staticAttr, framework);
+  const bound = vueDirectives(node, "bind").find(
+    (directive) => stringField(directive.arg as AstNode | undefined, "content") === name,
+  );
+  return bound ? templateScalarFromBinding(bound, context, itemName, framework) : undefined;
+}
+
+function templateScalarFromStaticAttribute(attr: AstNode, framework: string): HawkCompilerTemplateScalarWire {
+  const staticValue = attr.value as AstNode | undefined;
+  if (!staticValue) return literalTemplateScalar(true);
+  if (typeof staticValue.content === "string") return literalTemplateScalar(staticValue.content);
+  throw new Error(`${framework}.list-template.attribute-unsupported: list template static attributes must be scalar values.`);
+}
+
+function templateScalarFromBinding(
+  directive: AstNode,
+  context: VueLoweringContext,
+  itemName: string,
+  framework: string,
+): HawkCompilerTemplateScalarWire {
+  const expression = stringField(directive.exp as AstNode | undefined, "content");
+  if (!expression) {
+    throw new Error(`${framework}.list-template.attribute-unsupported: bound list template attributes require an expression.`);
+  }
+  return templateScalarFromExpression(expression, context, itemName, framework);
+}
+
+function templateScalarFromExpression(
+  expression: string | undefined,
+  context: VueLoweringContext,
+  itemName: string,
+  framework: string,
+): HawkCompilerTemplateScalarWire {
+  const staticValue = staticVueExpressionValue(expression, context);
+  if (staticValue !== undefined) return literalTemplateScalar(staticValue);
+  const source = expressionSource(expression, framework);
+  if (!expressionDependencies(source).includes(itemName)) {
+    throw new Error(`${framework}.list-template.expression-unsupported: list template expressions must depend on \`${itemName}\`.`);
+  }
+  return { type: "expression", expression: source };
+}
+
+function literalTemplateScalar(value: string | number | boolean): HawkCompilerTemplateScalarWire {
+  if (typeof value === "string") return { type: "literal", value: { type: "string", value } };
+  if (typeof value === "boolean") return { type: "literal", value: { type: "bool", value } };
+  return { type: "literal", value: { type: "number", value } };
+}
+
+function boundTemplateExpression(node: AstNode, name: string): string | undefined {
+  const bound = vueDirectives(node, "bind").find(
+    (directive) => stringField(directive.arg as AstNode | undefined, "content") === name,
+  );
+  return stringField(bound?.exp as AstNode | undefined, "content") || undefined;
+}
+
+function staticTemplateStringAttribute(
+  node: AstNode,
+  name: string,
+  context: VueLoweringContext | undefined,
+  framework: string,
+): string | undefined {
+  const staticAttr = arrayField(node, "props").find((prop) => prop.type === 6 && prop.name === name);
+  const staticValue = staticAttr?.value as AstNode | undefined;
+  if (typeof staticValue?.content === "string") return staticValue.content;
+  const expression = boundTemplateExpression(node, name);
+  if (!expression) return undefined;
+  if (!context) return undefined;
+  const value = staticVueExpressionValue(expression, context);
+  if (typeof value === "string") return value;
+  throw new Error(`${framework}.list-template.attribute-unsupported: list template \`${name}\` must resolve to a static string.`);
+}
+
+function pushVueReactivity(context: VueLoweringContext, binding: HawkCompilerReactiveBindingWire): void {
+  if (!context.reactivity.some((item) => item.kind === binding.kind && item.name === binding.name)) {
+    context.reactivity.push(binding);
+  }
+}
+
+function vueWatchReactivityBindings(source: string): HawkCompilerReactiveBindingWire[] {
+  const program = parseVueScriptProgram(source);
+  if (!program) return [];
+  const bindings: HawkCompilerReactiveBindingWire[] = [];
+  for (const statement of arrayField(program, "body")) {
+    if (statement.type !== "ExpressionStatement") continue;
+    const expression = statement.expression as AstNode | undefined;
+    if (expression?.type !== "CallExpression") continue;
+    const name = callName(expression.callee as AstNode | undefined);
+    if (name !== "watch") continue;
+    const args = arrayField(expression, "arguments");
+    const sourceName = vueWatchSourceName(args[0]);
+    const handlerName = identifierName(args[1]);
+    if (!handlerName) {
+      throw new Error("vue.watch.unsupported: watch handlers must be stable function identifiers.");
+    }
+    bindings.push({ kind: "effect", name: `watch:${sourceName}:${handlerName}` });
+  }
+  return bindings;
+}
+
+function vueWatchSourceName(source: AstNode | undefined): string {
+  const name = identifierName(source);
+  if (name) return name;
+  throw new Error("vue.watch.unsupported: watch sources must be stable identifiers.");
+}
+
+function payloadFieldsForEvent(kind: HawkEventSpec["kind"]) {
+  switch (kind) {
+    case "pointer.drag":
+    case "pointer.wheel":
+      return ["position", "delta"] as const;
+    case "pointer.press":
+    case "pointer.release":
+    case "pointer.move":
+    case "pointer.enter":
+    case "pointer.leave":
+      return ["position"] as const;
+    case "keyboard.key-down":
+    case "keyboard.key-up":
+      return ["key"] as const;
+    case "keyboard.text-input":
+    case "input.value-changed":
+    case "input.value-committed":
+      return ["value"] as const;
+    default:
+      return [] as const;
+  }
+}
+
+function vueEvents(
+  node: AstNode,
+  context: VueLoweringContext,
+  nodeId: string | undefined,
+): readonly HawkEventSpec[] {
   const events: HawkEventSpec[] = [];
   for (const directive of vueDirectives(node, "on")) {
     const event = stringField(directive.arg as AstNode | undefined, "content");
@@ -251,6 +651,13 @@ function vueEvents(node: AstNode): readonly HawkEventSpec[] {
     } else if (!VUE_LIFECYCLE_DIRECTIVES.has(event)) {
       throw new Error(`vue.event.unsupported: Vue event \`${event}\` is not part of the native event contract.`);
     }
+  }
+  const model = vueDirective(node, "model");
+  if (model) {
+    if (!nodeId) {
+      throw new Error("vue.model.list-template-unsupported: v-model in list templates requires a stable static node id.");
+    }
+    addVueModelBinding(model, context, nodeId, events);
   }
   return events;
 }
@@ -265,50 +672,255 @@ function vueLifecycle(node: AstNode): readonly HawkLifecycleSpec[] {
   return lifecycle;
 }
 
-function eventHandlerArtifactsForSpec(root: HawkElementSpec, script: string): readonly HawkCompilerEventHandlerWire[] {
-  const declarations = handlerDeclarationsFromScript(script);
-  return referencedHandlerNames(root).map((name) => {
-    const declaration = declarations.get(name);
-    if (!declaration) {
-      throw new Error(`vue.handler.missing: event handler \`${name}\` must be declared in the component script.`);
-    }
-    return {
-      name,
-      actions: handlerActions(name, declaration),
-    };
+function addVueModelBinding(
+  directive: AstNode,
+  context: VueLoweringContext,
+  nodeId: string,
+  events: HawkEventSpec[],
+): void {
+  const expression = stringField(directive.exp as AstNode | undefined, "content");
+  if (!expression.trim()) {
+    throw new Error("vue.model.unsupported: v-model requires a stable model expression.");
+  }
+  const source = expressionSource(expression, "vue");
+  const targetName = vueModelTargetName(source);
+  context.dynamicBindings.push({
+    node_id: nodeId,
+    target: { type: "prop", name: "value" },
+    expression: source,
+    dependencies: expressionDependencies(source),
   });
+  const handler = `${nodeId}:v-model`;
+  events.push({ kind: "input.value-changed", handler });
+  if (!context.syntheticEventHandlers.some((item) => item.name === handler)) {
+    context.syntheticEventHandlers.push({
+      name: handler,
+      actions: [
+        {
+          type: "set_dynamic_expression",
+          name: targetName,
+          expression: "event.value",
+          dependencies: ["event"],
+        },
+      ],
+    });
+  }
 }
 
-function referencedHandlerNames(root: HawkElementSpec): readonly string[] {
-  const names: string[] = [];
-  const seen = new Set<string>();
-  const visit = (element: HawkElementSpec): void => {
-    for (const event of element.events ?? []) {
-      if (!seen.has(event.handler)) {
-        seen.add(event.handler);
-        names.push(event.handler);
-      }
-    }
-    for (const lifecycle of element.lifecycle ?? []) {
-      if (!seen.has(lifecycle.handler)) {
-        seen.add(lifecycle.handler);
-        names.push(lifecycle.handler);
-      }
-    }
-    for (const child of element.children ?? []) visit(child);
-  };
-  visit(root);
-  return names;
+function vueModelTargetName(expression: string): string {
+  const parsed = parseExpression(expression, {
+    sourceType: "module",
+    plugins: ["typescript"],
+  }) as unknown as AstNode;
+  if (parsed.type === "Identifier") {
+    const name = identifierName(parsed);
+    if (name) return name;
+  }
+  if (parsed.type === "MemberExpression") {
+    const object = identifierName(parsed.object as AstNode | undefined);
+    const property = identifierName(parsed.property as AstNode | undefined);
+    if (object && property === "value") return object;
+  }
+  throw new Error("vue.model.unsupported: v-model must target an identifier or ref `.value` expression.");
 }
 
-function handlerDeclarationsFromScript(source: string): ReadonlyMap<string, AstNode> {
-  const declarations = new Map<string, AstNode>();
-  if (!source.trim()) return declarations;
+function vueLifecycleApiCalls(source: string): readonly HawkLifecycleSpec[] {
+  const lifecycle: HawkLifecycleSpec[] = [];
+  const program = parseVueScriptProgram(source);
+  for (const statement of arrayField(program, "body")) {
+    if (statement.type !== "ExpressionStatement") continue;
+    const call = statement.expression as AstNode | undefined;
+    if (call?.type !== "CallExpression") continue;
+    const name = callName(call.callee as AstNode | undefined);
+    const argument = arrayField(call, "arguments")[0];
+    if (name === "onMounted") {
+      for (const handler of lifecycleHandlerNamesFromArgument(argument, "vue", "onMounted")) {
+        pushLifecycle(lifecycle, "mounted", handler);
+      }
+      continue;
+    }
+    if (name === "onUnmounted") {
+      for (const handler of lifecycleHandlerNamesFromArgument(argument, "vue", "onUnmounted")) {
+        pushLifecycle(lifecycle, "unmounted", handler);
+      }
+    }
+  }
+  return lifecycle;
+}
+
+function withRootLifecycle(
+  root: HawkElementSpec,
+  lifecycle: readonly HawkLifecycleSpec[],
+): HawkElementSpec {
+  if (lifecycle.length === 0) return root;
+  const merged: HawkLifecycleSpec[] = [...(root.lifecycle ?? [])];
+  for (const item of lifecycle) pushLifecycle(merged, item.phase, item.handler);
+  return { ...root, lifecycle: merged };
+}
+
+function pushLifecycle(
+  lifecycle: HawkLifecycleSpec[],
+  phase: HawkLifecycleSpec["phase"],
+  handler: string,
+): void {
+  if (!lifecycle.some((item) => item.phase === phase && item.handler === handler)) {
+    lifecycle.push({ phase, handler });
+  }
+}
+
+function lifecycleHandlerNamesFromArgument(
+  argument: AstNode | undefined,
+  framework: string,
+  api: string,
+): readonly string[] {
+  const direct = identifierName(argument);
+  if (direct) return [direct];
+  const body = functionLikeBody(argument);
+  if (!body) {
+    throw new Error(`${framework}.lifecycle.unsupported: ${api} must reference a stable handler identifier or call one.`);
+  }
+  if (body.type === "CallExpression") {
+    const name = callName(body.callee as AstNode | undefined);
+    if (name) return [name];
+  }
+  if (body.type === "BlockStatement") {
+    const names: string[] = [];
+    for (const statement of arrayField(body, "body")) {
+      if (statement.type === "ReturnStatement") continue;
+      if (statement.type !== "ExpressionStatement") {
+        throw new Error(`${framework}.lifecycle.unsupported: ${api} handlers may only call stable lifecycle functions.`);
+      }
+      const expression = statement.expression as AstNode | undefined;
+      if (expression?.type !== "CallExpression") {
+        throw new Error(`${framework}.lifecycle.unsupported: ${api} handlers may only call stable lifecycle functions.`);
+      }
+      const name = callName(expression.callee as AstNode | undefined);
+      if (!name) {
+        throw new Error(`${framework}.lifecycle.unsupported: ${api} handlers may only call stable lifecycle functions.`);
+      }
+      names.push(name);
+    }
+    if (names.length > 0) return names;
+  }
+  throw new Error(`${framework}.lifecycle.unsupported: ${api} must reference a stable handler identifier or call one.`);
+}
+
+function functionLikeBody(node: AstNode | undefined): AstNode | undefined {
+  if (
+    node?.type === "ArrowFunctionExpression"
+    || node?.type === "FunctionExpression"
+    || node?.type === "FunctionDeclaration"
+  ) {
+    return node.body as AstNode | undefined;
+  }
+  return undefined;
+}
+
+function parseVueScriptProgram(source: string): AstNode | undefined {
+  if (!source.trim()) return undefined;
   const ast = parseScript(source, {
     sourceType: "module",
     plugins: ["typescript"],
   }) as unknown as AstNode;
-  for (const statement of arrayField(ast.program as AstNode | undefined, "body")) {
+  return ast.program as AstNode | undefined;
+}
+
+function callName(callee: AstNode | undefined): string | undefined {
+  if (callee?.type === "MemberExpression") return identifierName(callee.property as AstNode | undefined);
+  return identifierName(callee);
+}
+
+function eventHandlerArtifactsForSpec(
+  root: HawkElementSpec,
+  script: string,
+  listTemplates: readonly HawkCompilerListTemplateWire[],
+  syntheticEventHandlers: readonly HawkCompilerEventHandlerWire[],
+): readonly HawkCompilerEventHandlerWire[] {
+  const declarations = handlerDeclarationsFromScript(script);
+  const lifecycleOnlyHandlers = lifecycleOnlyHandlerNames(root, listTemplates);
+  const syntheticByName = new Map(syntheticEventHandlers.map((handler) => [handler.name, handler]));
+  return referencedHandlerNames(root, listTemplates).flatMap((name) => {
+    const synthetic = syntheticByName.get(name);
+    if (synthetic) return synthetic;
+    const declaration = declarations.get(name);
+    if (!declaration) {
+      throw new Error(`vue.handler.missing: event handler \`${name}\` must be declared in the component script.`);
+    }
+    const actions = handlerActions(name, declaration, lifecycleOnlyHandlers.has(name));
+    if (actions.length === 0) return [];
+    return {
+      name,
+      actions,
+    };
+  });
+}
+
+function lifecycleOnlyHandlerNames(
+  root: HawkElementSpec,
+  listTemplates: readonly HawkCompilerListTemplateWire[],
+): ReadonlySet<string> {
+  const eventHandlers = new Set<string>();
+  const lifecycleHandlers = new Set<string>();
+  const visit = (element: HawkElementSpec): void => {
+    for (const event of element.events ?? []) eventHandlers.add(event.handler);
+    for (const lifecycle of element.lifecycle ?? []) lifecycleHandlers.add(lifecycle.handler);
+    for (const child of element.children ?? []) visit(child);
+  };
+  visit(root);
+  for (const template of listTemplates) {
+    visitListTemplateHandlerNames(template.node, eventHandlers, lifecycleHandlers);
+  }
+  for (const name of eventHandlers) lifecycleHandlers.delete(name);
+  return lifecycleHandlers;
+}
+
+function referencedHandlerNames(
+  root: HawkElementSpec,
+  listTemplates: readonly HawkCompilerListTemplateWire[],
+): readonly string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const push = (handler: string): void => {
+    if (!seen.has(handler)) {
+      seen.add(handler);
+      names.push(handler);
+    }
+  };
+  const visit = (element: HawkElementSpec): void => {
+    for (const event of element.events ?? []) push(event.handler);
+    for (const lifecycle of element.lifecycle ?? []) push(lifecycle.handler);
+    for (const child of element.children ?? []) visit(child);
+  };
+  visit(root);
+  for (const template of listTemplates) {
+    visitListTemplateHandlers(template.node, push);
+  }
+  return names;
+}
+
+function visitListTemplateHandlerNames(
+  node: HawkCompilerListTemplateNodeWire,
+  eventHandlers: Set<string>,
+  lifecycleHandlers: Set<string>,
+): void {
+  for (const event of node.events) eventHandlers.add(event.handler);
+  for (const lifecycle of node.lifecycle) lifecycleHandlers.add(lifecycle.handler);
+  for (const child of node.children) visitListTemplateHandlerNames(child, eventHandlers, lifecycleHandlers);
+}
+
+function visitListTemplateHandlers(
+  node: HawkCompilerListTemplateNodeWire,
+  push: (handler: string) => void,
+): void {
+  for (const event of node.events) push(event.handler);
+  for (const lifecycle of node.lifecycle) push(lifecycle.handler);
+  for (const child of node.children) visitListTemplateHandlers(child, push);
+}
+
+function handlerDeclarationsFromScript(source: string): ReadonlyMap<string, AstNode> {
+  const declarations = new Map<string, AstNode>();
+  const program = parseVueScriptProgram(source);
+    for (const statement of arrayField(program, "body")) {
     if (statement.type === "FunctionDeclaration") {
       const name = identifierName(statement.id as AstNode | undefined);
       if (name) declarations.set(name, statement);
@@ -326,7 +938,11 @@ function handlerDeclarationsFromScript(source: string): ReadonlyMap<string, AstN
   return declarations;
 }
 
-function handlerActions(handler: string, declaration: AstNode): readonly HawkCompilerEventHandlerActionWire[] {
+function handlerActions(
+  handler: string,
+  declaration: AstNode,
+  allowEmpty: boolean,
+): readonly HawkCompilerEventHandlerActionWire[] {
   const body = declaration.body as AstNode | undefined;
   if (!body) {
     throw new Error(`vue.handler.unsupported: event handler \`${handler}\` must have an executable body.`);
@@ -340,9 +956,9 @@ function handlerActions(handler: string, declaration: AstNode): readonly HawkCom
     }
     return handlerActionFromExpression(handler, statement.expression as AstNode | undefined);
   });
-  if (actions.length === 0) {
-    throw new Error(`vue.handler.unsupported: event handler \`${handler}\` must contain at least one action.`);
-  }
+    if (actions.length === 0 && !allowEmpty) {
+      throw new Error(`vue.handler.unsupported: event handler \`${handler}\` must contain at least one action.`);
+    }
   return actions;
 }
 
@@ -497,7 +1113,134 @@ function runtimeProps(
     const value = dynamicVisualAttributeValue(node, name, context, nodeId, framework);
     if (value !== undefined) props[name] = value;
   }
+  for (const attr of arrayField(node, "props").filter((prop) => prop.type === 6)) {
+    const name = stringField(attr, "name");
+    if (!name || RESERVED_RUNTIME_PROP_NAMES.has(name)) continue;
+    const value = dynamicRuntimeVueStaticAttributeValue(attr, name, nodeId, framework);
+    if (value !== undefined) props[name] = value;
+  }
+  for (const directive of vueDirectives(node, "bind")) {
+    const name = stringField(directive.arg as AstNode | undefined, "content");
+    if (!name || RESERVED_RUNTIME_PROP_NAMES.has(name)) continue;
+    const value = dynamicRuntimeVueBindingValue(directive, name, context, nodeId, framework);
+    if (value !== undefined) props[name] = value;
+  }
   return props;
+}
+
+function withVueVisibilityBinding(
+  specs: readonly HawkElementSpec[],
+  expression: string | undefined,
+  context: VueLoweringContext,
+  negate: boolean,
+): readonly HawkElementSpec[] {
+  const dependencies = expressionDependencies(expression);
+  if (dependencies.length > 0) {
+    const source = expressionSource(expression, "vue");
+    const visibleExpression = negate ? `!(${source})` : source;
+    for (const spec of specs) {
+      mergeDynamicVisibilityBinding(context, spec.id, visibleExpression, dependencies);
+    }
+    return specs;
+  }
+
+  const staticValue = staticVueExpressionValue(expression, context);
+  if (typeof staticValue !== "boolean") {
+    throw new Error("vue.conditional.unsupported: Vue visibility directives must use boolean expressions.");
+  }
+  return specs.map((spec) => withStaticVisibility(spec, negate ? !staticValue : staticValue));
+}
+
+function requiredVueDirectiveExpression(directive: AstNode, name: string): string {
+  const expression = stringField(directive.exp as AstNode | undefined, "content");
+  if (!expression.trim()) {
+    throw new Error(`vue.conditional.unsupported: v-${name} requires a boolean expression.`);
+  }
+  return expressionSource(expression, "vue");
+}
+
+function negatedVueConditionChain(conditions: readonly string[]): string {
+  return conditions.map((condition) => `!(${condition})`).join(" && ");
+}
+
+function mergeDynamicVisibilityBinding(
+  context: VueLoweringContext,
+  nodeId: string,
+  expression: string,
+  dependencies: readonly string[],
+): void {
+  const index = context.dynamicBindings.findIndex(
+    (binding) =>
+      binding.node_id === nodeId
+      && binding.target.type === "prop"
+      && binding.target.name === "visible",
+  );
+  if (index < 0) {
+    context.dynamicBindings.push({
+      node_id: nodeId,
+      target: { type: "prop", name: "visible" },
+      expression,
+      dependencies,
+    });
+    return;
+  }
+  const existing = context.dynamicBindings[index];
+  if (!existing) {
+    throw new Error("vue.visibility.internal: visible binding index disappeared during merge.");
+  }
+  context.dynamicBindings[index] = {
+    node_id: existing.node_id,
+    target: existing.target,
+    expression: `(${existing.expression}) && (${expression})`,
+    dependencies: uniqueStrings([...existing.dependencies, ...dependencies]),
+  };
+}
+
+function withStaticVisibility(spec: HawkElementSpec, visible: boolean): HawkElementSpec {
+  const current = spec.props?.visible;
+  const combined = typeof current === "boolean" ? current && visible : visible;
+  return {
+    ...spec,
+    props: { ...(spec.props ?? {}), visible: combined },
+  };
+}
+
+function uniqueStrings(values: readonly string[]): readonly string[] {
+  return [...new Set(values)];
+}
+
+function dynamicRuntimeVueStaticAttributeValue(
+  attr: AstNode,
+  name: string,
+  nodeId: string,
+  framework: string,
+): string | number | boolean | undefined {
+  const staticValue = attr.value as AstNode | undefined;
+  if (!staticValue) return true;
+  if (typeof staticValue.content === "string") return staticValue.content;
+  throw new Error(`${framework}.attribute.unsupported: prop \`${name}\` on \`${nodeId}\` must be a static scalar or expression.`);
+}
+
+function dynamicRuntimeVueBindingValue(
+  directive: AstNode,
+  name: string,
+  context: VueLoweringContext,
+  nodeId: string,
+  framework: string,
+): string | number | boolean | undefined {
+  const expression = stringField(directive.exp as AstNode | undefined, "content");
+  if (!expression) {
+    throw new Error(`${framework}.attribute.unsupported: prop \`${name}\` on \`${nodeId}\` requires a binding expression.`);
+  }
+  const staticExpression = staticVueExpressionValue(expression, context);
+  if (staticExpression !== undefined) return staticExpression;
+  context.dynamicBindings.push({
+    node_id: nodeId,
+    target: { type: "prop", name },
+    expression: expressionSource(expression, framework),
+    dependencies: expressionDependencies(expression),
+  });
+  return undefined;
 }
 
 function dynamicVisualAttributeValue(
@@ -712,10 +1455,11 @@ function vueInitialDynamicValue(node: AstNode | undefined): HawkCompilerDynamicV
   const directValue = literalDynamicValue(node);
   if (directValue) return directValue;
   if (node?.type !== "CallExpression") return undefined;
-  const callee = identifierName(node.callee as AstNode | undefined);
-  const args = node.arguments as AstNode[] | undefined;
-  if (callee === "ref") return literalDynamicValue(args?.[0]);
-  if (callee !== "computed") return undefined;
+    const callee = identifierName(node.callee as AstNode | undefined);
+    const args = node.arguments as AstNode[] | undefined;
+    if (callee === "ref") return literalDynamicValue(args?.[0]);
+    if (callee === "reactive") return literalDynamicValue(args?.[0]);
+    if (callee !== "computed") return undefined;
   const callback = args?.[0];
   if (callback?.type !== "ArrowFunctionExpression" && callback?.type !== "FunctionExpression") {
     return undefined;
@@ -930,11 +1674,15 @@ function kindForTag(tag: string): HawkElementSpec["kind"] {
   if (tag === "hawk-view") return "view";
   if (tag === "hawk-text") return "text";
   if (tag === "hawk-button") return "button";
+  if (tag === "hawk-surface" || tag === "hawk-custom-surface") return "custom-surface";
+  if (VIEW_ELEMENT_TAGS.has(tag)) return "view";
+  if (TEXT_ELEMENT_TAGS.has(tag)) return "text";
+  if (tag === "button") return "button";
   throw new Error(`vue.element.unsupported: unsupported Hawk element \`${tag}\`.`);
 }
 
 function isHawkTag(tag: string): boolean {
-  return tag.startsWith("hawk-");
+  return tag.startsWith("hawk-") || VIEW_ELEMENT_TAGS.has(tag) || TEXT_ELEMENT_TAGS.has(tag) || tag === "button";
 }
 
 function isComponentTag(tag: string): boolean {
@@ -943,98 +1691,6 @@ function isComponentTag(tag: string): boolean {
 
 function isUnsafeAssetPath(path: string): boolean {
   return path.includes("://") || path.startsWith("/") || path.includes("..");
-}
-
-export function createHawkVueRenderer(): HawkVueRenderer {
-  const records: string[] = [];
-  const roots = new Map<string, HawkElementSpec>();
-  return {
-    get records() {
-      return records;
-    },
-    render: (component: unknown, target: { readonly id: string }) => {
-      if (!target.id.trim()) {
-        throw new Error("Hawk2UI Vue render targets require a stable id.");
-      }
-      const next = componentToNativeSpec(component, target.id);
-      validateUniqueChildKeys(next);
-      const previous = roots.get(target.id);
-      if (!previous) {
-        records.push(...recordsForApp({
-          name: `vue:${target.id}`,
-          root: next,
-        }));
-      } else {
-        records.push(...diffRecords(previous, next));
-      }
-      roots.set(target.id, next);
-    },
-    unmount: (target: { readonly id: string }) => {
-      if (!target.id.trim()) {
-        throw new Error("Hawk2UI Vue render targets require a stable id.");
-      }
-      const root = roots.get(target.id);
-      if (root) {
-        records.push(`unmount-element:${root.id}`);
-        roots.delete(target.id);
-      }
-    },
-  };
-}
-
-function componentToNativeSpec(component: unknown, fallbackId: string): HawkElementSpec {
-  const props = readRecord(component);
-  const id = readString(props, "id") ?? fallbackId;
-  const asset = readString(props, "asset");
-  return {
-    id,
-    kind: "view",
-    refs: readString(props, "ref") ? [readString(props, "ref") as string] : [],
-    styleRefs: readString(props, "class") ? [readString(props, "class") as string] : [],
-    assetRefs: asset ? [{ name: "vue.asset", path: asset }] : [],
-    events: readStringArray(props, "on").includes("pointer.press")
-      ? [{ kind: "pointer.press", handler: "handlePress" }]
-      : [],
-    children: readChildren(props).map(runtimeChildSpec),
-  };
-}
-
-function runtimeChildSpec(child: Record<string, unknown>, index: number): HawkElementSpec {
-  const id = readString(child, "id") ?? `child-${index}`;
-  const key = readString(child, "key") ?? readString(child, "id");
-  const props = readTextProp(child);
-  return {
-    id,
-    kind: "text",
-    ...(key ? { key } : {}),
-    ...(props ? { props } : {}),
-  };
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
-function readChildren(record: Record<string, unknown> | undefined): readonly Record<string, unknown>[] {
-  const children = record?.children;
-  return Array.isArray(children)
-    ? children.filter((child): child is Record<string, unknown> => Boolean(child) && typeof child === "object")
-    : [];
-}
-
-function readString(record: Record<string, unknown> | undefined, name: string): string | undefined {
-  const value = record?.[name];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function readStringArray(record: Record<string, unknown> | undefined, name: string): readonly string[] {
-  const value = record?.[name];
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
-
-function readTextProp(record: Record<string, unknown>): Record<string, string> | undefined {
-  const text = readString(record, "text");
-  return text ? { text } : undefined;
 }
 
 function validateUniqueChildKeys(element: HawkElementSpec): void {
@@ -1047,51 +1703,5 @@ function validateUniqueChildKeys(element: HawkElementSpec): void {
       keys.add(child.key);
     }
     validateUniqueChildKeys(child);
-  }
-}
-
-function diffRecords(previous: HawkElementSpec, next: HawkElementSpec): readonly string[] {
-  const records: string[] = [];
-  if (previous.id !== next.id) {
-    records.push(`remove-element:${previous.id}`);
-    records.push(...recordsForApp({ name: `vue:${next.id}`, root: next }));
-    return records;
-  }
-  if ((previous.styleRefs ?? []).join(" ") !== (next.styleRefs ?? []).join(" ")) {
-    for (const style of next.styleRefs ?? []) {
-      records.push(`style:${next.id}:${style}`);
-    }
-  }
-  emitPropDiffs(previous, next, records);
-  emitChildDiffs(previous, next, records);
-  return records;
-}
-
-function emitPropDiffs(previous: HawkElementSpec, next: HawkElementSpec, records: string[]): void {
-  const names = new Set([...Object.keys(previous.props ?? {}), ...Object.keys(next.props ?? {})]);
-  for (const name of [...names].sort()) {
-    const previousValue = previous.props?.[name];
-    const nextValue = next.props?.[name];
-    if (previousValue !== nextValue && nextValue !== undefined) {
-      records.push(`prop:${next.id}:${name}=${String(nextValue)}`);
-    }
-  }
-}
-
-function emitChildDiffs(previous: HawkElementSpec, next: HawkElementSpec, records: string[]): void {
-  const previousChildren = new Map((previous.children ?? []).map((child) => [child.key ?? child.id, child]));
-  const nextChildren = new Map((next.children ?? []).map((child) => [child.key ?? child.id, child]));
-  for (const [key, child] of nextChildren) {
-    const previousChild = previousChildren.get(key);
-    if (!previousChild) {
-      records.push(...recordsForApp({ name: `vue:${child.id}`, root: child }));
-    } else {
-      records.push(...diffRecords(previousChild, child));
-    }
-  }
-  for (const [key, child] of previousChildren) {
-    if (!nextChildren.has(key)) {
-      records.push(`remove-element:${child.id}`);
-    }
   }
 }

@@ -28,6 +28,8 @@ The OS compatibility matrix currently names:
 - `linux-wayland-desktop`
 - `linux-x11-plugin`
 
+Windows and macOS are required production release platforms. Release packaging is not considered complete until `desktop-windows`, `desktop-macos`, macOS AU packaging, signing/notarization where applicable, and host-loadable plugin bundles are verified with recorded release evidence.
+
 ## Package Outputs
 
 The package compatibility matrix currently names these outputs and verification commands:
@@ -60,6 +62,6 @@ hawk2ui package-plugin
 hawk2ui verify-artifact
 ```
 
-`hawk2ui package-plugin` materializes CLAP, VST3, AU, and standalone bundle layouts. On supported desktop build hosts it also compiles the generated CLAP and VST3 `cdylib` crates, installs the host-loadable shared libraries into the package binary slots, and refreshes package hashes before verification.
+`hawk2ui package-plugin` materializes release-backed CLAP and VST3 bundle layouts. On supported desktop build hosts it compiles the generated `cdylib` crates, installs host-loadable shared libraries into the package binary slots, and refreshes package hashes before verification.
 
 Use `hawk2ui diagnostics` whenever validation or verification returns a non-success exit code.

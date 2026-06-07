@@ -16,6 +16,7 @@ use crate::{
     CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError, PackageTargetRecord,
     SealedArtifact, SourceFramework, VerificationReport,
 };
+use hawk2ui_authoring::{AdapterError, FrameworkNativeProgram, FrameworkNativeProgramWire};
 use hawk2ui_script::{ScriptBackend, ScriptBackendError, ScriptExecutionLimits, ScriptModule};
 use hawk2ui_style::{StyleCompileError, compile_style_source};
 
@@ -219,13 +220,7 @@ impl BuildWorkspace {
     ) -> Result<CompiledFrameworkRecord, BuildWorkspaceError> {
         let bytes = self.read_declared_file(path)?;
         let compiler_artifact_json = self.compile_framework_source(framework, path)?;
-        serde_json::from_str::<serde_json::Value>(&compiler_artifact_json).map_err(|error| {
-            BuildWorkspaceError::FrameworkCompilation {
-                path: path.into(),
-                framework,
-                message: format!("framework compiler emitted invalid JSON: {error}"),
-            }
-        })?;
+        validate_framework_compiler_artifact_json(framework, path, &compiler_artifact_json)?;
         Ok(CompiledFrameworkRecord::new(
             entrypoint_id,
             framework,
@@ -438,6 +433,14 @@ fn default_framework_compiler_script() -> PathBuf {
         .join("packages/hawk2ui-compiler/src/cli.ts")
 }
 
+fn default_framework_compiler_cwd() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FrameworkCompilerHost {
     runner: FrameworkCompilerRunner,
@@ -447,7 +450,11 @@ struct FrameworkCompilerHost {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FrameworkCompilerRunner {
     CompilerBinary(PathBuf),
-    BunScript { bun: PathBuf, script: PathBuf },
+    BunScript {
+        bun: PathBuf,
+        script: PathBuf,
+        cwd: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -479,15 +486,19 @@ impl FrameworkCompilerHost {
             ));
         }
         Ok(Self {
-            runner: FrameworkCompilerRunner::BunScript { bun, script },
+            runner: FrameworkCompilerRunner::BunScript {
+                bun,
+                script,
+                cwd: default_framework_compiler_cwd(),
+            },
             timeout: FRAMEWORK_COMPILER_TIMEOUT,
         })
     }
 
     #[cfg(test)]
-    fn for_test(bun: PathBuf, script: PathBuf, timeout: Duration) -> Self {
+    fn for_test(bun: PathBuf, script: PathBuf, cwd: PathBuf, timeout: Duration) -> Self {
         Self {
-            runner: FrameworkCompilerRunner::BunScript { bun, script },
+            runner: FrameworkCompilerRunner::BunScript { bun, script, cwd },
             timeout,
         }
     }
@@ -499,12 +510,23 @@ impl FrameworkCompilerHost {
         path: &str,
     ) -> Result<String, String> {
         let mut command = self.command();
+        let (current_dir, input_path, source_path) = match &self.runner {
+            FrameworkCompilerRunner::CompilerBinary(_) => {
+                (root.to_path_buf(), PathBuf::from(path), None)
+            }
+            FrameworkCompilerRunner::BunScript { cwd, .. } => {
+                (cwd.clone(), root.join(path), Some(path))
+            }
+        };
         command
-            .current_dir(root)
+            .current_dir(current_dir)
             .arg("--framework")
             .arg(source_framework_label(framework))
             .arg("--input")
-            .arg(path);
+            .arg(input_path);
+        if let Some(source_path) = source_path {
+            command.arg("--source-path").arg(source_path);
+        }
         let process = run_compiler_process(&mut command, self.timeout)?;
         if !process.status.success() {
             return Err(format_compiler_failure(
@@ -520,12 +542,40 @@ impl FrameworkCompilerHost {
     fn command(&self) -> Command {
         match &self.runner {
             FrameworkCompilerRunner::CompilerBinary(binary) => Command::new(binary),
-            FrameworkCompilerRunner::BunScript { bun, script } => {
+            FrameworkCompilerRunner::BunScript { bun, script, .. } => {
                 let mut command = Command::new(bun);
                 command.arg(script);
                 command
             }
         }
+    }
+}
+
+fn validate_framework_compiler_artifact_json(
+    framework: SourceFramework,
+    path: &str,
+    compiler_artifact_json: &str,
+) -> Result<(), BuildWorkspaceError> {
+    let wire = FrameworkNativeProgramWire::from_json(compiler_artifact_json)
+        .map_err(|error| framework_compiler_artifact_error(framework, path, &error))?;
+    FrameworkNativeProgram::try_from(wire)
+        .map_err(|error| framework_compiler_artifact_error(framework, path, &error))?;
+    Ok(())
+}
+
+fn framework_compiler_artifact_error(
+    framework: SourceFramework,
+    path: &str,
+    error: &AdapterError,
+) -> BuildWorkspaceError {
+    BuildWorkspaceError::FrameworkCompilation {
+        path: path.into(),
+        framework,
+        message: format!(
+            "framework compiler emitted invalid native artifact ({}): {}",
+            error.rule(),
+            error.message()
+        ),
     }
 }
 
@@ -719,6 +769,7 @@ mod tests {
         let host = FrameworkCompilerHost::for_test(
             bun.clone(),
             script.clone(),
+            root.clone(),
             std::time::Duration::from_secs(5),
         );
         let output = host
@@ -734,6 +785,11 @@ mod tests {
         assert!(args.contains("--framework"), "{args}");
         assert!(args.contains("react"), "{args}");
         assert!(args.contains("--input"), "{args}");
+        assert!(
+            args.contains(input.to_string_lossy().as_ref()),
+            "Bun-backed compiler should receive an absolute input path: {args}"
+        );
+        assert!(args.contains("--source-path"), "{args}");
         assert!(args.contains("src/App.tsx"), "{args}");
     }
 
@@ -744,8 +800,12 @@ mod tests {
         let script = root.join("compiler.ts");
         write_slow_compiler_script(&script);
 
-        let host =
-            FrameworkCompilerHost::for_test(bun, script, std::time::Duration::from_millis(50));
+        let host = FrameworkCompilerHost::for_test(
+            bun,
+            script,
+            root.clone(),
+            std::time::Duration::from_millis(50),
+        );
         let error = host
             .compile(&root, SourceFramework::Svelte, "src/App.svelte")
             .expect_err("slow compiler should time out");
@@ -753,6 +813,27 @@ mod tests {
         assert!(error.contains("timed out"), "{error}");
         assert!(error.contains("starting compiler"), "{error}");
         assert!(error.contains("still compiling"), "{error}");
+    }
+
+    #[test]
+    fn framework_compiler_artifact_validation_rejects_structural_json_without_native_program() {
+        let error = validate_framework_compiler_artifact_json(
+            SourceFramework::React,
+            "src/App.tsx",
+            r#"{"kind":"react","compiled":true}"#,
+        )
+        .expect_err("syntactically valid but structurally invalid compiler JSON must fail");
+
+        assert!(matches!(
+            error,
+            BuildWorkspaceError::FrameworkCompilation {
+                path,
+                framework: SourceFramework::React,
+                message
+            } if path == "src/App.tsx"
+                && message.contains("framework-native-program.json-invalid")
+                && message.contains("unknown field `kind`")
+        ));
     }
 
     #[cfg(unix)]

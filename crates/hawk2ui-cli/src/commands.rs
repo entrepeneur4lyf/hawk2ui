@@ -2,8 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::CliDiagnostic;
-
 /// CLI command.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CliCommand {
@@ -29,6 +27,8 @@ pub enum CliCommand {
         /// Native presentation backend requested for the desktop runtime.
         presentation_backend: CliPresentationBackend,
     },
+    /// Package desktop targets.
+    PackageDesktop,
     /// Package plugin targets.
     PackagePlugin,
     /// Export the central generated JSON Schema catalog.
@@ -96,6 +96,7 @@ impl CliCommand {
             "run-desktop" => Some(Self::RunDesktop {
                 presentation_backend: CliPresentationBackend::Software,
             }),
+            "package-desktop" => Some(Self::PackageDesktop),
             "package-plugin" => Some(Self::PackagePlugin),
             "export-schemas" => Some(Self::ExportSchemas),
             "export-params" => Some(Self::ExportParams),
@@ -233,9 +234,10 @@ impl CommandCatalog {
             "  validate         Validate manifests, sources, and capabilities",
             "  build-dev        Build and write a development sealed artifact",
             "  build-release    Build and write a production sealed artifact",
-            "  verify-artifact  Verify a sealed artifact container",
-            "  run-desktop      Run a desktop native surface [--presentation-backend software|gpu-preferred|gpu-required]",
-            "  package-plugin   Materialize CLAP, VST3, AU, and standalone package layouts",
+              "  verify-artifact  Verify a sealed artifact container",
+              "  run-desktop      Run a desktop native surface [--presentation-backend software|gpu-preferred|gpu-required]",
+              "  package-desktop  Materialize a signed native desktop launcher bundle",
+              "  package-plugin   Materialize release-backed CLAP and VST3 package layouts",
             "  export-schemas   Export the central generated JSON Schema catalog",
             "  export-params    Emit truce parameter source generated from the manifest",
             "  pin-ids          Pin a stable numeric id to every unpinned manifest parameter",
@@ -251,80 +253,5 @@ fn unexpected_argument(argument: &str) -> CliError {
     CliError {
         exit_code: CliExitCode::Usage,
         message: format!("unexpected argument: {argument}"),
-    }
-}
-
-/// Deterministic scenario used by command tests and recording runners.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum BuildCommandScenario {
-    /// Command succeeds.
-    Success,
-    /// Validation fails.
-    ValidationFailure,
-    /// Artifact verification fails.
-    VerificationFailure,
-}
-
-/// Result of a build-family CLI command.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct BuildCommandResult {
-    /// Exit code.
-    pub exit_code: CliExitCode,
-    /// Structured diagnostics.
-    pub diagnostics: Vec<CliDiagnostic>,
-}
-
-/// Recording build command runner.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct BuildCommandRunner;
-
-impl BuildCommandRunner {
-    /// Runs validation.
-    #[must_use]
-    pub fn validate(&self, scenario: BuildCommandScenario) -> BuildCommandResult {
-        match scenario {
-            BuildCommandScenario::Success | BuildCommandScenario::VerificationFailure => success(),
-            BuildCommandScenario::ValidationFailure => BuildCommandResult {
-                exit_code: CliExitCode::Validation,
-                diagnostics: vec![CliDiagnostic::error(
-                    "manifest.invalid",
-                    "project manifest validation failed",
-                )],
-            },
-        }
-    }
-
-    /// Runs development build.
-    #[must_use]
-    pub fn build_dev(&self, scenario: BuildCommandScenario) -> BuildCommandResult {
-        self.validate(scenario)
-    }
-
-    /// Runs release build.
-    #[must_use]
-    pub fn build_release(&self, scenario: BuildCommandScenario) -> BuildCommandResult {
-        self.validate(scenario)
-    }
-
-    /// Runs artifact verification.
-    #[must_use]
-    pub fn verify_artifact(&self, scenario: BuildCommandScenario) -> BuildCommandResult {
-        match scenario {
-            BuildCommandScenario::Success | BuildCommandScenario::ValidationFailure => success(),
-            BuildCommandScenario::VerificationFailure => BuildCommandResult {
-                exit_code: CliExitCode::Verification,
-                diagnostics: vec![CliDiagnostic::error(
-                    "artifact.verification-failed",
-                    "sealed artifact verification failed",
-                )],
-            },
-        }
-    }
-}
-
-fn success() -> BuildCommandResult {
-    BuildCommandResult {
-        exit_code: CliExitCode::Success,
-        diagnostics: Vec::new(),
     }
 }

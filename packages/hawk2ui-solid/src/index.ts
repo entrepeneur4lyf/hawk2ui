@@ -8,10 +8,13 @@ import {
     type HawkCompilerDynamicBindingWire,
     type HawkCompilerDynamicValueWire,
     type HawkCompilerEventHandlerActionWire,
-    type HawkCompilerEventHandlerWire,
-    type HawkCompilerInitialDynamicValueWire,
-    type HawkCompilerReactiveBindingWire,
-  type HawkElementSpec,
+      type HawkCompilerEventHandlerWire,
+      type HawkCompilerInitialDynamicValueWire,
+      type HawkCompilerReactiveBindingWire,
+      type HawkCompilerListTemplateNodeWire,
+      type HawkCompilerListTemplateWire,
+      type HawkCompilerTemplateScalarWire,
+    type HawkElementSpec,
   type HawkEventSpec,
   type HawkLifecycleSpec,
 } from "../../hawk2ui-native/src/index.ts";
@@ -28,16 +31,6 @@ export interface HawkSolidCompileOutput {
   readonly compilerArtifact: HawkCompilerArtifact;
 }
 
-export interface HawkSolidRenderOptions {
-  readonly target: { readonly id: string };
-}
-
-export interface HawkSolidDisposer {
-  (): void;
-  readonly records: readonly string[];
-  readonly update: () => void;
-}
-
 type AstNode = Record<string, unknown>;
 type LiteralRecord = Readonly<Record<string, string | number | boolean>>;
 
@@ -51,6 +44,8 @@ interface SolidLoweringContext {
   readonly componentStack: readonly string[];
   readonly reactivity: HawkCompilerReactiveBindingWire[];
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
+  readonly listTemplates: HawkCompilerListTemplateWire[];
+  readonly pendingListTemplateAnchors: Map<string, string[]>;
 }
 
 interface ReturnedJsxElement {
@@ -65,7 +60,10 @@ interface SolidComponentDefinition {
 }
 
 const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
+const VIEW_ELEMENT_TAGS = new Set(["div", "section", "main", "article", "header", "footer", "nav", "aside", "form", "label", "ul", "ol", "li"]);
+const TEXT_ELEMENT_TAGS = new Set(["span", "p", "strong", "em", "small", "code", "h1", "h2", "h3", "h4", "h5", "h6"]);
 const SOLID_EVENT_PROPS: ReadonlyArray<readonly [string, HawkEventSpec["kind"]]> = [
+  ["onClick", "pointer.press"],
   ["onPointerDown", "pointer.press"],
   ["onPointerUp", "pointer.release"],
   ["onPointerMove", "pointer.move"],
@@ -91,6 +89,20 @@ const SOLID_LIFECYCLE_PROPS: ReadonlyArray<readonly [string, HawkLifecycleSpec["
   ["onShutdown", "shutdown"],
   ["onCleanup", "unmounted"],
 ];
+const RESERVED_RUNTIME_PROP_NAMES = new Set<string>([
+  "id",
+  "key",
+  "ref",
+  "class",
+  "className",
+  "data-asset",
+  "children",
+  "width",
+  "height",
+  ...VISUAL_PROP_NAMES,
+  ...SOLID_EVENT_PROPS.map(([name]) => name),
+  ...SOLID_LIFECYCLE_PROPS.map(([name]) => name),
+]);
 
 export function compileHawkSolid(input: HawkSolidCompileInput): HawkSolidCompileOutput {
   if (!/\.[jt]sx$/.test(input.filename)) {
@@ -124,10 +136,15 @@ export function compileHawkSolid(input: HawkSolidCompileInput): HawkSolidCompile
     scalars: new Map(),
     childSlots: new Map(),
     componentStack: [],
-    reactivity: [...signals.reactivity],
-    dynamicBindings: [],
-  };
-  const root = solidJsxElementToSpec(returned.element, context);
+      reactivity: [...signals.reactivity],
+      dynamicBindings: [],
+      listTemplates: [],
+      pendingListTemplateAnchors: new Map(),
+    };
+    const root = withRootLifecycle(
+      solidJsxElementToSpec(returned.element, context),
+      solidLifecycleApiCalls(returned.scope),
+    );
   validateUniqueChildKeys(root);
   context.reactivity.push({ kind: "effect", name: "root-props" });
   const app = { name: input.filename, root };
@@ -136,6 +153,7 @@ export function compileHawkSolid(input: HawkSolidCompileInput): HawkSolidCompile
     program,
     returned.scope,
     solidSetterBindingsFromProgram(program, returned.scope),
+    context.listTemplates,
   );
   return {
     framework: "solid",
@@ -153,9 +171,10 @@ export function compileHawkSolid(input: HawkSolidCompileInput): HawkSolidCompile
               source_path: input.filename,
               entrypoint: returned.entrypoint,
             },
-            eventHandlers,
-          },
-        ),
+              eventHandlers,
+              listTemplates: context.listTemplates,
+            },
+          ),
       };
   }
 
@@ -234,7 +253,7 @@ function solidJsxElementToSpec(node: AstNode, context: SolidLoweringContext): Ha
     assetRefs: assetPath ? [{ name: "solid.asset", path: assetPath }] : [],
     events: solidEvents(node),
     lifecycle: solidLifecycle(node),
-    children: solidChildSpecs(node, context),
+    children: solidChildSpecs(node, context, id),
   };
   const props = runtimeProps(node, context, id, "solid");
   const text = solidTextContent(node, context, id);
@@ -242,24 +261,66 @@ function solidJsxElementToSpec(node: AstNode, context: SolidLoweringContext): Ha
   return Object.keys(props).length > 0 ? { ...spec, props } : spec;
 }
 
-function solidChildSpecs(node: AstNode, context: SolidLoweringContext): readonly HawkElementSpec[] {
+function solidChildSpecs(node: AstNode, context: SolidLoweringContext, parentId: string): readonly HawkElementSpec[] {
   const children: HawkElementSpec[] = [];
   for (const child of arrayField(node, "children")) {
-    children.push(...solidChildNodeSpecs(child, context));
+    for (const spec of solidChildNodeSpecs(child, context, parentId)) {
+      anchorPendingListTemplates(context, parentId, spec.id);
+      children.push(spec);
+    }
   }
   return children;
 }
 
-function solidChildNodeSpecs(child: AstNode, context: SolidLoweringContext): readonly HawkElementSpec[] {
-  if (child.type === "JSXElement" && jsxTagName(child) === "For") return expandSolidFor(child, context);
+function solidChildNodeSpecs(child: AstNode, context: SolidLoweringContext, parentId: string): readonly HawkElementSpec[] {
+  if (child.type === "JSXElement" && jsxTagName(child) === "For") return expandSolidFor(child, context, parentId);
+  if (child.type === "JSXElement" && jsxTagName(child) === "Index") return expandSolidIndex(child, context, parentId);
+  if (child.type === "JSXElement" && jsxTagName(child) === "Show") return expandSolidShow(child, context, parentId);
+  if (child.type === "JSXElement" && jsxTagName(child) === "Switch") return expandSolidSwitch(child, context, parentId);
+  if (child.type === "JSXElement" && jsxTagName(child) === "Match") return expandSolidMatch(child, context, parentId);
   if (child.type === "JSXElement") return [solidJsxElementToSpec(child, context)];
   if (child.type !== "JSXExpressionContainer") return [];
   const slotName = componentChildSlotName(child.expression as AstNode | undefined, context);
   if (!slotName) return [];
-  return (context.childSlots.get(slotName) ?? []).flatMap((slotChild) => solidChildNodeSpecs(slotChild, context));
+  return (context.childSlots.get(slotName) ?? []).flatMap((slotChild) => solidChildNodeSpecs(slotChild, context, parentId));
 }
 
-function expandSolidFor(node: AstNode, context: SolidLoweringContext): readonly HawkElementSpec[] {
+function expandSolidShow(node: AstNode, context: SolidLoweringContext, parentId: string): readonly HawkElementSpec[] {
+  const when = jsxRawAttributeValue(node, "when");
+  if (when?.type !== "JSXExpressionContainer") {
+    throw new Error("solid.show.unsupported: Solid Show must use `when={condition}`.");
+  }
+  return withSolidVisibilityBinding(
+      solidChildSpecs(node, context, parentId),
+    when.expression as AstNode | undefined,
+    context,
+    false,
+  );
+}
+
+function expandSolidSwitch(node: AstNode, context: SolidLoweringContext, parentId: string): readonly HawkElementSpec[] {
+  const branches: HawkElementSpec[] = [];
+  for (const child of arrayField(node, "children")) {
+    if (child.type !== "JSXElement" || jsxTagName(child) !== "Match") continue;
+    branches.push(...expandSolidMatch(child, context, parentId));
+  }
+  return branches;
+}
+
+function expandSolidMatch(node: AstNode, context: SolidLoweringContext, parentId: string): readonly HawkElementSpec[] {
+  const when = jsxRawAttributeValue(node, "when");
+  if (when?.type !== "JSXExpressionContainer") {
+    throw new Error("solid.match.unsupported: Solid Match must use `when={condition}`.");
+  }
+  return withSolidVisibilityBinding(
+      solidChildSpecs(node, context, parentId),
+    when.expression as AstNode | undefined,
+    context,
+    false,
+  );
+}
+
+function expandSolidFor(node: AstNode, context: SolidLoweringContext, parentId: string): readonly HawkElementSpec[] {
   const each = jsxRawAttributeValue(node, "each");
   const source = solidSignalCallName((each?.expression as AstNode | undefined) ?? each);
   const callback = arrayField(node, "children")
@@ -271,15 +332,283 @@ function expandSolidFor(node: AstNode, context: SolidLoweringContext): readonly 
     }
   const items = context.arrays.get(source);
   if (!items) {
-    throw new Error(`solid.for.source-unresolved: Solid For source \`${source}\` must be a literal signal array.`);
+    const initialValue = context.initialDynamicValues.get(source)?.value;
+    if (initialValue?.type !== "array") {
+      throw new Error(`solid.for.source-unresolved: Solid For source \`${source}\` must be a literal signal array or initial dynamic array.`);
+    }
+    context.reactivity.push({ kind: "keyed-for-each", name: source });
+    context.listTemplates.push({
+      id: `${parentId}:${source}`,
+      parent_id: parentId,
+      source,
+      item: itemName,
+      key: templateKeyExpression(template, itemName, "solid"),
+      node: solidElementToListTemplateNode(template, context, itemName),
+    });
+    queuePendingListTemplateAnchor(context, parentId, `${parentId}:${source}`);
+    return [];
   }
   context.reactivity.push({ kind: "keyed-for-each", name: source });
   return items.map((item) =>
     solidJsxElementToSpec(template, {
       ...context,
       locals: new Map([...context.locals, [itemName, item]]),
-    }),
+      }),
     );
+}
+
+function expandSolidIndex(node: AstNode, context: SolidLoweringContext, parentId: string): readonly HawkElementSpec[] {
+  const each = jsxRawAttributeValue(node, "each");
+  const source = solidSignalCallName((each?.expression as AstNode | undefined) ?? each);
+  const callback = arrayField(node, "children")
+    .find((child) => child.type === "JSXExpressionContainer")?.expression as AstNode | undefined;
+  const itemName = identifierName((callback?.params as AstNode[] | undefined)?.[0]);
+  const template = callback?.body as AstNode | undefined;
+  if (!source || !itemName || !template || template.type !== "JSXElement") {
+    throw new Error("solid.index.unsupported: Solid Index lists must use `<Index each={items()}>{(item) => <hawk-* />}</Index>`.");
+  }
+  const initialValue = context.initialDynamicValues.get(source)?.value;
+  if (initialValue?.type !== "array") {
+    throw new Error(`solid.index.source-unresolved: Solid Index source \`${source}\` must be an initial dynamic array.`);
+  }
+  context.reactivity.push({ kind: "keyed-for-each", name: source });
+  context.listTemplates.push({
+    id: `${parentId}:${source}`,
+    parent_id: parentId,
+    source,
+    item: itemName,
+    key: templateKeyExpression(template, itemName, "solid", true),
+    node: solidElementToListTemplateNode(template, context, itemName, true),
+  });
+  queuePendingListTemplateAnchor(context, parentId, `${parentId}:${source}`);
+  return [];
+}
+
+function queuePendingListTemplateAnchor(
+  context: SolidLoweringContext,
+  parentId: string,
+  templateId: string,
+): void {
+  const pending = context.pendingListTemplateAnchors.get(parentId) ?? [];
+  pending.push(templateId);
+  context.pendingListTemplateAnchors.set(parentId, pending);
+}
+
+function anchorPendingListTemplates(
+  context: SolidLoweringContext,
+  parentId: string,
+  anchorBefore: string,
+): void {
+  const pending = context.pendingListTemplateAnchors.get(parentId);
+  if (!pending || pending.length === 0) return;
+  for (const templateId of pending) {
+    const index = context.listTemplates.findIndex((template) => template.id === templateId);
+    const template = context.listTemplates[index];
+    if (!template || template.anchor_before !== undefined) continue;
+    context.listTemplates[index] = {
+      ...template,
+      anchor_before: anchorBefore,
+    };
+  }
+  context.pendingListTemplateAnchors.delete(parentId);
+}
+
+function solidElementToListTemplateNode(
+  node: AstNode,
+  context: SolidLoweringContext,
+  itemName: string,
+  itemAccessor = false,
+): HawkCompilerListTemplateNodeWire {
+  const tag = jsxTagName(node);
+  if (!isHawkTag(tag)) {
+    throw new Error(`solid.for.template-unsupported: Solid list template must render a native Hawk element, found \`${tag}\`.`);
+  }
+  const id = templateScalarFromAttribute(node, "id", context, itemName, "solid", itemAccessor);
+  const key = optionalTemplateScalarFromAttribute(node, "key", context, itemName, "solid", itemAccessor) ?? id;
+  const classAttr = optionalString(jsxAttributeValue(node, "class", context));
+  const assetPath = optionalString(jsxAttributeValue(node, "data-asset", context));
+  if (assetPath && isUnsafeAssetPath(assetPath)) {
+    throw new Error(`solid.asset.path-invalid: asset path \`${assetPath}\` must be workspace-relative.`);
+  }
+  const props = templateProps(node, context, itemName, "solid", itemAccessor);
+  const text = templateTextContent(node, context, itemName, "solid", itemAccessor);
+  if (text) props.push({ name: "text", value: text });
+  return {
+    id,
+    kind: kindForTag(tag),
+    key,
+    props,
+    refs: optionalString(jsxAttributeValue(node, "ref", context))
+      ? [optionalString(jsxAttributeValue(node, "ref", context)) as string]
+      : [],
+    style_refs: classAttr ? [classAttr] : [],
+    asset_refs: assetPath ? [{ name: "solid.asset", path: assetPath }] : [],
+    events: solidEvents(node).map((event) => ({
+      kind: event.kind,
+      handler: event.handler,
+      payload_fields: [...payloadFieldsForEvent(event.kind)],
+    })),
+    lifecycle: solidLifecycle(node).map((lifecycle) => ({
+      event: lifecycle.phase,
+      handler: lifecycle.handler,
+    })),
+    children: arrayField(node, "children")
+      .filter((child) => child.type === "JSXElement" && isHawkTag(jsxTagName(child)))
+      .map((child) => solidElementToListTemplateNode(child, context, itemName, itemAccessor)),
+  };
+}
+
+function templateProps(
+  node: AstNode,
+  context: SolidLoweringContext,
+  itemName: string,
+  framework: string,
+  itemAccessor = false,
+): { name: string; value: HawkCompilerTemplateScalarWire }[] {
+  const props: { name: string; value: HawkCompilerTemplateScalarWire }[] = [];
+  for (const name of ["width", "height", ...VISUAL_PROP_NAMES]) {
+    const value = optionalTemplateScalarFromAttribute(node, name, context, itemName, framework, itemAccessor);
+    if (value) props.push({ name, value });
+  }
+  for (const attribute of arrayField(node.openingElement as AstNode | undefined, "attributes")) {
+    if (attribute.type !== "JSXAttribute") continue;
+    const name = jsxName(attribute.name as AstNode | undefined);
+    if (!name || RESERVED_RUNTIME_PROP_NAMES.has(name)) continue;
+    props.push({ name, value: templateScalarFromValue(attribute.value as AstNode | undefined, context, itemName, framework, itemAccessor) });
+  }
+  return props;
+}
+
+function templateTextContent(
+  node: AstNode,
+  context: SolidLoweringContext,
+  itemName: string,
+  framework: string,
+  itemAccessor = false,
+): HawkCompilerTemplateScalarWire | undefined {
+  const children = arrayField(node, "children").filter((child) => child.type === "JSXText" || child.type === "JSXExpressionContainer");
+  if (children.length === 0) return undefined;
+  if (children.length === 1) {
+    const child = children[0];
+    if (!child) return undefined;
+    if (child.type === "JSXText") {
+      const text = String(child.value ?? "").trim();
+      return text ? literalTemplateScalar(text) : undefined;
+    }
+    return templateScalarFromExpression(child.expression as AstNode | undefined, context, itemName, framework, itemAccessor);
+  }
+  return {
+    type: "expression",
+    expression: children.map((child) => child.type === "JSXText" ? JSON.stringify(String(child.value ?? "")) : listTemplateExpressionSource(child.expression as AstNode | undefined, framework, itemName, itemAccessor)).join(" + "),
+  };
+}
+
+function templateKeyExpression(node: AstNode, itemName: string, framework: string, itemAccessor = false): string {
+  const key = jsxRawAttributeValue(node, "key");
+  if (key?.type === "JSXExpressionContainer") return listTemplateExpressionSource(key.expression as AstNode | undefined, framework, itemName, itemAccessor);
+  if (key?.type === "StringLiteral") return JSON.stringify(key.value);
+  const id = jsxRawAttributeValue(node, "id");
+  if (id?.type === "JSXExpressionContainer") return listTemplateExpressionSource(id.expression as AstNode | undefined, framework, itemName, itemAccessor);
+  if (id?.type === "StringLiteral") return JSON.stringify(id.value);
+  return `${itemName}.id`;
+}
+
+function templateScalarFromAttribute(
+  node: AstNode,
+  name: string,
+  context: SolidLoweringContext,
+  itemName: string,
+  framework: string,
+  itemAccessor = false,
+): HawkCompilerTemplateScalarWire {
+  const value = optionalTemplateScalarFromAttribute(node, name, context, itemName, framework, itemAccessor);
+  if (!value) throw new Error(`${framework}.list-template.attribute-required: list template nodes require \`${name}\`.`);
+  return value;
+}
+
+function optionalTemplateScalarFromAttribute(
+  node: AstNode,
+  name: string,
+  context: SolidLoweringContext,
+  itemName: string,
+  framework: string,
+  itemAccessor = false,
+): HawkCompilerTemplateScalarWire | undefined {
+  const value = jsxRawAttributeValue(node, name);
+  if (!value) return undefined;
+  return templateScalarFromValue(value, context, itemName, framework, itemAccessor);
+}
+
+function templateScalarFromValue(
+  value: AstNode | undefined,
+  context: SolidLoweringContext,
+  itemName: string,
+  framework: string,
+  itemAccessor = false,
+): HawkCompilerTemplateScalarWire {
+  if (!value) return literalTemplateScalar(true);
+  if (value.type === "StringLiteral") return literalTemplateScalar(value.value as string);
+  if (value.type !== "JSXExpressionContainer") return literalTemplateScalar(true);
+  return templateScalarFromExpression(value.expression as AstNode | undefined, context, itemName, framework, itemAccessor);
+}
+
+function templateScalarFromExpression(
+  expression: AstNode | undefined,
+  context: SolidLoweringContext,
+  itemName: string,
+  framework: string,
+  itemAccessor = false,
+): HawkCompilerTemplateScalarWire {
+  const staticValue = staticTextExpressionValue(expression, context);
+  if (staticValue !== undefined) return literalTemplateScalar(staticValue);
+  const source = listTemplateExpressionSource(expression, framework, itemName, itemAccessor);
+  if (!expressionDependencies(expression).includes(itemName)) {
+    throw new Error(`${framework}.list-template.expression-unsupported: list template expressions must depend on \`${itemName}\`.`);
+  }
+  return { type: "expression", expression: source };
+}
+
+function listTemplateExpressionSource(
+  expression: AstNode | undefined,
+  framework: string,
+  itemName: string,
+  itemAccessor: boolean,
+): string {
+  const source = expressionSource(expression, framework);
+  return itemAccessor ? source.replace(new RegExp(`\\b${escapeRegExp(itemName)}\\s*\\(\\s*\\)`, "g"), itemName) : source;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function literalTemplateScalar(value: string | number | boolean): HawkCompilerTemplateScalarWire {
+  if (typeof value === "string") return { type: "literal", value: { type: "string", value } };
+  if (typeof value === "boolean") return { type: "literal", value: { type: "bool", value } };
+  return { type: "literal", value: { type: "number", value } };
+}
+
+function payloadFieldsForEvent(kind: HawkEventSpec["kind"]) {
+  switch (kind) {
+    case "pointer.drag":
+    case "pointer.wheel":
+      return ["position", "delta"] as const;
+    case "pointer.press":
+    case "pointer.release":
+    case "pointer.move":
+    case "pointer.enter":
+    case "pointer.leave":
+      return ["position"] as const;
+    case "keyboard.key-down":
+    case "keyboard.key-up":
+      return ["key"] as const;
+    case "keyboard.text-input":
+    case "input.value-changed":
+    case "input.value-committed":
+      return ["value"] as const;
+    default:
+      return [] as const;
+  }
 }
 
 function solidComponentElementToSpec(node: AstNode, context: SolidLoweringContext): HawkElementSpec {
@@ -444,48 +773,188 @@ function solidLifecycle(node: AstNode): readonly HawkLifecycleSpec[] {
   return lifecycle;
 }
 
+function solidLifecycleApiCalls(componentScope: AstNode | undefined): readonly HawkLifecycleSpec[] {
+  const lifecycle: HawkLifecycleSpec[] = [];
+  for (const statement of arrayField(componentScope, "body")) {
+    if (statement.type !== "ExpressionStatement") continue;
+    const call = statement.expression as AstNode | undefined;
+    if (call?.type !== "CallExpression") continue;
+    const name = callName(call.callee as AstNode | undefined);
+    const argument = arrayField(call, "arguments")[0];
+    if (name === "onMount") {
+      for (const handler of lifecycleHandlerNamesFromArgument(argument, "solid", "onMount")) {
+        pushLifecycle(lifecycle, "mounted", handler);
+      }
+      continue;
+    }
+    if (name === "onCleanup") {
+      for (const handler of lifecycleHandlerNamesFromArgument(argument, "solid", "onCleanup")) {
+        pushLifecycle(lifecycle, "unmounted", handler);
+      }
+    }
+  }
+  return lifecycle;
+}
+
+function withRootLifecycle(
+  root: HawkElementSpec,
+  lifecycle: readonly HawkLifecycleSpec[],
+): HawkElementSpec {
+  if (lifecycle.length === 0) return root;
+  const merged: HawkLifecycleSpec[] = [...(root.lifecycle ?? [])];
+  for (const item of lifecycle) pushLifecycle(merged, item.phase, item.handler);
+  return { ...root, lifecycle: merged };
+}
+
+function pushLifecycle(
+  lifecycle: HawkLifecycleSpec[],
+  phase: HawkLifecycleSpec["phase"],
+  handler: string,
+): void {
+  if (!lifecycle.some((item) => item.phase === phase && item.handler === handler)) {
+    lifecycle.push({ phase, handler });
+  }
+}
+
+function lifecycleHandlerNamesFromArgument(
+  argument: AstNode | undefined,
+  framework: string,
+  api: string,
+): readonly string[] {
+  const direct = identifierName(argument);
+  if (direct) return [direct];
+  const body = functionLikeBody(argument);
+  if (!body) {
+    throw new Error(`${framework}.lifecycle.unsupported: ${api} must reference a stable handler identifier or call one.`);
+  }
+  if (body.type === "CallExpression") {
+    const name = callName(body.callee as AstNode | undefined);
+    if (name) return [name];
+  }
+  if (body.type === "BlockStatement") {
+    const names: string[] = [];
+    for (const statement of arrayField(body, "body")) {
+      if (statement.type === "ReturnStatement") continue;
+      if (statement.type !== "ExpressionStatement") {
+        throw new Error(`${framework}.lifecycle.unsupported: ${api} handlers may only call stable lifecycle functions.`);
+      }
+      const expression = statement.expression as AstNode | undefined;
+      if (expression?.type !== "CallExpression") {
+        throw new Error(`${framework}.lifecycle.unsupported: ${api} handlers may only call stable lifecycle functions.`);
+      }
+      const name = callName(expression.callee as AstNode | undefined);
+      if (!name) {
+        throw new Error(`${framework}.lifecycle.unsupported: ${api} handlers may only call stable lifecycle functions.`);
+      }
+      names.push(name);
+    }
+    if (names.length > 0) return names;
+  }
+  throw new Error(`${framework}.lifecycle.unsupported: ${api} must reference a stable handler identifier or call one.`);
+}
+
+function functionLikeBody(node: AstNode | undefined): AstNode | undefined {
+  if (
+    node?.type === "ArrowFunctionExpression"
+    || node?.type === "FunctionExpression"
+    || node?.type === "FunctionDeclaration"
+  ) {
+    return node.body as AstNode | undefined;
+  }
+  return undefined;
+}
+
+function callName(callee: AstNode | undefined): string | undefined {
+  if (callee?.type === "MemberExpression") return identifierName(callee.property as AstNode | undefined);
+  return identifierName(callee);
+}
+
 function eventHandlersForSpec(
   root: HawkElementSpec,
   program: AstNode,
   componentScope: AstNode | undefined,
   setterBindings: ReadonlyMap<string, string>,
+  listTemplates: readonly HawkCompilerListTemplateWire[],
 ): readonly HawkCompilerEventHandlerWire[] {
   const declarations = handlerDeclarationsFromBody([
     ...arrayField(program, "body"),
     ...arrayField(componentScope, "body"),
   ]);
-  return referencedHandlerNames(root).map((name) => {
+  const lifecycleOnlyHandlers = lifecycleOnlyHandlerNames(root, listTemplates);
+  return referencedHandlerNames(root, listTemplates).flatMap((name) => {
     const declaration = declarations.get(name);
     if (!declaration) {
       throw new Error(`solid.handler.missing: event handler \`${name}\` must be declared in the module or component scope.`);
     }
+    const actions = handlerActions(name, declaration, setterBindings, "solid", lifecycleOnlyHandlers.has(name));
+    if (actions.length === 0) return [];
     return {
       name,
-      actions: handlerActions(name, declaration, setterBindings, "solid"),
+      actions,
     };
   });
 }
 
-function referencedHandlerNames(root: HawkElementSpec): readonly string[] {
-  const names: string[] = [];
-  const seen = new Set<string>();
+function lifecycleOnlyHandlerNames(
+  root: HawkElementSpec,
+  listTemplates: readonly HawkCompilerListTemplateWire[],
+): ReadonlySet<string> {
+  const eventHandlers = new Set<string>();
+  const lifecycleHandlers = new Set<string>();
   const visit = (element: HawkElementSpec): void => {
-    for (const event of element.events ?? []) {
-      if (!seen.has(event.handler)) {
-        seen.add(event.handler);
-        names.push(event.handler);
-      }
-    }
-    for (const lifecycle of element.lifecycle ?? []) {
-      if (!seen.has(lifecycle.handler)) {
-        seen.add(lifecycle.handler);
-        names.push(lifecycle.handler);
-      }
-    }
+    for (const event of element.events ?? []) eventHandlers.add(event.handler);
+    for (const lifecycle of element.lifecycle ?? []) lifecycleHandlers.add(lifecycle.handler);
     for (const child of element.children ?? []) visit(child);
   };
   visit(root);
+  for (const template of listTemplates) {
+    visitListTemplateHandlerNames(template.node, eventHandlers, lifecycleHandlers);
+  }
+  for (const name of eventHandlers) lifecycleHandlers.delete(name);
+  return lifecycleHandlers;
+}
+
+function referencedHandlerNames(
+  root: HawkElementSpec,
+  listTemplates: readonly HawkCompilerListTemplateWire[],
+): readonly string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const push = (handler: string): void => {
+    if (!seen.has(handler)) {
+      seen.add(handler);
+      names.push(handler);
+    }
+  };
+  const visit = (element: HawkElementSpec): void => {
+    for (const event of element.events ?? []) push(event.handler);
+    for (const lifecycle of element.lifecycle ?? []) push(lifecycle.handler);
+    for (const child of element.children ?? []) visit(child);
+  };
+  visit(root);
+  for (const template of listTemplates) {
+    visitListTemplateHandlers(template.node, push);
+  }
   return names;
+}
+
+function visitListTemplateHandlerNames(
+  node: HawkCompilerListTemplateNodeWire,
+  eventHandlers: Set<string>,
+  lifecycleHandlers: Set<string>,
+): void {
+  for (const event of node.events) eventHandlers.add(event.handler);
+  for (const lifecycle of node.lifecycle) lifecycleHandlers.add(lifecycle.handler);
+  for (const child of node.children) visitListTemplateHandlerNames(child, eventHandlers, lifecycleHandlers);
+}
+
+function visitListTemplateHandlers(
+  node: HawkCompilerListTemplateNodeWire,
+  push: (handler: string) => void,
+): void {
+  for (const event of node.events) push(event.handler);
+  for (const lifecycle of node.lifecycle) push(lifecycle.handler);
+  for (const child of node.children) visitListTemplateHandlers(child, push);
 }
 
 function handlerDeclarationsFromBody(statements: readonly AstNode[]): ReadonlyMap<string, AstNode> {
@@ -513,6 +982,7 @@ function handlerActions(
   declaration: AstNode,
   setterBindings: ReadonlyMap<string, string>,
   framework: string,
+  allowEmpty: boolean,
 ): readonly HawkCompilerEventHandlerActionWire[] {
   const body = declaration.body as AstNode | undefined;
   if (!body) {
@@ -527,9 +997,9 @@ function handlerActions(
     }
     return handlerActionFromExpression(handler, statement.expression as AstNode | undefined, setterBindings, framework);
   });
-  if (actions.length === 0) {
-    throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must contain at least one action.`);
-  }
+    if (actions.length === 0 && !allowEmpty) {
+      throw new Error(`${framework}.handler.unsupported: event handler \`${handler}\` must contain at least one action.`);
+    }
   return actions;
 }
 
@@ -688,7 +1158,69 @@ function runtimeProps(
     const value = dynamicVisualAttributeValue(node, name, context, nodeId, framework);
     if (value !== undefined) props[name] = value;
   }
+  for (const attribute of arrayField(node.openingElement as AstNode | undefined, "attributes")) {
+    if (attribute.type !== "JSXAttribute") continue;
+    const name = jsxName(attribute.name as AstNode | undefined);
+    if (!name || RESERVED_RUNTIME_PROP_NAMES.has(name)) continue;
+    const value = dynamicRuntimeJsxAttributeValue(attribute.value as AstNode | undefined, name, context, nodeId, framework);
+    if (value !== undefined) props[name] = value;
+  }
   return props;
+}
+
+function withSolidVisibilityBinding(
+  specs: readonly HawkElementSpec[],
+  expression: AstNode | undefined,
+  context: SolidLoweringContext,
+  negate: boolean,
+): readonly HawkElementSpec[] {
+  const dependencies = expressionDependencies(expression);
+  if (dependencies.length > 0) {
+    const source = expressionSource(expression, "solid");
+    const visibleExpression = negate ? `!(${source})` : source;
+    for (const spec of specs) {
+      context.dynamicBindings.push({
+        node_id: spec.id,
+        target: { type: "prop", name: "visible" },
+        expression: visibleExpression,
+        dependencies,
+      });
+    }
+    return specs;
+  }
+
+  const staticValue = staticTextExpressionValue(expression, context);
+  if (typeof staticValue !== "boolean") {
+    throw new Error("solid.show.unsupported: Solid Show must use a boolean expression.");
+  }
+  return specs.map((spec) => ({
+    ...spec,
+    props: { ...(spec.props ?? {}), visible: negate ? !staticValue : staticValue },
+  }));
+}
+
+function dynamicRuntimeJsxAttributeValue(
+  value: AstNode | undefined,
+  name: string,
+  context: SolidLoweringContext,
+  nodeId: string,
+  framework: string,
+): string | number | boolean | undefined {
+  if (!value) return true;
+  if (value.type === "StringLiteral") return value.value as string;
+  if (value.type !== "JSXExpressionContainer") {
+    throw new Error(`${framework}.attribute.unsupported: prop \`${name}\` on \`${nodeId}\` must be a static scalar or expression.`);
+  }
+  const expression = value.expression as AstNode | undefined;
+  const staticValue = staticTextExpressionValue(expression, context);
+  if (staticValue !== undefined) return staticValue;
+  context.dynamicBindings.push({
+    node_id: nodeId,
+    target: { type: "prop", name },
+    expression: expressionSource(expression, framework),
+    dependencies: expressionDependencies(expression),
+  });
+  return undefined;
 }
 
 function dynamicVisualAttributeValue(
@@ -799,6 +1331,11 @@ function collectSolidSignalsFromBody(
   reactivity: HawkCompilerReactiveBindingWire[],
 ): void {
   for (const statement of statements) {
+    if (statement.type === "ExpressionStatement") {
+      const effect = solidCreateEffectBinding(statement.expression as AstNode | undefined);
+      if (effect) reactivity.push(effect);
+      continue;
+    }
     if (statement.type !== "VariableDeclaration") continue;
     for (const declaration of arrayField(statement, "declarations")) {
       const signalName = signalBindingName(declaration.id as AstNode | undefined);
@@ -806,33 +1343,73 @@ function collectSolidSignalsFromBody(
       const signalValue = init?.type === "CallExpression" && identifierName(init.callee as AstNode | undefined) === "createSignal"
         ? literalDynamicValue((init.arguments as AstNode[] | undefined)?.[0])
         : undefined;
-      const values = signalValue?.type === "array"
-        ? literalObjectArray((init?.arguments as AstNode[] | undefined)?.[0])
-        : literalObjectArray(init);
+      const values = signalValue ? undefined : literalObjectArray(init);
       if (signalName && values) {
         arrays.set(signalName, values);
         reactivity.push({ kind: "signal", name: signalName });
       }
       if (signalName && signalValue) {
-        initialDynamicValues.set(signalName, {
-          name: signalName,
-          mode: "getter",
-          value: signalValue,
-        });
+        reactivity.push({ kind: "signal", name: signalName });
       }
-      const name = identifierName(declaration.id as AstNode | undefined);
-      const value = literalDynamicValue(init);
-      if (name && value) {
-        initialDynamicValues.set(name, { name, mode: "value", value });
+        if (signalName && signalValue) {
+          initialDynamicValues.set(signalName, {
+            name: signalName,
+            mode: "getter",
+            value: signalValue,
+          });
+        }
+        const name = identifierName(declaration.id as AstNode | undefined);
+        const memoValue = isCreateMemoCall(init)
+          ? literalDynamicValueFromFunction((init.arguments as AstNode[] | undefined)?.[0])
+          : undefined;
+        if (name && memoValue) {
+          initialDynamicValues.set(name, { name, mode: "getter", value: memoValue });
+          reactivity.push({ kind: "effect", name });
+          continue;
+        }
+        const value = literalDynamicValue(init);
+        if (name && value) {
+          initialDynamicValues.set(name, { name, mode: "value", value });
+        }
       }
-    }
   }
+}
+
+function solidCreateEffectBinding(
+  expression: AstNode | undefined,
+): HawkCompilerReactiveBindingWire | undefined {
+  if (expression?.type !== "CallExpression") return undefined;
+  if (identifierName(expression.callee as AstNode | undefined) !== "createEffect") return undefined;
+  const callback = arrayField(expression, "arguments")[0];
+  const callbackName = identifierName(callback);
+  if (!callbackName) {
+    throw new Error("solid.effect.unsupported: createEffect callbacks must be stable function identifiers.");
+  }
+  return { kind: "effect", name: `createEffect:${callbackName}` };
 }
 
 function signalBindingName(node: AstNode | undefined): string | undefined {
   if (node?.type === "Identifier") return identifierName(node);
   if (node?.type !== "ArrayPattern") return undefined;
   return identifierName((node.elements as AstNode[] | undefined)?.[0]);
+}
+
+function isCreateMemoCall(node: AstNode | undefined): node is AstNode & { arguments?: AstNode[] } {
+  return node?.type === "CallExpression" && identifierName(node.callee as AstNode | undefined) === "createMemo";
+}
+
+function literalDynamicValueFromFunction(callback: AstNode | undefined): HawkCompilerDynamicValueWire | undefined {
+  if (callback?.type !== "ArrowFunctionExpression" && callback?.type !== "FunctionExpression") {
+    return undefined;
+  }
+  const body = callback.body as AstNode | undefined;
+  if (body?.type !== "BlockStatement") return literalDynamicValue(body);
+  for (const statement of arrayField(body, "body")) {
+    if (statement.type === "ReturnStatement") {
+      return literalDynamicValue(statement.argument as AstNode | undefined);
+    }
+  }
+  return undefined;
 }
 
 function signalBindingPair(node: AstNode | undefined): { readonly signal: string; readonly setter: string } | undefined {
@@ -1042,11 +1619,15 @@ function kindForTag(tag: string): HawkElementSpec["kind"] {
   if (tag === "hawk-view") return "view";
   if (tag === "hawk-text") return "text";
   if (tag === "hawk-button") return "button";
+  if (tag === "hawk-surface" || tag === "hawk-custom-surface") return "custom-surface";
+  if (VIEW_ELEMENT_TAGS.has(tag)) return "view";
+  if (TEXT_ELEMENT_TAGS.has(tag)) return "text";
+  if (tag === "button") return "button";
   throw new Error(`solid.element.unsupported: unsupported Hawk element \`${tag}\`.`);
 }
 
 function isHawkTag(tag: string): boolean {
-  return tag.startsWith("hawk-");
+  return tag.startsWith("hawk-") || VIEW_ELEMENT_TAGS.has(tag) || TEXT_ELEMENT_TAGS.has(tag) || tag === "button";
 }
 
 function isComponentTag(tag: string): boolean {
@@ -1069,88 +1650,6 @@ function uniqueReactivity(
   });
 }
 
-export function renderHawkSolid(component: () => unknown, options: HawkSolidRenderOptions): HawkSolidDisposer {
-  if (!options.target.id.trim()) {
-    throw new Error("Hawk2UI Solid render targets require a stable id.");
-  }
-  const records: string[] = [];
-  let root = componentToNativeSpec(component(), options.target.id);
-  validateUniqueChildKeys(root);
-  records.push(...recordsForApp({ name: `solid:${options.target.id}`, root }));
-  const dispose = (() => {
-    records.push(`unmount-element:${root.id}`);
-  }) as HawkSolidDisposer;
-  Object.defineProperty(dispose, "records", {
-    enumerable: true,
-    get: () => records,
-  });
-  Object.defineProperty(dispose, "update", {
-    enumerable: true,
-    value: () => {
-      const next = componentToNativeSpec(component(), options.target.id);
-      validateUniqueChildKeys(next);
-      records.push(...diffRecords(root, next));
-      root = next;
-    },
-  });
-  return dispose;
-}
-
-function componentToNativeSpec(component: unknown, fallbackId: string): HawkElementSpec {
-  const props = readRecord(component);
-  const id = readString(props, "id") ?? fallbackId;
-  const asset = readString(props, "asset");
-  return {
-    id,
-    kind: "view",
-    refs: readString(props, "ref") ? [readString(props, "ref") as string] : [],
-    styleRefs: readString(props, "class") ? [readString(props, "class") as string] : [],
-    assetRefs: asset ? [{ name: "solid.asset", path: asset }] : [],
-    events: readStringArray(props, "on").includes("pointer.press")
-      ? [{ kind: "pointer.press", handler: "handlePress" }]
-      : [],
-    children: readChildren(props).map(runtimeChildSpec),
-  };
-}
-
-function runtimeChildSpec(child: Record<string, unknown>, index: number): HawkElementSpec {
-  const id = readString(child, "id") ?? `child-${index}`;
-  const key = readString(child, "key") ?? readString(child, "id");
-  const props = readTextProp(child);
-  return {
-    id,
-    kind: "text",
-    ...(key ? { key } : {}),
-    ...(props ? { props } : {}),
-  };
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
-function readChildren(record: Record<string, unknown> | undefined): readonly Record<string, unknown>[] {
-  const children = record?.children;
-  return Array.isArray(children)
-    ? children.filter((child): child is Record<string, unknown> => Boolean(child) && typeof child === "object")
-    : [];
-}
-
-function readString(record: Record<string, unknown> | undefined, name: string): string | undefined {
-  const value = record?.[name];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function readStringArray(record: Record<string, unknown> | undefined, name: string): readonly string[] {
-  const value = record?.[name];
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
-
-function readTextProp(record: Record<string, unknown>): Record<string, string> | undefined {
-  const text = readString(record, "text");
-  return text ? { text } : undefined;
-}
-
 function validateUniqueChildKeys(element: HawkElementSpec): void {
   const keys = new Set<string>();
   for (const child of element.children ?? []) {
@@ -1161,51 +1660,5 @@ function validateUniqueChildKeys(element: HawkElementSpec): void {
       keys.add(child.key);
     }
     validateUniqueChildKeys(child);
-  }
-}
-
-function diffRecords(previous: HawkElementSpec, next: HawkElementSpec): readonly string[] {
-  const records: string[] = [];
-  if (previous.id !== next.id) {
-    records.push(`remove-element:${previous.id}`);
-    records.push(...recordsForApp({ name: `solid:${next.id}`, root: next }));
-    return records;
-  }
-  if ((previous.styleRefs ?? []).join(" ") !== (next.styleRefs ?? []).join(" ")) {
-    for (const style of next.styleRefs ?? []) {
-      records.push(`style:${next.id}:${style}`);
-    }
-  }
-  emitPropDiffs(previous, next, records);
-  emitChildDiffs(previous, next, records);
-  return records;
-}
-
-function emitPropDiffs(previous: HawkElementSpec, next: HawkElementSpec, records: string[]): void {
-  const names = new Set([...Object.keys(previous.props ?? {}), ...Object.keys(next.props ?? {})]);
-  for (const name of [...names].sort()) {
-    const previousValue = previous.props?.[name];
-    const nextValue = next.props?.[name];
-    if (previousValue !== nextValue && nextValue !== undefined) {
-      records.push(`prop:${next.id}:${name}=${String(nextValue)}`);
-    }
-  }
-}
-
-function emitChildDiffs(previous: HawkElementSpec, next: HawkElementSpec, records: string[]): void {
-  const previousChildren = new Map((previous.children ?? []).map((child) => [child.key ?? child.id, child]));
-  const nextChildren = new Map((next.children ?? []).map((child) => [child.key ?? child.id, child]));
-  for (const [key, child] of nextChildren) {
-    const previousChild = previousChildren.get(key);
-    if (!previousChild) {
-      records.push(...recordsForApp({ name: `solid:${child.id}`, root: child }));
-    } else {
-      records.push(...diffRecords(previousChild, child));
-    }
-  }
-  for (const [key, child] of previousChildren) {
-    if (!nextChildren.has(key)) {
-      records.push(`remove-element:${child.id}`);
-    }
   }
 }

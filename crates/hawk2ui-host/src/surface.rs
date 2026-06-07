@@ -232,81 +232,6 @@ pub trait HostSurface {
     fn teardown(&mut self, reason: String);
 }
 
-/// Recording host surface for deterministic tests.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct RecordingHostSurface {
-    metrics: SurfaceMetrics,
-    capabilities: HostCapabilities,
-    focused: bool,
-    events: Vec<SurfaceEvent>,
-}
-
-impl RecordingHostSurface {
-    /// Creates a recording host surface.
-    #[must_use]
-    pub fn new(metrics: SurfaceMetrics, capabilities: HostCapabilities) -> Self {
-        Self {
-            metrics,
-            capabilities,
-            focused: false,
-            events: Vec::new(),
-        }
-    }
-
-    /// Drains recorded surface events.
-    pub fn drain_events(&mut self) -> Vec<SurfaceEvent> {
-        std::mem::take(&mut self.events)
-    }
-}
-
-impl HostSurface for RecordingHostSurface {
-    fn metrics(&self) -> SurfaceMetrics {
-        self.metrics
-    }
-
-    fn capabilities(&self) -> &HostCapabilities {
-        &self.capabilities
-    }
-
-    fn has_focus(&self) -> bool {
-        self.focused
-    }
-
-    fn set_focus(&mut self, focused: bool) {
-        self.focused = focused;
-        self.events.push(SurfaceEvent::FocusChanged(focused));
-    }
-
-    fn request_repaint(&mut self, request: RepaintRequest) {
-        self.events.push(SurfaceEvent::RepaintRequested(request));
-    }
-
-    fn resize(&mut self, metrics: SurfaceMetrics) {
-        self.metrics = metrics;
-        self.events.push(SurfaceEvent::Resized(metrics));
-    }
-
-    fn request_window_command(&mut self, command: SurfaceWindowCommand) {
-        self.events
-            .push(SurfaceEvent::WindowCommandRequested(command));
-    }
-
-    fn request_clipboard(&mut self, request: SurfaceClipboardRequest) {
-        self.events.push(SurfaceEvent::ClipboardRequested(request));
-    }
-
-    fn record_presented_frame(&mut self, frame_id: u64) {
-        self.events.push(SurfaceEvent::FramePresented {
-            frame_id,
-            metrics: self.metrics,
-        });
-    }
-
-    fn teardown(&mut self, reason: String) {
-        self.events.push(SurfaceEvent::TeardownRequested(reason));
-    }
-}
-
 /// Presented frame record.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PresentedFrame {
@@ -320,25 +245,4 @@ pub struct PresentedFrame {
 pub trait FramePresenter {
     /// Presents a frame to the current host surface.
     fn present_frame(&mut self, frame_id: u64, metrics: SurfaceMetrics);
-}
-
-/// Recording frame presenter for deterministic tests.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-pub struct RecordingFramePresenter {
-    presented_frames: Vec<PresentedFrame>,
-}
-
-impl RecordingFramePresenter {
-    /// Returns presented frames in order.
-    #[must_use]
-    pub fn presented_frames(&self) -> &[PresentedFrame] {
-        &self.presented_frames
-    }
-}
-
-impl FramePresenter for RecordingFramePresenter {
-    fn present_frame(&mut self, frame_id: u64, metrics: SurfaceMetrics) {
-        self.presented_frames
-            .push(PresentedFrame { frame_id, metrics });
-    }
 }

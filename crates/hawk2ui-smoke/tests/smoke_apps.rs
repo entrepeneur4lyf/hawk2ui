@@ -1,4 +1,4 @@
-use hawk2ui_smoke::{SmokeFixture, SmokeRunner, SmokeTargetKind};
+use hawk2ui_smoke::{CliWorkflowStatus, SmokeFixture, SmokeRunner, SmokeTargetKind};
 
 #[test]
 fn desktop_basic_builds_verifies_exports_scene_first_frame_and_window_lifecycle() {
@@ -84,6 +84,7 @@ fn plugin_synth_editor_exercises_baseview_lifecycle_resize_dpi_render_and_destro
         .expect("plugin synth editor smoke fixture should run");
 
     assert_eq!(result.fixture_name, "plugin-synth-editor");
+    assert_eq!(result.trace_source_path, "artifacts/editor.trace");
     assert!(result.build.artifact_verified);
     assert_eq!(result.build.compiled_script_count, 1);
     assert_eq!(result.build.compiled_style_count, 0);
@@ -168,6 +169,8 @@ fn style_gallery_exports_deterministic_snapshots_for_all_sections() {
         ]
     );
     assert_eq!(result.snapshot_count, 13);
+    assert_eq!(result.snapshot_count, result.sections.len());
+    assert_eq!(result.section_source_path, "src/main.ts");
     assert!(result.deterministic);
 }
 
@@ -195,6 +198,10 @@ fn security_denials_fail_before_runtime_surface_launch() {
         ]
     );
     assert!(!result.runtime_surface_launched);
+    assert_eq!(
+        result.launch_gate_evidence,
+        "runtime_surface_launched=false"
+    );
 }
 
 #[test]
@@ -233,14 +240,92 @@ fn framework_examples_cover_all_public_framework_fixtures() {
     assert_eq!(result.contracts.len(), 5);
     for contract in &result.contracts {
         assert_eq!(contract.root_id, "root");
-        assert_eq!(contract.keyed_children, vec!["title", "cta"]);
+        assert!(
+            contract
+                .keyed_children
+                .starts_with(&["title".into(), "cta".into()])
+        );
         assert_eq!(contract.style_refs, vec!["surface.card"]);
         assert_eq!(contract.asset_paths, vec!["assets/logo.svg"]);
+        assert_eq!(contract.build.generator, "hawk2ui-build");
+        assert_eq!(contract.build.profile, "production");
+        assert!(contract.build.artifact_verified);
+        assert_eq!(contract.software_frame.physical_size, [320, 180]);
+        assert!(
+            contract.software_frame.visible_pixel,
+            "{} framework example must render visible software-frame pixels",
+            contract.framework
+        );
     }
+    let native = result
+        .contracts
+        .iter()
+        .find(|contract| contract.framework == "native")
+        .expect("native example should be covered");
+    assert_eq!(native.build.compiled_script_count, 1);
+    assert!(native.compiler_artifact.is_none());
+
+    let compiled_frameworks: Vec<_> = result
+        .contracts
+        .iter()
+        .filter(|contract| contract.framework != "native")
+        .collect();
+    assert_eq!(compiled_frameworks.len(), 4);
+    for contract in compiled_frameworks {
+        assert_eq!(contract.build.compiled_script_count, 0);
+        assert_eq!(contract.build.compiled_framework_count, 1);
+        let compiler_artifact = contract
+            .compiler_artifact
+            .as_ref()
+            .expect("framework examples must carry real compiler artifact evidence");
+        assert_eq!(compiler_artifact.framework, contract.framework);
+        assert!(compiler_artifact.compiler.starts_with("@hawk2ui/"));
+        assert_eq!(
+            compiler_artifact.artifact_path,
+            "frameworks/entry.hawk.framework.json"
+        );
+        assert!(compiler_artifact.artifact_bytes > 128);
+    }
+    assert_eq!(
+        result
+            .contracts
+            .iter()
+            .find(|contract| contract.framework == "svelte")
+            .expect("svelte example should be covered")
+            .list_template_count,
+        1
+    );
+    assert_eq!(
+        result
+            .contracts
+            .iter()
+            .find(|contract| contract.framework == "solid")
+            .expect("solid example should be covered")
+            .list_template_count,
+        1
+    );
     assert!(
         result
             .contracts
             .iter()
             .all(|contract| contract.runtime_bridged)
     );
+}
+
+#[test]
+fn cli_end_to_end_smoke_builds_verifies_runs_desktop_and_packages_plugin() {
+    let runner = SmokeRunner;
+
+    let result = runner
+        .run_cli_end_to_end()
+        .expect("CLI end-to-end smoke should execute real workflows");
+
+    assert_eq!(result.desktop_build_release, CliWorkflowStatus::Passed);
+    assert_eq!(result.desktop_verify_artifact, CliWorkflowStatus::Passed);
+    assert_eq!(result.desktop_run_first_frame, CliWorkflowStatus::Passed);
+    assert_eq!(result.desktop_frames_presented, 1);
+    assert_eq!(result.plugin_package, CliWorkflowStatus::Passed);
+    assert_eq!(result.plugin_layout_verification, CliWorkflowStatus::Passed);
+    assert_eq!(result.plugin_host_loadable_binaries, 2);
+    assert!(result.plugin_unsupported_outputs_absent);
 }

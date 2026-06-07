@@ -2,10 +2,12 @@
 
 use std::collections::BTreeSet;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{FilesystemGrant, FilesystemPolicy, PlatformDiagnostic};
 
 /// Database migration record.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DatabaseMigration {
     /// Monotonic migration version.
     pub version: u32,
@@ -20,6 +22,37 @@ impl DatabaseMigration {
         Self {
             version,
             id: id.into(),
+        }
+    }
+}
+
+/// Database manifest declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DatabaseManifest {
+    /// Required capability key.
+    pub capability_key: String,
+    /// Filesystem grant that bounds the database storage file.
+    pub grant: FilesystemGrant,
+    /// Database storage path relative to the filesystem grant.
+    pub relative_path: String,
+    /// Ordered migrations that must be applied to the store.
+    pub migrations: Vec<DatabaseMigration>,
+}
+
+impl DatabaseManifest {
+    /// Creates a database manifest declaration.
+    #[must_use]
+    pub fn new(
+        capability_key: impl Into<String>,
+        grant: FilesystemGrant,
+        relative_path: impl Into<String>,
+        migrations: impl IntoIterator<Item = DatabaseMigration>,
+    ) -> Self {
+        Self {
+            capability_key: capability_key.into(),
+            grant,
+            relative_path: relative_path.into(),
+            migrations: migrations.into_iter().collect(),
         }
     }
 }

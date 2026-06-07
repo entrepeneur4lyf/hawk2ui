@@ -46,9 +46,15 @@ The native stack: `skia-safe` rendering, `taffy` flexbox/grid layout, `parley`/`
 
 ## Status
 
-Implemented against an enforced production baseline. The core engine, runtime, desktop and plugin hosts, framework adapters, and the build/CLI toolchain are in place and covered by CI (format, clippy, unit + integration + smoke tests, render benchmark, docs, dependency policy).
+Implemented against an enforced production baseline. The core engine, runtime, desktop host, plugin host layers, framework adapters, and build/CLI toolchain are covered by CI (format, clippy, unit + integration + smoke tests, render benchmark, docs, dependency policy), but whole-framework production release status is gated by the release evidence below.
 
-The baseline is stable, production-ready, and feature-complete. No MVP scope, candidate backend, partial framework compiler, placeholder runtime path, or deferred compatibility target satisfies the baseline. Any missing feature, unsupported production platform, stub, TODO, or untested integration is a release blocker until code, tests, manual coverage, and release evidence prove it complete.
+The release baseline is evidence-based: no MVP scope, candidate backend, partial framework compiler, placeholder runtime path, deferred compatibility target, hidden stub, TODO, or untested integration satisfies release readiness.
+
+A production release is blocked until every release-gated desktop, plugin, framework, rendering, platform, packaging, security, performance, smoke, conformance, manual, and release-evidence path is implemented in code and passing its verification command.
+
+Subsystems may be usable before the full release gate passes, but README status must not describe the whole framework as production-ready or feature-complete until the release evidence proves that claim.
+
+Windows and macOS are mandatory production release targets, not optional follow-up work. A public release announcement is blocked until native Windows and macOS desktop/plugin-host paths have passing runtime, packaging, manual, and release-evidence coverage.
 
 ## Build & Test
 
@@ -73,7 +79,7 @@ HAWK2UI_TRUSTED_RELEASE_KEYS=local-release:<64-hex-public-key> \
 cargo run -p hawk2ui-cli -- verify-artifact # verify release trust
 HAWK2UI_RELEASE_SIGNING_KEY_ID=local-release \
 HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
-cargo run -p hawk2ui-cli -- package-plugin # CLAP / VST3 / AU / standalone
+cargo run -p hawk2ui-cli -- package-plugin # CLAP / VST3
 ```
 
 See `examples/` for working `hawk.json` layouts (`desktop-basic`, `plugin-synth-editor`), and `CLAUDE.md` for the architecture and crate layering.
@@ -132,11 +138,12 @@ checks, or source-truth conformance.
 | VST3 implementation | Remediated | Generated VST3 scaffolds now build against the local safe binding crate, export lifecycle entry points and `GetPluginFactory`, enumerate processor/controller classes, instantiate COM-compatible processor/controller objects through `createInstance`, expose stereo bus routing, process f32/f64 passthrough audio buffers, round-trip parameter state through `IBStream`, and are compiled into host-loadable package binaries by `package-plugin`. |
 | Font pipeline depth | Remediated | `hawk2ui-text` now loads app font bytes into the Parley font context, resolves fallbacks, shapes through Parley, and provides a generation-aware glyph/layout cache with hit/miss stats and explicit invalidation; runtime text draw commands preserve requested font families into Skia replay with fallback to the renderer default typeface. |
 | Host surface abstraction | Remediated | `HostSurface` is now dyn-compatible, desktop and plugin adapters route through the common surface/frame-presentation boundary, and lifecycle tests prove repaint, resize, window commands, frame presentation, and teardown work through `&mut dyn HostSurface`. |
-| Platform backends | Remediated | `hawk2ui-platform` now provides executable backends for scoped filesystem reads/writes, policy-approved HTTP(S) GET requests through bounded `ureq`, text clipboard storage, and declared secret-store lookup/redaction, with a deterministic static network backend for offline verification. |
+| Platform backends | Remediated | `hawk2ui-platform` now provides executable, policy-checked backends for scoped filesystem reads/writes, bounded HTTP(S) GET requests, text clipboard storage, declared secret lookup/redaction, AI provider calls, host-managed audio cues, dialogs/file pickers, localization bundles, MCP tool calls, notifications, global shortcuts, and scoped JSON database migrations/queries/transactions, with deterministic offline backends for verification. |
 | Skia CPU renderer depth | Remediated | `hawk2ui-render-skia` now has pixel-tested source-rect image drawing, nearest/linear sampling, mipmap/tile-mode controls, text highlight/stroke/underline/strikethrough/subpixel controls, SVG clip paths, explicit blend-mode rect compositing, structured effects, vector assets, and runtime-scene replay. |
 | Runtime shader effects (`SkRuntimeEffect`) | Remediated | Runtime shader effects now cross the framework boundary: backend-neutral render APIs, retained runtime shader-effect visuals, runtime draw commands, authoring props, Skia replay, bounded `SkSL` compilation, typed float/int uniforms, registered image child shaders, cache stats, capability reporting, and Skia pixel tests. |
 | Desktop Wayland GPU backend | Remediated | `hawk2ui-host-winit` now exposes typed software/GPU-preferred/GPU-required presentation selection, creates native Wayland EGL/Glutin surfaces, renders through Skia Ganesh GL, verifies submitted frames with readback evidence, exposes GPU frame counts in runtime summaries, and has a gated native Wayland smoke test (`HAWK2UI_NATIVE_WAYLAND_GPU_SMOKE=1`). |
 | Baseview native Wayland plugin embedding | Remediated | The vendored Baseview adapter now accepts native Wayland parent handles, opens Wayland child surfaces, creates EGL/OpenGL contexts for GPU plugin editors, reports GL creation failures as hard diagnostics, accepts CLAP Wayland parent ABI calls, and has gated native software/GL Wayland smokes including resize-after-GL coverage. |
+| Windows/macOS native release coverage | Release blocker | Windows and macOS desktop windows, plugin-host embedding, GPU/software rendering, input/resize/close/DPI behavior, packaging/signing/notarization where applicable, manual coverage, and release evidence must be implemented and verified before any public production release announcement. |
 | Security evidence vocabulary | Remediated | `hawk2ui-security` remains an evidence vocabulary for decisions made by concrete validators in `hawk2ui-build`, `hawk2ui-assets`, `hawk2ui-script`, `hawk2ui-platform`, and `hawk2ui-security-model`; conformance tests require the manual to state that boundary. |
 
 Recently closed hardening items include CLAP multi-instance state isolation,

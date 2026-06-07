@@ -39,6 +39,14 @@ blocking = "release"
 evidence = "target/release-evidence/compatibility-matrix.txt"
 
 [[criteria]]
+id = "framework-compilers"
+title = "Framework compiler examples"
+owner = "framework"
+command = "rtk bash scripts/check-framework-examples.sh"
+blocking = "release"
+evidence = "target/release-evidence/framework-compilers.txt"
+
+[[criteria]]
 id = "performance-budgets"
 title = "Performance budgets"
 owner = "performance"

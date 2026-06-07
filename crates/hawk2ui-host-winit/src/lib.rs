@@ -5,7 +5,11 @@ mod gpu_frame;
 mod runtime;
 mod software_frame;
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    path::{Path, PathBuf},
+};
 
 use hawk2ui_api::Diagnostic;
 use hawk2ui_host::{
@@ -13,6 +17,12 @@ use hawk2ui_host::{
     DesktopDialogResponse, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
     HostPlatformHandle, KeyboardInput, LinuxWindowSystem, PointerInput, RepaintRequest,
     SurfaceClipboardRequest, SurfaceMetrics, SurfaceOwnership, WindowMode,
+};
+use hawk2ui_platform::{
+    AudioCueBinding, AudioPlaybackSink, ClipboardAccess, DialogKind, DialogRequest,
+    GlobalShortcutSink, HostDialogResponse, NotificationBinding, NotificationSink,
+    PlatformBackendError, PlatformDiagnostic, PlatformHostBackend, PlatformOperation,
+    ShortcutBinding,
 };
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
@@ -511,6 +521,672 @@ impl<B: WinitDialogBackend> WinitDialogBridge<B> {
             }
         }
     }
+}
+
+/// Backend boundary for native desktop audio cue playback.
+pub trait WinitAudioBackend {
+    /// Plays a host-resolved audio source URI.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the native audio backend cannot play the source.
+    fn play_source_uri(&mut self, source_uri: String) -> Result<(), WinitHostError>;
+}
+
+/// Production audio backend backed by `rodio`.
+pub struct RodioAudioBackend {
+    sink: rodio::MixerDeviceSink,
+}
+
+impl RodioAudioBackend {
+    /// Opens the default native audio output sink.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when no usable native output device can be opened.
+    pub fn new() -> Result<Self, WinitHostError> {
+        let sink = rodio::DeviceSinkBuilder::open_default_sink().map_err(|error| {
+            WinitHostError::new(
+                "desktop.audio.open-failed",
+                format!("failed to open native audio output sink: {error}"),
+            )
+        })?;
+        Ok(Self { sink })
+    }
+}
+
+impl WinitAudioBackend for RodioAudioBackend {
+    fn play_source_uri(&mut self, source_uri: String) -> Result<(), WinitHostError> {
+        let path = audio_source_uri_to_path(&source_uri)?;
+        let file = File::open(&path).map_err(|error| {
+            WinitHostError::new(
+                "desktop.audio.open-source-failed",
+                format!("failed to open audio source {}: {error}", path.display()),
+            )
+        })?;
+        let source = rodio::Decoder::try_from(file).map_err(|error| {
+            WinitHostError::new(
+                "desktop.audio.decode-failed",
+                format!("failed to decode audio source {}: {error}", path.display()),
+            )
+        })?;
+        self.sink.mixer().add(source);
+        Ok(())
+    }
+}
+
+/// Platform audio sink for policy-approved `Hawk2UI` audio cue bindings.
+#[derive(Clone, Debug)]
+pub struct WinitAudioSink<B> {
+    backend: B,
+}
+
+impl<B: WinitAudioBackend> WinitAudioSink<B> {
+    /// Creates a Winit audio sink from a native audio backend.
+    #[must_use]
+    pub const fn new(backend: B) -> Self {
+        Self { backend }
+    }
+
+    /// Returns the wrapped audio backend.
+    #[must_use]
+    pub const fn backend(&self) -> &B {
+        &self.backend
+    }
+}
+
+impl<B: WinitAudioBackend> AudioPlaybackSink for WinitAudioSink<B> {
+    fn play_audio_cue(&mut self, binding: &AudioCueBinding) -> Result<(), PlatformBackendError> {
+        self.backend
+            .play_source_uri(binding.source_uri.clone())
+            .map_err(|error| winit_error_to_platform(PlatformOperation::AudioPlayback, &error))
+    }
+}
+
+/// Backend boundary for native desktop notifications.
+pub trait WinitNotificationBackend {
+    /// Sends a native desktop notification.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the platform notification service rejects the request.
+    fn send_notification(&mut self, title: String, body: String) -> Result<(), WinitHostError>;
+}
+
+/// Production notification backend backed by `notify-rust` where supported.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NotifyRustNotificationBackend;
+
+impl NotifyRustNotificationBackend {
+    /// Creates the default native notification backend.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl WinitNotificationBackend for NotifyRustNotificationBackend {
+    fn send_notification(&mut self, title: String, body: String) -> Result<(), WinitHostError> {
+        send_native_notification(&title, &body)
+    }
+}
+
+/// Platform notification sink for policy-approved `Hawk2UI` notification bindings.
+#[derive(Clone, Debug)]
+pub struct WinitNotificationSink<B> {
+    backend: B,
+}
+
+impl<B: WinitNotificationBackend> WinitNotificationSink<B> {
+    /// Creates a Winit notification sink from a native notification backend.
+    #[must_use]
+    pub const fn new(backend: B) -> Self {
+        Self { backend }
+    }
+
+    /// Returns the wrapped notification backend.
+    #[must_use]
+    pub const fn backend(&self) -> &B {
+        &self.backend
+    }
+}
+
+impl<B: WinitNotificationBackend> NotificationSink for WinitNotificationSink<B> {
+    fn send_notification(
+        &mut self,
+        binding: &NotificationBinding,
+    ) -> Result<(), PlatformBackendError> {
+        self.backend
+            .send_notification(binding.title.clone(), binding.body.clone())
+            .map_err(|error| winit_error_to_platform(PlatformOperation::NotificationSend, &error))
+    }
+}
+
+/// Backend boundary for native global shortcut registration.
+pub trait WinitShortcutBackend {
+    /// Registers a native global shortcut mapped to a `Hawk2UI` action.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the accelerator cannot be parsed or registered.
+    fn register_shortcut(
+        &mut self,
+        accelerator: String,
+        action_id: String,
+    ) -> Result<(), WinitHostError>;
+}
+
+/// Backend boundary for the Wayland global-shortcut portal.
+pub trait WinitWaylandShortcutPortal {
+    /// Binds a shortcut through the desktop portal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the portal cannot bind the shortcut.
+    fn bind_shortcut(
+        &mut self,
+        accelerator: String,
+        action_id: String,
+        preferred_trigger: Option<String>,
+    ) -> Result<(), WinitHostError>;
+}
+
+/// Wayland shortcut backend backed by a portal implementation.
+#[derive(Clone, Debug)]
+pub struct WaylandPortalShortcutBackend<P> {
+    portal: P,
+}
+
+impl<P: WinitWaylandShortcutPortal> WaylandPortalShortcutBackend<P> {
+    /// Creates a Wayland portal shortcut backend.
+    #[must_use]
+    pub const fn new(portal: P) -> Self {
+        Self { portal }
+    }
+
+    /// Returns the wrapped portal backend.
+    #[must_use]
+    pub const fn portal(&self) -> &P {
+        &self.portal
+    }
+}
+
+impl<P: WinitWaylandShortcutPortal> WinitShortcutBackend for WaylandPortalShortcutBackend<P> {
+    fn register_shortcut(
+        &mut self,
+        accelerator: String,
+        action_id: String,
+    ) -> Result<(), WinitHostError> {
+        let preferred_trigger = portal_preferred_trigger(&accelerator);
+        self.portal
+            .bind_shortcut(accelerator, action_id, preferred_trigger)
+    }
+}
+
+/// Production Wayland global-shortcut portal backed by `ashpd`.
+pub struct AshpdWaylandShortcutPortal {
+    runtime: tokio::runtime::Runtime,
+    portal: ashpd::desktop::global_shortcuts::GlobalShortcuts,
+    session: ashpd::desktop::Session<ashpd::desktop::global_shortcuts::GlobalShortcuts>,
+}
+
+impl AshpdWaylandShortcutPortal {
+    /// Opens the XDG desktop portal global-shortcut session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the portal service or session cannot be created.
+    pub fn new() -> Result<Self, WinitHostError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| {
+                WinitHostError::new(
+                    "desktop.shortcut.portal-runtime-failed",
+                    format!("failed to create Wayland shortcut portal runtime: {error}"),
+                )
+            })?;
+        let (portal, session) = runtime
+            .block_on(async {
+                let portal = ashpd::desktop::global_shortcuts::GlobalShortcuts::new().await?;
+                let session = portal
+                    .create_session(ashpd::desktop::CreateSessionOptions::default())
+                    .await?;
+                Ok::<_, ashpd::Error>((portal, session))
+            })
+            .map_err(|error| {
+                WinitHostError::new(
+                    "desktop.shortcut.portal-open-failed",
+                    format!("failed to open Wayland global shortcut portal session: {error}"),
+                )
+            })?;
+        Ok(Self {
+            runtime,
+            portal,
+            session,
+        })
+    }
+}
+
+impl WinitWaylandShortcutPortal for AshpdWaylandShortcutPortal {
+    fn bind_shortcut(
+        &mut self,
+        accelerator: String,
+        action_id: String,
+        preferred_trigger: Option<String>,
+    ) -> Result<(), WinitHostError> {
+        let mut shortcut =
+            ashpd::desktop::global_shortcuts::NewShortcut::new(&action_id, &action_id);
+        shortcut = shortcut.preferred_trigger(preferred_trigger.as_deref());
+        let request = self
+            .runtime
+            .block_on(self.portal.bind_shortcuts(
+                &self.session,
+                &[shortcut],
+                None,
+                ashpd::desktop::global_shortcuts::BindShortcutsOptions::default(),
+            ))
+            .map_err(|error| {
+                WinitHostError::new(
+                    "desktop.shortcut.portal-bind-failed",
+                    format!("failed to bind Wayland shortcut {accelerator}: {error}"),
+                )
+            })?;
+        request.response().map_err(|error| {
+            WinitHostError::new(
+                "desktop.shortcut.portal-response-failed",
+                format!("Wayland shortcut portal rejected {accelerator}: {error}"),
+            )
+        })?;
+        Ok(())
+    }
+}
+
+/// Production global shortcut backend backed by `global-hotkey` on supported platforms.
+pub struct GlobalHotkeyShortcutBackend {
+    manager: global_hotkey::GlobalHotKeyManager,
+    actions_by_hotkey_id: BTreeMap<u32, String>,
+}
+
+impl GlobalHotkeyShortcutBackend {
+    /// Creates a native global shortcut backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the current platform/session cannot support global shortcuts.
+    pub fn new(linux_window_system: Option<LinuxWindowSystem>) -> Result<Self, WinitHostError> {
+        reject_unsupported_linux_shortcut_session(linux_window_system)?;
+        let manager = global_hotkey::GlobalHotKeyManager::new().map_err(|error| {
+            WinitHostError::new(
+                "desktop.shortcut.open-failed",
+                format!("failed to open native global shortcut manager: {error}"),
+            )
+        })?;
+        Ok(Self {
+            manager,
+            actions_by_hotkey_id: BTreeMap::new(),
+        })
+    }
+
+    /// Returns the action mapped to a native global-hotkey ID.
+    #[must_use]
+    pub fn action_for_hotkey_id(&self, hotkey_id: u32) -> Option<&str> {
+        self.actions_by_hotkey_id
+            .get(&hotkey_id)
+            .map(String::as_str)
+    }
+}
+
+impl WinitShortcutBackend for GlobalHotkeyShortcutBackend {
+    fn register_shortcut(
+        &mut self,
+        accelerator: String,
+        action_id: String,
+    ) -> Result<(), WinitHostError> {
+        let hotkey: global_hotkey::hotkey::HotKey = accelerator.parse().map_err(|error| {
+            WinitHostError::new(
+                "desktop.shortcut.parse-failed",
+                format!("failed to parse global shortcut accelerator {accelerator}: {error}"),
+            )
+        })?;
+        self.manager.register(hotkey).map_err(|error| {
+            WinitHostError::new(
+                "desktop.shortcut.register-failed",
+                format!("failed to register global shortcut {accelerator}: {error}"),
+            )
+        })?;
+        self.actions_by_hotkey_id.insert(hotkey.id(), action_id);
+        Ok(())
+    }
+}
+
+/// Native shortcut backend selector for Winit desktop hosts.
+///
+/// On Linux Wayland this uses the XDG desktop portal. On X11/XWayland, Windows, and macOS it uses
+/// `global-hotkey`.
+pub enum WinitNativeShortcutBackend {
+    /// XDG desktop portal backend for native Wayland sessions.
+    WaylandPortal(WaylandPortalShortcutBackend<AshpdWaylandShortcutPortal>),
+    /// `global-hotkey` backend for X11/XWayland, Windows, and macOS.
+    GlobalHotkey(GlobalHotkeyShortcutBackend),
+}
+
+impl WinitNativeShortcutBackend {
+    /// Creates the native shortcut backend for the current Winit platform/session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WinitHostError`] when the selected native shortcut backend cannot be opened.
+    pub fn new(linux_window_system: Option<LinuxWindowSystem>) -> Result<Self, WinitHostError> {
+        #[cfg(target_os = "linux")]
+        {
+            if matches!(linux_window_system, Some(LinuxWindowSystem::Wayland)) {
+                return AshpdWaylandShortcutPortal::new()
+                    .map(WaylandPortalShortcutBackend::new)
+                    .map(Self::WaylandPortal);
+            }
+        }
+        GlobalHotkeyShortcutBackend::new(linux_window_system).map(Self::GlobalHotkey)
+    }
+}
+
+impl WinitShortcutBackend for WinitNativeShortcutBackend {
+    fn register_shortcut(
+        &mut self,
+        accelerator: String,
+        action_id: String,
+    ) -> Result<(), WinitHostError> {
+        match self {
+            Self::WaylandPortal(backend) => backend.register_shortcut(accelerator, action_id),
+            Self::GlobalHotkey(backend) => backend.register_shortcut(accelerator, action_id),
+        }
+    }
+}
+
+/// Platform shortcut sink for policy-approved `Hawk2UI` shortcut bindings.
+#[derive(Clone, Debug)]
+pub struct WinitShortcutSink<B> {
+    backend: B,
+}
+
+impl<B: WinitShortcutBackend> WinitShortcutSink<B> {
+    /// Creates a Winit shortcut sink from a native shortcut backend.
+    #[must_use]
+    pub const fn new(backend: B) -> Self {
+        Self { backend }
+    }
+
+    /// Returns the wrapped shortcut backend.
+    #[must_use]
+    pub const fn backend(&self) -> &B {
+        &self.backend
+    }
+}
+
+impl<B: WinitShortcutBackend> GlobalShortcutSink for WinitShortcutSink<B> {
+    fn register_shortcut(&mut self, binding: &ShortcutBinding) -> Result<(), PlatformBackendError> {
+        self.backend
+            .register_shortcut(binding.accelerator.clone(), binding.action_id.clone())
+            .map_err(|error| {
+                winit_error_to_platform(PlatformOperation::GlobalShortcutRegister, &error)
+            })
+    }
+}
+
+/// Platform host adapter backed by Winit desktop clipboard and dialog bridges.
+#[derive(Clone, Debug)]
+pub struct WinitPlatformHostBackend<C, D> {
+    clipboard: WinitClipboardBridge<C>,
+    dialogs: WinitDialogBridge<D>,
+}
+
+impl<C, D> WinitPlatformHostBackend<C, D>
+where
+    C: WinitClipboardBackend,
+    D: WinitDialogBackend,
+{
+    /// Creates a platform host adapter from native Winit bridge backends.
+    #[must_use]
+    pub const fn new(
+        clipboard_capability: ClipboardCapability,
+        clipboard_backend: C,
+        dialog_backend: D,
+    ) -> Self {
+        Self {
+            clipboard: WinitClipboardBridge::new(clipboard_capability, clipboard_backend),
+            dialogs: WinitDialogBridge::new(dialog_backend),
+        }
+    }
+}
+
+impl<C, D> PlatformHostBackend for WinitPlatformHostBackend<C, D>
+where
+    C: WinitClipboardBackend,
+    D: WinitDialogBackend,
+{
+    fn write_clipboard_text(
+        &mut self,
+        access: &ClipboardAccess,
+        text: String,
+    ) -> Result<(), PlatformBackendError> {
+        if access.operation != PlatformOperation::ClipboardWrite {
+            return Err(platform_bridge_error(
+                PlatformOperation::ClipboardWrite,
+                "desktop.platform-clipboard.invalid-operation",
+                "clipboard write bridge received a non-write access record",
+            ));
+        }
+        self.clipboard
+            .handle_request(SurfaceClipboardRequest::Write(text))
+            .map(|_| ())
+            .map_err(|error| winit_error_to_platform(PlatformOperation::ClipboardWrite, &error))
+    }
+
+    fn read_clipboard_text(
+        &mut self,
+        access: &ClipboardAccess,
+    ) -> Result<Option<String>, PlatformBackendError> {
+        if access.operation != PlatformOperation::ClipboardRead {
+            return Err(platform_bridge_error(
+                PlatformOperation::ClipboardRead,
+                "desktop.platform-clipboard.invalid-operation",
+                "clipboard read bridge received a non-read access record",
+            ));
+        }
+        match self
+            .clipboard
+            .handle_request(SurfaceClipboardRequest::Read)
+            .map_err(|error| winit_error_to_platform(PlatformOperation::ClipboardRead, &error))?
+        {
+            WinitClipboardResponse::Text(text) => Ok(Some(text)),
+            WinitClipboardResponse::Written | WinitClipboardResponse::Cleared => {
+                Err(platform_bridge_error(
+                    PlatformOperation::ClipboardRead,
+                    "desktop.platform-clipboard.invalid-response",
+                    "clipboard read bridge returned a non-text response",
+                ))
+            }
+        }
+    }
+
+    fn open_dialog(
+        &mut self,
+        request: &DialogRequest,
+    ) -> Result<HostDialogResponse, PlatformBackendError> {
+        let operation = match request.kind {
+            DialogKind::Message => PlatformOperation::DialogOpen,
+            DialogKind::FilePicker => PlatformOperation::FilePickerOpen,
+        };
+        let native_request = match request.kind {
+            DialogKind::Message => DesktopDialogRequest::Message {
+                title: "Hawk2UI".into(),
+                message: "The application requested a host dialog.".into(),
+                level: DesktopDialogLevel::Info,
+            },
+            DialogKind::FilePicker => DesktopDialogRequest::OpenFile {
+                title: "Open file".into(),
+                directory: None,
+                filters: Vec::new(),
+            },
+        };
+        let response = self
+            .dialogs
+            .handle_request(native_request)
+            .map_err(|error| winit_error_to_platform(operation, &error))?;
+        Ok(match response {
+            DesktopDialogResponse::Acknowledged => {
+                HostDialogResponse::accepted(request.kind, std::iter::empty::<String>())
+            }
+            DesktopDialogResponse::SelectedFile(path) | DesktopDialogResponse::SavedFile(path) => {
+                HostDialogResponse::accepted(request.kind, [path.to_string_lossy().into_owned()])
+            }
+            DesktopDialogResponse::Cancelled => HostDialogResponse::cancelled(request.kind),
+        })
+    }
+}
+
+fn winit_error_to_platform(
+    operation: PlatformOperation,
+    error: &WinitHostError,
+) -> PlatformBackendError {
+    platform_bridge_error(operation, error.rule(), error.message())
+}
+
+fn platform_bridge_error(
+    operation: PlatformOperation,
+    rule: impl Into<String>,
+    message: impl Into<String>,
+) -> PlatformBackendError {
+    PlatformBackendError {
+        operation,
+        diagnostic: PlatformDiagnostic::error(rule, message),
+    }
+}
+
+fn audio_source_uri_to_path(source_uri: &str) -> Result<PathBuf, WinitHostError> {
+    if let Ok(url) = url::Url::parse(source_uri) {
+        if url.scheme() != "file" {
+            return Err(WinitHostError::new(
+                "desktop.audio.unsupported-source-uri",
+                format!("audio source URI must use file:// scheme: {source_uri}"),
+            ));
+        }
+        return url.to_file_path().map_err(|()| {
+            WinitHostError::new(
+                "desktop.audio.invalid-source-uri",
+                format!("file audio source URI cannot be converted to a local path: {source_uri}"),
+            )
+        });
+    }
+
+    let path = PathBuf::from(source_uri);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(WinitHostError::new(
+            "desktop.audio.invalid-source-uri",
+            format!("audio source path must be absolute or file:// URI: {source_uri}"),
+        ))
+    }
+}
+
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+fn send_native_notification(title: &str, body: &str) -> Result<(), WinitHostError> {
+    notify_rust::Notification::new()
+        .summary(title)
+        .body(body)
+        .show()
+        .map(|_| ())
+        .map_err(|error| {
+            WinitHostError::new(
+                "desktop.notification.send-failed",
+                format!("failed to send native notification: {error}"),
+            )
+        })
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)))]
+fn send_native_notification(_title: &str, _body: &str) -> Result<(), WinitHostError> {
+    Err(WinitHostError::new(
+        "desktop.notification.unsupported-platform",
+        "native desktop notifications are not implemented for this platform",
+    ))
+}
+
+fn reject_unsupported_linux_shortcut_session(
+    linux_window_system: Option<LinuxWindowSystem>,
+) -> Result<(), WinitHostError> {
+    #[cfg(target_os = "linux")]
+    {
+        if matches!(linux_window_system, Some(LinuxWindowSystem::Wayland)) {
+            return Err(WinitHostError::new(
+                "desktop.shortcut.wayland-unsupported",
+                "global-hotkey 0.8 supports Linux global shortcuts through X11 only; native Wayland shortcut portals are not available through this backend",
+            ));
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = linux_window_system;
+    Ok(())
+}
+
+fn portal_preferred_trigger(accelerator: &str) -> Option<String> {
+    let tokens = accelerator
+        .split('+')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    let (key, modifiers) = tokens.split_last()?;
+    let mut trigger = String::new();
+    for modifier in modifiers {
+        match modifier.to_ascii_uppercase().as_str() {
+            "CONTROL" | "CTRL" | "COMMANDORCONTROL" | "COMMANDORCTRL" | "CMDORCTRL"
+            | "CMDORCONTROL" => trigger.push_str("<Control>"),
+            "ALT" | "OPTION" => trigger.push_str("<Alt>"),
+            "SHIFT" => trigger.push_str("<Shift>"),
+            "SUPER" | "META" | "COMMAND" | "CMD" => trigger.push_str("<Super>"),
+            _ => return None,
+        }
+    }
+    trigger.push_str(&portal_trigger_key(key)?);
+    Some(trigger)
+}
+
+fn portal_trigger_key(key: &str) -> Option<String> {
+    let upper = key.to_ascii_uppercase();
+    if upper.len() == 1 && upper.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return Some(upper);
+    }
+    if let Some(rest) = upper.strip_prefix("KEY")
+        && rest.len() == 1
+        && rest.chars().all(|ch| ch.is_ascii_alphabetic())
+    {
+        return Some(rest.to_owned());
+    }
+    if let Some(rest) = upper.strip_prefix("DIGIT")
+        && rest.len() == 1
+        && rest.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return Some(rest.to_owned());
+    }
+    if upper.starts_with('F') && upper[1..].chars().all(|ch| ch.is_ascii_digit()) {
+        return Some(upper);
+    }
+    None
 }
 
 impl WinitEventTranslator {

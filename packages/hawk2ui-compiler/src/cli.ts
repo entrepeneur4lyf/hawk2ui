@@ -16,6 +16,7 @@ declare const process: {
 interface CliOptions {
   readonly framework?: HawkFrameworkKind;
   readonly input: string;
+  readonly sourcePath?: string;
   readonly out?: string;
 }
 
@@ -24,8 +25,8 @@ async function main(): Promise<void> {
   const source = await Bun.file(options.input).text();
   const output = compileHawkSource(
     options.framework
-      ? { framework: options.framework, filename: options.input, source }
-      : { filename: options.input, source },
+      ? { framework: options.framework, filename: options.sourcePath ?? options.input, source }
+      : { filename: options.sourcePath ?? options.input, source },
   );
   const json = compilerArtifactJson(output);
   if (options.out) {
@@ -38,6 +39,7 @@ async function main(): Promise<void> {
 function parseArgs(args: readonly string[]): CliOptions {
   let framework: HawkFrameworkKind | undefined;
   let input = "";
+  let sourcePath: string | undefined;
   let out: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -46,6 +48,9 @@ function parseArgs(args: readonly string[]): CliOptions {
       index += 1;
     } else if (arg === "--input") {
       input = requiredValue(args, index, "--input");
+      index += 1;
+    } else if (arg === "--source-path") {
+      sourcePath = requiredValue(args, index, "--source-path");
       index += 1;
     } else if (arg === "--out") {
       out = requiredValue(args, index, "--out");
@@ -60,7 +65,8 @@ function parseArgs(args: readonly string[]): CliOptions {
     throw new Error("compiler.cli.input-required: pass --input <source-file>.");
   }
   const base = framework ? { framework, input } : { input };
-  return out ? { ...base, out } : base;
+  const withSourcePath = sourcePath ? { ...base, sourcePath } : base;
+  return out ? { ...withSourcePath, out } : withSourcePath;
 }
 
 function requiredValue(args: readonly string[], index: number, name: string): string {
@@ -81,7 +87,7 @@ function parseFramework(value: string): HawkFrameworkKind {
 class UsageRequested extends Error {}
 
 function usage(): string {
-  return "Usage: hawk2ui-compile --input <file> [--framework react|solid|svelte|vue] [--out artifact.json]\n";
+  return "Usage: hawk2ui-compile --input <file> [--source-path <workspace-relative-file>] [--framework react|solid|svelte|vue] [--out artifact.json]\n";
 }
 
 main().catch((error: unknown) => {

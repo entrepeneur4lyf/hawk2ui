@@ -904,6 +904,7 @@ impl RuntimeViewTree {
                 node: root,
                 parent: None,
                 children: Vec::new(),
+                visible: true,
                 invalidated: false,
             }],
         }
@@ -935,8 +936,100 @@ impl RuntimeViewTree {
             node: child,
             parent: Some(parent_id.clone()),
             children: Vec::new(),
+            visible: true,
             invalidated: false,
         });
+        Ok(self)
+    }
+
+    /// Inserts a child view before an existing child of the same parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when the parent or anchor is missing, the anchor does not
+    /// belong to the parent, or the child ID already exists.
+    pub fn insert_child_before(
+        mut self,
+        parent_id: &RuntimeViewId,
+        anchor_id: &RuntimeViewId,
+        child: RuntimeViewNode,
+    ) -> Result<Self, RuntimeSceneError> {
+        if self.index_of(child.id()).is_some() {
+            return Err(RuntimeSceneError::DuplicateNode(
+                child.id().as_str().to_string(),
+            ));
+        }
+        let Some(parent_index) = self.index_of(parent_id) else {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        };
+        let Some(anchor_entry_index) = self.index_of(anchor_id) else {
+            return Err(RuntimeSceneError::MissingNode(
+                anchor_id.as_str().to_string(),
+            ));
+        };
+        let Some(anchor_child_index) = self.entries[parent_index]
+            .children
+            .iter()
+            .position(|id| id.as_str() == anchor_id.as_str())
+        else {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        };
+
+        let child_id = child.id().clone();
+        self.entries[parent_index]
+            .children
+            .insert(anchor_child_index, child_id);
+        self.entries.insert(
+            anchor_entry_index,
+            RuntimeViewEntry {
+                node: child,
+                parent: Some(parent_id.clone()),
+                children: Vec::new(),
+                visible: true,
+                invalidated: false,
+            },
+        );
+        Ok(self)
+    }
+
+    /// Removes the requested subtree roots and all descendants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when a subtree root is missing or attempts to remove the
+    /// retained tree root.
+    pub fn remove_subtrees(
+        mut self,
+        subtree_roots: &[RuntimeViewId],
+    ) -> Result<Self, RuntimeSceneError> {
+        let mut removed = BTreeSet::new();
+        for root in subtree_roots {
+            if root.as_str() == self.root_id.as_str() {
+                return Err(RuntimeSceneError::MissingParent(root.as_str().to_string()));
+            }
+            let Some(index) = self.index_of(root) else {
+                return Err(RuntimeSceneError::MissingNode(root.as_str().to_string()));
+            };
+            self.collect_subtree_ids(index, &mut removed);
+        }
+        if removed.is_empty() {
+            return Ok(self);
+        }
+        for entry in &mut self.entries {
+            let previous_len = entry.children.len();
+            entry
+                .children
+                .retain(|child| !removed.contains(child.as_str()));
+            if entry.children.len() != previous_len {
+                entry.invalidated = true;
+            }
+        }
+        self.entries
+            .retain(|entry| !removed.contains(entry.node.id().as_str()));
         Ok(self)
     }
 
@@ -1008,6 +1101,24 @@ impl RuntimeViewTree {
         Ok(self)
     }
 
+    /// Updates whether a runtime node and its descendants participate in layout and drawing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when the node is missing.
+    pub fn update_visibility(
+        mut self,
+        node_id: &RuntimeViewId,
+        visible: bool,
+    ) -> Result<Self, RuntimeSceneError> {
+        let Some(index) = self.index_of(node_id) else {
+            return Err(RuntimeSceneError::MissingNode(node_id.as_str().to_string()));
+        };
+        self.entries[index].visible = visible;
+        self.entries[index].invalidated = true;
+        Ok(self)
+    }
+
     fn invalidated_view_ids(&self) -> Vec<RuntimeViewId> {
         self.entries
             .iter()
@@ -1028,6 +1139,33 @@ impl RuntimeViewTree {
             .position(|entry| entry.node.id().as_str() == node_id.as_str())
     }
 
+    fn collect_subtree_ids(&self, index: usize, removed: &mut BTreeSet<String>) {
+        let id = self.entries[index].node.id().as_str().to_string();
+        if !removed.insert(id) {
+            return;
+        }
+        for child_id in &self.entries[index].children {
+            if let Some(child_index) = self.index_of(child_id) {
+                self.collect_subtree_ids(child_index, removed);
+            }
+        }
+    }
+
+    fn is_effectively_visible_index(&self, index: usize) -> bool {
+        let mut current = Some(index);
+        while let Some(entry_index) = current {
+            let entry = &self.entries[entry_index];
+            if !entry.visible {
+                return false;
+            }
+            current = entry
+                .parent
+                .as_ref()
+                .and_then(|parent_id| self.index_of(parent_id));
+        }
+        true
+    }
+
     fn validate_for_bridge(&self) -> Result<(), RuntimeSceneError> {
         for entry in &self.entries {
             validate_runtime_node(&entry.node)?;
@@ -1041,7 +1179,10 @@ impl RuntimeViewTree {
             .first()
             .ok_or_else(|| RuntimeSceneError::MissingNode("root".to_string()))?;
         let mut layout_tree = LayoutTree::new(layout_node_for(&root.node));
-        for entry in self.entries.iter().skip(1) {
+        for (index, entry) in self.entries.iter().enumerate().skip(1) {
+            if !self.is_effectively_visible_index(index) {
+                continue;
+            }
             let Some(parent_id) = entry.parent.as_ref() else {
                 return Err(RuntimeSceneError::MissingParent(
                     entry.node.id().as_str().to_string(),
@@ -1061,7 +1202,10 @@ impl RuntimeViewTree {
             .first()
             .ok_or_else(|| RuntimeSceneError::MissingNode("root".to_string()))?;
         let mut scene = SceneGraph::new(scene_node_for(root.node.id(), absolute)?);
-        for entry in self.entries.iter().skip(1) {
+        for (index, entry) in self.entries.iter().enumerate().skip(1) {
+            if !self.is_effectively_visible_index(index) {
+                continue;
+            }
             let Some(parent_id) = entry.parent.as_ref() else {
                 return Err(RuntimeSceneError::MissingParent(
                     entry.node.id().as_str().to_string(),
@@ -1072,7 +1216,9 @@ impl RuntimeViewTree {
                 scene_node_for(entry.node.id(), absolute)?,
             )?;
         }
-        for entry in self.entries.iter().filter(|entry| entry.invalidated) {
+        for (_, entry) in self.entries.iter().enumerate().filter(|(index, entry)| {
+            entry.invalidated && (*index == 0 || self.is_effectively_visible_index(*index))
+        }) {
             scene = scene.invalidate(
                 &SceneNodeId::new(entry.node.id().as_str()),
                 InvalidationReason::Paint,
@@ -1088,6 +1234,9 @@ impl RuntimeViewTree {
         let mut layers = LayerStack::new();
         let mut draw_commands = Vec::new();
         for (order, entry) in self.entries.iter().enumerate() {
+            if !self.is_effectively_visible_index(order) {
+                continue;
+            }
             let Some(geometry) = geometry_for(geometry, entry.node.id()) else {
                 continue;
             };
@@ -1173,6 +1322,7 @@ struct RuntimeViewEntry {
     node: RuntimeViewNode,
     parent: Option<RuntimeViewId>,
     children: Vec<RuntimeViewId>,
+    visible: bool,
     invalidated: bool,
 }
 
@@ -1217,7 +1367,10 @@ fn resolve_absolute_geometry(
 ) -> Result<AbsoluteGeometry, RuntimeSceneError> {
     let mut nodes: Vec<(RuntimeViewId, ComputedGeometry)> = Vec::with_capacity(tree.entries.len());
     let mut clips: Vec<(RuntimeViewId, ComputedGeometry)> = Vec::new();
-    for entry in &tree.entries {
+    for (index, entry) in tree.entries.iter().enumerate() {
+        if index != 0 && !tree.is_effectively_visible_index(index) {
+            continue;
+        }
         let view_id = entry.node.id();
         let layout_id = LayoutNodeId::new(view_id.as_str());
         let relative = *layout

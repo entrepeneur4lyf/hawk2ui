@@ -60,9 +60,12 @@ macOS support must include owned window surfaces and embedded NSView/NSWindow in
 
 Linux support must account for Wayland, X11/XCB, and XWayland host behavior.
 
+Windows and macOS are mandatory production targets. Public release is blocked until both platforms have verified desktop and plugin host coverage for open, close, resize, DPI changes, focus, keyboard, pointer input, repaint scheduling, software presentation, GPU presentation where declared, and safe teardown.
+
 ## Acceptance Criteria
 
 - Desktop and plugin surfaces expose a common rendering surface contract.
 - Plugin surfaces do not assume top-level window ownership.
 - Resize and DPI changes are reported to rendering.
 - Teardown is safe for app processes and plugin host processes.
+- Windows and macOS native host behavior has recorded release evidence before announcement.

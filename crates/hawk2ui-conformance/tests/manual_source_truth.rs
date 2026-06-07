@@ -28,19 +28,24 @@ fn manual(path: &str) -> String {
 }
 
 #[test]
-fn readme_states_non_negotiable_production_baseline() {
+fn readme_states_evidence_based_production_release_gate() {
     let readme = manual("README.md");
 
     for required in [
-        "The baseline is stable, production-ready, and feature-complete.",
-        "No MVP scope, candidate backend, partial framework compiler, placeholder runtime path, or deferred compatibility target satisfies the baseline.",
-        "Any missing feature, unsupported production platform, stub, TODO, or untested integration is a release blocker until code, tests, manual coverage, and release evidence prove it complete.",
+        "The release baseline is evidence-based: no MVP scope, candidate backend, partial framework compiler, placeholder runtime path, deferred compatibility target, hidden stub, TODO, or untested integration satisfies release readiness.",
+        "A production release is blocked until every release-gated desktop, plugin, framework, rendering, platform, packaging, security, performance, smoke, conformance, manual, and release-evidence path is implemented in code and passing its verification command.",
+        "Subsystems may be usable before the full release gate passes, but README status must not describe the whole framework as production-ready or feature-complete until the release evidence proves that claim.",
     ] {
         assert!(
             readme.contains(required),
-            "README must state non-negotiable production baseline sentence: {required}"
+            "README must state evidence-based production release gate sentence: {required}"
         );
     }
+
+    assert!(
+        !readme.contains("The baseline is stable, production-ready, and feature-complete."),
+        "README must not overclaim whole-framework production readiness before release evidence passes"
+    );
 
     for stale_reference in [
         "docs/specs/",

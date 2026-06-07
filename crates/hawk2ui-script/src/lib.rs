@@ -12,8 +12,8 @@ use hawk2ui_api::Diagnostic;
 use hawk2ui_authoring::{
     FrameworkDynamicBinding, FrameworkDynamicValue, FrameworkEventHandler,
     FrameworkEventHandlerAction, FrameworkInitialDynamicValue, FrameworkInitialDynamicValueMode,
-    FrameworkNativeNode, FrameworkNativeProgram, NativeRuntimeBridgeArtifact,
-    NativeRuntimeBridgeError, PropValue,
+    FrameworkListTemplate, FrameworkNativeProgram, NativeRuntimeBridgeArtifact,
+    NativeRuntimeBridgeError, NativeRuntimeNodeMetadata, PropValue,
 };
 use hawk2ui_runtime::{
     RuntimeEvent, RuntimeEventKind, RuntimeViewTree, StructuredValue as RuntimeStructuredValue,
@@ -737,6 +737,15 @@ impl DynamicExpressionEnvironment {
         };
         self.bindings.insert(name.to_string(), updated);
     }
+
+    fn framework_value(&self, name: &str) -> Option<&DynamicExpressionValue> {
+        match self.bindings.get(name) {
+            Some(
+                DynamicExpressionBinding::Value(value) | DynamicExpressionBinding::Getter(value),
+            ) => Some(value),
+            None => None,
+        }
+    }
 }
 
 /// Executable framework runtime controller.
@@ -749,6 +758,7 @@ pub struct FrameworkRuntimeController {
     environment: DynamicExpressionEnvironment,
     event_bindings: BTreeMap<(String, String), String>,
     event_handlers: BTreeMap<String, FrameworkEventHandler>,
+    list_templates: Vec<FrameworkListTemplate>,
 }
 
 impl FrameworkRuntimeController {
@@ -765,18 +775,18 @@ impl FrameworkRuntimeController {
         for value in program.initial_dynamic_values() {
             environment.insert_framework_initial(value);
         }
-        let mut event_bindings = BTreeMap::new();
-        collect_framework_event_bindings(program.root(), &mut event_bindings);
         let event_handlers = program
             .event_handlers()
             .iter()
             .map(|handler| (handler.name().to_string(), handler.clone()))
             .collect::<BTreeMap<_, _>>();
+        let list_templates = program.list_templates().to_vec();
         let mut controller = Self {
             artifact,
             environment,
-            event_bindings,
+            event_bindings: BTreeMap::new(),
             event_handlers,
+            list_templates,
         };
         controller.rebind_runtime_tree()?;
         Ok(controller)
@@ -886,47 +896,46 @@ impl FrameworkRuntimeController {
         let mut backend =
             ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
         self.artifact = backend.apply_dynamic_bindings(self.artifact.clone(), &self.environment)?;
+        for template in &self.list_templates {
+            let Some(value) = self.environment.framework_value(template.source()) else {
+                return Err(ScriptBackendError::new(
+                    "script.framework-list.source-missing",
+                    format!(
+                        "framework list template `{}` references missing source `{}`",
+                        template.id(),
+                        template.source()
+                    ),
+                ));
+            };
+            let value = dynamic_expression_value_to_framework_dynamic_value(value)?;
+            self.artifact = self
+                .artifact
+                .clone()
+                .apply_list_template(template, &value)
+                .map_err(|error| script_error_from_runtime_bridge(&error))?;
+        }
+        self.event_bindings = event_bindings_from_metadata(self.artifact.metadata());
         Ok(())
     }
 }
 
-fn collect_framework_event_bindings(
-    node: &FrameworkNativeNode,
-    bindings: &mut BTreeMap<(String, String), String>,
-) {
-    for event in node.events() {
-        bindings.insert(
-            (
-                event.target().as_str().to_string(),
-                event.event().stable_key().clone(),
-            ),
-            event.handler().as_str().to_string(),
-        );
+fn event_bindings_from_metadata(
+    metadata: &[NativeRuntimeNodeMetadata],
+) -> BTreeMap<(String, String), String> {
+    let mut bindings = BTreeMap::new();
+    for node in metadata {
+        for (event_name, handler_name) in node
+            .event_bindings()
+            .iter()
+            .chain(node.lifecycle_bindings())
+        {
+            bindings.insert(
+                (node.node_id().to_string(), event_name.clone()),
+                handler_name.clone(),
+            );
+        }
     }
-    for (event, handler) in node.lifecycle() {
-        bindings.insert(
-            (
-                node.id().as_str().to_string(),
-                framework_lifecycle_event_name(*event).to_string(),
-            ),
-            handler.as_str().to_string(),
-        );
-    }
-    for (_, child) in node.children() {
-        collect_framework_event_bindings(child, bindings);
-    }
-}
-
-fn framework_lifecycle_event_name(event: hawk2ui_authoring::NativeLifecycleEvent) -> &'static str {
-    match event {
-        hawk2ui_authoring::NativeLifecycleEvent::Mounted => "lifecycle.mounted",
-        hawk2ui_authoring::NativeLifecycleEvent::Suspended => "lifecycle.suspended",
-        hawk2ui_authoring::NativeLifecycleEvent::Resumed => "lifecycle.resumed",
-        hawk2ui_authoring::NativeLifecycleEvent::HotReloaded => "lifecycle.hot-reloaded",
-        hawk2ui_authoring::NativeLifecycleEvent::ErrorBoundary => "lifecycle.error-boundary",
-        hawk2ui_authoring::NativeLifecycleEvent::Shutdown => "lifecycle.shutdown",
-        hawk2ui_authoring::NativeLifecycleEvent::Unmounted => "lifecycle.unmounted",
-    }
+    bindings
 }
 
 fn framework_dynamic_value_to_expression_value(
@@ -954,6 +963,36 @@ fn framework_dynamic_value_to_expression_value(
                 })
                 .collect(),
         ),
+    }
+}
+
+fn dynamic_expression_value_to_framework_dynamic_value(
+    value: &DynamicExpressionValue,
+) -> Result<FrameworkDynamicValue, ScriptBackendError> {
+    match value {
+        DynamicExpressionValue::Null => Ok(FrameworkDynamicValue::Null),
+        DynamicExpressionValue::Bool(value) => Ok(FrameworkDynamicValue::Bool(*value)),
+        DynamicExpressionValue::Number(value) if value.is_finite() => {
+            Ok(FrameworkDynamicValue::Number(*value))
+        }
+        DynamicExpressionValue::Number(_) => Err(ScriptBackendError::new(
+            "script.framework-list.value-invalid",
+            "framework list numeric values must be finite",
+        )),
+        DynamicExpressionValue::String(value) => Ok(FrameworkDynamicValue::String(value.clone())),
+        DynamicExpressionValue::Array(values) => values
+            .iter()
+            .map(dynamic_expression_value_to_framework_dynamic_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map(FrameworkDynamicValue::Array),
+        DynamicExpressionValue::Object(values) => values
+            .iter()
+            .map(|(key, value)| {
+                dynamic_expression_value_to_framework_dynamic_value(value)
+                    .map(|value| (key.clone(), value))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()
+            .map(FrameworkDynamicValue::Object),
     }
 }
 
@@ -2415,6 +2454,219 @@ export function mount(host) {
             title.visual(),
             RuntimeVisual::Text(text) if text.text() == "Pressed"
         ));
+    }
+
+    const LIST_TEMPLATE_COMPILER_JSON: &str = r#"{
+        "schema_version": 1,
+          "root": {
+              "id": "root",
+              "kind": "view",
+              "events": [
+                  {
+                      "kind": "pointer.press",
+                      "handler": "replaceItems",
+                      "payload_fields": ["position"]
+                  }
+              ],
+              "children": [
+                  {
+                      "key": "header",
+                      "node": {
+                          "id": "header",
+                          "kind": "text",
+                          "props": [
+                              {
+                                  "name": "text",
+                                  "value": {"type": "string", "value": "Header"}
+                              }
+                          ]
+                      }
+                  },
+                  {
+                      "key": "footer",
+                      "node": {
+                          "id": "footer",
+                          "kind": "text",
+                          "props": [
+                              {
+                                  "name": "text",
+                                  "value": {"type": "string", "value": "Footer"}
+                              }
+                          ]
+                      }
+                  }
+              ]
+          },
+        "initial_dynamic_values": [
+            {
+                "name": "items",
+                "mode": "value",
+                "value": {
+                    "type": "array",
+                    "value": [
+                        {
+                            "type": "object",
+                                 "value": {
+                                     "id": {"type": "string", "value": "alpha"},
+                                  "label": {"type": "string", "value": "Alpha"},
+                                  "width": {"type": "number", "value": 152}
+                                  }
+                              }
+                          ]
+                }
+            }
+        ],
+        "event_handlers": [
+            {
+                "name": "replaceItems",
+                "actions": [
+                    {
+                        "type": "set_dynamic_value",
+                        "name": "items",
+                        "value": {
+                            "type": "array",
+                            "value": [
+                                {
+                                    "type": "object",
+                                      "value": {
+                                          "id": {"type": "string", "value": "beta"},
+                                          "label": {"type": "string", "value": "Beta"},
+                                          "width": {"type": "number", "value": 152}
+                                      }
+                                  }
+                              ]
+                        }
+                    }
+                ]
+            }
+        ],
+        "list_templates": [
+              {
+                  "id": "root:items",
+                  "parent_id": "root",
+                  "anchor_before": "footer",
+                  "source": "items",
+                  "item": "item",
+                  "key": "item.id + \"-row\"",
+                  "node": {
+                      "id": {"type": "expression", "expression": "item.id + \"-row\""},
+                      "kind": "text",
+                      "key": {"type": "expression", "expression": "item.id + \"-row\""},
+                      "props": [
+                          {
+                              "name": "text",
+                              "value": {"type": "expression", "expression": "item.label + \"!\""}
+                          },
+                          {
+                              "name": "width",
+                              "value": {"type": "expression", "expression": "item.width + 8"}
+                          },
+                        {
+                            "name": "height",
+                            "value": {"type": "literal", "value": {"type": "number", "value": 32}}
+                        }
+                    ],
+                    "refs": [],
+                    "style_refs": [],
+                    "asset_refs": [],
+                    "events": [
+                        {
+                            "kind": "pointer.press",
+                            "handler": "replaceItems",
+                            "payload_fields": ["position"]
+                        }
+                    ],
+                    "lifecycle": [],
+                    "children": []
+                }
+            }
+        ]
+    }"#;
+
+    fn list_template_controller() -> FrameworkRuntimeController {
+        use hawk2ui_authoring::{
+            FrameworkNativeProgram, FrameworkNativeProgramWire, NativeRuntimeBridge,
+        };
+
+        let program = FrameworkNativeProgram::try_from(
+            FrameworkNativeProgramWire::from_json(LIST_TEMPLATE_COMPILER_JSON)
+                .expect("list-template compiler JSON parses"),
+        )
+        .expect("list-template compiler artifact validates");
+        let native = program
+            .to_native_authoring_artifact("App.tsx", true)
+            .expect("program finalizes");
+        let runtime = NativeRuntimeBridge::new()
+            .bridge_artifact(&native)
+            .expect("program bridges");
+        FrameworkRuntimeController::from_program(&program, runtime).expect("controller builds")
+    }
+
+    fn assert_root_children(controller: &FrameworkRuntimeController, expected: &[&str]) {
+        use hawk2ui_runtime::RuntimeViewId;
+
+        let expected = expected
+            .iter()
+            .map(|id| RuntimeViewId::new(*id))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            controller
+                .runtime_tree()
+                .children_of(&RuntimeViewId::new("root")),
+            expected.as_slice()
+        );
+    }
+
+    fn assert_text_node(controller: &FrameworkRuntimeController, id: &str, expected: &str) {
+        use hawk2ui_runtime::{RuntimeViewId, RuntimeVisual};
+
+        let node = controller
+            .runtime_tree()
+            .node(&RuntimeViewId::new(id))
+            .unwrap_or_else(|| panic!("{id} list item exists"));
+        assert!(matches!(
+            node.visual(),
+            RuntimeVisual::Text(text) if text.text() == expected
+        ));
+    }
+
+    #[test]
+    fn framework_runtime_controller_materializes_and_updates_runtime_list_templates() {
+        use hawk2ui_runtime::{RuntimeEvent, RuntimeViewId};
+
+        let mut controller = list_template_controller();
+        assert_root_children(&controller, &["header", "alpha-row", "footer"]);
+        assert_text_node(&controller, "alpha-row", "Alpha!");
+
+        let changed = controller
+            .dispatch_runtime_event(&RuntimeEvent::ui("root", "pointer.press"))
+            .expect("list update handler executes");
+
+        assert!(changed);
+        assert_root_children(&controller, &["header", "beta-row", "footer"]);
+        assert!(
+            controller
+                .runtime_tree()
+                .node(&RuntimeViewId::new("alpha-row"))
+                .is_none(),
+            "previous list item must be removed from the retained runtime tree"
+        );
+        assert_text_node(&controller, "beta-row", "Beta!");
+    }
+
+    #[test]
+    fn framework_runtime_controller_dispatches_events_from_runtime_list_templates() {
+        use hawk2ui_runtime::RuntimeEvent;
+
+        let mut controller = list_template_controller();
+
+        let changed = controller
+            .dispatch_runtime_event(&RuntimeEvent::ui("alpha-row", "pointer.press"))
+            .expect("materialized list event handler executes");
+
+        assert!(changed);
+        assert_root_children(&controller, &["header", "beta-row", "footer"]);
+        assert_text_node(&controller, "beta-row", "Beta!");
     }
 
     #[test]

@@ -5,11 +5,14 @@ import {
     type HawkCompilerArtifact,
     type HawkCompilerDynamicBindingWire,
     type HawkCompilerDynamicValueWire,
-    type HawkCompilerEventHandlerActionWire,
-    type HawkCompilerEventHandlerWire,
-    type HawkCompilerInitialDynamicValueWire,
-    type HawkElementSpec,
-    type HawkEventSpec,
+      type HawkCompilerEventHandlerActionWire,
+      type HawkCompilerEventHandlerWire,
+      type HawkCompilerInitialDynamicValueWire,
+      type HawkCompilerListTemplateNodeWire,
+      type HawkCompilerListTemplateWire,
+      type HawkCompilerTemplateScalarWire,
+      type HawkElementSpec,
+      type HawkEventSpec,
   type HawkLifecycleSpec,
 } from "../../hawk2ui-native/src/index.ts";
 
@@ -39,6 +42,8 @@ interface SvelteLoweringContext {
   readonly snippetSlots: ReadonlyMap<string, readonly AstNode[]>;
   readonly snippetStack: readonly string[];
   readonly dynamicBindings: HawkCompilerDynamicBindingWire[];
+  readonly listTemplates: HawkCompilerListTemplateWire[];
+  readonly pendingListTemplateAnchors: Map<string, string[]>;
 }
 
 interface SvelteSnippetDefinition {
@@ -47,7 +52,19 @@ interface SvelteSnippetDefinition {
 }
 
 const VISUAL_PROP_NAMES = ["font_size", "color", "background"] as const;
+const VIEW_ELEMENT_TAGS = new Set(["div", "section", "main", "article", "header", "footer", "nav", "aside", "form", "label", "ul", "ol", "li"]);
+const TEXT_ELEMENT_TAGS = new Set(["span", "p", "strong", "em", "small", "code", "h1", "h2", "h3", "h4", "h5", "h6"]);
+const RESERVED_RUNTIME_ATTRIBUTE_NAMES = new Set<string>([
+  "id",
+  "class",
+  "data-asset",
+  "key",
+  "width",
+  "height",
+  ...VISUAL_PROP_NAMES,
+]);
 const SVELTE_EVENT_DIRECTIVES = new Map<string, HawkEventSpec["kind"]>([
+  ["click", "pointer.press"],
   ["press", "pointer.press"],
   ["pointerdown", "pointer.press"],
   ["pointerup", "pointer.release"],
@@ -80,10 +97,11 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
     throw new Error("Hawk2UI Svelte inputs must be .svelte files.");
   }
 
-  const ast = parseSvelte(input.source, { filename: input.filename }) as AstNode;
+  const ast = parseSvelte(input.source, { filename: input.filename, modern: true }) as unknown as AstNode;
   compileSvelte(input.source, { filename: input.filename, generate: false });
 
-  const rootNode = firstHawkElement(childrenOf(ast.html as AstNode | undefined));
+  const rootChildren = childrenOf(ast);
+  const rootNode = firstHawkElement(rootChildren);
   if (!rootNode) {
     throw new Error("svelte.root.missing: Svelte compiler output must contain one hawk root element.");
   }
@@ -92,7 +110,7 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
   const context: SvelteLoweringContext = {
     source: input.source,
     arrays: literalArraysFromProgram(instanceProgram),
-    snippets: snippetDefinitionsFromNodes(childrenOf(ast.html as AstNode | undefined)),
+    snippets: snippetDefinitionsFromNodes(rootChildren),
     initialDynamicValues: initialDynamicValuesFromProgram(instanceProgram),
     locals: new Map(),
     globals: scalarValuesFromProgram(instanceProgram),
@@ -100,8 +118,13 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
     snippetSlots: new Map(),
     snippetStack: [],
     dynamicBindings: [],
+    listTemplates: [],
+    pendingListTemplateAnchors: new Map(),
   };
-  const root = svelteElementToSpec(rootNode, context);
+  const root = withRootLifecycle(
+    svelteElementToSpec(rootNode, context),
+    svelteLifecycleApiCalls(instanceProgram),
+  );
   validateUniqueChildIds(root.children ?? []);
 
   const app = { name: input.filename, root };
@@ -122,9 +145,10 @@ export function compileHawkSvelte(input: HawkSvelteCompileInput): HawkSvelteComp
               source_path: input.filename,
               entrypoint: "default",
             },
-            eventHandlers: handlerArtifacts,
-          },
-        ),
+              eventHandlers: handlerArtifacts,
+              listTemplates: context.listTemplates,
+            },
+          ),
       };
   }
 
@@ -147,7 +171,7 @@ function svelteElementToSpec(node: AstNode, context: SvelteLoweringContext): Haw
     assetRefs: assetPath ? [{ name: "svelte.asset", path: assetPath }] : [],
     events: handlers.events,
     lifecycle: handlers.lifecycle,
-    children: childSpecs(node, context),
+    children: childSpecs(node, context, id),
   };
 
   const props = runtimeProps(node, context, id, "svelte");
@@ -156,21 +180,50 @@ function svelteElementToSpec(node: AstNode, context: SvelteLoweringContext): Haw
   return Object.keys(props).length > 0 ? { ...spec, props } : spec;
 }
 
-function childSpecs(node: AstNode, context: SvelteLoweringContext): readonly HawkElementSpec[] {
+function childSpecs(node: AstNode, context: SvelteLoweringContext, parentId: string): readonly HawkElementSpec[] {
   const children: HawkElementSpec[] = [];
   for (const child of childrenOf(node)) {
-    if (child.type === "Element" && isHawkTag(stringField(child, "name"))) {
-      children.push(svelteElementToSpec(child, context));
+    let specs: readonly HawkElementSpec[] = [];
+    if (isSvelteElement(child) && isHawkTag(stringField(child, "name"))) {
+      specs = [svelteElementToSpec(child, context)];
     } else if (child.type === "EachBlock") {
-      children.push(...expandEachBlock(child, context));
+      specs = expandEachBlock(child, context, parentId);
+    } else if (child.type === "IfBlock") {
+      specs = expandIfBlock(child, context, parentId);
     } else if (child.type === "RenderTag") {
-      children.push(...expandRenderTag(child, context));
+      specs = expandRenderTag(child, context, parentId);
+    }
+    for (const spec of specs) {
+      anchorPendingListTemplates(context, parentId, spec.id);
+      children.push(spec);
     }
   }
   return children;
 }
 
-function expandRenderTag(tag: AstNode, context: SvelteLoweringContext): readonly HawkElementSpec[] {
+function expandIfBlock(block: AstNode, context: SvelteLoweringContext, parentId: string): readonly HawkElementSpec[] {
+  const expression = (block.expression ?? block.test) as AstNode | undefined;
+  const consequent = (block.consequent as AstNode | undefined) ?? block;
+  const visibleChildren = withSvelteVisibilityBinding(
+    childSpecs({ children: childrenOf(consequent) }, context, parentId),
+    expression,
+    context,
+    false,
+  );
+  const elseBlock = (block.else ?? block.alternate) as AstNode | undefined;
+  if (!elseBlock) return visibleChildren;
+  return [
+    ...visibleChildren,
+      ...withSvelteVisibilityBinding(
+        childSpecs({ children: childrenOf(elseBlock) }, context, parentId),
+      expression,
+      context,
+      true,
+    ),
+  ];
+}
+
+function expandRenderTag(tag: AstNode, context: SvelteLoweringContext, parentId: string): readonly HawkElementSpec[] {
   const call = tag.expression as AstNode | undefined;
   if (call?.type !== "CallExpression") {
     throw new Error("svelte.render.unsupported: render tags must call a Svelte 5 snippet.");
@@ -180,7 +233,7 @@ function expandRenderTag(tag: AstNode, context: SvelteLoweringContext): readonly
     throw new Error("svelte.render.unsupported: render tags must call a stable snippet identifier.");
   }
   const slot = context.snippetSlots.get(name);
-  if (slot) return slot.flatMap((child) => childSpecs({ children: [child] }, context));
+  if (slot) return slot.flatMap((child) => childSpecs({ children: [child] }, context, parentId));
   const definition = context.snippets.get(name);
   if (!definition) {
     throw new Error(`svelte.render.unresolved: snippet \`${name}\` must be declared in this component.`);
@@ -189,7 +242,7 @@ function expandRenderTag(tag: AstNode, context: SvelteLoweringContext): readonly
     throw new Error(`svelte.render.cycle: snippet \`${name}\` recursively renders itself.`);
   }
   const scoped = scopedSnippetContext(name, definition, arrayField(call, "arguments"), context);
-  return childSpecs({ children: definition.children }, scoped);
+  return childSpecs({ children: definition.children }, scoped, parentId);
 }
 
 function scopedSnippetContext(
@@ -238,7 +291,7 @@ function evaluateSnippetArgument(
   return evaluateExpression(expression, context);
 }
 
-function expandEachBlock(block: AstNode, context: SvelteLoweringContext): readonly HawkElementSpec[] {
+function expandEachBlock(block: AstNode, context: SvelteLoweringContext, parentId: string): readonly HawkElementSpec[] {
   const source = identifierName(block.expression as AstNode | undefined);
   const itemName = identifierName(block.context as AstNode | undefined);
   if (!source || !itemName) {
@@ -246,7 +299,25 @@ function expandEachBlock(block: AstNode, context: SvelteLoweringContext): readon
   }
   const items = context.arrays.get(source);
   if (!items) {
-    throw new Error(`svelte.each.source-unresolved: Svelte each source \`${source}\` must be a literal array.`);
+    const initialValue = context.initialDynamicValues.get(source)?.value;
+    if (initialValue?.type !== "array") {
+      throw new Error(`svelte.each.source-unresolved: Svelte each source \`${source}\` must be a literal array or initial dynamic array.`);
+    }
+    const template = firstHawkElement(childrenOf(block));
+    if (!template) {
+      throw new Error("svelte.each.template-missing: Svelte each blocks must render one hawk child element.");
+    }
+    const keyExpression = expressionSource(block.key as AstNode | undefined, context);
+    context.listTemplates.push({
+      id: `${parentId}:${source}`,
+      parent_id: parentId,
+      source,
+      item: itemName,
+      key: keyExpression,
+      node: svelteElementToListTemplateNode(template, context, itemName),
+    });
+    queuePendingListTemplateAnchor(context, parentId, `${parentId}:${source}`);
+    return [];
   }
   const template = firstHawkElement(childrenOf(block));
   if (!template) {
@@ -260,6 +331,150 @@ function expandEachBlock(block: AstNode, context: SvelteLoweringContext): readon
   );
 }
 
+function queuePendingListTemplateAnchor(
+  context: SvelteLoweringContext,
+  parentId: string,
+  templateId: string,
+): void {
+  const pending = context.pendingListTemplateAnchors.get(parentId) ?? [];
+  pending.push(templateId);
+  context.pendingListTemplateAnchors.set(parentId, pending);
+}
+
+function anchorPendingListTemplates(
+  context: SvelteLoweringContext,
+  parentId: string,
+  anchorBefore: string,
+): void {
+  const pending = context.pendingListTemplateAnchors.get(parentId);
+  if (!pending || pending.length === 0) return;
+  for (const templateId of pending) {
+    const index = context.listTemplates.findIndex((template) => template.id === templateId);
+    const template = context.listTemplates[index];
+    if (!template || template.anchor_before !== undefined) continue;
+    context.listTemplates[index] = {
+      ...template,
+      anchor_before: anchorBefore,
+    };
+  }
+  context.pendingListTemplateAnchors.delete(parentId);
+}
+
+function svelteElementToListTemplateNode(
+  node: AstNode,
+  context: SvelteLoweringContext,
+  itemName: string,
+): HawkCompilerListTemplateNodeWire {
+  const tag = stringField(node, "name");
+  const id = templateScalarFromAttribute(node, "id", context, itemName);
+  const props = templateProps(node, context, itemName);
+  const text = templateTextContent(node, context, itemName);
+  if (text) props.push({ name: "text", value: text });
+  const handlers = eventHandlers(node);
+  return {
+    id,
+    kind: kindForTag(tag),
+    key: id,
+    props,
+    refs: actionRefs(node),
+    style_refs: optionalString(attributeValue(node, "class", context)) ? [optionalString(attributeValue(node, "class", context)) as string] : [],
+    asset_refs: optionalString(attributeValue(node, "data-asset", context)) ? [{ name: "svelte.asset", path: optionalString(attributeValue(node, "data-asset", context)) as string }] : [],
+    events: handlers.events.map((event) => ({ kind: event.kind, handler: event.handler, payload_fields: payloadFieldsForEvent(event.kind) })),
+    lifecycle: handlers.lifecycle.map((lifecycle) => ({ event: lifecycle.phase, handler: lifecycle.handler })),
+    children: childrenOf(node)
+      .filter((child) => isSvelteElement(child) && isHawkTag(stringField(child, "name")))
+      .map((child) => svelteElementToListTemplateNode(child, context, itemName)),
+  };
+}
+
+function templateProps(
+  node: AstNode,
+  context: SvelteLoweringContext,
+  itemName: string,
+): { name: string; value: HawkCompilerTemplateScalarWire }[] {
+  const props: { name: string; value: HawkCompilerTemplateScalarWire }[] = [];
+  for (const name of ["width", "height", ...VISUAL_PROP_NAMES]) {
+    const value = optionalTemplateScalarFromAttribute(node, name, context, itemName);
+    if (value) props.push({ name, value });
+  }
+  for (const attribute of attributesOf(node)) {
+    if (attribute.type !== "Attribute") continue;
+    const name = stringField(attribute, "name");
+    if (!name || RESERVED_RUNTIME_ATTRIBUTE_NAMES.has(name)) continue;
+    props.push({ name, value: templateScalarFromAttribute(node, name, context, itemName) });
+  }
+  return props;
+}
+
+function templateTextContent(
+  node: AstNode,
+  context: SvelteLoweringContext,
+  itemName: string,
+): HawkCompilerTemplateScalarWire | undefined {
+  const children = childrenOf(node).filter((child) => child.type === "Text" || isExpressionTag(child));
+  if (children.length === 0) return undefined;
+  if (children.length === 1) {
+    const child = children[0];
+    if (!child) return undefined;
+    if (child.type === "Text") {
+      const text = stringField(child, "data").trim();
+      return text ? literalTemplateScalar(text) : undefined;
+    }
+    return templateScalarFromExpression(child.expression as AstNode | undefined, context, itemName);
+  }
+  return {
+    type: "expression",
+    expression: children.map((child) => child.type === "Text" ? JSON.stringify(stringField(child, "data")) : expressionSource(child.expression as AstNode | undefined, context)).join(" + "),
+  };
+}
+
+function templateScalarFromAttribute(
+  node: AstNode,
+  name: string,
+  context: SvelteLoweringContext,
+  itemName: string,
+): HawkCompilerTemplateScalarWire {
+  const value = optionalTemplateScalarFromAttribute(node, name, context, itemName);
+  if (!value) throw new Error(`svelte.list-template.attribute-required: list template nodes require \`${name}\`.`);
+  return value;
+}
+
+function optionalTemplateScalarFromAttribute(
+  node: AstNode,
+  name: string,
+  context: SvelteLoweringContext,
+  itemName: string,
+): HawkCompilerTemplateScalarWire | undefined {
+  const attribute = attributesOf(node).find((candidate) => candidate.type === "Attribute" && stringField(candidate, "name") === name);
+  if (!attribute) return undefined;
+  const value = firstAttributeValueNode(attribute);
+  if (value === true) return literalTemplateScalar(true);
+  if (!value) return literalTemplateScalar(true);
+  if (value.type === "Text") return literalTemplateScalar(stringField(value, "data"));
+  if (isExpressionTag(value)) return templateScalarFromExpression(value.expression as AstNode | undefined, context, itemName);
+  return undefined;
+}
+
+function templateScalarFromExpression(
+  expression: AstNode | undefined,
+  context: SvelteLoweringContext,
+  itemName: string,
+): HawkCompilerTemplateScalarWire {
+  const staticValue = staticTextExpressionValue(expression, context);
+  if (staticValue !== undefined) return literalTemplateScalar(staticValue);
+  const source = expressionSource(expression, context);
+  if (!expressionDependencies(expression).includes(itemName)) {
+    throw new Error(`svelte.list-template.expression-unsupported: list template expressions must depend on \`${itemName}\`.`);
+  }
+  return { type: "expression", expression: source };
+}
+
+function literalTemplateScalar(value: string | number | boolean): HawkCompilerTemplateScalarWire {
+  if (typeof value === "string") return { type: "literal", value: { type: "string", value } };
+  if (typeof value === "boolean") return { type: "literal", value: { type: "bool", value } };
+  return { type: "literal", value: { type: "number", value } };
+}
+
 function eventHandlers(node: AstNode): {
   readonly events: readonly HawkEventSpec[];
   readonly lifecycle: readonly HawkLifecycleSpec[];
@@ -267,7 +482,7 @@ function eventHandlers(node: AstNode): {
   const events: HawkEventSpec[] = [];
   const lifecycle: HawkLifecycleSpec[] = [];
   for (const attribute of attributesOf(node)) {
-      if (attribute.type !== "EventHandler") continue;
+      if (attribute.type !== "EventHandler" && attribute.type !== "OnDirective") continue;
       const name = stringField(attribute, "name");
       const handler = handlerName(attribute.expression as AstNode | undefined);
       const eventKind = SVELTE_EVENT_DIRECTIVES.get(name);
@@ -283,44 +498,219 @@ function eventHandlers(node: AstNode): {
   return { events, lifecycle };
 }
 
+function svelteLifecycleApiCalls(program: AstNode | undefined): readonly HawkLifecycleSpec[] {
+  const lifecycle: HawkLifecycleSpec[] = [];
+  for (const statement of arrayField(program, "body")) {
+    if (statement.type !== "ExpressionStatement") continue;
+    const call = statement.expression as AstNode | undefined;
+    if (call?.type !== "CallExpression") continue;
+    const name = callName(call.callee as AstNode | undefined);
+    const argument = arrayField(call, "arguments")[0];
+    if (name === "onMount") {
+      for (const handler of lifecycleHandlerNamesFromArgument(argument, "svelte", "onMount")) {
+        pushLifecycle(lifecycle, "mounted", handler);
+      }
+      const cleanup = lifecycleCleanupHandlerNameFromArgument(argument, "svelte", "onMount");
+      if (cleanup) pushLifecycle(lifecycle, "unmounted", cleanup);
+      continue;
+    }
+    if (name === "onDestroy") {
+      for (const handler of lifecycleHandlerNamesFromArgument(argument, "svelte", "onDestroy")) {
+        pushLifecycle(lifecycle, "unmounted", handler);
+      }
+    }
+  }
+  return lifecycle;
+}
+
+function withRootLifecycle(
+  root: HawkElementSpec,
+  lifecycle: readonly HawkLifecycleSpec[],
+): HawkElementSpec {
+  if (lifecycle.length === 0) return root;
+  const merged: HawkLifecycleSpec[] = [...(root.lifecycle ?? [])];
+  for (const item of lifecycle) pushLifecycle(merged, item.phase, item.handler);
+  return { ...root, lifecycle: merged };
+}
+
+function pushLifecycle(
+  lifecycle: HawkLifecycleSpec[],
+  phase: HawkLifecycleSpec["phase"],
+  handler: string,
+): void {
+  if (!lifecycle.some((item) => item.phase === phase && item.handler === handler)) {
+    lifecycle.push({ phase, handler });
+  }
+}
+
+function lifecycleHandlerNamesFromArgument(
+  argument: AstNode | undefined,
+  framework: string,
+  api: string,
+): readonly string[] {
+  const direct = identifierName(argument);
+  if (direct) return [direct];
+  const body = functionLikeBody(argument);
+  if (!body) {
+    throw new Error(`${framework}.lifecycle.unsupported: ${api} must reference a stable handler identifier or call one.`);
+  }
+  if (body.type === "CallExpression") {
+    const name = callName(body.callee as AstNode | undefined);
+    if (name) return [name];
+  }
+  if (body.type === "BlockStatement") {
+    const names: string[] = [];
+    for (const statement of arrayField(body, "body")) {
+      if (statement.type === "ReturnStatement") continue;
+      if (statement.type !== "ExpressionStatement") {
+        throw new Error(`${framework}.lifecycle.unsupported: ${api} handlers may only call stable lifecycle functions.`);
+      }
+      const expression = statement.expression as AstNode | undefined;
+      if (expression?.type !== "CallExpression") {
+        throw new Error(`${framework}.lifecycle.unsupported: ${api} handlers may only call stable lifecycle functions.`);
+      }
+      const name = callName(expression.callee as AstNode | undefined);
+      if (!name) {
+        throw new Error(`${framework}.lifecycle.unsupported: ${api} handlers may only call stable lifecycle functions.`);
+      }
+      names.push(name);
+    }
+    if (names.length > 0) return names;
+  }
+  throw new Error(`${framework}.lifecycle.unsupported: ${api} must reference a stable handler identifier or call one.`);
+}
+
+function lifecycleCleanupHandlerNameFromArgument(
+  argument: AstNode | undefined,
+  framework: string,
+  api: string,
+): string | undefined {
+  const body = functionLikeBody(argument);
+  if (body?.type !== "BlockStatement") return undefined;
+  for (const statement of arrayField(body, "body")) {
+    if (statement.type !== "ReturnStatement") continue;
+    return lifecycleCleanupHandlerName(statement.argument as AstNode | undefined, framework, api);
+  }
+  return undefined;
+}
+
+function lifecycleCleanupHandlerName(
+  expression: AstNode | undefined,
+  framework: string,
+  api: string,
+): string {
+  const direct = identifierName(expression);
+  if (direct) return direct;
+  const body = functionLikeBody(expression);
+  if (body?.type === "CallExpression") {
+    const name = callName(body.callee as AstNode | undefined);
+    if (name) return name;
+  }
+  if (body?.type === "BlockStatement") {
+    const handlers = lifecycleHandlerNamesFromArgument(expression, framework, api);
+    const handler = handlers[0];
+    if (handlers.length === 1 && handler) return handler;
+  }
+  throw new Error(`${framework}.lifecycle.unsupported: ${api} cleanup must reference or call one stable handler.`);
+}
+
+function functionLikeBody(node: AstNode | undefined): AstNode | undefined {
+  if (
+    node?.type === "ArrowFunctionExpression"
+    || node?.type === "FunctionExpression"
+    || node?.type === "FunctionDeclaration"
+  ) {
+    return node.body as AstNode | undefined;
+  }
+  return undefined;
+}
+
+function callName(callee: AstNode | undefined): string | undefined {
+  if (callee?.type === "MemberExpression") return identifierName(callee.property as AstNode | undefined);
+  return identifierName(callee);
+}
+
 function eventHandlerArtifactsForSpec(
   root: HawkElementSpec,
   program: AstNode | undefined,
   context: SvelteLoweringContext,
 ): readonly HawkCompilerEventHandlerWire[] {
   const declarations = handlerDeclarationsFromProgram(program);
-  return referencedHandlerNames(root).map((name) => {
+  const lifecycleOnlyHandlers = lifecycleOnlyHandlerNames(root, context.listTemplates);
+  return referencedHandlerNames(root, context.listTemplates).flatMap((name) => {
     const declaration = declarations.get(name);
     if (!declaration) {
       throw new Error(`svelte.handler.missing: event handler \`${name}\` must be declared in the instance script.`);
     }
+    const actions = handlerActions(name, declaration, context, lifecycleOnlyHandlers.has(name));
+    if (actions.length === 0) return [];
     return {
       name,
-      actions: handlerActions(name, declaration, context),
+      actions,
     };
   });
 }
 
-function referencedHandlerNames(root: HawkElementSpec): readonly string[] {
-  const names: string[] = [];
-  const seen = new Set<string>();
+function lifecycleOnlyHandlerNames(
+  root: HawkElementSpec,
+  listTemplates: readonly HawkCompilerListTemplateWire[],
+): ReadonlySet<string> {
+  const eventHandlers = new Set<string>();
+  const lifecycleHandlers = new Set<string>();
   const visit = (element: HawkElementSpec): void => {
-    for (const event of element.events ?? []) {
-      if (!seen.has(event.handler)) {
-        seen.add(event.handler);
-        names.push(event.handler);
-      }
-    }
-    for (const lifecycle of element.lifecycle ?? []) {
-      if (!seen.has(lifecycle.handler)) {
-        seen.add(lifecycle.handler);
-        names.push(lifecycle.handler);
-      }
-    }
+    for (const event of element.events ?? []) eventHandlers.add(event.handler);
+    for (const lifecycle of element.lifecycle ?? []) lifecycleHandlers.add(lifecycle.handler);
     for (const child of element.children ?? []) visit(child);
   };
   visit(root);
+  for (const template of listTemplates) {
+    visitListTemplateHandlerNames(template.node, eventHandlers, lifecycleHandlers);
+  }
+  for (const name of eventHandlers) lifecycleHandlers.delete(name);
+  return lifecycleHandlers;
+}
+
+function referencedHandlerNames(
+  root: HawkElementSpec,
+  listTemplates: readonly HawkCompilerListTemplateWire[],
+): readonly string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const push = (handler: string): void => {
+    if (!seen.has(handler)) {
+      seen.add(handler);
+      names.push(handler);
+    }
+  };
+  const visit = (element: HawkElementSpec): void => {
+    for (const event of element.events ?? []) push(event.handler);
+    for (const lifecycle of element.lifecycle ?? []) push(lifecycle.handler);
+    for (const child of element.children ?? []) visit(child);
+  };
+  visit(root);
+  for (const template of listTemplates) {
+    visitListTemplateHandlers(template.node, push);
+  }
   return names;
+}
+
+function visitListTemplateHandlerNames(
+  node: HawkCompilerListTemplateNodeWire,
+  eventHandlers: Set<string>,
+  lifecycleHandlers: Set<string>,
+): void {
+  for (const event of node.events) eventHandlers.add(event.handler);
+  for (const lifecycle of node.lifecycle) lifecycleHandlers.add(lifecycle.handler);
+  for (const child of node.children) visitListTemplateHandlerNames(child, eventHandlers, lifecycleHandlers);
+}
+
+function visitListTemplateHandlers(
+  node: HawkCompilerListTemplateNodeWire,
+  push: (handler: string) => void,
+): void {
+  for (const event of node.events) push(event.handler);
+  for (const lifecycle of node.lifecycle) push(lifecycle.handler);
+  for (const child of node.children) visitListTemplateHandlers(child, push);
 }
 
 function handlerDeclarationsFromProgram(program: AstNode | undefined): ReadonlyMap<string, AstNode> {
@@ -347,6 +737,7 @@ function handlerActions(
   handler: string,
   declaration: AstNode,
   context: SvelteLoweringContext,
+  allowEmpty: boolean,
 ): readonly HawkCompilerEventHandlerActionWire[] {
   const body = declaration.body as AstNode | undefined;
   if (!body) {
@@ -360,12 +751,12 @@ function handlerActions(
       throw new Error(`svelte.handler.unsupported: event handler \`${handler}\` contains unsupported statements.`);
     }
     return handlerActionFromExpression(handler, statement.expression as AstNode | undefined, context);
-  });
-  if (actions.length === 0) {
-    throw new Error(`svelte.handler.unsupported: event handler \`${handler}\` must contain at least one action.`);
+    });
+    if (actions.length === 0 && !allowEmpty) {
+      throw new Error(`svelte.handler.unsupported: event handler \`${handler}\` must contain at least one action.`);
+    }
+    return actions;
   }
-  return actions;
-}
 
 function handlerActionFromExpression(
   handler: string,
@@ -401,7 +792,7 @@ function dynamicUpdateAction(
 
 function actionRefs(node: AstNode): readonly string[] {
   return attributesOf(node)
-    .filter((attribute) => attribute.type === "Action")
+    .filter((attribute) => attribute.type === "Action" || attribute.type === "UseDirective")
     .map((attribute) => stringField(attribute, "name"))
     .filter((name) => name.trim().length > 0);
 }
@@ -413,12 +804,11 @@ function attributeValue(
 ): string | number | boolean | undefined {
   const attribute = attributesOf(node).find((item) => item.type === "Attribute" && item.name === name);
   if (!attribute) return undefined;
-  const value = attribute.value;
-  if (value === true) return true;
-  if (!Array.isArray(value) || value.length === 0) return "";
-  const first = value[0] as AstNode;
+  const first = firstAttributeValueNode(attribute);
+  if (first === true) return true;
+  if (!first) return "";
   if (first.type === "Text") return stringField(first, "data");
-  if (first.type === "MustacheTag") return evaluateExpression(first.expression as AstNode | undefined, context);
+  if (isExpressionTag(first)) return evaluateExpression(first.expression as AstNode | undefined, context);
   throw new Error(`svelte.attribute.unsupported: attribute \`${name}\` must be static or a literal member expression.`);
 }
 
@@ -441,7 +831,7 @@ function textContent(
       }
       continue;
     }
-    if (child.type !== "MustacheTag") continue;
+      if (!isExpressionTag(child)) continue;
     const expression = child.expression as AstNode | undefined;
     const staticValue = staticTextExpressionValue(expression, context);
     if (staticValue !== undefined) {
@@ -510,7 +900,109 @@ function runtimeProps(
     const value = dynamicVisualAttributeValue(node, name, context, nodeId, framework);
     if (value !== undefined) props[name] = value;
   }
+  for (const attribute of attributesOf(node).filter((item) => item.type === "Attribute")) {
+    const name = stringField(attribute, "name");
+    if (!name || RESERVED_RUNTIME_ATTRIBUTE_NAMES.has(name)) continue;
+    const value = dynamicRuntimeAttributeValue(attribute, name, context, nodeId, framework);
+    if (value !== undefined) props[name] = value;
+  }
   return props;
+}
+
+function withSvelteVisibilityBinding(
+  specs: readonly HawkElementSpec[],
+  expression: AstNode | undefined,
+  context: SvelteLoweringContext,
+  negate: boolean,
+): readonly HawkElementSpec[] {
+  const dependencies = expressionDependencies(expression);
+  if (dependencies.length > 0) {
+    const source = expressionSource(expression, context);
+    const visibleExpression = negate ? `!(${source})` : source;
+    for (const spec of specs) {
+      mergeDynamicVisibilityBinding(context, spec.id, visibleExpression, dependencies);
+    }
+    return specs;
+  }
+
+  const staticValue = staticTextExpressionValue(expression, context);
+  if (typeof staticValue !== "boolean") {
+    throw new Error("svelte.if.unsupported: Svelte if blocks must use boolean expressions.");
+  }
+  return specs.map((spec) => withStaticVisibility(spec, negate ? !staticValue : staticValue));
+}
+
+function mergeDynamicVisibilityBinding(
+  context: SvelteLoweringContext,
+  nodeId: string,
+  expression: string,
+  dependencies: readonly string[],
+): void {
+  const index = context.dynamicBindings.findIndex(
+    (binding) =>
+      binding.node_id === nodeId
+      && binding.target.type === "prop"
+      && binding.target.name === "visible",
+  );
+  if (index < 0) {
+    context.dynamicBindings.push({
+      node_id: nodeId,
+      target: { type: "prop", name: "visible" },
+      expression,
+      dependencies,
+    });
+    return;
+  }
+  const existing = context.dynamicBindings[index];
+  if (!existing) {
+    throw new Error("svelte.visibility.internal: visible binding index disappeared during merge.");
+  }
+  context.dynamicBindings[index] = {
+    node_id: existing.node_id,
+    target: existing.target,
+    expression: `(${existing.expression}) && (${expression})`,
+    dependencies: uniqueStrings([...existing.dependencies, ...dependencies]),
+  };
+}
+
+function withStaticVisibility(spec: HawkElementSpec, visible: boolean): HawkElementSpec {
+  const current = spec.props?.visible;
+  const combined = typeof current === "boolean" ? current && visible : visible;
+  return {
+    ...spec,
+    props: { ...(spec.props ?? {}), visible: combined },
+  };
+}
+
+function uniqueStrings(values: readonly string[]): readonly string[] {
+  return [...new Set(values)];
+}
+
+function dynamicRuntimeAttributeValue(
+  attribute: AstNode,
+  name: string,
+  context: SvelteLoweringContext,
+  nodeId: string,
+  framework: string,
+): string | number | boolean | undefined {
+  const value = attribute.value;
+  const first = firstAttributeValueNode(attribute);
+  if (first === true) return true;
+  if (!first) return "";
+  if (first.type === "Text") return stringField(first, "data");
+  if (!isExpressionTag(first)) {
+    throw new Error(`${framework}.attribute.unsupported: prop \`${name}\` on \`${nodeId}\` must be a static scalar or expression.`);
+  }
+  const expression = first.expression as AstNode | undefined;
+  const staticValue = staticTextExpressionValue(expression, context);
+  if (staticValue !== undefined) return staticValue;
+  context.dynamicBindings.push({
+    node_id: nodeId,
+    target: { type: "prop", name },
+    expression: expressionSource(expression, context),
+    dependencies: expressionDependencies(expression),
+  });
+  return undefined;
 }
 
 function dynamicVisualAttributeValue(
@@ -522,11 +1014,11 @@ function dynamicVisualAttributeValue(
 ): string | number | boolean | undefined {
   const attribute = attributesOf(node).find((item) => item.type === "Attribute" && item.name === name);
   if (!attribute) return undefined;
-  const value = attribute.value;
-  if (!Array.isArray(value) || value.length === 0) return "";
-  const first = value[0] as AstNode;
+  const first = firstAttributeValueNode(attribute);
+  if (first === true) return "";
+  if (!first) return "";
   if (first.type === "Text") return stringField(first, "data");
-  if (first.type !== "MustacheTag") {
+  if (!isExpressionTag(first)) {
     throw new Error(`${framework}.attribute.unsupported: visual prop \`${name}\` on \`${nodeId}\` must be a static scalar or expression.`);
   }
   const expression = first.expression as AstNode | undefined;
@@ -550,13 +1042,12 @@ function dynamicLayoutAttributeValue(
 ): number | undefined {
   const attribute = attributesOf(node).find((item) => item.type === "Attribute" && item.name === name);
   if (!attribute) return undefined;
-  const value = attribute.value;
-  if (!Array.isArray(value) || value.length === 0) {
+  const first = firstAttributeValueNode(attribute);
+  if (first === true || !first) {
     throw new Error(`${framework}.attribute.unsupported: layout prop \`${name}\` must be numeric.`);
   }
-  const first = value[0] as AstNode;
   if (first.type === "Text") return layoutNumber(stringField(first, "data"), nodeId, name, framework);
-  if (first.type !== "MustacheTag") {
+  if (!isExpressionTag(first)) {
     throw new Error(`${framework}.attribute.unsupported: layout prop \`${name}\` must be numeric.`);
   }
   const expression = first.expression as AstNode | undefined;
@@ -592,6 +1083,7 @@ function literalArraysFromProgram(program: AstNode | undefined): ReadonlyMap<str
   const arrays = new Map<string, readonly LiteralRecord[]>();
   for (const statement of Array.isArray(program?.body) ? (program.body as AstNode[]) : []) {
     if (statement.type !== "VariableDeclaration") continue;
+    if (statement.kind !== "const") continue;
     for (const declaration of Array.isArray(statement.declarations) ? (statement.declarations as AstNode[]) : []) {
       const name = identifierName(declaration.id as AstNode | undefined);
       const values = literalObjectArray(declaration.init as AstNode | undefined);
@@ -606,6 +1098,15 @@ function initialDynamicValuesFromProgram(
 ): ReadonlyMap<string, HawkCompilerInitialDynamicValueWire> {
   const values = new Map<string, HawkCompilerInitialDynamicValueWire>();
   for (const statement of Array.isArray(program?.body) ? (program.body as AstNode[]) : []) {
+    if (statement.type === "LabeledStatement" && identifierName(statement.label as AstNode | undefined) === "$") {
+      const expression = (statement.body as AstNode | undefined)?.expression as AstNode | undefined;
+      if (expression?.type === "AssignmentExpression" && expression.operator === "=") {
+        const name = identifierName(expression.left as AstNode | undefined);
+        const value = literalDynamicValue(expression.right as AstNode | undefined);
+        if (name && value) values.set(name, { name, mode: "value", value });
+      }
+      continue;
+    }
     if (statement.type !== "VariableDeclaration") continue;
     for (const declaration of Array.isArray(statement.declarations) ? (statement.declarations as AstNode[]) : []) {
       const name = identifierName(declaration.id as AstNode | undefined);
@@ -794,15 +1295,37 @@ function collectExpressionDependencies(node: AstNode | undefined, dependencies: 
 }
 
 function firstHawkElement(nodes: readonly AstNode[]): AstNode | undefined {
-  return nodes.find((node) => node.type === "Element" && isHawkTag(stringField(node, "name")));
+  return nodes.find((node) => isSvelteElement(node) && isHawkTag(stringField(node, "name")));
 }
 
 function childrenOf(node: AstNode | undefined): readonly AstNode[] {
-  return Array.isArray(node?.children) ? (node.children as AstNode[]) : [];
+  if (Array.isArray(node?.children)) return node.children as AstNode[];
+  const fragment = node?.fragment as AstNode | undefined;
+  if (Array.isArray(fragment?.nodes)) return fragment.nodes as AstNode[];
+  const body = node?.body as AstNode | undefined;
+  if (Array.isArray(body?.nodes)) return body.nodes as AstNode[];
+  if (Array.isArray(node?.nodes)) return node.nodes as AstNode[];
+  return [];
 }
 
 function attributesOf(node: AstNode): readonly AstNode[] {
   return Array.isArray(node.attributes) ? (node.attributes as AstNode[]) : [];
+}
+
+function firstAttributeValueNode(attribute: AstNode): AstNode | true | undefined {
+  const value = attribute.value;
+  if (value === true) return true;
+  if (Array.isArray(value)) return value[0] as AstNode | undefined;
+  if (value && typeof value === "object") return value as AstNode;
+  return undefined;
+}
+
+function isSvelteElement(node: AstNode | undefined): boolean {
+  return node?.type === "Element" || node?.type === "RegularElement";
+}
+
+function isExpressionTag(node: AstNode | undefined): boolean {
+  return node?.type === "MustacheTag" || node?.type === "ExpressionTag";
 }
 
 function handlerName(expression: AstNode | undefined): string {
@@ -843,11 +1366,15 @@ function kindForTag(tag: string): HawkElementSpec["kind"] {
   if (tag === "hawk-view") return "view";
   if (tag === "hawk-text") return "text";
   if (tag === "hawk-button") return "button";
+  if (tag === "hawk-surface" || tag === "hawk-custom-surface") return "custom-surface";
+  if (VIEW_ELEMENT_TAGS.has(tag)) return "view";
+  if (TEXT_ELEMENT_TAGS.has(tag)) return "text";
+  if (tag === "button") return "button";
   throw new Error(`svelte.element.unsupported: unsupported Hawk element \`${tag}\`.`);
 }
 
 function isHawkTag(tag: string): boolean {
-  return tag.startsWith("hawk-");
+  return tag.startsWith("hawk-") || VIEW_ELEMENT_TAGS.has(tag) || TEXT_ELEMENT_TAGS.has(tag) || tag === "button";
 }
 
 function validateUniqueChildIds(children: readonly HawkElementSpec[]): void {
@@ -862,4 +1389,27 @@ function validateUniqueChildIds(children: readonly HawkElementSpec[]): void {
 
 function isUnsafeAssetPath(path: string): boolean {
   return path.includes("://") || path.startsWith("/") || path.includes("..");
+}
+
+function payloadFieldsForEvent(kind: HawkEventSpec["kind"]) {
+  switch (kind) {
+    case "pointer.drag":
+    case "pointer.wheel":
+      return ["position", "delta"] as const;
+    case "pointer.press":
+    case "pointer.release":
+    case "pointer.move":
+    case "pointer.enter":
+    case "pointer.leave":
+      return ["position"] as const;
+    case "keyboard.key-down":
+    case "keyboard.key-up":
+      return ["key"] as const;
+    case "keyboard.text-input":
+    case "input.value-changed":
+    case "input.value-committed":
+      return ["value"] as const;
+    default:
+      return [] as const;
+  }
 }

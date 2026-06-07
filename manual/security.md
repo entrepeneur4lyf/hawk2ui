@@ -56,7 +56,7 @@ Build and package commands fail closed without signing material. Verification fa
 - `hawk2ui-build` validates manifests, release signing, sealed artifacts, package trust, and target metadata.
 - `hawk2ui-assets` validates asset sizes, hashes, image metadata, and SVG/vector safety.
 - `hawk2ui-script` enforces script sandboxing, host-call policy, deterministic timers, and execution limits.
-- `hawk2ui-platform` enforces scoped filesystem, network, clipboard, and secret-store access.
+- `hawk2ui-platform` enforces scoped filesystem, network, clipboard, secret-store, AI provider, audio cue, dialog/file picker, localization, MCP tool, notification, global shortcut, and database access.
 - `hawk2ui-security-model` validates threat registries, capability rejection fixtures, runtime authority, secret redaction, and package trust records.
 
 Evidence records should be emitted only after those concrete validators accept or reject an operation. Do not construct evidence records as a substitute for running the validator that owns the domain.
@@ -67,4 +67,4 @@ Evidence records should be emitted only after those concrete validators accept o
 - Treat validation and verification diagnostics as release blockers when they have error severity.
 - Keep asset paths resolvable and hashes stable before sealing artifacts.
 - Avoid unsupported source and style features; they should produce deterministic diagnostics.
-- Do not expect plugin hosts or desktop adapters to provide undeclared filesystem, network, clipboard, database, secret, or host API access.
+- Do not expect plugin hosts or desktop adapters to provide undeclared filesystem, network, clipboard, database, secret, AI, audio, dialog, localization, MCP, notification, shortcut, or host API access.

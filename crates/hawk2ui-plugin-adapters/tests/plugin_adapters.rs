@@ -31,16 +31,13 @@ fn plugin_adapters_generate_all_supported_package_targets() {
     let request = PackageRequest::new(metadata, BundleOutput::new("dist", "Demo"), parameters)
         .with_format(PackageFormat::Clap)
         .with_format(PackageFormat::Vst3)
-        .with_format(PackageFormat::Au)
-        .with_format(PackageFormat::Standalone)
-        .with_format(PackageFormat::DesktopBundle)
         .with_format(PackageFormat::SealedArtifact);
 
     let plan = PackageAdapterSet::new()
         .plan(&request)
         .expect("package plan succeeds");
 
-    assert_eq!(plan.targets().len(), 6);
+    assert_eq!(plan.targets().len(), 3);
     assert!(
         plan.targets()
             .iter()
@@ -59,18 +56,33 @@ fn plugin_adapters_generate_all_supported_package_targets() {
     assert!(
         plan.targets()
             .iter()
-            .any(|target| target.output_path().ends_with("Demo.component"))
-    );
-    assert!(
-        plan.targets()
-            .iter()
-            .any(|target| target.output_path().ends_with("Demo.app"))
-    );
-    assert!(
-        plan.targets()
-            .iter()
             .any(|target| target.output_path().ends_with("Demo.hawk2ui"))
     );
+}
+
+#[test]
+fn plugin_adapters_reject_unimplemented_package_formats_before_materialization() {
+    let metadata = FormatMetadata::new("com.hawk2ui.unsupported", "Unsupported", "Hawk2UI");
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new("dist", "Unsupported"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Au)
+    .with_format(PackageFormat::Standalone)
+    .with_format(PackageFormat::DesktopBundle);
+
+    let error = PackageAdapterSet::new()
+        .plan(&request)
+        .expect_err("unimplemented host formats must not produce fake package plans");
+
+    assert_eq!(error.diagnostics().len(), 3);
+    assert!(error.diagnostics().iter().all(|diagnostic| {
+        diagnostic.rule() == "package.format.unsupported"
+            && diagnostic
+                .message()
+                .contains("does not have production binary materialization")
+    }));
 }
 
 #[test]
@@ -115,7 +127,7 @@ fn plugin_adapters_generate_and_validate_verification_report_schema() {
         ParameterModel::new([]),
     )
     .with_format(PackageFormat::Clap)
-    .with_format(PackageFormat::DesktopBundle);
+    .with_format(PackageFormat::Vst3);
 
     let plan = PackageAdapterSet::new()
         .plan(&request)
@@ -222,11 +234,185 @@ fn plugin_adapters_materialize_package_metadata_outputs() {
     assert!(clap_entry.contains("features = [\"audio-effect\"]"));
 
     let report = plan.verify_materialized(&outputs);
-    assert_eq!(report.status(), VerificationStatus::Passed);
+    assert_eq!(report.status(), VerificationStatus::Failed);
     std::fs::remove_file(&outputs[0].artifact_descriptor_path)
         .expect("artifact descriptor should be removable");
     let failed = plan.verify_materialized(&outputs);
     assert_eq!(failed.status(), VerificationStatus::Failed);
+}
+
+#[test]
+fn plugin_adapters_reject_text_placeholders_in_host_binary_slots() {
+    let metadata = FormatMetadata::new("com.hawk2ui.binary-slot", "Binary Slot", "Hawk2UI")
+        .feature("audio-effect");
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-plugin-binary-slot-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Binary Slot"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap)
+    .with_format(PackageFormat::Vst3);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+
+    let report = plan.verify_materialized(&outputs);
+
+    assert_eq!(report.status(), VerificationStatus::Failed);
+}
+
+#[test]
+fn plugin_adapters_report_materialized_verification_failure_details() {
+    let metadata = FormatMetadata::new("com.hawk2ui.diagnostics", "Diagnostics", "Hawk2UI")
+        .feature("audio-effect");
+    let output_root = std::env::temp_dir().join(format!(
+        "hawk2ui-plugin-diagnostics-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos()
+    ));
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Diagnostics"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+    let report = plan.verify_materialized(&outputs);
+    let value = serde_json::to_value(&report).expect("verification report serializes");
+    let entry = value["entries"]
+        .as_array()
+        .expect("entries serialize as array")
+        .first()
+        .expect("verification entry exists");
+    let diagnostics = entry["diagnostics"]
+        .as_array()
+        .expect("failed entry serializes diagnostics");
+
+    assert_eq!(entry["status"], "Failed");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic["rule"] == "package.binary-slot.not-loadable"
+            && diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("Diagnostics.clap"))
+    }));
+}
+
+#[test]
+fn plugin_adapters_reject_native_looking_binaries_without_required_exports() {
+    let metadata = FormatMetadata::new("com.hawk2ui.missing-exports", "MissingExports", "Hawk2UI")
+        .feature("audio-effect");
+    let output_root = unique_temp_dir("hawk2ui-plugin-missing-exports");
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "MissingExports"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap)
+    .with_format(PackageFormat::Vst3);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+    for output in &outputs {
+        let root = Path::new(&output.output_path);
+        let binary_path = match output.format {
+            PackageFormat::Clap => root.join("MissingExports.clap"),
+            PackageFormat::Vst3 => root
+                .join("Contents")
+                .join("x86_64-linux")
+                .join("MissingExports.vst3"),
+            other => panic!("unexpected output format: {other:?}"),
+        };
+        std::fs::write(
+            &binary_path,
+            b"\x7fELFnative-looking-without-required-exports",
+        )
+        .expect("native-looking test binary writes");
+    }
+
+    let report = plan.verify_materialized(&outputs);
+
+    assert_eq!(report.status(), VerificationStatus::Failed);
+    assert!(report.entries().iter().any(|entry| {
+        entry.target().format() == PackageFormat::Clap
+            && entry.diagnostics().iter().any(|diagnostic| {
+                diagnostic.rule() == "package.binary-slot.missing-export-symbol"
+                    && diagnostic.message().contains("clap_entry")
+            })
+    }));
+    assert!(report.entries().iter().any(|entry| {
+        entry.target().format() == PackageFormat::Vst3
+            && entry.diagnostics().iter().any(|diagnostic| {
+                diagnostic.rule() == "package.binary-slot.missing-export-symbol"
+                    && diagnostic.message().contains("GetPluginFactory")
+            })
+    }));
+}
+
+#[test]
+fn plugin_adapters_reject_symbol_text_without_dynamic_loadability() {
+    let metadata = FormatMetadata::new("com.hawk2ui.dynamic-load", "DynamicLoad", "Hawk2UI")
+        .feature("audio-effect");
+    let output_root = unique_temp_dir("hawk2ui-plugin-dynamic-load");
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "DynamicLoad"),
+        ParameterModel::new([]),
+    )
+    .with_format(PackageFormat::Clap)
+    .with_format(PackageFormat::Vst3);
+
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("materialization succeeds");
+    for output in &outputs {
+        let root = Path::new(&output.output_path);
+        let (binary_path, symbol) = match output.format {
+            PackageFormat::Clap => (root.join("DynamicLoad.clap"), "clap_entry"),
+            PackageFormat::Vst3 => (
+                root.join("Contents")
+                    .join("x86_64-linux")
+                    .join("DynamicLoad.vst3"),
+                "GetPluginFactory",
+            ),
+            other => panic!("unexpected output format: {other:?}"),
+        };
+        std::fs::write(
+            &binary_path,
+            format!("\x7fELFnative-looking-symbol-text-only-{symbol}"),
+        )
+        .expect("native-looking symbol-text test binary writes");
+    }
+
+    let report = plan.verify_materialized(&outputs);
+
+    assert_eq!(report.status(), VerificationStatus::Failed);
+    assert!(report.entries().iter().any(|entry| {
+        matches!(
+            entry.target().format(),
+            PackageFormat::Clap | PackageFormat::Vst3
+        ) && entry
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.rule() == "package.binary-slot.dynamic-load-failed")
+    }));
 }
 
 #[test]
@@ -442,7 +628,7 @@ fn plugin_adapters_materialize_runtime_artifact_payload_into_package_resources()
     assert!(hashes.contains("Contents/Resources/generated-clap/src/lib.rs"));
     assert_eq!(
         plan.verify_materialized(&outputs).status(),
-        VerificationStatus::Passed
+        VerificationStatus::Failed
     );
     std::fs::remove_file(runtime_artifact_path).expect("runtime artifact should be removable");
     assert_eq!(
@@ -535,6 +721,42 @@ fn plugin_adapters_trusted_runtime_editor_loader_enforces_release_keys() {
         unsigned_error.diagnostic().rule(),
         "package.clap-runtime-editor.security.package.signature-missing"
     );
+}
+
+#[test]
+fn plugin_adapters_trusted_materialized_verification_rejects_unsigned_runtime_artifacts() {
+    let unsigned_artifact = unsigned_runtime_artifact();
+    let runtime_artifact =
+        serde_json::to_value(&unsigned_artifact).expect("unsigned artifact serializes");
+    let output_root = unique_temp_dir("hawk2ui-plugin-trusted-materialized-unsigned");
+    let request = PackageRequest::new(
+        FormatMetadata::new(
+            "com.hawk2ui.trusted-materialized",
+            "Trusted Materialized",
+            "Hawk2UI",
+        ),
+        BundleOutput::new(output_root.to_string_lossy(), "TrustedMaterialized"),
+        ParameterModel::new([]),
+    )
+    .with_editor(PluginEditor::custom(
+        "main-editor",
+        PluginEditorSize::new(320.0, 180.0, 1.0),
+    ))
+    .with_runtime_artifact(runtime_artifact)
+    .with_format(PackageFormat::Clap);
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("package plan succeeds");
+    let outputs = plan.materialize().expect("package materializes");
+
+    let report = plan.verify_trusted_materialized(&outputs, &ArtifactSignatureVerifier::default());
+
+    assert_eq!(report.status(), VerificationStatus::Failed);
+    assert!(report.entries().iter().any(|entry| {
+        entry.diagnostics().iter().any(|diagnostic| {
+            diagnostic.rule() == "package.runtime-artifact.security.package.signature-missing"
+        })
+    }));
 }
 
 const VALID_PLUGIN_MANIFEST: &str = r#"
@@ -1185,90 +1407,91 @@ fn main() {
 }
 
 unsafe fn instantiate_class(factory: *mut IPluginFactory, cid: TUID) {
-    let mut object = ptr::null_mut::<c_void>();
-    let result = ((*(*factory).vtbl).createInstance)(
-        factory,
-        cid.as_ptr(),
-        FUnknown_iid.as_ptr(),
-        &mut object,
-    );
-    assert_eq!(result, kResultOk);
-    assert!(!object.is_null());
-      let unknown = object.cast::<FUnknown>();
-      ((*(*unknown).vtbl).release)(unknown);
-  }
+    unsafe {
+        let mut object = ptr::null_mut::<c_void>();
+        let result = ((*(*factory).vtbl).createInstance)(
+            factory,
+            cid.as_ptr(),
+            FUnknown_iid.as_ptr(),
+            &mut object,
+        );
+        assert_eq!(result, kResultOk);
+        assert!(!object.is_null());
+        let unknown = object.cast::<FUnknown>();
+        ((*(*unknown).vtbl).release)(unknown);
+    }
+}
 
-  unsafe fn instantiate_component_routing(factory: *mut IPluginFactory, cid: TUID) {
-      let mut object = ptr::null_mut::<c_void>();
-      let result = ((*(*factory).vtbl).createInstance)(
-          factory,
-          cid.as_ptr(),
-          IComponent_iid.as_ptr(),
-          &mut object,
-      );
-      assert_eq!(result, kResultOk);
-      assert!(!object.is_null());
-      let component = object.cast::<IComponent>();
-      let vtbl = &*(*component).vtbl;
-      let mut input = RoutingInfo {
-          mediaType: MediaTypes_::kAudio as MediaType,
-          busIndex: 0,
-          channel: 1,
-      };
-      let mut output = RoutingInfo {
-          mediaType: 0,
-          busIndex: -1,
-          channel: -1,
-      };
-      assert_eq!(
-          (vtbl.getRoutingInfo)(component, &mut input, &mut output),
-          kResultOk
-      );
-      assert_eq!(output.mediaType, MediaTypes_::kAudio as MediaType);
-      assert_eq!(output.busIndex, 0);
-      assert_eq!(output.channel, 1);
+unsafe fn instantiate_component_routing(factory: *mut IPluginFactory, cid: TUID) {
+    unsafe {
+        let mut object = ptr::null_mut::<c_void>();
+        let result = ((*(*factory).vtbl).createInstance)(
+            factory,
+            cid.as_ptr(),
+            IComponent_iid.as_ptr(),
+            &mut object,
+        );
+        assert_eq!(result, kResultOk);
+        assert!(!object.is_null());
+        let component = object.cast::<IComponent>();
+        let vtbl = &*(*component).vtbl;
+        let mut input = RoutingInfo {
+            mediaType: MediaTypes_::kAudio as MediaType,
+            busIndex: 0,
+            channel: 1,
+        };
+        let mut output = RoutingInfo {
+            mediaType: 0,
+            busIndex: -1,
+            channel: -1,
+        };
+        assert_eq!(
+            (vtbl.getRoutingInfo)(component, &mut input, &mut output),
+            kResultOk
+        );
+        assert_eq!(output.mediaType, MediaTypes_::kAudio as MediaType);
+        assert_eq!(output.busIndex, 0);
+        assert_eq!(output.channel, 1);
 
-      let unknown = object.cast::<FUnknown>();
-      ((*(*unknown).vtbl).release)(unknown);
-  }
+        let unknown = object.cast::<FUnknown>();
+        ((*(*unknown).vtbl).release)(unknown);
+    }
+}
 
-  unsafe fn instantiate_processor_passthrough(factory: *mut IPluginFactory, cid: TUID) {
-      let mut object = ptr::null_mut::<c_void>();
-      let result = ((*(*factory).vtbl).createInstance)(
-          factory,
-          cid.as_ptr(),
-          IAudioProcessor_iid.as_ptr(),
-          &mut object,
-      );
-      assert_eq!(result, kResultOk);
-      assert!(!object.is_null());
-      let processor = object.cast::<IAudioProcessor>();
-      let vtbl = &*(*processor).vtbl;
-      assert_eq!(
-          (vtbl.canProcessSampleSize)(
-              processor,
-              SymbolicSampleSizes_::kSample32 as i32
-          ),
-          kResultOk
-      );
-      assert_eq!(
-          (vtbl.canProcessSampleSize)(
-              processor,
-              SymbolicSampleSizes_::kSample64 as i32
-          ),
-          kResultOk
-      );
-      assert_process32_passthrough(processor, vtbl);
-      assert_process64_passthrough(processor, vtbl);
+unsafe fn instantiate_processor_passthrough(factory: *mut IPluginFactory, cid: TUID) {
+    unsafe {
+        let mut object = ptr::null_mut::<c_void>();
+        let result = ((*(*factory).vtbl).createInstance)(
+            factory,
+            cid.as_ptr(),
+            IAudioProcessor_iid.as_ptr(),
+            &mut object,
+        );
+        assert_eq!(result, kResultOk);
+        assert!(!object.is_null());
+        let processor = object.cast::<IAudioProcessor>();
+        let vtbl = &*(*processor).vtbl;
+        assert_eq!(
+            (vtbl.canProcessSampleSize)(processor, SymbolicSampleSizes_::kSample32 as i32),
+            kResultOk
+        );
+        assert_eq!(
+            (vtbl.canProcessSampleSize)(processor, SymbolicSampleSizes_::kSample64 as i32),
+            kResultOk
+        );
+        assert_process32_passthrough(processor, vtbl);
+        assert_process64_passthrough(processor, vtbl);
 
-      let unknown = object.cast::<FUnknown>();
-      ((*(*unknown).vtbl).release)(unknown);
-  }
+        let unknown = object.cast::<FUnknown>();
+        ((*(*unknown).vtbl).release)(unknown);
+    }
+}
 
   unsafe fn assert_process32_passthrough(
       processor: *mut IAudioProcessor,
       vtbl: &IAudioProcessorVtbl,
   ) {
+      unsafe {
       let mut input_left = [0.25_f32, -0.5, 0.75];
       let mut input_right = [1.0_f32, 0.5, -1.0];
       let mut output_left = [0.0_f32; 3];
@@ -1306,12 +1529,14 @@ unsafe fn instantiate_class(factory: *mut IPluginFactory, cid: TUID) {
       assert_eq!((vtbl.process)(processor, &mut process_data), kResultOk);
       assert_eq!(output_left, input_left);
       assert_eq!(output_right, input_right);
+      }
   }
 
   unsafe fn assert_process64_passthrough(
       processor: *mut IAudioProcessor,
       vtbl: &IAudioProcessorVtbl,
   ) {
+      unsafe {
       let mut input_left = [0.125_f64, -0.25, 0.5];
       let mut input_right = [0.75_f64, 0.0, -0.75];
       let mut output_left = [0.0_f64; 3];
@@ -1349,9 +1574,11 @@ unsafe fn instantiate_class(factory: *mut IPluginFactory, cid: TUID) {
       assert_eq!((vtbl.process)(processor, &mut process_data), kResultOk);
       assert_eq!(output_left, input_left);
       assert_eq!(output_right, input_right);
+      }
   }
 
   unsafe fn instantiate_controller_with_parameters(factory: *mut IPluginFactory, cid: TUID) {
+    unsafe {
     let mut object = ptr::null_mut::<c_void>();
     let result = ((*(*factory).vtbl).createInstance)(
         factory,
@@ -1408,6 +1635,7 @@ unsafe fn instantiate_class(factory: *mut IPluginFactory, cid: TUID) {
 
     let unknown = object.cast::<FUnknown>();
     ((*(*unknown).vtbl).release)(unknown);
+    }
 }
 
 fn c_chars_to_string<const N: usize>(source: &[c_char; N]) -> String {
@@ -2185,9 +2413,7 @@ fn plugin_adapters_materialize_format_specific_layouts_and_hash_manifest() {
         ParameterModel::new([]),
     )
     .with_format(PackageFormat::Clap)
-    .with_format(PackageFormat::Vst3)
-    .with_format(PackageFormat::Au)
-    .with_format(PackageFormat::Standalone);
+    .with_format(PackageFormat::Vst3);
 
     let plan = PackageAdapterSet::new()
         .plan(&request)
@@ -2241,21 +2467,10 @@ fn plugin_adapters_materialize_format_specific_layouts_and_hash_manifest() {
                 assert!(hashes.contains("Contents/Resources/generated-vst3/Cargo.toml"));
                 assert!(hashes.contains("Contents/Resources/generated-vst3/src/lib.rs"));
             }
-            PackageFormat::Au => {
-                assert!(root.join("Contents/Info.plist").is_file());
-                assert!(root.join("Contents/MacOS/Layout").is_file());
-                assert!(hashes.contains("Contents/MacOS/Layout"));
-            }
-            PackageFormat::Standalone => {
-                assert!(root.join("Contents/Info.plist").is_file());
-                assert!(root.join("Contents/MacOS/Layout").is_file());
-                assert!(
-                    root.join("Contents/Resources/hawk2ui-launch.toml")
-                        .is_file()
-                );
-                assert!(hashes.contains("Contents/Resources/hawk2ui-launch.toml"));
-            }
-            PackageFormat::DesktopBundle | PackageFormat::SealedArtifact => {
+            PackageFormat::Au
+            | PackageFormat::Standalone
+            | PackageFormat::DesktopBundle
+            | PackageFormat::SealedArtifact => {
                 panic!("unexpected format in layout test");
             }
         }
@@ -2277,7 +2492,7 @@ fn plugin_adapters_materialize_removes_stale_output_payloads() {
         BundleOutput::new(output_root.to_string_lossy(), "Clean"),
         ParameterModel::new([]),
     )
-    .with_format(PackageFormat::Clap);
+    .with_format(PackageFormat::SealedArtifact);
 
     let plan = PackageAdapterSet::new()
         .plan(&request)
@@ -2314,7 +2529,7 @@ fn plugin_adapters_verify_materialized_rejects_tampered_package_payloads() {
         BundleOutput::new(output_root.to_string_lossy(), "Tamper"),
         ParameterModel::new([]),
     )
-    .with_format(PackageFormat::Clap);
+    .with_format(PackageFormat::SealedArtifact);
 
     let plan = PackageAdapterSet::new()
         .plan(&request)
@@ -2326,7 +2541,7 @@ fn plugin_adapters_verify_materialized_rejects_tampered_package_payloads() {
     );
 
     std::fs::write(
-        Path::new(&outputs[0].output_path).join("Tamper.clap"),
+        Path::new(&outputs[0].output_path).join("Contents/Resources/sealed-artifact.hawk2ui"),
         "tampered",
     )
     .expect("entry payload should be writable");
@@ -2407,7 +2622,7 @@ fn plugin_adapters_escape_package_metadata_in_generated_descriptors() {
         ParameterModel::new([]),
     )
     .with_format(PackageFormat::Clap)
-    .with_format(PackageFormat::Standalone);
+    .with_format(PackageFormat::Vst3);
 
     let plan = PackageAdapterSet::new()
         .plan(&request)
@@ -2419,20 +2634,17 @@ fn plugin_adapters_escape_package_metadata_in_generated_descriptors() {
         .find(|output| output.format == PackageFormat::Clap)
         .map(|output| Path::new(&output.output_path))
         .expect("clap output exists");
-    let standalone_root = outputs
+    let vst3_root = outputs
         .iter()
-        .find(|output| output.format == PackageFormat::Standalone)
+        .find(|output| output.format == PackageFormat::Vst3)
         .map(|output| Path::new(&output.output_path))
-        .expect("standalone output exists");
+        .expect("VST3 output exists");
     let package_manifest =
         std::fs::read_to_string(clap_root.join("hawk2ui-package.toml")).expect("manifest reads");
     let clap_manifest = std::fs::read_to_string(clap_root.join("Contents/Resources/clap.json"))
         .expect("clap manifest reads");
     let info_plist =
-        std::fs::read_to_string(standalone_root.join("Contents/Info.plist")).expect("plist reads");
-    let launch_manifest =
-        std::fs::read_to_string(standalone_root.join("Contents/Resources/hawk2ui-launch.toml"))
-            .expect("launch manifest reads");
+        std::fs::read_to_string(vst3_root.join("Contents/Info.plist")).expect("plist reads");
 
     assert!(package_manifest.contains(r#"display_name = "Quote\"Name&<""#));
     assert!(package_manifest.contains(r#""quoted \"feature\"""#));
@@ -2440,7 +2652,6 @@ fn plugin_adapters_escape_package_metadata_in_generated_descriptors() {
     assert!(clap_manifest.contains(r#""vendor": "Hawk \"A&B\" <Co>""#));
     assert!(info_plist.contains("Quote&quot;Name&amp;&lt;"));
     assert!(info_plist.contains("Hawk &quot;A&amp;B&quot; &lt;Co&gt;"));
-    assert!(launch_manifest.contains(r#"entry = "Contents/MacOS/Quote\"Name&<""#));
 }
 
 #[test]

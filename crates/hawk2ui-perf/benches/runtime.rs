@@ -18,7 +18,7 @@ fn main() {
         )
         .with_case(
             BenchmarkCase::new("memory-working-set", memory_fixture, BenchmarkKind::Memory)
-                .with_measurement(common::measure_directory_bytes(memory_fixture)),
+                .with_measurement(common::measure_dashboard_smoke_frame_bytes(memory_fixture)),
         )
         .with_case(
             BenchmarkCase::new(
@@ -26,7 +26,7 @@ fn main() {
                 runtime_fixture,
                 BenchmarkKind::Runtime,
             )
-            .with_measurement(common::measure_operation_count(1024)),
+            .with_measurement(common::measure_runtime_dispatch_operation_count(1024)),
         );
     let stability = RuntimeStabilityFixture::run(
         "runtime-event-dispatch",

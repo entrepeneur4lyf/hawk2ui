@@ -150,6 +150,38 @@ export interface HawkCompilerInitialDynamicValueWire {
   readonly value: HawkCompilerDynamicValueWire;
 }
 
+export type HawkCompilerTemplateScalarWire =
+  | { readonly type: "literal"; readonly value: HawkCompilerPropValueWire }
+  | { readonly type: "expression"; readonly expression: string };
+
+export interface HawkCompilerTemplatePropWire {
+  readonly name: string;
+  readonly value: HawkCompilerTemplateScalarWire;
+}
+
+export interface HawkCompilerListTemplateNodeWire {
+  readonly id: HawkCompilerTemplateScalarWire;
+  readonly kind: HawkElementKind;
+  readonly key?: HawkCompilerTemplateScalarWire;
+  readonly props: readonly HawkCompilerTemplatePropWire[];
+  readonly refs: readonly string[];
+  readonly style_refs: readonly string[];
+  readonly asset_refs: readonly HawkCompilerAssetWire[];
+  readonly events: readonly HawkCompilerEventWire[];
+  readonly lifecycle: readonly HawkCompilerLifecycleWire[];
+  readonly children: readonly HawkCompilerListTemplateNodeWire[];
+}
+
+export interface HawkCompilerListTemplateWire {
+  readonly id: string;
+  readonly parent_id: string;
+  readonly anchor_before?: string;
+  readonly source: string;
+  readonly item: string;
+  readonly key: string;
+  readonly node: HawkCompilerListTemplateNodeWire;
+}
+
 export interface HawkCompilerSourceWire {
   readonly framework: string;
   readonly compiler: string;
@@ -160,6 +192,7 @@ export interface HawkCompilerSourceWire {
 export interface HawkCompilerArtifactOptions {
   readonly compiler?: HawkCompilerSourceWire;
   readonly eventHandlers?: readonly HawkCompilerEventHandlerWire[];
+  readonly listTemplates?: readonly HawkCompilerListTemplateWire[];
 }
 
 export interface HawkCompilerArtifact {
@@ -170,6 +203,7 @@ export interface HawkCompilerArtifact {
   readonly dynamic_bindings: readonly HawkCompilerDynamicBindingWire[];
   readonly initial_dynamic_values: readonly HawkCompilerInitialDynamicValueWire[];
   readonly event_handlers: readonly HawkCompilerEventHandlerWire[];
+  readonly list_templates: readonly HawkCompilerListTemplateWire[];
 }
 
 export interface HawkCompiledApp extends HawkAppSpec {
@@ -202,7 +236,11 @@ export function compilerArtifactForApp(
   validateElement(spec.root);
   validateDynamicBindings(dynamicBindings, elementIds(spec.root));
   validateInitialDynamicValues(initialDynamicValues);
-  validateEventHandlers(options.eventHandlers ?? [], referencedHandlerNames(spec.root));
+  const listTemplates = options.listTemplates ?? [];
+  const referencedHandlers = referencedHandlerNames(spec.root);
+  addListTemplateHandlerNames(listTemplates, referencedHandlers);
+  validateEventHandlers(options.eventHandlers ?? [], referencedHandlers);
+  validateListTemplates(listTemplates, elementIds(spec.root));
   const compiler = cloneCompilerSourceWire(options.compiler ?? nativeCompilerSourceForApp(spec));
   validateCompilerSource(compiler);
   return {
@@ -222,8 +260,9 @@ export function compilerArtifactForApp(
         value: cloneDynamicValueWire(value.value),
       })),
       event_handlers: (options.eventHandlers ?? []).map(cloneEventHandlerWire),
-    };
-  }
+        list_templates: listTemplates.map(cloneListTemplateWire),
+      };
+    }
 
 export function recordsForApp(spec: HawkAppSpec): readonly string[] {
   const records: string[] = [];
@@ -609,6 +648,102 @@ function validateEventHandlers(value: unknown, referencedHandlers: ReadonlySet<s
   }
 }
 
+function validateListTemplates(
+  templates: readonly HawkCompilerListTemplateWire[],
+  ids: ReadonlySet<string>,
+): void {
+  const templateIds = new Set<string>();
+  for (const template of templates) {
+    if (!template.id.trim()) {
+      throw new Error("native.list-template.id-invalid: list templates require stable ids.");
+    }
+    if (templateIds.has(template.id)) {
+      throw new Error(`native.list-template.duplicate: list template \`${template.id}\` is declared more than once.`);
+    }
+    templateIds.add(template.id);
+      if (!ids.has(template.parent_id)) {
+        throw new Error(`native.list-template.parent-missing: list template \`${template.id}\` references unknown parent \`${template.parent_id}\`.`);
+      }
+      if (template.anchor_before !== undefined) {
+        if (typeof template.anchor_before !== "string" || !template.anchor_before.trim()) {
+          throw new Error(`native.list-template.anchor-before-invalid: list template \`${template.id}\` has an invalid anchor id.`);
+        }
+        if (!ids.has(template.anchor_before)) {
+          throw new Error(`native.list-template.anchor-before-missing: list template \`${template.id}\` references unknown anchor \`${template.anchor_before}\`.`);
+        }
+      }
+      if (!template.source.trim() || !template.item.trim() || !template.key.trim()) {
+        throw new Error(`native.list-template.source-invalid: list template \`${template.id}\` requires source, item, and key expressions.`);
+      }
+    validateTemplateNode(template.node, template.id);
+  }
+}
+
+function validateTemplateNode(node: HawkCompilerListTemplateNodeWire, templateId: string): void {
+  if (!isElementKind(node.kind)) {
+    throw new Error(`native.list-template.kind-invalid: list template \`${templateId}\` has unsupported node kind.`);
+  }
+  validateTemplateScalar(node.id, templateId, "id");
+  if (node.key !== undefined) validateTemplateScalar(node.key, templateId, "key");
+  validateStringArray(node.refs, "native.list-template.refs-invalid", `refs on list template \`${templateId}\` must be stable strings.`);
+  validateStringArray(node.style_refs, "native.list-template.style-refs-invalid", `style refs on list template \`${templateId}\` must be stable strings.`);
+    for (const prop of node.props) {
+      if (!prop.name.trim()) {
+        throw new Error(`native.list-template.prop-name-invalid: list template \`${templateId}\` has an empty prop name.`);
+      }
+      validateTemplateScalar(prop.value, templateId, prop.name);
+    }
+    for (const asset of validateRecordArray(node.asset_refs, "native.list-template.assets-invalid", `asset refs on list template \`${templateId}\` must be an array of records.`)) {
+      if (typeof asset.name !== "string" || !asset.name.trim()) {
+        throw new Error(`native.list-template.asset-name-invalid: asset ref on list template \`${templateId}\` requires a stable name.`);
+      }
+      if (typeof asset.path !== "string" || !asset.path.trim() || isUnsafeAssetPath(asset.path)) {
+        throw new Error(`native.list-template.asset-path-invalid: asset \`${String(asset.name)}\` must use a workspace-relative safe path.`);
+      }
+    }
+    for (const event of validateRecordArray(node.events, "native.list-template.events-invalid", `events on list template \`${templateId}\` must be an array of records.`)) {
+      if (!isHawkEventKind(event.kind)) {
+        throw new Error(`native.list-template.event-kind-invalid: event on list template \`${templateId}\` has unsupported kind \`${String(event.kind)}\`.`);
+      }
+      if (typeof event.handler !== "string" || !event.handler.trim()) {
+        throw new Error(`native.list-template.event-handler-invalid: event on list template \`${templateId}\` requires a stable handler name.`);
+      }
+      validateStringArray(event.payload_fields, "native.list-template.event-payload-invalid", `event payload fields on list template \`${templateId}\` must be stable strings.`);
+    }
+    for (const lifecycle of validateRecordArray(node.lifecycle, "native.list-template.lifecycle-invalid", `lifecycle on list template \`${templateId}\` must be an array of records.`)) {
+      if (!isHawkLifecyclePhase(lifecycle.event)) {
+        throw new Error(`native.list-template.lifecycle-event-invalid: lifecycle on list template \`${templateId}\` has unsupported event \`${String(lifecycle.event)}\`.`);
+      }
+      if (typeof lifecycle.handler !== "string" || !lifecycle.handler.trim()) {
+        throw new Error(`native.list-template.lifecycle-handler-invalid: lifecycle on list template \`${templateId}\` requires a stable handler name.`);
+      }
+    }
+    for (const child of node.children) validateTemplateNode(child, templateId);
+  }
+
+function validateTemplateScalar(
+  value: HawkCompilerTemplateScalarWire,
+  templateId: string,
+  label: string,
+): void {
+  if (value.type === "literal") {
+    validatePropValueWire(value.value, `list template \`${templateId}\` ${label}`);
+  } else if (value.type === "expression") {
+    if (!value.expression.trim()) {
+      throw new Error(`native.list-template.expression-invalid: list template \`${templateId}\` ${label} expression must be non-empty.`);
+    }
+  } else {
+    throw new Error(`native.list-template.scalar-invalid: list template \`${templateId}\` ${label} has unsupported scalar type.`);
+  }
+}
+
+function validatePropValueWire(value: HawkCompilerPropValueWire, label: string): void {
+  if (value.type === "string" && typeof value.value === "string") return;
+  if (value.type === "bool" && typeof value.value === "boolean") return;
+  if (value.type === "number" && typeof value.value === "number" && Number.isFinite(value.value)) return;
+  throw new Error(`native.list-template.literal-invalid: ${label} has an invalid literal value.`);
+}
+
 function validateDynamicValue(value: unknown, name: string): asserts value is HawkCompilerDynamicValueWire {
   if (!isObjectRecord(value) || typeof value.type !== "string") {
     throw new Error(`native.initial-dynamic-value.type-invalid: initial dynamic value \`${name}\` has an unsupported dynamic value record.`);
@@ -655,6 +790,42 @@ function validateDynamicValue(value: unknown, name: string): asserts value is Ha
 
 function isObjectRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function cloneTemplateScalarWire(value: HawkCompilerTemplateScalarWire): HawkCompilerTemplateScalarWire {
+  if (value.type === "expression") return { type: "expression", expression: value.expression };
+  return { type: "literal", value: { ...value.value } };
+}
+
+function cloneListTemplateNodeWire(node: HawkCompilerListTemplateNodeWire): HawkCompilerListTemplateNodeWire {
+  return {
+    id: cloneTemplateScalarWire(node.id),
+    kind: node.kind,
+    ...(node.key ? { key: cloneTemplateScalarWire(node.key) } : {}),
+    props: node.props.map((prop) => ({ name: prop.name, value: cloneTemplateScalarWire(prop.value) })),
+    refs: [...node.refs],
+    style_refs: [...node.style_refs],
+    asset_refs: node.asset_refs.map((asset) => ({ ...asset })),
+    events: node.events.map((event) => ({
+      kind: event.kind,
+      handler: event.handler,
+      payload_fields: [...event.payload_fields],
+    })),
+    lifecycle: node.lifecycle.map((lifecycle) => ({ ...lifecycle })),
+    children: node.children.map(cloneListTemplateNodeWire),
+  };
+}
+
+function cloneListTemplateWire(template: HawkCompilerListTemplateWire): HawkCompilerListTemplateWire {
+  return {
+      id: template.id,
+      parent_id: template.parent_id,
+      ...(template.anchor_before ? { anchor_before: template.anchor_before } : {}),
+      source: template.source,
+      item: template.item,
+    key: template.key,
+    node: cloneListTemplateNodeWire(template.node),
+  };
 }
 
 function cloneDynamicValueWire(value: HawkCompilerDynamicValueWire): HawkCompilerDynamicValueWire {
@@ -712,7 +883,7 @@ function elementIds(root: HawkElementSpec): ReadonlySet<string> {
   return ids;
 }
 
-function referencedHandlerNames(root: HawkElementSpec): ReadonlySet<string> {
+function referencedHandlerNames(root: HawkElementSpec): Set<string> {
   const names = new Set<string>();
   const visit = (element: HawkElementSpec): void => {
     for (const event of element.events ?? []) {
@@ -727,6 +898,22 @@ function referencedHandlerNames(root: HawkElementSpec): ReadonlySet<string> {
   };
   visit(root);
   return names;
+}
+
+function addListTemplateHandlerNames(
+  templates: readonly HawkCompilerListTemplateWire[],
+  names: Set<string>,
+): void {
+  const visit = (node: HawkCompilerListTemplateNodeWire): void => {
+    for (const event of node.events) {
+      if (typeof event.handler === "string" && event.handler.trim()) names.add(event.handler);
+    }
+    for (const lifecycle of node.lifecycle) {
+      if (typeof lifecycle.handler === "string" && lifecycle.handler.trim()) names.add(lifecycle.handler);
+    }
+    for (const child of node.children) visit(child);
+  };
+  for (const template of templates) visit(template.node);
 }
 
 function isUnsafeAssetPath(path: string): boolean {

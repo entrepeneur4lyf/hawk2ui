@@ -11,6 +11,7 @@ pub mod native;
 mod operation_keys;
 pub mod runtime_bridge;
 pub mod state;
+pub mod testkit;
 
 pub use adapter::{
     AdapterError, CustomRendererError, CustomRendererOperation, CustomRendererProtocol,
@@ -18,14 +19,15 @@ pub use adapter::{
     FrameworkDynamicBindingWire, FrameworkDynamicValue, FrameworkDynamicValueWire,
     FrameworkEventHandler, FrameworkEventHandlerAction, FrameworkEventHandlerActionWire,
     FrameworkEventHandlerWire, FrameworkInitialDynamicValue, FrameworkInitialDynamicValueMode,
-    FrameworkInitialDynamicValueModeWire, FrameworkInitialDynamicValueWire,
+    FrameworkInitialDynamicValueModeWire, FrameworkInitialDynamicValueWire, FrameworkListTemplate,
+    FrameworkListTemplateNode, FrameworkListTemplateNodeWire, FrameworkListTemplateWire,
     FrameworkNativeAssetWire, FrameworkNativeChildWire, FrameworkNativeElementKindWire,
     FrameworkNativeEventWire, FrameworkNativeLifecycleEventWire, FrameworkNativeLifecycleWire,
     FrameworkNativeNode, FrameworkNativeNodeWire, FrameworkNativePayloadFieldWire,
     FrameworkNativeProgram, FrameworkNativeProgramWire, FrameworkNativePropValueWire,
     FrameworkNativePropWire, FrameworkReactiveBinding, FrameworkReactiveBindingKindWire,
-    FrameworkReactiveBindingWire, NativeRendererAdapter, NodeOperation,
-    RecordingNativeRendererAdapter,
+    FrameworkReactiveBindingWire, FrameworkTemplatePropWire, FrameworkTemplateScalar,
+    FrameworkTemplateScalarWire, NativeRendererAdapter, NodeOperation,
 };
 pub use compile::{
     AuthoringArtifact, AuthoringDiagnostic, AuthoringDiagnosticSeverity, compile_authoring_source,

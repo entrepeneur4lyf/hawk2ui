@@ -32,7 +32,7 @@ use hawk2ui_host_winit::{
 use hawk2ui_plugin::{BundleOutput, FormatMetadata, PluginEditor, PluginEditorSize};
 use hawk2ui_plugin_adapters::{
     MaterializedPackageOutput, PackageAdapterSet, PackageFormat, PackageMaterializationError,
-    PackageRequest, VerificationStatus,
+    PackageRequest, VerificationReport as PackageVerificationReport, VerificationStatus,
 };
 use hawk2ui_runtime::{EntryNode, RuntimeSceneError, RuntimeViewTree};
 use hawk2ui_schema::schema_catalog_json;
@@ -43,9 +43,9 @@ use hawk2ui_script::{
 use hawk2ui_security_model::{PackageTrustRecord, PackageTrustValidator, VerificationReportStatus};
 
 use crate::{
-    CliCommand, CliDiagnostic, CliExitCode, CliPresentationBackend, DevChangeClassifier, DevLoop,
-    DevPatchKind, DevPatchPlan, DevWatchKind, DevWatchedPath, FileSystemWatcher,
-    NotifyFileSystemWatcher, RecordingReloadTarget, RecordingWatcher,
+    CliCommand, CliDiagnostic, CliExitCode, CliPresentationBackend, DevChangeBatch,
+    DevChangeClassifier, DevLoop, DevPatchKind, DevPatchPlan, DevWatchKind, DevWatchedPath,
+    FileSystemWatcher, NotifyFileSystemWatcher,
 };
 
 const ARTIFACT_SCHEMA_VERSION: ArtifactSchemaVersion = ArtifactSchemaVersion::new(1, 0);
@@ -61,6 +61,18 @@ const LEGACY_MANIFEST_FILE: &str = "manifest.hawk.toml";
 enum BuildProfile {
     Development,
     Production,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DesktopPackageOutput {
+    package_root: PathBuf,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct PackagedDesktopRuntimeDescriptor {
+    manifest_source: String,
+    artifact: SealedArtifact,
 }
 
 impl BuildProfile {
@@ -101,6 +113,78 @@ impl DesktopEntryAppModel {
     fn from_mount_json(value: &str) -> Result<Self, String> {
         EntryNode::from_tree_json(value).map(|root| Self { root })
     }
+}
+
+/// Runs a packaged desktop app using the descriptor located next to the generated launcher.
+///
+/// # Errors
+///
+/// Returns a rendered diagnostic string when the descriptor, signed artifact, runtime config, or
+/// native desktop host fails.
+pub fn run_packaged_desktop_from_default_location() -> Result<(), String> {
+    let executable = env::current_exe()
+        .map_err(|error| format!("package.desktop.current-exe-failed: {error}"))?;
+    let usr_dir = executable.parent().and_then(Path::parent).ok_or_else(|| {
+        format!(
+            "package.desktop.layout-invalid: launcher path {} is not inside usr/bin",
+            executable.display()
+        )
+    })?;
+    let descriptor_path = usr_dir
+        .join("share")
+        .join("hawk2ui")
+        .join("hawk2ui-desktop-runtime.json");
+    run_packaged_desktop_from_descriptor_path(descriptor_path).map(|_| ())
+}
+
+/// Runs a packaged desktop app from an explicit runtime descriptor path.
+///
+/// # Errors
+///
+/// Returns a rendered diagnostic string when the descriptor, signed artifact, runtime config, or
+/// native desktop host fails.
+pub fn run_packaged_desktop_from_descriptor_path(
+    descriptor_path: impl AsRef<Path>,
+) -> Result<WinitDesktopRuntimeSummary, String> {
+    let descriptor_path = descriptor_path.as_ref();
+    let descriptor_source = fs::read_to_string(descriptor_path).map_err(|error| {
+        format!(
+            "package.desktop.descriptor-read-failed: failed to read {}: {error}",
+            descriptor_path.display()
+        )
+    })?;
+    let descriptor: PackagedDesktopRuntimeDescriptor = serde_json::from_str(&descriptor_source)
+        .map_err(|error| {
+            format!(
+                "package.desktop.descriptor-parse-failed: failed to parse {}: {error}",
+                descriptor_path.display()
+            )
+        })?;
+    descriptor
+        .artifact
+        .ensure_signature_policy(ArtifactSignaturePolicy::RequireVerifiedSignature)
+        .map_err(|error| sealed_artifact_error_diagnostic(error).render())?;
+    let manifest = HawkManifest::parse(&descriptor.manifest_source)
+        .map_err(|error| manifest_error_diagnostic(error).render())?;
+    let exit_after_first_frame = env::var_os("HAWK2UI_EXIT_AFTER_FIRST_FRAME").is_some();
+    let mut config = desktop_runtime_config_from_manifest_and_artifact(
+        &manifest,
+        &descriptor.artifact,
+        exit_after_first_frame,
+    )
+    .map_err(|diagnostic| diagnostic.render())?;
+    let descriptor_dir = descriptor_path.parent().ok_or_else(|| {
+        format!(
+            "package.desktop.descriptor-layout-invalid: descriptor {} has no parent directory",
+            descriptor_path.display()
+        )
+    })?;
+    let runtime_assets = desktop_runtime_assets(&descriptor_dir.join("workspace"), &manifest)
+        .map_err(|diagnostic| diagnostic.render())?;
+    config = config.with_runtime_assets(runtime_assets);
+    WinitDesktopRuntime::new()
+        .run_blocking(config)
+        .map_err(|error| format!("{}: {}", error.rule(), error.message()))
 }
 
 /// Result of a concrete CLI command execution.
@@ -148,6 +232,7 @@ pub struct WorkspaceCommandRunner {
     dev_iteration_limit: Option<usize>,
     release_signing_key: Option<ArtifactSigningKey>,
     trusted_release_keys: Vec<ArtifactSignatureVerificationKey>,
+    desktop_exit_after_first_frame: bool,
 }
 
 impl WorkspaceCommandRunner {
@@ -159,6 +244,7 @@ impl WorkspaceCommandRunner {
             dev_iteration_limit: Some(1),
             release_signing_key: None,
             trusted_release_keys: Vec::new(),
+            desktop_exit_after_first_frame: false,
         }
     }
 
@@ -173,6 +259,13 @@ impl WorkspaceCommandRunner {
     #[must_use]
     pub const fn with_unbounded_dev_loop(mut self) -> Self {
         self.dev_iteration_limit = None;
+        self
+    }
+
+    /// Configures desktop runs to exit after presenting the first frame.
+    #[must_use]
+    pub const fn with_desktop_exit_after_first_frame(mut self) -> Self {
+        self.desktop_exit_after_first_frame = true;
         self
     }
 
@@ -309,6 +402,7 @@ impl WorkspaceCommandRunner {
             CliCommand::RunDesktop {
                 presentation_backend,
             } => self.run_desktop(presentation_backend),
+            CliCommand::PackageDesktop => self.package_desktop(),
             CliCommand::PackagePlugin => self.package_plugin(),
             CliCommand::ExportSchemas => Self::export_schemas(),
             CliCommand::ExportParams => self.export_params(),
@@ -399,7 +493,7 @@ impl WorkspaceCommandRunner {
             FileSystemWatcher::new(&self.root, watched_paths.iter().map(DevWatchedPath::path));
         let mut notify_watcher = None;
         if self.dev_iteration_limit.is_none() {
-            let _ = file_watcher.changed_files();
+            file_watcher.prime();
             match NotifyFileSystemWatcher::new(
                 &self.root,
                 watched_paths.iter().map(DevWatchedPath::path),
@@ -464,8 +558,8 @@ impl WorkspaceCommandRunner {
             }
 
             let mut dev_loop = DevLoop::new(
-                RecordingWatcher::new(changed_files),
-                RecordingReloadTarget::default(),
+                DevChangeBatch::new(changed_files),
+                crate::DevReloadAcknowledgement,
             )
             .preserve_state(true);
             match dev_loop.run_once() {
@@ -724,7 +818,8 @@ impl WorkspaceCommandRunner {
                 )],
             );
         }
-        let exit_after_first_frame = std::env::var_os("HAWK2UI_EXIT_AFTER_FIRST_FRAME").is_some();
+        let exit_after_first_frame = self.desktop_exit_after_first_frame
+            || std::env::var_os("HAWK2UI_EXIT_AFTER_FIRST_FRAME").is_some();
         let config =
             match desktop_runtime_config_with_assets(&self.root, &output, exit_after_first_frame) {
                 Ok(config) => config,
@@ -743,6 +838,271 @@ impl WorkspaceCommandRunner {
                 vec![CliDiagnostic::error(error.rule(), error.message())],
             ),
         }
+    }
+
+    fn package_desktop(&self) -> CommandExecution {
+        let output = match self.build_workspace() {
+            Ok(output) => output,
+            Err(execution) => return execution,
+        };
+        if !output.manifest.has_target(PackageTarget::Desktop) {
+            return CommandExecution::failure(
+                CliExitCode::Runtime,
+                vec![CliDiagnostic::target_incompatibility(
+                    "desktop",
+                    "manifest does not declare a desktop target",
+                )],
+            );
+        }
+        if !output.verification.is_release_ready() {
+            let diagnostics = output
+                .verification
+                .diagnostics
+                .iter()
+                .map(build_diagnostic_to_cli)
+                .collect();
+            return CommandExecution::failure(CliExitCode::Verification, diagnostics);
+        }
+        let artifact = match self.artifact_for_profile(&output.artifact, BuildProfile::Production) {
+            Ok(artifact) => artifact,
+            Err(execution) => return execution,
+        };
+        let package = match self.materialize_desktop_package(&output.manifest, &artifact) {
+            Ok(package) => package,
+            Err(diagnostic) => {
+                return CommandExecution::failure(CliExitCode::Runtime, vec![*diagnostic]);
+            }
+        };
+        CommandExecution::success(format!(
+            "materialized desktop package:\n- {}\nlauncher-verification-status: passed\nartifact-signature: verified\n",
+            package.package_root.display()
+        ))
+    }
+
+    fn materialize_desktop_package(
+        &self,
+        manifest: &HawkManifest,
+        artifact: &SealedArtifact,
+    ) -> Result<DesktopPackageOutput, Box<CliDiagnostic>> {
+        artifact
+            .ensure_signature_policy(ArtifactSignaturePolicy::RequireVerifiedSignature)
+            .map_err(|error| Box::new(sealed_artifact_error_diagnostic(error)))?;
+        let package_root = self
+            .root
+            .join("target")
+            .join("hawk2ui")
+            .join(format!("{}.AppDir", bundle_name(&manifest.identity.id)));
+        if package_root.exists() {
+            fs::remove_dir_all(&package_root).map_err(|error| {
+                Box::new(CliDiagnostic::error(
+                    "package.desktop.clean-failed",
+                    format!(
+                        "failed to clean desktop package {}: {error}",
+                        package_root.display()
+                    ),
+                ))
+            })?;
+        }
+
+        let bin_dir = package_root.join("usr").join("bin");
+        let resource_dir = package_root.join("usr").join("share").join("hawk2ui");
+        fs::create_dir_all(&bin_dir).map_err(|error| {
+            desktop_package_io_error("package.desktop.bin-dir-failed", &bin_dir, &error)
+        })?;
+        fs::create_dir_all(&resource_dir).map_err(|error| {
+            desktop_package_io_error("package.desktop.resource-dir-failed", &resource_dir, &error)
+        })?;
+
+        let (manifest_file_name, manifest_source) = self.packaged_desktop_manifest_source()?;
+        let descriptor = PackagedDesktopRuntimeDescriptor {
+            manifest_source: manifest_source.clone(),
+            artifact: artifact.clone(),
+        };
+        let descriptor_path = resource_dir.join("hawk2ui-desktop-runtime.json");
+        write_desktop_package_json(&descriptor_path, &descriptor)?;
+        let artifact_path = resource_dir.join("hawk2ui-artifact.hawk");
+        write_desktop_package_json(&artifact_path, artifact)?;
+        let package_manifest_path = package_root.join("hawk2ui-desktop-package.json");
+        write_desktop_package_json(
+            &package_manifest_path,
+            &desktop_package_manifest(manifest, &artifact.hashes.content.0),
+        )?;
+
+        let mut package_files = vec![
+            package_manifest_path,
+            descriptor_path,
+            artifact_path,
+            Self::write_packaged_desktop_workspace(
+                &manifest_file_name,
+                &manifest_source,
+                &resource_dir,
+            )?,
+        ];
+        package_files.extend(self.copy_packaged_desktop_assets(manifest, &resource_dir)?);
+        let generated_root = Self::write_desktop_launcher_workspace(manifest, &resource_dir)?;
+        package_files.push(generated_root.join("Cargo.toml"));
+        package_files.push(generated_root.join("src").join("main.rs"));
+        let launcher_path = Self::build_desktop_launcher(manifest, &package_root, &generated_root)?;
+        verify_native_desktop_launcher(&launcher_path)?;
+        package_files.push(launcher_path);
+
+        let hash_manifest_path = resource_dir.join("hawk2ui-hashes.json");
+        write_desktop_package_json(
+            &hash_manifest_path,
+            &desktop_package_hash_manifest(&package_root, &package_files)?,
+        )?;
+        Ok(DesktopPackageOutput { package_root })
+    }
+
+    fn packaged_desktop_manifest_source(&self) -> Result<(String, String), Box<CliDiagnostic>> {
+        let canonical = self.canonical_manifest_path();
+        if canonical.is_file() {
+            let source = fs::read_to_string(&canonical).map_err(|error| {
+                desktop_package_io_error("package.desktop.manifest-read-failed", &canonical, &error)
+            })?;
+            return Ok((CANONICAL_MANIFEST_FILE.to_string(), source));
+        }
+        let legacy = self.legacy_manifest_path();
+        let source = fs::read_to_string(&legacy).map_err(|error| {
+            desktop_package_io_error("package.desktop.manifest-read-failed", &legacy, &error)
+        })?;
+        Ok((LEGACY_MANIFEST_FILE.to_string(), source))
+    }
+
+    fn write_packaged_desktop_workspace(
+        manifest_file_name: &str,
+        manifest_source: &str,
+        resource_dir: &Path,
+    ) -> Result<PathBuf, Box<CliDiagnostic>> {
+        let workspace_manifest_path = resource_dir.join("workspace").join(manifest_file_name);
+        write_desktop_package_file(&workspace_manifest_path, manifest_source)?;
+        Ok(workspace_manifest_path)
+    }
+
+    fn copy_packaged_desktop_assets(
+        &self,
+        manifest: &HawkManifest,
+        resource_dir: &Path,
+    ) -> Result<Vec<PathBuf>, Box<CliDiagnostic>> {
+        let workspace_root = resource_dir.join("workspace");
+        let mut copied = Vec::new();
+        for asset in &manifest.assets {
+            if asset.kind == "design-token" {
+                continue;
+            }
+            let bytes = read_runtime_asset_bytes(&self.root, &asset.path)?;
+            let destination = workspace_root.join(&asset.path);
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    desktop_package_io_error("package.desktop.asset-dir-failed", parent, &error)
+                })?;
+            }
+            fs::write(&destination, bytes).map_err(|error| {
+                desktop_package_io_error("package.desktop.asset-copy-failed", &destination, &error)
+            })?;
+            copied.push(destination);
+        }
+        Ok(copied)
+    }
+
+    fn write_desktop_launcher_workspace(
+        manifest: &HawkManifest,
+        resource_dir: &Path,
+    ) -> Result<PathBuf, Box<CliDiagnostic>> {
+        let generated_root = resource_dir.join("generated-launcher");
+        let source_dir = generated_root.join("src");
+        fs::create_dir_all(&source_dir).map_err(|error| {
+            desktop_package_io_error(
+                "package.desktop.launcher-source-dir-failed",
+                &source_dir,
+                &error,
+            )
+        })?;
+        write_desktop_package_file(
+            &generated_root.join("Cargo.toml"),
+            desktop_launcher_cargo_toml(manifest, Path::new(env!("CARGO_MANIFEST_DIR"))),
+        )?;
+        write_desktop_package_file(
+            &source_dir.join("main.rs"),
+            "fn main() {\n    if let Err(error) = hawk2ui_cli::run_packaged_desktop_from_default_location() {\n        eprintln!(\"{error}\");\n        std::process::exit(1);\n    }\n}\n",
+        )?;
+        Ok(generated_root)
+    }
+
+    fn build_desktop_launcher(
+        manifest: &HawkManifest,
+        package_root: &Path,
+        generated_root: &Path,
+    ) -> Result<PathBuf, Box<CliDiagnostic>> {
+        let manifest_path = generated_root.join("Cargo.toml");
+        let target_dir = generated_root.join("target");
+        let command_output = Command::new(cargo_executable())
+            .arg("build")
+            .arg("--release")
+            .arg("--manifest-path")
+            .arg(&manifest_path)
+            .arg("--target-dir")
+            .arg(&target_dir)
+            .current_dir(generated_root)
+            .output()
+            .map_err(|error| {
+                Box::new(
+                    CliDiagnostic::error(
+                        "package.desktop.launcher-build-launch-failed",
+                        format!("failed to launch Cargo for desktop launcher: {error}"),
+                    )
+                    .file(manifest_path.display().to_string()),
+                )
+            })?;
+        if !command_output.status.success() {
+            return Err(Box::new(
+                CliDiagnostic::error(
+                    "package.desktop.launcher-build-failed",
+                    format!(
+                        "generated desktop launcher build failed:{}",
+                        render_process_output(&command_output)
+                    ),
+                )
+                .file(manifest_path.display().to_string()),
+            ));
+        }
+        remove_generated_lockfile(generated_root)?;
+        let built_launcher =
+            target_dir
+                .join("release")
+                .join(executable_filename(&desktop_launcher_package_name(
+                    manifest,
+                )));
+        let launcher_path = package_root
+            .join("usr")
+            .join("bin")
+            .join(&manifest.identity.name);
+        fs::copy(&built_launcher, &launcher_path).map_err(|error| {
+            Box::new(
+                CliDiagnostic::error(
+                    "package.desktop.launcher-install-failed",
+                    format!(
+                        "failed to install desktop launcher {} into {}: {error}",
+                        built_launcher.display(),
+                        launcher_path.display()
+                    ),
+                )
+                .file(launcher_path.display().to_string()),
+            )
+        })?;
+        fs::remove_dir_all(&target_dir).map_err(|error| {
+            Box::new(
+                CliDiagnostic::error(
+                    "package.desktop.launcher-build-cache-clean-failed",
+                    format!(
+                        "failed to remove generated launcher build cache {}: {error}",
+                        target_dir.display()
+                    ),
+                )
+                .file(target_dir.display().to_string()),
+            )
+        })?;
+        Ok(launcher_path)
     }
 
     fn package_plugin(&self) -> CommandExecution {
@@ -785,11 +1145,12 @@ impl WorkspaceCommandRunner {
                 return CommandExecution::failure(CliExitCode::Runtime, vec![*diagnostic]);
             }
         };
-        let verification = plan.verify_materialized(&outputs);
+        let verification =
+            plan.verify_trusted_materialized(&outputs, &self.trusted_release_verifier());
         if verification.status() == VerificationStatus::Failed {
             return CommandExecution::failure(
                 CliExitCode::Verification,
-                vec![package_verification_diagnostic()],
+                package_verification_diagnostics(&verification),
             );
         }
         let mut stdout = String::from("materialized plugin package layouts:\n");
@@ -1486,11 +1847,45 @@ fn package_materialization_diagnostic(error: &PackageMaterializationError) -> Cl
     )
 }
 
-fn package_verification_diagnostic() -> CliDiagnostic {
-    CliDiagnostic::error(
-        "plugin.package.verification-failed",
-        "plugin package verification failed",
-    )
+fn package_verification_diagnostics(report: &PackageVerificationReport) -> Vec<CliDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for entry in report
+        .entries()
+        .iter()
+        .filter(|entry| entry.status() == VerificationStatus::Failed)
+    {
+        if entry.diagnostics().is_empty() {
+            diagnostics.push(
+                CliDiagnostic::error(
+                    "plugin.package.verification-failed",
+                    format!(
+                        "plugin package {:?} verification failed without detailed diagnostics",
+                        entry.target().format()
+                    ),
+                )
+                .file(entry.target().output_path()),
+            );
+            continue;
+        }
+        diagnostics.extend(entry.diagnostics().iter().map(|diagnostic| {
+            CliDiagnostic::error(
+                diagnostic.rule(),
+                format!(
+                    "plugin package {:?} verification failed: {}",
+                    entry.target().format(),
+                    diagnostic.message()
+                ),
+            )
+            .file(entry.target().output_path())
+        }));
+    }
+    if diagnostics.is_empty() {
+        diagnostics.push(CliDiagnostic::error(
+            "plugin.package.verification-failed",
+            "plugin package verification failed",
+        ));
+    }
+    diagnostics
 }
 
 fn io_failure(rule: &str, path: &Path, error: &std::io::Error) -> CommandExecution {
@@ -1556,6 +1951,167 @@ fn write_project_file(path: &Path, contents: &str) -> std::io::Result<()> {
     fs::write(path, contents)
 }
 
+fn desktop_package_io_error(
+    rule: &'static str,
+    path: &Path,
+    error: &std::io::Error,
+) -> Box<CliDiagnostic> {
+    Box::new(CliDiagnostic::error(rule, error.to_string()).file(path.display().to_string()))
+}
+
+fn write_desktop_package_file(
+    path: &Path,
+    contents: impl AsRef<[u8]>,
+) -> Result<(), Box<CliDiagnostic>> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            desktop_package_io_error("package.desktop.create-dir-failed", parent, &error)
+        })?;
+    }
+    fs::write(path, contents)
+        .map_err(|error| desktop_package_io_error("package.desktop.write-failed", path, &error))
+}
+
+fn write_desktop_package_json<T: serde::Serialize>(
+    path: &Path,
+    value: &T,
+) -> Result<(), Box<CliDiagnostic>> {
+    let mut payload = serde_json::to_string_pretty(value).map_err(|error| {
+        Box::new(CliDiagnostic::error(
+            "package.desktop.json-encode-failed",
+            format!(
+                "failed to encode desktop package JSON {}: {error}",
+                path.display()
+            ),
+        ))
+    })?;
+    payload.push('\n');
+    write_desktop_package_file(path, payload)
+}
+
+fn desktop_package_manifest(manifest: &HawkManifest, content_hash: &str) -> serde_json::Value {
+    serde_json::json!({
+        "packageType": "desktop",
+        "id": manifest.identity.id,
+        "displayName": manifest.identity.name,
+        "version": manifest.identity.version,
+        "entry": format!("usr/bin/{}", manifest.identity.name),
+        "runtimeDescriptor": "usr/share/hawk2ui/hawk2ui-desktop-runtime.json",
+        "artifact": "usr/share/hawk2ui/hawk2ui-artifact.hawk",
+        "contentHash": content_hash,
+    })
+}
+
+fn cargo_toml_basic_string(value: &str) -> String {
+    let mut output = String::with_capacity(value.len() + 2);
+    output.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => output.push_str("\\\\"),
+            '"' => output.push_str("\\\""),
+            '\u{08}' => output.push_str("\\b"),
+            '\t' => output.push_str("\\t"),
+            '\n' => output.push_str("\\n"),
+            '\u{0c}' => output.push_str("\\f"),
+            '\r' => output.push_str("\\r"),
+            '\u{00}'..='\u{1f}' => {
+                let _ = write!(output, "\\u{:04X}", u32::from(ch));
+            }
+            _ => output.push(ch),
+        }
+    }
+    output.push('"');
+    output
+}
+
+fn desktop_launcher_package_name(manifest: &HawkManifest) -> String {
+    format!(
+        "hawk2ui_desktop_launcher_{}",
+        bundle_name(&manifest.identity.id).replace('-', "_")
+    )
+}
+
+fn desktop_launcher_cargo_toml(manifest: &HawkManifest, cli_crate_path: &Path) -> String {
+    format!(
+        "[package]\nname = {}\nversion = {}\nedition = \"2024\"\n\n[dependencies]\nhawk2ui-cli = {{ path = {} }}\n",
+        cargo_toml_basic_string(&desktop_launcher_package_name(manifest)),
+        cargo_toml_basic_string(&manifest.identity.version),
+        cargo_toml_basic_string(&cli_crate_path.display().to_string())
+    )
+}
+
+fn desktop_package_hash_manifest(
+    package_root: &Path,
+    package_files: &[PathBuf],
+) -> Result<serde_json::Value, Box<CliDiagnostic>> {
+    let mut entries = Vec::new();
+    for file in package_files {
+        let bytes = fs::read(file).map_err(|error| {
+            desktop_package_io_error("package.desktop.hash-read-failed", file, &error)
+        })?;
+        entries.push((
+            normalized_package_relative_path(package_root, file)?,
+            AssetHash::sha256_bytes(&bytes),
+        ));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let files = entries
+        .into_iter()
+        .map(|(path, hash)| {
+            serde_json::json!({
+                "path": path,
+                "hash": hash.as_str(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "algorithm": "sha256",
+        "files": files,
+    }))
+}
+
+fn verify_native_desktop_launcher(path: &Path) -> Result<(), Box<CliDiagnostic>> {
+    let bytes = fs::read(path).map_err(|error| {
+        desktop_package_io_error("package.desktop.launcher-read-failed", path, &error)
+    })?;
+    if native_executable_magic_matches(&bytes) {
+        Ok(())
+    } else {
+        Err(Box::new(
+            CliDiagnostic::error(
+                "package.desktop.launcher-not-native",
+                format!(
+                    "desktop launcher {} is not a native executable for this platform",
+                    path.display()
+                ),
+            )
+            .file(path.display().to_string()),
+        ))
+    }
+}
+
+fn native_executable_magic_matches(bytes: &[u8]) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        bytes.starts_with(b"\x7fELF")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        bytes.starts_with(b"MZ")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        bytes.starts_with(&[0xfe, 0xed, 0xfa, 0xce])
+            || bytes.starts_with(&[0xfe, 0xed, 0xfa, 0xcf])
+            || bytes.starts_with(&[0xca, 0xfe, 0xba, 0xbe])
+            || bytes.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        !bytes.is_empty()
+    }
+}
+
 fn render_diagnostics(diagnostics: &[CliDiagnostic]) -> String {
     diagnostics
         .iter()
@@ -1600,6 +2156,17 @@ fn cargo_executable() -> std::ffi::OsString {
     match env::var_os("CARGO") {
         Some(path) => path,
         None => "cargo".into(),
+    }
+}
+
+fn executable_filename(file_stem: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        format!("{file_stem}.exe")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        file_stem.to_string()
     }
 }
 
@@ -1942,13 +2509,7 @@ fn plugin_editor_from_manifest(manifest: &HawkManifest) -> PluginEditor {
 }
 
 fn plugin_package_formats() -> impl Iterator<Item = PackageFormat> {
-    [
-        PackageFormat::Clap,
-        PackageFormat::Vst3,
-        PackageFormat::Au,
-        PackageFormat::Standalone,
-    ]
-    .into_iter()
+    [PackageFormat::Clap, PackageFormat::Vst3].into_iter()
 }
 
 fn runtime_presentation_backend(
@@ -2079,26 +2640,37 @@ fn desktop_runtime_config_from_build_output(
     output: &BuildWorkspaceOutput,
     exit_after_first_frame: bool,
 ) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
-    if let Some(controller) = entry_framework_runtime_controller(output)? {
+    desktop_runtime_config_from_manifest_and_artifact(
+        &output.manifest,
+        &output.artifact,
+        exit_after_first_frame,
+    )
+}
+
+fn desktop_runtime_config_from_manifest_and_artifact(
+    manifest: &HawkManifest,
+    artifact: &SealedArtifact,
+    exit_after_first_frame: bool,
+) -> Result<WinitDesktopRuntimeConfig, Box<CliDiagnostic>> {
+    if let Some(controller) = entry_framework_runtime_controller(artifact)? {
         return Ok(desktop_runtime_config_from_manifest_with_runtime_tree(
-            &output.manifest,
+            manifest,
             controller.runtime_tree().clone(),
             exit_after_first_frame,
         )?
         .with_framework_controller(controller));
     }
-    let Some(script) = entry_script_record(output) else {
-        let app_model =
-            DesktopEntryAppModel::manifest_fallback(output.manifest.identity.name.clone());
+    let Some(script) = entry_script_record(artifact) else {
+        let app_model = DesktopEntryAppModel::manifest_fallback(manifest.identity.name.clone());
         return desktop_runtime_config_from_manifest_with_app_model(
-            &output.manifest,
+            manifest,
             &app_model,
             exit_after_first_frame,
         );
     };
     if let Some(app_model) = entry_script_mount_app_model(script)? {
         let config = desktop_runtime_config_from_manifest_with_app_model(
-            &output.manifest,
+            manifest,
             &app_model,
             exit_after_first_frame,
         )?;
@@ -2109,11 +2681,11 @@ fn desktop_runtime_config_from_build_output(
         )));
     }
     let app_model = entry_script_visible_title(script).map_or_else(
-        || DesktopEntryAppModel::manifest_fallback(output.manifest.identity.name.clone()),
+        || DesktopEntryAppModel::manifest_fallback(manifest.identity.name.clone()),
         DesktopEntryAppModel::manifest_fallback,
     );
     desktop_runtime_config_from_manifest_with_app_model(
-        &output.manifest,
+        manifest,
         &app_model,
         exit_after_first_frame,
     )
@@ -2272,19 +2844,17 @@ fn runtime_tree_from_manifest(
         .map_err(|error| runtime_scene_diagnostic(&error))
 }
 
-fn entry_script_record(output: &BuildWorkspaceOutput) -> Option<&CompiledScriptRecord> {
-    output
-        .artifact
+fn entry_script_record(artifact: &SealedArtifact) -> Option<&CompiledScriptRecord> {
+    artifact
         .compiled_scripts
         .iter()
         .find(|script| script.entrypoint_id == "entry")
 }
 
 fn entry_framework_runtime_controller(
-    output: &BuildWorkspaceOutput,
+    artifact: &SealedArtifact,
 ) -> Result<Option<FrameworkRuntimeController>, Box<CliDiagnostic>> {
-    let Some(framework) = output
-        .artifact
+    let Some(framework) = artifact
         .compiled_frameworks
         .iter()
         .find(|framework| framework.entrypoint_id == "entry")
@@ -2743,6 +3313,35 @@ mod tests {
         assert!(output.contains(
             "presentation-fallback-message: Winit GPU presentation currently requires a native Wayland display"
         ));
+    }
+
+    #[test]
+    fn package_verification_diagnostics_include_materialized_target_details() {
+        let output_root = env::temp_dir().join(format!(
+            "hawk2ui-cli-package-verification-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let request = PackageRequest::new(
+            FormatMetadata::new("com.hawk2ui.cli-diagnostics", "CLI Diagnostics", "Hawk2UI"),
+            BundleOutput::new(output_root.to_string_lossy(), "CLI Diagnostics"),
+            hawk2ui_plugin::ParameterModel::new([]),
+        )
+        .with_format(PackageFormat::Clap);
+        let plan = PackageAdapterSet::new()
+            .plan(&request)
+            .expect("package plan succeeds");
+        let outputs = plan.materialize().expect("package materializes");
+        let report = plan.verify_materialized(&outputs);
+
+        let diagnostics = package_verification_diagnostics(&report);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule == "package.binary-slot.not-loadable"
+                && diagnostic.message.contains("CLI Diagnostics.clap")
+        }));
     }
 
     #[test]

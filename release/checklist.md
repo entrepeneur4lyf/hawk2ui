@@ -12,7 +12,7 @@ Run these commands from the repository root before tagging or publishing a relea
 ## Required Evidence
 
 - Confirm release criteria evidence files are written under `target/release-evidence/`.
-- Confirm package target evidence covers desktop bundles, plugin bundles, sealed artifacts, debug packages, and release packages.
+- Confirm package target evidence covers release-backed CLAP/VST3 plugin bundles, sealed artifacts, debug packages, and release packages.
 - Confirm changelog verification evidence is linked before tagging.
 - Confirm `CHANGELOG.md` includes Added, Changed, Fixed, Security, Compatibility, Migration, and Known Limitations sections.
 

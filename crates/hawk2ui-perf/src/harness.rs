@@ -15,8 +15,10 @@ use crate::{PerformanceBudgets, PerformanceCategory};
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MeasurementQuality {
-    /// Deterministic measurement suitable for release gates.
+    /// Deterministic measurement observed from an executed product code path.
     Deterministic,
+    /// Synthetic or prefilled measurement retained for tests and advisory reports only.
+    SyntheticSurrogate,
     /// Wall-clock measurement retained for trend visibility only.
     AdvisoryWallClock,
 }
@@ -179,6 +181,12 @@ impl BenchmarkMeasurement {
     /// Creates a benchmark measurement from an already-observed value.
     #[must_use]
     pub const fn new(observed: u64) -> Self {
+        Self::with_quality(observed, MeasurementQuality::SyntheticSurrogate)
+    }
+
+    /// Creates a release-gate-eligible measurement from executed instrumentation.
+    #[must_use]
+    pub const fn observed(observed: u64) -> Self {
         Self {
             observed,
             quality: MeasurementQuality::Deterministic,
@@ -237,10 +245,22 @@ impl BenchmarkMeasurement {
         Self::new(bytes)
     }
 
+    /// Creates a release-gate-eligible byte-size measurement from executed instrumentation.
+    #[must_use]
+    pub const fn observed_bytes(bytes: u64) -> Self {
+        Self::observed(bytes)
+    }
+
     /// Creates a count measurement.
     #[must_use]
     pub const fn from_count(count: u64) -> Self {
         Self::new(count)
+    }
+
+    /// Creates a release-gate-eligible count measurement from executed instrumentation.
+    #[must_use]
+    pub const fn observed_count(count: u64) -> Self {
+        Self::observed(count)
     }
 }
 
@@ -522,6 +542,8 @@ pub enum BenchmarkError {
     },
     /// Advisory wall-clock evidence was used for a release-gating budget.
     AdvisoryMeasurementUsedForReleaseGate(String),
+    /// Synthetic or prefilled evidence was used for a release-gating budget.
+    SyntheticMeasurementUsedForReleaseGate(String),
 }
 
 fn validate_case(case: &BenchmarkCase, budgets: &PerformanceBudgets) -> Result<(), BenchmarkError> {
@@ -545,10 +567,20 @@ fn validate_case(case: &BenchmarkCase, budgets: &PerformanceBudgets) -> Result<(
     let Some(measurement) = case.measurement else {
         return Err(BenchmarkError::MissingMeasurement(case.budget_name.clone()));
     };
-    if budget.release_gate && !measurement.release_gate_eligible() {
-        return Err(BenchmarkError::AdvisoryMeasurementUsedForReleaseGate(
-            case.budget_name.clone(),
-        ));
+    if budget.release_gate {
+        match measurement.quality {
+            MeasurementQuality::Deterministic => {}
+            MeasurementQuality::SyntheticSurrogate => {
+                return Err(BenchmarkError::SyntheticMeasurementUsedForReleaseGate(
+                    case.budget_name.clone(),
+                ));
+            }
+            MeasurementQuality::AdvisoryWallClock => {
+                return Err(BenchmarkError::AdvisoryMeasurementUsedForReleaseGate(
+                    case.budget_name.clone(),
+                ));
+            }
+        }
     }
     if matches!(measurement.quality, MeasurementQuality::AdvisoryWallClock) {
         return Ok(());
@@ -612,7 +644,7 @@ fn report_entry(case: &BenchmarkCase, budgets: &PerformanceBudgets) -> Benchmark
             failure: Some("missing-measurement".to_string()),
         };
     };
-    if budget.release_gate && !measurement.release_gate_eligible() {
+    if budget.release_gate && measurement.quality == MeasurementQuality::AdvisoryWallClock {
         return BenchmarkReportEntry {
             budget_name: case.budget_name.clone(),
             fixture: case.fixture.clone(),
@@ -622,6 +654,18 @@ fn report_entry(case: &BenchmarkCase, budgets: &PerformanceBudgets) -> Benchmark
             maximum: Some(budget.maximum),
             accepted: false,
             failure: Some("advisory-measurement".to_string()),
+        };
+    }
+    if budget.release_gate && measurement.quality == MeasurementQuality::SyntheticSurrogate {
+        return BenchmarkReportEntry {
+            budget_name: case.budget_name.clone(),
+            fixture: case.fixture.clone(),
+            kind: case.kind,
+            observed: Some(measurement.observed),
+            quality: Some(measurement.quality),
+            maximum: Some(budget.maximum),
+            accepted: false,
+            failure: Some("synthetic-measurement".to_string()),
         };
     }
     let accepted = measurement.quality == MeasurementQuality::AdvisoryWallClock

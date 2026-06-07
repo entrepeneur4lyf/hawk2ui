@@ -591,7 +591,8 @@ component EventSink id=event-sink {
 #[test]
 fn adapter_contract_records_equivalent_operations_for_framework_labels() {
     for framework in ["native", "svelte", "react", "vue", "solid"] {
-        let mut adapter = hawk2ui_authoring::RecordingNativeRendererAdapter::new(framework);
+        let mut adapter =
+            hawk2ui_authoring::testkit::RecordingNativeRendererAdapter::new(framework);
         adapter
             .apply(hawk2ui_authoring::NodeOperation::MountElement(
                 ElementNode::new(ElementId::new("root"), ElementKind::View),
@@ -620,7 +621,7 @@ fn adapter_contract_records_equivalent_operations_for_framework_labels() {
 
 #[test]
 fn recording_adapter_preserves_component_and_surface_operations() {
-    let mut adapter = hawk2ui_authoring::RecordingNativeRendererAdapter::new("solid");
+    let mut adapter = hawk2ui_authoring::testkit::RecordingNativeRendererAdapter::new("solid");
 
     adapter
         .apply(hawk2ui_authoring::NodeOperation::MountComponent(

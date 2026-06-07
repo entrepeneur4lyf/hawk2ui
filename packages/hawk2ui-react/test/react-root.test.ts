@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { compileHawkReact, createHawkReactRoot } from "../src/index.ts";
+import { compileHawkReact } from "../src/index.ts";
+import { createHawkReactRoot } from "../src/testkit.ts";
 
 test("React compiler emits versioned native compiler artifacts from TSX", () => {
   const output = compileHawkReact({
@@ -171,6 +172,118 @@ test("React compiler lowers the complete native event and lifecycle contract fro
   ]);
 });
 
+test("React compiler lowers useEffect mount and cleanup to root lifecycle", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'import { useEffect } from "react"; function mounted() {} function destroyed() {} export function App() { useEffect(() => { mounted(); return destroyed; }, []); return <hawk-view id="root"></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.root.lifecycle).toContainEqual({ event: "mounted", handler: "mounted" });
+  expect(output.compilerArtifact.root.lifecycle).toContainEqual({ event: "unmounted", handler: "destroyed" });
+});
+
+test("React compiler preserves dependency useEffect calls as effect reactivity bindings", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'import { useEffect, useState } from "react"; export function App() { const [label] = useState("Ready"); function syncLabel() { label; } useEffect(syncLabel, [label]); return <hawk-text id="root">{label}</hawk-text>; }',
+  });
+
+  expect(output.compilerArtifact.reactivity).toContainEqual({
+    kind: "effect",
+    name: "useEffect:syncLabel:label",
+  });
+});
+
+test("React compiler preserves useMemo literal initial dynamic values", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'import { useMemo } from "react"; export function App() { const label = useMemo(() => "Ready", []); return <hawk-text id="root">{label}</hawk-text>; }',
+  });
+
+  expect(output.compilerArtifact.initial_dynamic_values).toContainEqual({
+    name: "label",
+    mode: "value",
+    value: { type: "string", value: "Ready" },
+  });
+});
+
+test("React compiler emits runtime list templates for dynamic keyed maps", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'import { useState } from "react"; export function App() { const [items, setItems] = useState([{ id: "alpha", label: "Alpha" }, { id: "beta", label: "Beta" }]); function handleItemPress() { setItems([{ id: "gamma", label: "Gamma" }]); } return <hawk-view id="root">{items.map((item) => <hawk-text id={item.id} key={item.id} onPointerDown={handleItemPress}>{item.label}</hawk-text>)}</hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.root.children).toEqual([]);
+  expect(output.compilerArtifact.initial_dynamic_values).toContainEqual({
+    name: "items",
+    mode: "value",
+    value: {
+      type: "array",
+      value: [
+        {
+          type: "object",
+          value: {
+            id: { type: "string", value: "alpha" },
+            label: { type: "string", value: "Alpha" },
+          },
+        },
+        {
+          type: "object",
+          value: {
+            id: { type: "string", value: "beta" },
+            label: { type: "string", value: "Beta" },
+          },
+        },
+      ],
+    },
+  });
+  expect(output.compilerArtifact.list_templates).toEqual([
+    {
+      id: "root:items",
+      parent_id: "root",
+      source: "items",
+      item: "item",
+      key: "item.id",
+      node: {
+        id: { type: "expression", expression: "item.id" },
+        kind: "text",
+        key: { type: "expression", expression: "item.id" },
+        props: [{ name: "text", value: { type: "expression", expression: "item.label" } }],
+        refs: [],
+        style_refs: [],
+        asset_refs: [],
+          events: [{ kind: "pointer.press", handler: "handleItemPress", payload_fields: ["position"] }],
+          lifecycle: [],
+          children: [],
+        },
+      },
+    ]);
+    expect(output.compilerArtifact.event_handlers.map((handler) => handler.name)).toEqual(["handleItemPress"]);
+  });
+
+test("React compiler anchors runtime list templates before the next static sibling", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'import { useState } from "react"; export function App() { const [items] = useState([{ id: "alpha", label: "Alpha" }]); return <hawk-view id="root"><hawk-text id="header">Header</hawk-text>{items.map((item) => <hawk-text id={item.id + "-row"} key={item.id + "-row"}>{item.label + "!"}</hawk-text>)}<hawk-text id="footer">Footer</hawk-text></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.root.children.map((child) => child.node.id)).toEqual(["header", "footer"]);
+  expect(output.compilerArtifact.list_templates[0]?.anchor_before).toBe("footer");
+  expect(output.compilerArtifact.list_templates[0]?.key).toBe('item.id + "-row"');
+  expect(output.compilerArtifact.list_templates[0]?.node.id).toEqual({
+    type: "expression",
+    expression: 'item.id + "-row"',
+  });
+  expect(output.compilerArtifact.list_templates[0]?.node.props).toEqual([
+    { name: "text", value: { type: "expression", expression: 'item.label + "!"' } },
+  ]);
+});
+
 test("React compiler preserves dynamic layout prop bindings from TSX expressions", () => {
   const output = compileHawkReact({
     filename: "App.tsx",
@@ -223,6 +336,101 @@ test("React compiler preserves dynamic visual prop bindings from TSX expressions
   ]);
 });
 
+test("React compiler passes through arbitrary scalar props and dynamic prop bindings", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'const role = getRole(); export function App() { return <hawk-view id="root"><hawk-button id="cta" aria_label="Start" tab_index={2} selected={true} data_role={role}>Go</hawk-button></hawk-view>; }',
+  });
+  const button = output.compilerArtifact.root.children[0].node;
+
+  expect(button.props).toContainEqual({ name: "aria_label", value: { type: "string", value: "Start" } });
+  expect(button.props).toContainEqual({ name: "tab_index", value: { type: "number", value: 2 } });
+  expect(button.props).toContainEqual({ name: "selected", value: { type: "bool", value: true } });
+  expect(output.compilerArtifact.dynamic_bindings).toContainEqual({
+    node_id: "cta",
+    target: { type: "prop", name: "data_role" },
+    expression: "role",
+    dependencies: ["role"],
+  });
+});
+
+test("React compiler maps onClick to pointer press", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'let label = "Idle"; function handleClick() { label = "Clicked"; } export function App() { return <hawk-view id="root"><hawk-button id="cta" onClick={handleClick}>Go</hawk-button></hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.root.children[0].node.events).toEqual([
+    { kind: "pointer.press", handler: "handleClick", payload_fields: ["position"] },
+  ]);
+});
+
+test("React compiler lowers hawk-surface to a custom surface node", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'export function App() { return <hawk-view id="root"><hawk-surface id="meter" surface_id="level-meter" /></hawk-view>; }',
+  });
+
+  const surface = output.compilerArtifact.root.children[0].node;
+  expect(surface.kind).toBe("custom-surface");
+  expect(surface.props).toContainEqual({ name: "surface_id", value: { type: "string", value: "level-meter" } });
+});
+
+test("React compiler lowers logical conditionals to visible dynamic bindings", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'export function App() { const [showTitle] = useState(true); return <hawk-view id="root">{showTitle && <hawk-text id="title">Title</hawk-text>}</hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.root.children[0].node.id).toBe("title");
+  expect(output.compilerArtifact.dynamic_bindings).toContainEqual({
+    node_id: "title",
+    target: { type: "prop", name: "visible" },
+    expression: "showTitle",
+    dependencies: ["showTitle"],
+  });
+});
+
+test("React compiler lowers ternary branches to visible dynamic bindings", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'export function App() { const [showTitle] = useState(true); return <hawk-view id="root">{showTitle ? <hawk-text id="title">Title</hawk-text> : <hawk-text id="fallback">Fallback</hawk-text>}</hawk-view>; }',
+  });
+
+  expect(output.compilerArtifact.root.children.map((child) => child.node.id)).toEqual(["title", "fallback"]);
+  expect(output.compilerArtifact.dynamic_bindings).toContainEqual({
+    node_id: "title",
+    target: { type: "prop", name: "visible" },
+    expression: "showTitle",
+    dependencies: ["showTitle"],
+  });
+  expect(output.compilerArtifact.dynamic_bindings).toContainEqual({
+    node_id: "fallback",
+    target: { type: "prop", name: "visible" },
+    expression: "!(showTitle)",
+    dependencies: ["showTitle"],
+  });
+});
+
+test("React compiler accepts standard element aliases for native nodes", () => {
+  const output = compileHawkReact({
+    filename: "App.tsx",
+    source:
+      'export function App() { return <div id="root"><button id="cta">Go</button><p id="copy">Copy</p></div>; }',
+  });
+
+  expect(output.compilerArtifact.root.kind).toBe("view");
+  expect(output.compilerArtifact.root.children.map((child) => [child.node.id, child.node.kind])).toEqual([
+    ["cta", "button"],
+    ["copy", "text"],
+  ]);
+});
+
 test("React root renders, updates, removes children, and unmounts deterministically", () => {
   const root = createHawkReactRoot({ id: "host" });
 
@@ -234,9 +442,14 @@ test("React root renders, updates, removes children, and unmounts deterministica
       className: "surface.card",
       "data-asset": "assets/logo.svg",
       onPointerDown: "handlePress",
+      onKeyDown: "handleKeyDown",
       children: [
         { type: "hawk-text", key: "title", props: { id: "title", text: "Title" } },
-        { type: "hawk-button", key: "cta", props: { id: "cta", text: "Go" } },
+        {
+          type: "hawk-button",
+          key: "cta",
+          props: { id: "cta", text: "Go", onPointerUp: "handleRelease" },
+        },
       ],
     },
   });
@@ -247,11 +460,19 @@ test("React root renders, updates, removes children, and unmounts deterministica
     "style:root:surface.card",
     "asset:root:assets/logo.svg",
     "bind-event:root:pointer.press",
+    "bind-event:root:keyboard.key-down",
     "mount-element:title",
     "prop:title:text=Title",
     "mount-element:cta",
+    "bind-event:cta:pointer.release",
     "prop:cta:text=Go",
   ]);
+  expect(root.snapshot?.events?.map((event) => event.handler)).toEqual([
+    "handlePress",
+    "handleKeyDown",
+  ]);
+  expect(root.snapshot?.children?.[1]?.kind).toBe("button");
+  expect(root.snapshot?.children?.[1]?.events?.[0]?.handler).toBe("handleRelease");
 
   root.render({
     type: "hawk-view",
@@ -261,13 +482,14 @@ test("React root renders, updates, removes children, and unmounts deterministica
       className: "surface.card emphasis",
       "data-asset": "assets/logo.svg",
       onPointerDown: "handlePress",
+      onKeyDown: "handleKeyDown",
       children: [
         { type: "hawk-text", key: "title", props: { id: "title", text: "Updated" } },
       ],
     },
   });
 
-  expect(root.records.slice(9)).toEqual([
+  expect(root.records.slice(11)).toEqual([
     "style:root:surface.card emphasis",
     "prop:title:text=Updated",
     "remove-element:cta",
@@ -275,6 +497,7 @@ test("React root renders, updates, removes children, and unmounts deterministica
 
   root.unmount();
   expect(root.records.at(-1)).toBe("unmount-element:root");
+  expect(root.snapshot).toBeUndefined();
 });
 
 test("React root rejects duplicate keyed children", () => {

@@ -42,7 +42,7 @@ The implemented CLI command catalog accepts these commands:
 - `hawk2ui build-release` is the release artifact command name.
 - `hawk2ui verify-artifact` is the sealed artifact verification command name.
 - `hawk2ui run-desktop` is the desktop native surface command name.
-- `hawk2ui package-plugin` is the plugin package command name for CLAP, VST3, AU, and standalone targets.
+- `hawk2ui package-plugin` is the plugin package command name for release-backed CLAP and VST3 targets.
 - `hawk2ui diagnostics` is the structured diagnostics command name.
 
 Implemented process exit codes are `0` for success, `2` for usage errors, `10` for validation failures, `11` for artifact verification failures, and `12` for runtime failures.

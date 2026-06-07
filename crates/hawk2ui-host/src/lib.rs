@@ -6,24 +6,21 @@ pub mod platform;
 pub mod plugin;
 pub mod resize_bridge;
 pub mod surface;
+pub mod testkit;
 
 pub use desktop::{
     ClipboardCapability, DesktopDialogFileFilter, DesktopDialogLevel, DesktopDialogRequest,
     DesktopDialogResponse, DesktopHostAdapter, DesktopHostEvent, DesktopWindowConfig,
-    KeyboardInput, PointerInput, RecordingDesktopAdapter, WindowMode,
+    KeyboardInput, PointerInput, WindowMode,
 };
 pub use platform::{
     HostPlatformHandle, LinuxWindowSystem, PlatformHandleDiagnostic, SurfaceOwnership,
 };
-pub use plugin::{
-    PluginEditorConfig, PluginHostAdapter, PluginHostEvent, PluginParentHandle,
-    RecordingPluginAdapter,
-};
+pub use plugin::{PluginEditorConfig, PluginHostAdapter, PluginHostEvent, PluginParentHandle};
 pub use resize_bridge::{HostSurfaceUpdateRequest, RendererResizeBridge, RendererTargetRequest};
 pub use surface::{
-    FramePresenter, HostCapabilities, HostCapability, HostSurface, PresentedFrame,
-    RecordingFramePresenter, RecordingHostSurface, RepaintRequest, SurfaceClipboardRequest,
-    SurfaceEvent, SurfaceMetrics, SurfaceWindowCommand, SurfaceWindowMode,
+    FramePresenter, HostCapabilities, HostCapability, HostSurface, PresentedFrame, RepaintRequest,
+    SurfaceClipboardRequest, SurfaceEvent, SurfaceMetrics, SurfaceWindowCommand, SurfaceWindowMode,
 };
 
 /// The canonical Cargo package name for this crate.
