@@ -2,7 +2,7 @@
 //!
 //! A plugin editor's UI is JS-driven: the author's entry script returns a node
 //! tree, not a baked scene. [`build_editor_scene`] runs that script's `mount`
-//! function through `hawk2ui-script`'s boa-backed [`ScriptBackend`] and converts
+//! function through `hawk2ui-script`'s compatibility [`ScriptBackend`] and converts
 //! the serialized node tree into a renderable [`RuntimeSceneFrame`], using the
 //! [`entry_mount_bootstrap_with_host`] convention and [`EntryNode`] conversion —
 //! the host-projecting sibling of the no-op `entry_mount_bootstrap` the desktop

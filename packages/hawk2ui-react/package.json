@@ -3,17 +3,15 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
-    "@babel/core": "7.29.7",
-    "@babel/generator": "7.29.7",
-    "@babel/parser": "7.29.7",
-    "@babel/preset-react": "7.29.7",
-    "@babel/preset-typescript": "7.29.7"
+    "react-reconciler": "0.33.0"
   },
   "peerDependencies": {
     "react": ">=19"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./jsx-runtime": "./src/jsx-runtime.ts",
+    "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts"
   },
-  "description": "React 19 custom renderer integration for Hawk2UI native records."
+  "description": "React 19 custom renderer integration for Hawk2UI scene operations."
 }

@@ -9,6 +9,22 @@ use std::{
 
 use serde::Deserialize;
 
+const REQUIRED_RUNTIME_BUNDLE_EVIDENCE: &[&str] = &[
+    "embedded-deno-runtime",
+    "rusty-v8-static-archive",
+    "rusty-v8-source-binding",
+    "sealed-js-module-graph",
+    "runtime-assets",
+    "package-manager-metadata",
+    "lockfile-hash",
+    "dependency-graph-metadata",
+    "sealed-module-dependency-origin",
+    "sealed-module-source-map-hash",
+    "sealed-module-entrypoint",
+    "sealed-module-import-metadata",
+    "bundle-content-hash",
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReleaseCheckMode {
     Full,
@@ -444,6 +460,14 @@ impl PackageTargets {
             }
         }
 
+        for target in &self.targets {
+            if target.requires_runtime_bundle_evidence() && !target.has_runtime_bundle_evidence() {
+                return Err(PackageTargetsError::MissingRuntimeBundleEvidence(
+                    target.id.clone(),
+                ));
+            }
+        }
+
         Ok(())
     }
 }
@@ -456,6 +480,8 @@ struct PackageTarget {
     command: String,
     evidence: String,
     release_gate: bool,
+    #[serde(default)]
+    runtime_bundle_evidence: Vec<String>,
 }
 
 impl PackageTarget {
@@ -469,12 +495,29 @@ impl PackageTarget {
             Ok(())
         }
     }
+
+    fn requires_runtime_bundle_evidence(&self) -> bool {
+        self.release_gate
+            && matches!(
+                self.kind.as_str(),
+                "desktop-bundle" | "plugin-bundle" | "desktop-smoke" | "plugin-smoke"
+            )
+    }
+
+    fn has_runtime_bundle_evidence(&self) -> bool {
+        REQUIRED_RUNTIME_BUNDLE_EVIDENCE.iter().all(|required| {
+            self.runtime_bundle_evidence
+                .iter()
+                .any(|item| item == required)
+        })
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum PackageTargetsError {
     Parse(String),
     DuplicateTarget(String),
+    MissingRuntimeBundleEvidence(String),
     MissingRequiredField { id: String, field: &'static str },
 }
 
@@ -692,7 +735,13 @@ impl ReleaseEvidence {
             }
         }
 
-        for target_id in ["desktop-linux", "plugin-clap", "plugin-vst3", "plugin-au"] {
+        for target_id in [
+            "desktop-linux-wayland",
+            "desktop-linux-x11",
+            "plugin-clap",
+            "plugin-vst3",
+            "plugin-au",
+        ] {
             if !targets.contains(target_id) {
                 return Err(ReleaseEvidenceError::MissingPackageTarget(
                     target_id.to_owned(),
@@ -770,6 +819,17 @@ impl ReleaseEvidence {
                     target.id.clone(),
                 ));
             }
+
+            if target.requires_runtime_bundle_evidence() {
+                for evidence in &target.runtime_bundle_evidence {
+                    if !manual_packaging.contains(evidence) {
+                        return Err(ReleaseEvidenceError::ManualMissingRuntimeBundleEvidence {
+                            target_id: target.id.clone(),
+                            evidence: evidence.clone(),
+                        });
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -819,6 +879,10 @@ enum ReleaseEvidenceError {
         command: String,
     },
     ManualMissingNonGatedTarget(String),
+    ManualMissingRuntimeBundleEvidence {
+        target_id: String,
+        evidence: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -935,6 +999,10 @@ evidence = "target/release-evidence/manuals.txt"
             "dependency-health",
             "compatibility-matrix",
             "framework-compilers",
+            "react-deno-runtime",
+            "developer-experience",
+            "capability-apis",
+            "v8-artifact-policy",
             "performance-budgets",
             "visual-regression",
             "plugin-realtime-safety",
@@ -945,6 +1013,16 @@ evidence = "target/release-evidence/manuals.txt"
         ] {
             assert!(criteria.contains(id), "missing release criterion {id}");
         }
+        let framework_compilers = criteria
+            .criteria
+            .iter()
+            .find(|criterion| criterion.id == "framework-compilers")
+            .expect("framework-compilers criterion must exist");
+        assert_eq!(
+            framework_compilers.blocking,
+            BlockingLevel::Advisory,
+            "incubating framework compiler examples must not block the React/Deno release"
+        );
     }
 
     #[test]
@@ -1050,12 +1128,15 @@ compatibility_notes_required = true
             .expect("repository package targets must parse");
 
         for id in [
-            "desktop-linux",
+            "desktop-linux-wayland",
+            "desktop-linux-x11",
             "desktop-windows",
             "desktop-macos",
             "plugin-clap",
             "plugin-vst3",
             "plugin-au",
+            "react-desktop-smoke",
+            "react-plugin-smoke",
             "sealed-artifact",
             "debug-package",
             "release-package",
@@ -1063,13 +1144,55 @@ compatibility_notes_required = true
             assert!(targets.contains(id), "missing package target {id}");
         }
 
-        let vst3 = targets
-            .targets
-            .iter()
-            .find(|target| target.id == "plugin-vst3")
-            .expect("VST3 remains a tracked release-gated target");
-        assert!(vst3.release_gate, "VST3 must be a release-gated target");
+        for id in ["plugin-clap", "plugin-vst3", "plugin-au"] {
+            let target = targets
+                .targets
+                .iter()
+                .find(|target| target.id == id)
+                .unwrap_or_else(|| panic!("{id} remains a tracked release-gated target"));
+            assert!(target.release_gate, "{id} must be a release-gated target");
+        }
         assert!(targets.release_blockers().all(|target| target.release_gate));
+
+        for id in [
+            "desktop-linux-wayland",
+            "desktop-linux-x11",
+            "desktop-windows",
+            "desktop-macos",
+            "plugin-clap",
+            "plugin-vst3",
+            "plugin-au",
+            "react-desktop-smoke",
+            "react-plugin-smoke",
+        ] {
+            let target = targets
+                .targets
+                .iter()
+                .find(|target| target.id == id)
+                .unwrap_or_else(|| panic!("missing package target {id}"));
+            assert!(
+                target.has_runtime_bundle_evidence(),
+                "{id} must record embedded runtime and sealed module graph evidence"
+            );
+            for evidence in [
+                "package-manager-metadata",
+                "lockfile-hash",
+                "dependency-graph-metadata",
+                "sealed-module-dependency-origin",
+                "sealed-module-source-map-hash",
+                "sealed-module-entrypoint",
+                "sealed-module-import-metadata",
+                "bundle-content-hash",
+            ] {
+                assert!(
+                    target
+                        .runtime_bundle_evidence
+                        .iter()
+                        .any(|item| item == evidence),
+                    "{id} must record {evidence} release evidence"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1078,7 +1201,8 @@ compatibility_notes_required = true
             .expect("repository dependency policy must parse");
 
         for dependency in [
-            "boa_engine",
+            "deno_core",
+            "v8",
             "parley",
             "oxc_allocator",
             "lightningcss",
@@ -1098,10 +1222,10 @@ compatibility_notes_required = true
             policy
                 .dependencies
                 .iter()
-                .any(|entry| entry.name == "boa_engine"
+                .any(|entry| entry.name == "deno_core"
                     && entry.source == DependencySource::CratesIo
                     && !entry.release_blocker),
-            "Boa must use a crates.io dependency contract"
+            "Deno core must use a crates.io dependency contract"
         );
         assert!(
             policy
@@ -1120,6 +1244,16 @@ compatibility_notes_required = true
                 "{dependency} must track the accepted truce.audio 0.56.0 line"
             );
         }
+        let v8 = policy
+            .dependencies
+            .iter()
+            .find(|entry| entry.name == "v8")
+            .expect("missing dependency policy entry for v8");
+        assert!(
+            v8.upgrade_gate
+                .contains("cargo test -p hawk2ui-js-runtime --test v8_artifacts -- --nocapture"),
+            "v8 upgrade gate must run the v8_artifacts integration test target"
+        );
     }
 
     #[test]
@@ -1147,6 +1281,27 @@ release_gate = true
         assert_eq!(
             error,
             PackageTargetsError::DuplicateTarget("desktop-linux".into())
+        );
+    }
+
+    #[test]
+    fn rejects_release_gated_package_without_runtime_bundle_evidence() {
+        let input = r#"
+[[targets]]
+id = "desktop-linux-wayland"
+kind = "desktop-bundle"
+platform = "linux-wayland"
+command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
+evidence = "target/release-evidence/desktop-linux-wayland.txt"
+release_gate = true
+"#;
+
+        let error =
+            PackageTargets::parse(input).expect_err("runtime bundle evidence must be required");
+
+        assert_eq!(
+            error,
+            PackageTargetsError::MissingRuntimeBundleEvidence("desktop-linux-wayland".into())
         );
     }
 
@@ -1270,8 +1425,11 @@ release_gate = true
 
 ## Package Outputs
 
-- `desktop-linux`: `rtk cargo test -p hawk2ui-build package_desktop_linux`
+- `desktop-linux-wayland`: `rtk cargo test -p hawk2ui-build package_desktop_linux`
+- `desktop-linux-x11`: `rtk cargo test -p hawk2ui-build package_desktop_linux`
 - `plugin-clap`: `rtk cargo test -p hawk2ui-plugin-adapters stale_command`
+
+    Runtime bundle evidence: `embedded-deno-runtime`, `rusty-v8-static-archive`, `rusty-v8-source-binding`, `sealed-js-module-graph`, `runtime-assets`, `package-manager-metadata`, `lockfile-hash`, `dependency-graph-metadata`, `sealed-module-dependency-origin`, `sealed-module-source-map-hash`, `sealed-module-entrypoint`, `sealed-module-import-metadata`, `bundle-content-hash`.
 ";
 
         let error = ReleaseEvidence::parse(
@@ -1282,12 +1440,22 @@ release_gate = true
             VALID_CRITERIA,
             r#"
 [[targets]]
-id = "desktop-linux"
+id = "desktop-linux-wayland"
 kind = "desktop-bundle"
-platform = "linux"
+platform = "linux-wayland"
 command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
-evidence = "target/release-evidence/desktop-linux.txt"
+evidence = "target/release-evidence/desktop-linux-wayland.txt"
 release_gate = true
+  runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
+
+[[targets]]
+id = "desktop-linux-x11"
+kind = "desktop-bundle"
+platform = "linux-x11"
+command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
+evidence = "target/release-evidence/desktop-linux-x11.txt"
+release_gate = true
+  runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
 
 [[targets]]
 id = "plugin-clap"
@@ -1296,6 +1464,7 @@ platform = "cross-platform"
 command = "rtk cargo test -p hawk2ui-plugin-adapters package_clap"
 evidence = "target/release-evidence/plugin-clap.txt"
 release_gate = true
+  runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
 
 [[targets]]
 id = "plugin-vst3"
@@ -1312,6 +1481,7 @@ platform = "macos"
 command = "rtk cargo test -p hawk2ui-plugin-adapters package_au"
 evidence = "target/release-evidence/plugin-au.txt"
 release_gate = true
+  runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
 "#,
         )
         .expect_err("manual package command drift must fail");
@@ -1321,6 +1491,84 @@ release_gate = true
             ReleaseEvidenceError::ManualMissingPackageCommand {
                 target_id: "plugin-clap".to_owned(),
                 command: "rtk cargo test -p hawk2ui-plugin-adapters package_clap".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_manual_runtime_bundle_evidence_drift_from_release_targets() {
+        let manual = r"
+# Hawk2UI Packaging
+
+## Package Outputs
+
+- `desktop-linux-wayland`: `rtk cargo test -p hawk2ui-build package_desktop_linux`
+- `desktop-linux-x11`: `rtk cargo test -p hawk2ui-build package_desktop_linux`
+- `plugin-clap`: `rtk cargo test -p hawk2ui-plugin-adapters package_clap`
+- `plugin-vst3`: `rtk cargo test -p hawk2ui-plugin-adapters package_vst3`
+- `plugin-au`: `rtk cargo test -p hawk2ui-plugin-adapters package_au`
+";
+
+        let error = ReleaseEvidence::parse(
+            "# Hawk2UI\n\ndesktop VST3 CLAP AU build-release verify-artifact package-plugin cargo run -p xtask -- check-fast cargo run -p xtask -- check",
+            "- [Desktop Apps](desktop-apps.md)\n- [Plugin Editors](plugin-editors.md)\n- [Runtime APIs](runtime-apis.md)\n- [Packaging](packaging.md)\n- [Security](security.md)\n- [Troubleshooting](troubleshooting.md)",
+            manual,
+            include_str!("../../Cargo.toml"),
+            VALID_CRITERIA,
+            r#"
+[[targets]]
+id = "desktop-linux-wayland"
+kind = "desktop-bundle"
+platform = "linux-wayland"
+command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
+evidence = "target/release-evidence/desktop-linux-wayland.txt"
+release_gate = true
+  runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
+
+[[targets]]
+id = "desktop-linux-x11"
+kind = "desktop-bundle"
+platform = "linux-x11"
+command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
+evidence = "target/release-evidence/desktop-linux-x11.txt"
+release_gate = true
+  runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
+
+[[targets]]
+id = "plugin-clap"
+kind = "plugin-bundle"
+platform = "cross-platform"
+command = "rtk cargo test -p hawk2ui-plugin-adapters package_clap"
+evidence = "target/release-evidence/plugin-clap.txt"
+release_gate = true
+  runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
+
+[[targets]]
+id = "plugin-vst3"
+kind = "plugin-bundle"
+platform = "cross-platform"
+command = "rtk cargo test -p hawk2ui-plugin-adapters package_vst3"
+evidence = "target/release-evidence/plugin-vst3.txt"
+release_gate = true
+  runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
+
+[[targets]]
+id = "plugin-au"
+kind = "plugin-bundle"
+platform = "macos"
+command = "rtk cargo test -p hawk2ui-plugin-adapters package_au"
+evidence = "target/release-evidence/plugin-au.txt"
+release_gate = true
+  runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
+"#,
+        )
+        .expect_err("manual runtime bundle evidence drift must fail");
+
+        assert_eq!(
+            error,
+            ReleaseEvidenceError::ManualMissingRuntimeBundleEvidence {
+                target_id: "desktop-linux-wayland".to_owned(),
+                evidence: "embedded-deno-runtime".to_owned(),
             }
         );
     }

@@ -17,6 +17,7 @@ members = [
     "crates/hawk2ui-host",
     "crates/hawk2ui-host-baseview",
     "crates/hawk2ui-host-winit",
+    "crates/hawk2ui-js-runtime",
     "crates/hawk2ui-layout",
     "crates/hawk2ui-perf",
     "crates/hawk2ui-platform",
@@ -63,3 +64,21 @@ serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 toml = "0.8"
 url = "2"
+
+[profile.dev]
+# Full debuginfo for V8/Skia-heavy debug builds makes target/ grow extremely
+# quickly. Line tables keep useful backtraces while avoiding giant debug objects.
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.build-override]
+debug = false
+incremental = false
+
+[profile.test]
+debug = "line-tables-only"
+incremental = false
+
+[profile.test.build-override]
+debug = false
+incremental = false

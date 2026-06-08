@@ -6,7 +6,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CliCommand {
     /// Create a new project.
-    NewProject,
+    NewProject {
+        /// Project scaffold template.
+        template: CliProjectTemplate,
+        /// JavaScript package manager metadata to write into generated React projects.
+        package_manager: CliPackageManager,
+    },
     /// Build and run the default target.
     Run,
     /// Run a development loop with native reload.
@@ -48,6 +53,80 @@ pub enum CliCommand {
     Explain,
 }
 
+/// Project scaffold template requested by `init`/`new`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum CliProjectTemplate {
+    /// React desktop app template.
+    #[default]
+    ReactApp,
+    /// React plugin editor template.
+    ReactPlugin,
+    /// Legacy native desktop+plugin scaffold.
+    Native,
+}
+
+impl CliProjectTemplate {
+    /// Parses a scaffold template name.
+    #[must_use]
+    pub fn parse_name(name: &str) -> Option<Self> {
+        match name {
+            "react-app" => Some(Self::ReactApp),
+            "react-plugin" => Some(Self::ReactPlugin),
+            "native" => Some(Self::Native),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable CLI label for the template.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ReactApp => "react-app",
+            Self::ReactPlugin => "react-plugin",
+            Self::Native => "native",
+        }
+    }
+}
+
+/// JavaScript package manager selected for generated React projects.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum CliPackageManager {
+    /// Bun package manager.
+    #[default]
+    Bun,
+    /// npm package manager.
+    Npm,
+    /// pnpm package manager.
+    Pnpm,
+    /// Yarn package manager.
+    Yarn,
+}
+
+impl CliPackageManager {
+    /// Parses a package-manager name.
+    #[must_use]
+    pub fn parse_name(name: &str) -> Option<Self> {
+        match name {
+            "bun" => Some(Self::Bun),
+            "npm" => Some(Self::Npm),
+            "pnpm" => Some(Self::Pnpm),
+            "yarn" => Some(Self::Yarn),
+            _ => None,
+        }
+    }
+
+    /// Returns the package manager string written to generated package manifests.
+    #[must_use]
+    pub const fn package_manager_field(self) -> &'static str {
+        match self {
+            Self::Bun => "bun@1.0.0",
+            Self::Npm => "npm@10.0.0",
+            Self::Pnpm => "pnpm@9.0.0",
+            Self::Yarn => "yarn@4.0.0",
+        }
+    }
+}
+
 /// Native desktop presentation backend requested by the CLI.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CliPresentationBackend {
@@ -86,7 +165,10 @@ impl CliPresentationBackend {
 impl CliCommand {
     fn from_name(name: &str) -> Option<Self> {
         match name {
-            "new" => Some(Self::NewProject),
+            "init" | "new" => Some(Self::NewProject {
+                template: CliProjectTemplate::default(),
+                package_manager: CliPackageManager::default(),
+            }),
             "run" => Some(Self::Run),
             "dev" => Some(Self::Dev),
             "validate" => Some(Self::Validate),
@@ -160,6 +242,12 @@ impl CommandCatalog {
             message: format!("unknown command: {}", command_name.as_ref()),
         })?;
         match &mut command {
+            CliCommand::NewProject {
+                template,
+                package_manager,
+            } => {
+                parse_new_project_args(&mut args, template, package_manager)?;
+            }
             CliCommand::VerifyArtifact { path } => {
                 if let Some(value) = args.next() {
                     *path = Some(value.as_ref().to_string());
@@ -228,7 +316,8 @@ impl CommandCatalog {
             "Hawk2UI CLI",
             "",
             "Commands:",
-            "  new              Create a new Hawk2UI project",
+            "  init             Create a new Hawk2UI project [--template react-app|react-plugin|native] [--package-manager bun|npm|pnpm|yarn]",
+            "  new              Alias for init",
             "  run              Build and run the default native target",
             "  dev              Watch, rebuild, validate, and hot-reload the native surface",
             "  validate         Validate manifests, sources, and capabilities",
@@ -237,7 +326,7 @@ impl CommandCatalog {
               "  verify-artifact  Verify a sealed artifact container",
               "  run-desktop      Run a desktop native surface [--presentation-backend software|gpu-preferred|gpu-required]",
               "  package-desktop  Materialize a signed native desktop launcher bundle",
-              "  package-plugin   Materialize release-backed CLAP and VST3 package layouts",
+              "  package-plugin   Materialize release-backed CLAP, VST3, and AU package layouts",
             "  export-schemas   Export the central generated JSON Schema catalog",
             "  export-params    Emit truce parameter source generated from the manifest",
             "  pin-ids          Pin a stable numeric id to every unpinned manifest parameter",
@@ -254,4 +343,47 @@ fn unexpected_argument(argument: &str) -> CliError {
         exit_code: CliExitCode::Usage,
         message: format!("unexpected argument: {argument}"),
     }
+}
+
+fn parse_new_project_args<I, S>(
+    args: &mut I,
+    template: &mut CliProjectTemplate,
+    package_manager: &mut CliPackageManager,
+) -> Result<(), CliError>
+where
+    I: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    while let Some(argument) = args.next() {
+        match argument.as_ref() {
+            "--template" => {
+                let Some(value) = args.next() else {
+                    return Err(CliError {
+                        exit_code: CliExitCode::Usage,
+                        message: "--template requires a value".into(),
+                    });
+                };
+                *template =
+                    CliProjectTemplate::parse_name(value.as_ref()).ok_or_else(|| CliError {
+                        exit_code: CliExitCode::Usage,
+                        message: format!("unknown project template: {}", value.as_ref()),
+                    })?;
+            }
+            "--package-manager" | "--pm" => {
+                let Some(value) = args.next() else {
+                    return Err(CliError {
+                        exit_code: CliExitCode::Usage,
+                        message: "--package-manager requires a value".into(),
+                    });
+                };
+                *package_manager =
+                    CliPackageManager::parse_name(value.as_ref()).ok_or_else(|| CliError {
+                        exit_code: CliExitCode::Usage,
+                        message: format!("unknown package manager: {}", value.as_ref()),
+                    })?;
+            }
+            other => return Err(unexpected_argument(other)),
+        }
+    }
+    Ok(())
 }

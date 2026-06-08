@@ -1497,7 +1497,7 @@ impl BaseviewRuntimeWindowBackend for BaseviewGpuRuntimeWindowBackend {
             let _ = (adapter, scene);
             Err(BaseviewHostError::new(
                 "baseview.runtime-window.unsupported-platform",
-                "Baseview runtime editor live windows are currently implemented for Linux; Windows and macOS remain release-gated targets",
+                "Baseview GPU runtime editor live windows need a target-specific renderer on this OS; CLAP/VST3/AU plugin packaging remains truce.audio-backed",
             ))
         }
     }

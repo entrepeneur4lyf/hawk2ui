@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 //! Gated native smoke: builds the editor scene from a compiled entry script
-//! (the `from_entry_script` path — boa runs the script's `mount`), drives
+//! (the `from_entry_script` path runs the script's `mount`), drives
 //! [`Hawk2uiTruceEditor::open`] against a real X11 parent, and asserts the
 //! editor presents at least one frame and captures the host bridge. Mirrors
 //! `hawk2ui-host-baseview`'s `native_parented_smoke`; set
@@ -120,7 +120,7 @@ fn editor_config() -> PluginEditorConfig {
 }
 
 /// Entry script whose `mount` returns the editor's root view — a blue fill with
-/// a title — driven through the real `from_entry_script` → boa → scene path so
+/// a title — driven through the real `from_entry_script` scene path so
 /// the smoke renders a from-script scene rather than a hand-built one.
 const ENTRY_SOURCE: &str = r##"
 export function mount(host) {

@@ -146,6 +146,32 @@ fn production_source_does_not_use_panic_style_fallible_assumptions() {
 }
 
 #[test]
+fn production_source_does_not_contain_release_placeholder_markers() {
+    let root = workspace_root();
+    for source_path in collect_workspace_production_sources(&root) {
+        let source = read_source(&source_path);
+        let production_source = production_source(&source);
+
+        for forbidden in [
+            "TODO",
+            "todo!",
+            "unimplemented!",
+            "hidden stub",
+            "stubbed",
+            "placeholder runtime path",
+            "fake success",
+            "MVP scope",
+        ] {
+            assert!(
+                !production_source.contains(forbidden),
+                "`{}` must not contain release-placeholder marker `{forbidden}` in production code",
+                source_path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn panic_style_gate_covers_assertion_macro_variants() {
     for token in [
         "assert!(",
@@ -182,6 +208,38 @@ fn recorder_test_doubles_are_quarantined_to_testkit_modules() {
                 is_testkit || !production_source.contains(forbidden),
                 "`{}` must not expose recorder/test-double API `{forbidden}` outside an explicit testkit module",
                 source_path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn legacy_script_surfaces_do_not_claim_boa_or_production_js_runtime() {
+    let root = workspace_root();
+
+    for relative_path in [
+        "crates/hawk2ui-script/Cargo.toml",
+        "crates/hawk2ui-script/src/lib.rs",
+        "crates/hawk2ui-script/tests/script_backend.rs",
+        "crates/hawk2ui-plugin-truce/Cargo.toml",
+        "crates/hawk2ui-plugin-truce/src/scene.rs",
+        "crates/hawk2ui-plugin-truce/tests/native_truce_editor_smoke.rs",
+    ] {
+        let content = read_source(&root.join(relative_path));
+        for forbidden in [
+            "Boa",
+            "`boa`",
+            "_boa_",
+            " boa ",
+            "boa-backed",
+            "boa runs",
+            "→ boa",
+            "Production script backend",
+            "production script backend",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "`{relative_path}` must not preserve legacy Boa/production script-runtime wording `{forbidden}`"
             );
         }
     }

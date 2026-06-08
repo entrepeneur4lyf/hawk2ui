@@ -13,15 +13,23 @@ The examples below are repository fixtures and are used as source-truth coverage
 - `examples/plugin-synth-editor/hawk.json`
 - `examples/plugin-meter-analyzer/hawk.json`
 
+## React First Runtime
+
+- `examples/react-desktop-basic/hawk.json`
+- `examples/react-plugin-basic/hawk.json`
+
+These fixtures declare `build.output` and lockfile metadata so smoke tests execute the same sealed JS module graph that packaging records in the artifact. The React desktop smoke records visible network-update evidence plus storage and file-operation evidence from the sealed bundle; the React plugin smoke records parameter, state/preset, host transport, realtime meter, DSP control, and realtime-denial evidence.
+
 ## Style And Security
 
 - `examples/style-gallery/hawk.json`
 - `examples/security-denials/hawk.json`
 
-## Framework Fixtures
+## Incubating Framework Compiler Fixtures
+
+These fixtures exercise legacy and incubating compiler/reference paths. They are not React production release evidence; React production examples are the sealed Deno runtime fixtures above.
 
 - `examples/frameworks/svelte-basic/hawk.json`
-- `examples/frameworks/react-basic/hawk.json`
 - `examples/frameworks/vue-basic/hawk.json`
 - `examples/frameworks/solid-basic/hawk.json`
 - `examples/frameworks/native-basic/hawk.json`

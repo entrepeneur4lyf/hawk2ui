@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.packages.json",
+  "include": [
+    "packages/hawk2ui-react/src/**/*.ts",
+    "packages/hawk2ui-react/src/**/*.tsx",
+    "packages/hawk2ui-react/src/**/*.d.ts"
+  ]
+}

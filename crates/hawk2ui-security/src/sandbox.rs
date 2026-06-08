@@ -16,6 +16,8 @@ pub enum ScriptSandboxOperation {
     DirectFilesystem,
     /// Direct network access.
     DirectNetwork,
+    /// Ambient process environment access.
+    EnvironmentAccess,
     /// Process spawning.
     ProcessSpawning,
     /// Native module loading.
@@ -38,6 +40,9 @@ impl ScriptSandboxOperation {
                 "direct filesystem access is denied",
             ),
             Self::DirectNetwork => ("script.network.denied", "direct network access is denied"),
+            Self::EnvironmentAccess => {
+                ("script.environment.denied", "environment access is denied")
+            }
             Self::ProcessSpawning => ("script.process.denied", "process spawning is denied"),
             Self::NativeModuleLoading => (
                 "script.native-module.denied",

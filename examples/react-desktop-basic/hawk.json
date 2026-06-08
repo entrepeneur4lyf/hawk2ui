@@ -1,0 +1,41 @@
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.examples.react-desktop-basic",
+    "name": "Hawk2UI React Desktop Basic",
+    "version": "0.1.0",
+    "bundleId": "com.hawk2ui.examples.react-desktop-basic"
+  },
+  "app": {
+    "entry": "src/App.tsx",
+    "framework": "react"
+  },
+  "build": {
+    "output": "dist/main.js"
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "linux-wayland",
+        "platforms": [
+          "windows",
+          "macos",
+          "linux-wayland",
+          "linux-x11"
+        ],
+        "window": {
+          "title": "Hawk2UI React Desktop Basic",
+          "width": 960,
+          "height": 540
+        }
+      }
+    ]
+  },
+  "permissions": {
+    "capabilities": [
+      "native-windowing",
+      "sealed-artifacts"
+    ]
+  }
+}

@@ -1,7 +1,8 @@
 //! Sealed artifact records and compatibility checks.
 
 use crate::{
-    BuildDiagnostic, BuildDiagnosticSeverity, HawkManifest, PackageTarget, SourceFramework,
+    BuildDiagnostic, BuildDiagnosticSeverity, HawkManifest, PackageTarget,
+    SealedJsDependencyOrigin, SealedJsModuleGraph, SourceFramework,
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use schemars::JsonSchema;
@@ -592,6 +593,8 @@ pub struct SealedArtifact {
     pub compiled_scripts: Vec<CompiledScriptRecord>,
     /// Compiled framework-native payloads.
     pub compiled_frameworks: Vec<CompiledFrameworkRecord>,
+    /// Sealed JavaScript module graphs for runtime-rendered applications.
+    pub js_module_graphs: Vec<SealedJsModuleGraph>,
     /// Compiled style payloads.
     pub compiled_styles: Vec<CompiledStyleRecord>,
     /// Runtime asset manifest.
@@ -624,6 +627,7 @@ impl SealedArtifact {
             manifest_snapshot_hash: manifest_snapshot_hash.clone(),
             compiled_scripts: Vec::new(),
             compiled_frameworks: Vec::new(),
+            js_module_graphs: Vec::new(),
             compiled_styles: Vec::new(),
             asset_manifest: Vec::new(),
             compiled_assets: Vec::new(),
@@ -660,6 +664,14 @@ impl SealedArtifact {
     #[must_use]
     pub fn with_compiled_framework(mut self, framework: CompiledFrameworkRecord) -> Self {
         self.compiled_frameworks.push(framework);
+        self.hashes.content = self.content_hash();
+        self
+    }
+
+    /// Adds a sealed JavaScript module graph and refreshes the content hash.
+    #[must_use]
+    pub fn with_js_module_graph(mut self, graph: SealedJsModuleGraph) -> Self {
+        self.js_module_graphs.push(graph);
         self.hashes.content = self.content_hash();
         self
     }
@@ -979,6 +991,7 @@ impl SealedArtifact {
         }
         append_script_payloads(&mut payload, &self.compiled_scripts);
         append_framework_payloads(&mut payload, &self.compiled_frameworks);
+        append_js_module_graph_payloads(&mut payload, &self.js_module_graphs);
         append_style_payloads(&mut payload, &self.compiled_styles);
         append_asset_manifest_payloads(&mut payload, &self.asset_manifest);
         append_compiled_asset_payloads(&mut payload, &self.compiled_assets);
@@ -1036,6 +1049,92 @@ fn append_framework_payloads(payload: &mut String, frameworks: &[CompiledFramewo
         payload.push(':');
         payload.push_str(&ArtifactHash::from_bytes(framework.compiler_artifact_json.as_bytes()).0);
         payload.push(';');
+    }
+}
+
+fn append_js_module_graph_payloads(payload: &mut String, graphs: &[SealedJsModuleGraph]) {
+    for graph in graphs {
+        payload.push_str("js-graph=");
+        payload.push_str(graph.entrypoint());
+        payload.push(':');
+        payload.push_str(graph.package_manager().kind.as_str());
+        if let Some(lockfile_sha256) = &graph.package_manager().lockfile_sha256 {
+            payload.push(':');
+            payload.push_str(lockfile_sha256);
+        }
+        if let Some(package_manager_version) = &graph.package_manager().package_manager_version {
+            payload.push(':');
+            payload.push_str(package_manager_version);
+        }
+        payload.push(';');
+
+        for module in graph.modules() {
+            payload.push_str("js-module=");
+            payload.push_str(module.specifier());
+            payload.push(':');
+            payload.push_str(module.sha256());
+            append_js_dependency_origin_payload(payload, module.dependency_origin());
+            if let Some(chunk) = module.chunk() {
+                payload.push(':');
+                payload.push_str(chunk);
+            }
+            if let Some(source_map) = module.source_map() {
+                payload.push_str(":source-map=");
+                payload.push_str(&source_map.sha256());
+            }
+            payload.push(':');
+            payload.push_str(&ArtifactHash::from_bytes(module.source().as_bytes()).0);
+            payload.push(';');
+            for target in module.static_imports() {
+                payload.push_str("js-static-import=");
+                payload.push_str(module.specifier());
+                payload.push_str("->");
+                payload.push_str(target);
+                payload.push(';');
+            }
+            for target in module.dynamic_imports() {
+                payload.push_str("js-dynamic-import=");
+                payload.push_str(module.specifier());
+                payload.push_str("->");
+                payload.push_str(target);
+                payload.push(';');
+            }
+        }
+
+        for chunk in graph.chunks() {
+            payload.push_str("js-chunk=");
+            payload.push_str(chunk.id());
+            for module in chunk.modules() {
+                payload.push(':');
+                payload.push_str(module);
+            }
+            payload.push(';');
+        }
+    }
+}
+
+fn append_js_dependency_origin_payload(
+    payload: &mut String,
+    dependency_origin: &SealedJsDependencyOrigin,
+) {
+    payload.push_str(":origin=");
+    match dependency_origin {
+        SealedJsDependencyOrigin::Workspace { path } => {
+            payload.push_str("workspace:");
+            payload.push_str(path);
+        }
+        SealedJsDependencyOrigin::Package { name, version } => {
+            payload.push_str("package:");
+            payload.push_str(name);
+            if let Some(version) = version {
+                payload.push('@');
+                payload.push_str(version);
+            }
+        }
+        SealedJsDependencyOrigin::Generated { tool } => {
+            payload.push_str("generated:");
+            payload.push_str(tool);
+        }
     }
 }
 

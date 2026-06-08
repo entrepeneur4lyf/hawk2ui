@@ -35,6 +35,54 @@ release = "supported"
 ci_coverage = true
 
 [[targets]]
+name = "linux-x11-desktop"
+family = "linux"
+os_version = "Ubuntu 24.04 LTS or newer"
+surface = "desktop"
+architecture = "x86_64"
+windowing = "x11-xcb"
+accessibility = "native"
+packaging = "desktop-bundle"
+release = "supported"
+ci_coverage = true
+
+[[targets]]
+name = "windows-plugin"
+family = "windows"
+os_version = "Windows 10 22H2 or newer"
+surface = "plugin"
+architecture = "x86_64"
+windowing = "hwnd"
+accessibility = "host-dependent"
+packaging = "plugin-bundle"
+release = "supported"
+ci_coverage = true
+
+[[targets]]
+name = "macos-plugin"
+family = "macos"
+os_version = "macOS 13 or newer"
+surface = "plugin"
+architecture = "aarch64"
+windowing = "nsview"
+accessibility = "host-dependent"
+packaging = "plugin-bundle"
+release = "supported"
+ci_coverage = true
+
+[[targets]]
+name = "linux-wayland-plugin"
+family = "linux"
+os_version = "Ubuntu 24.04 LTS or newer"
+surface = "plugin"
+architecture = "x86_64"
+windowing = "wayland"
+accessibility = "host-dependent"
+packaging = "plugin-bundle"
+release = "supported"
+ci_coverage = true
+
+[[targets]]
 name = "linux-x11-plugin"
 family = "linux"
 os_version = "Ubuntu 24.04 LTS or newer"
@@ -42,6 +90,6 @@ surface = "plugin"
 architecture = "x86_64"
 windowing = "x11-xcb"
 accessibility = "host-dependent"
-packaging = "clap-bundle"
+packaging = "plugin-bundle"
 release = "supported"
 ci_coverage = true

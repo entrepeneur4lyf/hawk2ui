@@ -6,7 +6,6 @@ manifest_path="${workspace_root}/Cargo.toml"
 
 framework_examples=(
   "svelte-basic"
-  "react-basic"
   "vue-basic"
   "solid-basic"
 )

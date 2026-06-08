@@ -12,6 +12,9 @@
     "framework": "react",
     "style": "styles/main.hawk.css"
   },
+  "build": {
+    "output": "dist/main.js"
+  },
   "targets": {
     "desktop": [
       {

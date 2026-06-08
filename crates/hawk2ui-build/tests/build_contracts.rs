@@ -2,13 +2,15 @@ use ed25519_dalek::{Signer, SigningKey};
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_build::{
     ARTIFACT_SIGNATURE_ALGORITHM_ED25519_SHA256_V1, ArtifactHash, ArtifactSchemaVersion,
-    ArtifactSignature, ArtifactSignaturePolicy, ArtifactSignatureVerificationKey,
-    ArtifactSignatureVerifier, ArtifactSigningKey, AssetCompilationError, AssetCompilationPlan,
-    AssetDimensions, AssetKind, AssetManifestEntry, AssetSanitizationStatus, AssetSource,
-    AssetSourceIndex, BuildDiagnostic, BuildDiagnosticSeverity, BuildPhase, BuildPipeline,
-    BuildPipelineError, BuildWorkspace, BuildWorkspaceError, CompiledAssetRecord,
-    CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError, PackageTarget,
-    PackageTargetRecord, SealedArtifact, SealedArtifactError, SourceFramework, SourceSpan,
+    ArtifactSignature, ArtifactSignaturePolicy, ArtifactSignatureStatus,
+    ArtifactSignatureVerificationKey, ArtifactSignatureVerifier, ArtifactSigningKey,
+    AssetCompilationError, AssetCompilationPlan, AssetDimensions, AssetKind, AssetManifestEntry,
+    AssetSanitizationStatus, AssetSource, AssetSourceIndex, BuildDiagnostic,
+    BuildDiagnosticSeverity, BuildPhase, BuildPipeline, BuildPipelineError, BuildWorkspace,
+    BuildWorkspaceError, CompiledAssetRecord, CompiledScriptRecord, CompiledStyleRecord,
+    HawkManifest, ManifestError, PackageManagerKind, PackageManagerMetadata, PackageTarget,
+    PackageTargetRecord, SealedArtifact, SealedArtifactError, SealedJsDependencyOrigin,
+    SealedJsModule, SealedJsModuleGraph, SealedJsSourceMap, SourceFramework, SourceSpan,
     VerificationReport, migrate_toml_manifest_to_json,
 };
 use hawk2ui_plugin::{ParameterRange, ParameterValue};
@@ -165,7 +167,7 @@ const VALID_HAWK_JSON: &str = r#"
     "plugin": [
       {
         "name": "editor",
-        "formats": ["clap", "vst3"],
+        "formats": ["clap", "vst3", "au"],
         "editor": {
           "width": 960,
           "height": 540
@@ -1298,6 +1300,25 @@ fn sealed_artifact_content_hash_changes_when_compiled_payload_changes() {
 }
 
 #[test]
+fn sealed_artifact_content_hash_changes_when_js_module_release_metadata_changes() {
+    let base = artifact_with_js_module_release_metadata(
+        SealedJsDependencyOrigin::workspace("src/main.tsx"),
+        SealedJsSourceMap::inline("{}"),
+    );
+    let changed_origin = artifact_with_js_module_release_metadata(
+        SealedJsDependencyOrigin::workspace("src/renamed-main.tsx"),
+        SealedJsSourceMap::inline("{}"),
+    );
+    let changed_source_map = artifact_with_js_module_release_metadata(
+        SealedJsDependencyOrigin::workspace("src/main.tsx"),
+        SealedJsSourceMap::inline("{\"version\":3}"),
+    );
+
+    assert_ne!(base.content_hash(), changed_origin.content_hash());
+    assert_ne!(base.content_hash(), changed_source_map.content_hash());
+}
+
+#[test]
 fn sealed_artifact_container_serializes_verifies_and_enforces_signature_policy() {
     let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
     let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
@@ -1355,6 +1376,101 @@ fn sealed_artifact_container_serializes_verifies_and_enforces_signature_policy()
         &verifier,
     )
     .expect("trusted release signature verifies");
+    assert_eq!(trusted, signed);
+}
+
+fn artifact_with_js_module_release_metadata(
+    dependency_origin: SealedJsDependencyOrigin,
+    source_map: SealedJsSourceMap,
+) -> SealedArtifact {
+    let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
+    let source = "export const app = 'hawk';";
+    let graph = SealedJsModuleGraph::new(
+        "app:///dist/main.js",
+        PackageManagerMetadata::new(
+            PackageManagerKind::Bun,
+            Some(PathBuf::from("bun.lock")),
+            Some("lock-hash".to_owned()),
+        ),
+    )
+    .with_module(
+        SealedJsModule::new(
+            "app:///dist/main.js",
+            source,
+            js_module_sha256(source.as_bytes()),
+        )
+        .with_dependency_origin(dependency_origin)
+        .with_source_map(source_map),
+    );
+
+    SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_js_module_graph(graph)
+}
+
+fn js_module_sha256(bytes: &[u8]) -> String {
+    ArtifactHash::from_bytes(bytes)
+        .0
+        .strip_prefix("sha256:")
+        .expect("artifact hash prefix is stable")
+        .to_owned()
+}
+
+#[test]
+fn debug_package_allows_unsigned_development_container() {
+    let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
+    let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(CompiledScriptRecord::new(
+            "main",
+            "src/main.ts",
+            "scripts/main.hawk.js",
+            ArtifactHash::from_bytes(b"debug-script"),
+        ));
+
+    let bytes = artifact
+        .to_container_bytes(ArtifactSignaturePolicy::AllowUnsignedDevelopment)
+        .expect("debug package allows unsigned development artifact containers");
+    let restored = SealedArtifact::from_container_bytes(
+        &bytes,
+        ArtifactSchemaVersion::new(1, 0),
+        ArtifactSignaturePolicy::AllowUnsignedDevelopment,
+    )
+    .expect("debug package container verifies under development policy");
+
+    assert_eq!(restored.signature.status, ArtifactSignatureStatus::Unsigned);
+    assert_eq!(restored, artifact);
+}
+
+#[test]
+fn release_package_requires_verified_signature_container() {
+    let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
+    let artifact = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest)
+        .with_compiled_script(CompiledScriptRecord::new(
+            "main",
+            "src/main.ts",
+            "scripts/main.hawk.js",
+            ArtifactHash::from_bytes(b"release-script"),
+        ));
+
+    assert!(
+        artifact
+            .to_container_bytes(ArtifactSignaturePolicy::RequireVerifiedSignature)
+            .is_err()
+    );
+
+    let signing_key = ArtifactSigningKey::ed25519_sha256_v1("release-key", [7; 32]);
+    let signed = signing_key.sign(&artifact);
+    let bytes = signed
+        .to_container_bytes(ArtifactSignaturePolicy::RequireVerifiedSignature)
+        .expect("release package requires a verified signed artifact container");
+    let verifier = ArtifactSignatureVerifier::new([signing_key.verification_key()]);
+    let trusted = SealedArtifact::from_trusted_container_bytes(
+        &bytes,
+        ArtifactSchemaVersion::new(1, 0),
+        &verifier,
+    )
+    .expect("release package verifies against the trusted release key");
+
+    assert_eq!(trusted.signature.status, ArtifactSignatureStatus::Verified);
     assert_eq!(trusted, signed);
 }
 
@@ -1483,6 +1599,18 @@ fn sealed_artifact_reports_incompatible_schema_diagnostic() {
             )
         }
     );
+}
+
+#[test]
+fn artifact_compatibility_accepts_current_schema_and_rejects_future_major() {
+    let manifest = HawkManifest::parse(VALID_MANIFEST).expect("valid manifest parses");
+    let current = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(1, 0), &manifest);
+    let future = SealedArtifact::from_manifest(ArtifactSchemaVersion::new(2, 0), &manifest);
+
+    assert!(current.is_compatible_with(ArtifactSchemaVersion::new(1, 0)));
+    assert!(current.is_compatible_with(ArtifactSchemaVersion::new(1, 99)));
+    assert!(!current.is_compatible_with(ArtifactSchemaVersion::new(2, 0)));
+    assert!(!future.is_compatible_with(ArtifactSchemaVersion::new(1, 0)));
 }
 
 #[test]
@@ -1789,6 +1917,36 @@ diagnostics:
 }
 
 #[test]
+fn package_desktop_linux_records_release_package_target() {
+    assert_desktop_package_target_record("linux");
+}
+
+#[test]
+fn package_desktop_windows_records_release_package_target() {
+    assert_desktop_package_target_record("windows");
+}
+
+#[test]
+fn package_desktop_macos_records_release_package_target() {
+    assert_desktop_package_target_record("macos");
+}
+
+fn assert_desktop_package_target_record(platform: &str) {
+    let report = VerificationReport::new(format!("com.hawk2ui.desktop-{platform}"))
+        .with_package_target(PackageTargetRecord::new(PackageTarget::Desktop, platform));
+
+    assert!(report.is_release_ready());
+    assert_eq!(report.package_targets.len(), 1);
+    assert_eq!(report.package_targets[0].target, PackageTarget::Desktop);
+    assert_eq!(report.package_targets[0].name, platform);
+    assert!(
+        report
+            .render_text()
+            .contains(format!("- desktop {platform}").as_str())
+    );
+}
+
+#[test]
 fn build_workspace_reads_project_files_and_materializes_sealed_artifact() {
     let root = temp_build_workspace("complete");
     write_file(
@@ -2035,18 +2193,8 @@ fn build_workspace_seals_real_framework_compiler_output_as_native_wire_artifact(
 }
 
 #[test]
-fn build_workspace_seals_real_react_vue_solid_framework_outputs_as_native_wire_artifacts() {
+fn build_workspace_seals_real_vue_solid_framework_outputs_as_incubating_native_wire_artifacts() {
     for fixture in [
-        (
-            "react",
-            "src/App.tsx",
-            r#"import { useState } from "react";
-export function App() {
-  const [label, setLabel] = useState("Ready");
-  function handleClick() { setLabel("Clicked"); }
-  return <hawk-view id="root"><hawk-button id="cta" onClick={handleClick}>{label}</hawk-button></hawk-view>;
-}"#,
-        ),
         (
             "vue",
             "src/App.vue",
@@ -2123,6 +2271,209 @@ export function App() {
             artifact["root"]["children"][0]["node"]["events"][0]["kind"],
             "pointer.press"
         );
+    }
+}
+
+#[test]
+fn build_workspace_seals_react_package_manager_bundle_as_js_module_graph() {
+    let root = temp_build_workspace("react-package-manager-js-graph");
+    write_file(
+        &root.join("hawk.json"),
+        r#"
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.react-package-manager-js-graph",
+    "name": "React Package Manager JS Graph",
+    "version": "1.0.0",
+    "bundleId": "com.hawk2ui.react-package-manager-js-graph"
+  },
+  "app": {
+    "framework": "react",
+    "entry": "src/App.tsx"
+  },
+  "build": {
+    "output": "dist/main.js"
+  },
+  "permissions": {
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "standalone",
+        "platforms": ["linux-wayland"]
+      }
+    ]
+  }
+}
+"#,
+    );
+    write_file(&root.join("bun.lock"), "lockfileVersion = 1\n");
+    write_file(
+        &root.join("src/App.tsx"),
+        r#"import { createRoot } from "@hawk2ui/react";
+function App() {
+  return <view id="root"><text>Ready</text></view>;
+}
+createRoot("root").render(<App />);"#,
+    );
+    write_file(
+        &root.join("dist/main.js"),
+        r"globalThis.__hawk2uiBundleProducedByPackageManager = true;",
+    );
+
+    let output = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect("React build should seal the package-manager-produced JS bundle");
+
+    assert!(
+        output.artifact.compiled_frameworks.is_empty(),
+        "React production builds must not use the legacy framework compiler artifact"
+    );
+    let artifact_json =
+        serde_json::to_value(&output.artifact).expect("artifact should serialize to JSON");
+    let graphs = artifact_json["js_module_graphs"]
+        .as_array()
+        .expect("React build should serialize sealed JS module graphs");
+    assert_eq!(graphs.len(), 1);
+    assert_eq!(graphs[0]["entrypoint"], "file:///dist/main.js");
+    assert_eq!(graphs[0]["package_manager"]["kind"], "bun");
+    assert_eq!(
+        graphs[0]["modules"][0]["source"],
+        "globalThis.__hawk2uiBundleProducedByPackageManager = true;"
+    );
+    assert_eq!(
+        graphs[0]["modules"][0]["sha256"].as_str().unwrap().len(),
+        64
+    );
+}
+
+#[test]
+fn build_workspace_uses_manifest_package_manager_selection_for_react_bundle() {
+    let root = temp_build_workspace("react-package-manager-explicit-selection");
+    write_file(
+        &root.join("hawk.json"),
+        r#"
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.react-package-manager-explicit-selection",
+    "name": "React Package Manager Explicit Selection",
+    "version": "1.0.0",
+    "bundleId": "com.hawk2ui.react-package-manager-explicit-selection"
+  },
+  "app": {
+    "framework": "react",
+    "entry": "src/App.tsx"
+  },
+  "build": {
+    "output": "dist/main.js",
+    "packageManager": "yarn"
+  },
+  "permissions": {
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "standalone",
+        "platforms": ["linux-wayland"]
+      }
+    ]
+  }
+}
+"#,
+    );
+    write_file(&root.join("bun.lock"), "bun\n");
+    write_file(&root.join("yarn.lock"), "yarn\n");
+    write_file(
+        &root.join("src/App.tsx"),
+        r#"import { createRoot } from "@hawk2ui/react";
+function App() {
+  return <view id="root"><text>Ready</text></view>;
+}
+createRoot("root").render(<App />);"#,
+    );
+    write_file(
+        &root.join("dist/main.js"),
+        "globalThis.__hawk2uiExplicitPackageManager = true;",
+    );
+
+    let output = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect("manifest packageManager should resolve ambiguous lockfiles");
+
+    let artifact_json =
+        serde_json::to_value(&output.artifact).expect("artifact should serialize to JSON");
+    let graph = &artifact_json["js_module_graphs"][0];
+    assert_eq!(graph["package_manager"]["kind"], "yarn");
+    assert!(
+        graph["package_manager"]["lockfile_path"]
+            .as_str()
+            .expect("lockfile path should serialize")
+            .ends_with("yarn.lock")
+    );
+}
+
+#[test]
+fn build_workspace_rejects_legacy_react_framework_compiler_path() {
+    let root = temp_build_workspace("react-runtime-rejects-legacy-compiler");
+    write_file(
+        &root.join("hawk.json"),
+        r#"
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.react-runtime-rejects-legacy-compiler",
+    "name": "React Runtime Rejects Legacy Compiler",
+    "version": "1.0.0",
+    "bundleId": "com.hawk2ui.react-runtime-rejects-legacy-compiler"
+  },
+  "app": {
+    "framework": "react",
+    "entry": "src/App.tsx"
+  },
+  "permissions": {
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "standalone",
+        "platforms": ["linux-wayland"]
+      }
+    ]
+  }
+}
+"#,
+    );
+    write_file(
+        &root.join("src/App.tsx"),
+        r#"import { createRoot } from "@hawk2ui/react";
+function App() {
+  return <view id="root"><text>Ready</text></view>;
+}
+createRoot("root").render(<App />);"#,
+    );
+
+    let error = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect_err("React must use the Deno runtime path, not the legacy compiler");
+
+    match error {
+        BuildWorkspaceError::FrameworkCompilation {
+            framework, message, ..
+        } => {
+            assert_eq!(framework, SourceFramework::React);
+            assert!(message.contains("compiler.framework.react-runtime"));
+            assert!(message.contains("@hawk2ui/react createRoot"));
+            assert!(message.contains("sealed Deno runtime"));
+        }
+        other => panic!("expected React framework compiler rejection, got {other:?}"),
     }
 }
 

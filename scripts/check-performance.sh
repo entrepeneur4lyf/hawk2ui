@@ -12,3 +12,4 @@ cargo bench -p hawk2ui-perf --bench runtime -- --quick
 cargo bench -p hawk2ui-perf --bench package -- --quick
 cargo bench -p hawk2ui-perf --bench desktop_host -- --quick
 cargo bench -p hawk2ui-perf --bench plugin_realtime -- --quick
+cargo bench -p hawk2ui-perf --bench release_gates -- --quick

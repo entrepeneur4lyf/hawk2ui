@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Production script backend for Hawk2UI JavaScript and TypeScript execution."
+description = "Compatibility TypeScript transform and legacy script fixture backend for Hawk2UI."
 
 [lib]
 name = "hawk2ui_script"
@@ -17,9 +17,9 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-boa_engine = "0.21.1"
 hawk2ui-api = { version = "0.1.0", path = "../hawk2ui-api" }
 hawk2ui-authoring = { version = "0.1.0", path = "../hawk2ui-authoring" }
+hawk2ui-js-runtime = { version = "0.1.0", path = "../hawk2ui-js-runtime" }
 hawk2ui-runtime = { version = "0.1.0", path = "../hawk2ui-runtime" }
 oxc_allocator = "0.133.0"
 oxc_codegen = "0.133.0"

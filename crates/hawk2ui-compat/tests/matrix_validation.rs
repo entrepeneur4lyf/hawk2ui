@@ -59,12 +59,28 @@ fn os_matrix_declares_supported_platforms_with_ci_and_package_coverage() {
     assert!(matrix.contains_target("windows-desktop"));
     assert!(matrix.contains_target("macos-desktop"));
     assert!(matrix.contains_target("linux-wayland-desktop"));
-    assert!(
-        matrix
-            .targets
-            .iter()
-            .any(|target| target.surface == SurfaceKind::Plugin)
-    );
+    assert!(matrix.contains_target("linux-x11-desktop"));
+    for plugin_target in [
+        "windows-plugin",
+        "macos-plugin",
+        "linux-wayland-plugin",
+        "linux-x11-plugin",
+    ] {
+        assert!(
+            matrix.contains_target(plugin_target),
+            "matrix missing truce-backed plugin-host target {plugin_target}"
+        );
+        assert!(
+            matrix
+                .targets
+                .iter()
+                .any(|target| target.name == plugin_target
+                    && target.surface == SurfaceKind::Plugin
+                    && target.release == ReleaseStatus::Supported
+                    && target.ci_coverage),
+            "{plugin_target} must be a supported plugin target with release coverage"
+        );
+    }
 }
 
 #[test]
@@ -100,7 +116,7 @@ fn plugin_host_matrix_declares_editor_lifecycle_state_and_realtime_coverage() {
     let matrix = HostCompatibilityMatrix::parse(&read_workspace_file("compatibility/hosts.toml"))
         .expect("host matrix parses");
 
-    for format in ["clap", "vst3", "au", "standalone"] {
+    for format in ["clap", "vst3", "au"] {
         let host = matrix
             .host(format)
             .unwrap_or_else(|| panic!("missing host compatibility row for {format}"));
@@ -132,6 +148,11 @@ fn plugin_host_matrix_declares_editor_lifecycle_state_and_realtime_coverage() {
             "{format} should not have missing coverage diagnostics"
         );
     }
+
+    assert!(
+        matrix.host("standalone").is_none(),
+        "standalone must not be listed as a release-backed plugin host format"
+    );
 }
 
 #[test]
@@ -177,7 +198,8 @@ fn packaging_matrix_declares_outputs_and_verification_commands() {
             .expect("package matrix parses");
 
     for output in [
-        "desktop-linux",
+        "desktop-linux-wayland",
+        "desktop-linux-x11",
         "desktop-windows",
         "desktop-macos",
         "plugin-clap",

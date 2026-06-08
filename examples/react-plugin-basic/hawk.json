@@ -1,0 +1,54 @@
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.examples.react-plugin-basic",
+    "name": "Hawk2UI React Plugin Basic",
+    "version": "0.1.0",
+    "bundleId": "com.hawk2ui.examples.react-plugin-basic"
+  },
+  "app": {
+    "entry": "src/App.tsx",
+    "framework": "react"
+  },
+  "build": {
+    "output": "dist/main.js"
+  },
+  "targets": {
+    "plugin": [
+      {
+        "name": "clap",
+        "formats": [
+          "clap",
+          "vst3",
+          "au"
+        ],
+        "editor": {
+          "width": 960,
+          "height": 540
+        }
+      }
+    ]
+  },
+  "plugin": {
+    "id": "com.hawk2ui.examples.react-plugin-basic",
+    "name": "Hawk2UI React Plugin Basic",
+    "parameters": [
+      {
+        "id": "gain",
+        "paramId": 3001,
+        "name": "Gain",
+        "kind": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.25
+      }
+    ]
+  },
+  "permissions": {
+    "capabilities": [
+      "plugin-parameters",
+      "sealed-artifacts"
+    ]
+  }
+}

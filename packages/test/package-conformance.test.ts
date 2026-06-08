@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHawkApp } from "../hawk2ui-native/src/index.ts";
-import { compileHawkReact } from "../hawk2ui-react/src/index.ts";
+import { compileHawkReact } from "../hawk2ui-react/src/legacyCompiler.ts";
 import { compileHawkSolid } from "../hawk2ui-solid/src/index.ts";
 import { compileHawkSvelte } from "../hawk2ui-svelte/src/index.ts";
 import { compileHawkVue } from "../hawk2ui-vue/src/index.ts";

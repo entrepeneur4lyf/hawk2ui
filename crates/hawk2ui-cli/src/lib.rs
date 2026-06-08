@@ -7,7 +7,10 @@ pub mod diagnostics;
 pub mod executor;
 pub mod testkit;
 
-pub use commands::{CliCommand, CliError, CliExitCode, CliPresentationBackend, CommandCatalog};
+pub use commands::{
+    CliCommand, CliError, CliExitCode, CliPackageManager, CliPresentationBackend,
+    CliProjectTemplate, CommandCatalog,
+};
 pub use dev_loop::{
     DevChangeBatch, DevChangeClassifier, DevErrorOverlay, DevLoop, DevLoopEvent, DevLoopReport,
     DevPatchKind, DevPatchPlan, DevReloadAcknowledgement, DevSurfaceReloader, DevWatchKind,

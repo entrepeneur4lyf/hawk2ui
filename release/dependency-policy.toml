@@ -1,18 +1,27 @@
 [[dependencies]]
-name = "boa_engine"
+name = "deno_core"
 source = "crates-io"
-version = "0.21.1"
+version = "0.403.0"
 owner = "runtime"
-risk = "Accepted Boa runtime release; upgrades must preserve sandbox, host bindings, timer/promise jobs, and TypeScript execution semantics."
+risk = "Embedded JavaScript runtime core. Upgrades must preserve sealed module loading, op registration, event loop behavior, runtime interruption, source diagnostics, and absence of ambient Deno globals."
 release_blocker = false
-upgrade_gate = "cargo test -p hawk2ui-script && cargo test -p hawk2ui-runtime script"
+upgrade_gate = "cargo test -p hawk2ui-js-runtime -- --nocapture && cargo clippy -p hawk2ui-js-runtime --all-targets -- -D warnings"
+
+[[dependencies]]
+name = "v8"
+source = "crates-io"
+version = "149.2.0"
+owner = "runtime"
+risk = "Native V8 binding and prebuilt artifact compatibility set. Upgrades must preserve verified archive/binding artifact checks and must not introduce a Hawk2UI V8 source-build fallback."
+release_blocker = false
+upgrade_gate = "cargo test -p hawk2ui-js-runtime --test v8_artifacts -- --nocapture"
 
 [[dependencies]]
 name = "parley"
 source = "crates-io"
 version = "0.7.0"
 owner = "text"
-risk = "Accepted text layout engine release pinned to remain compatible with Boa's ICU dependency line; upgrades must preserve shaping, bidi, wrapping, fallback, and high-DPI metrics."
+risk = "Accepted text layout engine release; upgrades must preserve shaping, bidi, wrapping, fallback, and high-DPI metrics."
 release_blocker = false
 upgrade_gate = "cargo test -p hawk2ui-text && cargo test -p hawk2ui-layout hawk_text_measurer_uses_production_text_backend_metrics"
 

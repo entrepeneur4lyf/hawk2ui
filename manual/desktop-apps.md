@@ -50,7 +50,8 @@ The compatibility matrix currently names these desktop targets:
 - `windows-desktop`: Windows 10 22H2 or newer, `hwnd` windowing, `desktop-bundle` packaging.
 - `macos-desktop`: macOS 13 or newer, `nswindow` windowing, `app-bundle` packaging.
 - `linux-wayland-desktop`: Ubuntu 24.04 LTS or newer, native Wayland windowing, `desktop-bundle` packaging.
+- `linux-x11-desktop`: Ubuntu 24.04 LTS or newer, X11/XCB windowing, `desktop-bundle` packaging.
 
-Windows and macOS are mandatory production release targets. A public release announcement remains blocked until both targets have native window lifecycle coverage for open, close, resize, DPI, input, software/GPU presentation, packaging/signing/notarization where applicable, and recorded release evidence.
+Windows, macOS, Linux Wayland, and Linux X11 are required production release platforms. A public release announcement remains blocked until those targets have native window lifecycle coverage for open, close, resize, DPI, input, software/GPU presentation, packaging/signing/notarization where applicable, and recorded release evidence.
 
-The matrix also includes `linux-x11-plugin` for plugin host coverage, not standalone desktop application launch.
+The matrix also includes `windows-plugin`, `macos-plugin`, `linux-wayland-plugin`, and `linux-x11-plugin` for truce-backed plugin host coverage.

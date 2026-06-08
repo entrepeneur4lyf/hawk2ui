@@ -9,6 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
+use crate::package_manager::PackageManagerKind;
 use crate::param_codegen::{field_ident, pascal_ident};
 
 /// Supported package target class.
@@ -63,6 +64,8 @@ pub struct HawkManifest {
     pub assets: Vec<AssetDeclaration>,
     /// Preset declarations.
     pub presets: Vec<PresetDeclaration>,
+    /// Build output metadata.
+    pub build: BuildOptions,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
@@ -84,6 +87,8 @@ struct RawManifest {
     assets: Vec<AssetDeclaration>,
     #[serde(default)]
     presets: Vec<PresetDeclaration>,
+    #[serde(default)]
+    build: BuildOptions,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
@@ -268,11 +273,13 @@ impl JsonPermissions {
 struct JsonBuild {
     #[serde(skip_serializing_if = "Option::is_none")]
     output: Option<String>,
+    #[serde(rename = "packageManager", skip_serializing_if = "Option::is_none")]
+    package_manager: Option<PackageManagerKind>,
 }
 
 impl JsonBuild {
     fn is_empty(&self) -> bool {
-        self.output.is_none()
+        self.output.is_none() && self.package_manager.is_none()
     }
 }
 
@@ -453,6 +460,18 @@ pub struct PresetDeclaration {
     pub name: String,
 }
 
+/// Build output options.
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuildOptions {
+    /// Package-manager-produced JavaScript bundle output path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    /// Explicit package manager used to resolve ambiguous lockfiles.
+    #[serde(rename = "packageManager", skip_serializing_if = "Option::is_none")]
+    pub package_manager: Option<PackageManagerKind>,
+}
+
 impl HawkManifest {
     /// Parses and validates a Hawk manifest from canonical `hawk.json` or legacy TOML.
     ///
@@ -485,6 +504,7 @@ impl HawkManifest {
             meters: raw.meters,
             assets: raw.assets,
             presets: raw.presets,
+            build: raw.build,
         };
         manifest.validate()?;
         Ok(manifest)
@@ -523,8 +543,16 @@ impl HawkManifest {
     #[must_use]
     pub fn snapshot(&self) -> String {
         format!(
-            "{}:{}:{}:{}",
-            self.identity.id, self.identity.name, self.identity.version, self.source.entry
+            "{}:{}:{}:{}:{}:{}",
+            self.identity.id,
+            self.identity.name,
+            self.identity.version,
+            self.source.entry,
+            self.build.output.as_deref().unwrap_or_default(),
+            self.build
+                .package_manager
+                .map(PackageManagerKind::as_str)
+                .unwrap_or_default()
         )
     }
 
@@ -704,6 +732,10 @@ impl HawkManifest {
             }
         }
 
+        if let Some(output) = &self.build.output {
+            require_non_empty("build.output", output)?;
+        }
+
         Ok(())
     }
 }
@@ -787,6 +819,10 @@ impl RawJsonManifest {
             meters,
             assets: self.assets.entries,
             presets: self.presets,
+            build: BuildOptions {
+                output: self.build.output,
+                package_manager: self.build.package_manager,
+            },
         };
         manifest.validate()?;
         Ok(manifest)
@@ -863,7 +899,10 @@ impl RawJsonManifest {
                 network: None,
                 filesystem: Vec::new(),
             },
-            build: JsonBuild::default(),
+            build: JsonBuild {
+                output: manifest.build.output.clone(),
+                package_manager: manifest.build.package_manager,
+            },
         }
     }
 }

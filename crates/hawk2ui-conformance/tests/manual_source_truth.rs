@@ -35,6 +35,8 @@ fn readme_states_evidence_based_production_release_gate() {
         "The release baseline is evidence-based: no MVP scope, candidate backend, partial framework compiler, placeholder runtime path, deferred compatibility target, hidden stub, TODO, or untested integration satisfies release readiness.",
         "A production release is blocked until every release-gated desktop, plugin, framework, rendering, platform, packaging, security, performance, smoke, conformance, manual, and release-evidence path is implemented in code and passing its verification command.",
         "Subsystems may be usable before the full release gate passes, but README status must not describe the whole framework as production-ready or feature-complete until the release evidence proves that claim.",
+        "Windows, macOS, Linux Wayland, and Linux X11 are mandatory production release targets, not optional follow-up work.",
+        "A public release announcement is blocked until native Windows, macOS, Linux Wayland, and Linux X11 desktop/plugin-host paths have passing runtime, packaging, manual, and release-evidence coverage.",
     ] {
         assert!(
             readme.contains(required),
@@ -52,12 +54,27 @@ fn readme_states_evidence_based_production_release_gate() {
         "docs/decisions/",
         "docs/technical/",
         "current limitations",
+        "`boa_engine` + `oxc` for JavaScript/TypeScript",
+        "Windows and macOS are mandatory production release targets, not optional follow-up work.",
     ] {
         assert!(
             !readme.contains(stale_reference),
             "README must not point users at removed planning docs or soften baseline with `{stale_reference}`"
         );
     }
+
+    assert!(
+        readme.contains("`hawk2ui-js-runtime` Deno/V8 for React-first JavaScript"),
+        "README native stack must describe the production React-first Deno/V8 runtime"
+    );
+    assert!(
+        readme.contains("packaged as CLAP/VST3/AU."),
+        "README plugin target claim must list the release-backed plugin package formats"
+    );
+    assert!(
+        !readme.contains("CLAP/VST3/AU/standalone"),
+        "README must not advertise standalone plugin packaging as release-backed"
+    );
 }
 
 #[test]
@@ -307,6 +324,20 @@ fn manual_desktop_commands_document_implemented_cli_commands() {
 }
 
 #[test]
+fn manual_desktop_release_platforms_match_matrix_scope() {
+    let required =
+        "Windows, macOS, Linux Wayland, and Linux X11 are required production release platforms.";
+
+    for manual_path in ["manual/desktop-apps.md", "manual/packaging.md"] {
+        let content = manual(manual_path);
+        assert!(
+            content.contains(required),
+            "{manual_path} must name every desktop release platform from the compatibility matrix"
+        );
+    }
+}
+
+#[test]
 fn manual_plugin_examples_reference_code_backed_plugin_fixtures() {
     let guide = manual("manual/plugin-editors.md");
 
@@ -337,6 +368,73 @@ fn manual_plugin_examples_reference_code_backed_plugin_fixtures() {
                 parameter.id
             );
         }
+    }
+}
+
+#[test]
+fn react_plugin_example_declares_release_formats_and_audio_dsp_capability_usage() {
+    let manifest = manual("examples/react-plugin-basic/hawk.json");
+    let source = manual("examples/react-plugin-basic/src/App.tsx");
+
+    for required in [
+        "\"clap\"",
+        "\"vst3\"",
+        "\"au\"",
+        "\"build\"",
+        "\"output\": \"dist/main.js\"",
+    ] {
+        assert!(
+            manifest.contains(required),
+            "React plugin example manifest missing release fixture evidence: {required}"
+        );
+    }
+
+    for required in [
+        "from \"hawk:plugin\"",
+        "from \"hawk:audio\"",
+        "from \"hawk:dsp\"",
+        "beginAutomationGesture",
+        "subscribeMeters",
+        "sendControl",
+    ] {
+        assert!(
+            source.contains(required),
+            "React plugin example source missing plugin/audio/DSP operation evidence: {required}"
+        );
+    }
+}
+
+#[test]
+fn react_desktop_example_declares_all_release_desktop_platforms_and_capabilities() {
+    let manifest = manual("examples/react-desktop-basic/hawk.json");
+    let source = manual("examples/react-desktop-basic/src/App.tsx");
+
+    for required in [
+        "\"windows\"",
+        "\"macos\"",
+        "\"linux-wayland\"",
+        "\"linux-x11\"",
+        "\"build\"",
+        "\"output\": \"dist/main.js\"",
+    ] {
+        assert!(
+            manifest.contains(required),
+            "React desktop example manifest missing release fixture evidence: {required}"
+        );
+    }
+
+    for required in [
+        "from \"hawk:network\"",
+        "from \"hawk:storage\"",
+        "from \"hawk:files\"",
+        "request(",
+        "setItem",
+        "pickFile",
+    ] {
+        assert!(
+            source.contains(required),
+            "React desktop example source missing capability operation evidence: {required}"
+        );
     }
 }
 
@@ -549,6 +647,330 @@ fn manual_runtime_security_and_packaging_match_machine_readable_gates() {
 }
 
 #[test]
+fn manual_packaging_documents_sealed_js_module_graph_release_metadata() {
+    let packaging = manual("manual/packaging.md");
+
+    for required in [
+        "Sealed JS module graph metadata records every module specifier, content hash, source-map hash, dependency origin, static import, dynamic import, chunk membership, package manager, lockfile hash, and graph entrypoint.",
+        "`SealedJsDependencyOrigin` records whether a module came from workspace build output, an installed package dependency, or generated build tooling.",
+    ] {
+        assert!(
+            packaging.contains(required),
+            "packaging manual missing sealed JS release metadata claim: {required}"
+        );
+    }
+}
+
+#[test]
+fn plugin_package_command_docs_include_au_release_target() {
+    let getting_started = manual("manual/getting-started.md");
+    let plugin_editors = manual("manual/plugin-editors.md");
+    let packaging = manual("manual/packaging.md");
+    let release_checklist = read_workspace_file("release/checklist.md");
+
+    assert!(
+        getting_started.contains(
+            "`hawk2ui package-plugin` is the plugin package command name for release-backed CLAP, VST3, and AU targets."
+        ),
+        "getting-started manual must document AU as a release-backed package-plugin target"
+    );
+    assert!(
+        plugin_editors.contains(
+            "`hawk2ui package-plugin` implements release-backed CLAP, VST3, and AU targets through the truce.audio-backed plugin layer."
+        ),
+        "plugin editors manual must document truce-backed CLAP/VST3/AU package-plugin support"
+    );
+    assert!(
+        packaging.contains(
+            "`hawk2ui package-plugin` materializes release-backed CLAP, VST3, and AU bundle layouts."
+        ),
+        "packaging manual must document AU as a release-backed package-plugin layout"
+    );
+    assert!(
+        packaging.contains(
+            "CLAP, VST3, and AU plugin packaging is backed by the truce.audio plugin layer and verified through `hawk2ui package-plugin` evidence."
+        ),
+        "packaging manual must document truce-backed plugin package support"
+    );
+    assert!(
+        release_checklist.contains("release-backed CLAP/VST3/AU plugin bundles"),
+        "release checklist must include AU in plugin bundle evidence"
+    );
+    assert!(
+        release_checklist.contains("Windows, macOS, Linux Wayland, Linux X11"),
+        "release checklist must preserve all required desktop platform evidence"
+    );
+    assert!(
+        !plugin_editors.contains("- `standalone`"),
+        "plugin editors manual must not advertise standalone as a release-backed host format"
+    );
+}
+
+#[test]
+fn plugin_support_source_truth_does_not_gate_truce_backed_formats() {
+    let host_baseview = read_workspace_file("crates/hawk2ui-host-baseview/src/lib.rs");
+    let plugin_editors = manual("manual/plugin-editors.md");
+    let packaging = manual("manual/packaging.md");
+
+    for source in [&host_baseview, &plugin_editors, &packaging] {
+        assert!(
+            !source.contains("Windows and macOS remain release-gated targets"),
+            "truce-backed plugin support must not be described as gated behind missing Windows/macOS support"
+        );
+        assert!(
+            !source.contains("On supported desktop build hosts"),
+            "truce-backed plugin packaging must not be softened with host-support gating language"
+        );
+    }
+
+    for required in [
+        "truce.audio-backed plugin layer",
+        "truce.audio plugin layer",
+    ] {
+        assert!(
+            plugin_editors.contains(required) || packaging.contains(required),
+            "public plugin docs must preserve truce-backed support claim: {required}"
+        );
+    }
+}
+
+#[test]
+fn manual_getting_started_documents_react_developer_experience_commands() {
+    let getting_started = manual("manual/getting-started.md");
+
+    for command in [
+        "hawk2ui init",
+        "hawk2ui new",
+        "hawk2ui dev",
+        "hawk2ui build-dev",
+        "hawk2ui build-release",
+        "hawk2ui run-desktop",
+        "hawk2ui package-desktop",
+        "hawk2ui package-plugin",
+        "hawk2ui verify-artifact",
+        "hawk2ui diagnostics",
+    ] {
+        assert!(
+            getting_started.contains(command),
+            "getting started manual missing developer-experience command: {command}"
+        );
+    }
+}
+
+#[test]
+fn manual_runtime_framework_claims_match_react_first_deno_release_scope() {
+    let runtime = manual("manual/runtime-apis.md");
+
+    for required in [
+        "React 19+ production support uses `@hawk2ui/react` `createRoot` with the sealed Deno runtime.",
+        "React emits Hawk2UI scene operations through `hawk2ui-js-runtime`, not `FrameworkNativeProgram` or the legacy source-string compiler path.",
+        "Vue, Solid, and Svelte are incubating framework adapters.",
+    ] {
+        assert!(
+            runtime.contains(required),
+            "runtime manual missing React-first Deno source-truth claim: {required}"
+        );
+    }
+
+    assert!(
+        !runtime
+            .contains("Svelte 5, React 19+, Vue 3.5+, and Solid adapters all accept this boundary"),
+        "runtime manual must not present React as part of the legacy framework compiler boundary"
+    );
+}
+
+#[test]
+fn manual_project_manifest_describes_react_sealed_js_graph_release_path() {
+    let manifest = manual("manual/project-manifest.md");
+
+    for required in [
+        "`app` declares the authoring entrypoint and framework used to produce package-manager build output.",
+        "React release builds consume a sealed JavaScript module graph produced from the selected package-manager build output.",
+        "Vue, Solid, and Svelte manifest values remain incubating until their runtime renderer adapters have equivalent release evidence.",
+        "\"entry\": \"src/App.tsx\"",
+        "\"framework\": \"react\"",
+        "\"formats\": [\"clap\", \"vst3\", \"au\"]",
+        "Supported `formats`: `clap`, `vst3`, and `au`.",
+    ] {
+        assert!(
+            manifest.contains(required),
+            "project manifest manual missing React-first manifest claim: {required}"
+        );
+    }
+
+    for forbidden in [
+        "Framework compilers are authoring frontends selected by the manifest; the runtime consumes compiled Hawk artifacts, not framework source directly.",
+        "Authoring entrypoint, framework compiler, and optional style/script entries.",
+        "A framework entry produces a compiled framework artifact; a `native` entry produces a compiled script artifact.",
+        "\"entry\": \"src/App.svelte\"",
+        "\"formats\": [\"clap\", \"vst3\", \"au\", \"standalone\"]",
+        "- `standalone`",
+    ] {
+        assert!(
+            !manifest.contains(forbidden),
+            "project manifest manual must not preserve legacy framework compiler release wording: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn manual_project_manifest_documents_react_build_output_and_package_manager_fields() {
+    let manifest = manual("manual/project-manifest.md");
+
+    for required in [
+        "## `build`",
+        "Package-manager-produced JavaScript output path, package-manager selection, and lockfile detection.",
+        "`output` is the package-manager-produced JavaScript bundle path sealed into the release artifact for React builds.",
+        "`packageManager` accepts `bun`, `npm`, `pnpm`, or `yarn` and selects the lockfile when more than one supported lockfile is present.",
+        "If `packageManager` is omitted, release builds detect `bun.lock`, `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`.",
+    ] {
+        assert!(
+            manifest.contains(required),
+            "project manifest manual missing React build field documentation: {required}"
+        );
+    }
+}
+
+#[test]
+fn manual_project_manifest_examples_include_all_release_desktop_platforms() {
+    let manifest = manual("manual/project-manifest.md");
+
+    for required in [
+        "\"platforms\": [\"windows\", \"macos\", \"linux-wayland\", \"linux-x11\"]",
+        "Desktop target `platforms` must include Windows, macOS, Linux Wayland, and Linux X11 before a production release claim.",
+    ] {
+        assert!(
+            manifest.contains(required),
+            "project manifest manual missing release desktop platform documentation: {required}"
+        );
+    }
+}
+
+#[test]
+fn manual_runtime_documents_hawk_js_capability_imports() {
+    let runtime = manual("manual/runtime-apis.md");
+
+    for module in [
+        "hawk:runtime",
+        "hawk:network",
+        "hawk:api",
+        "hawk:storage",
+        "hawk:secrets",
+        "hawk:files",
+        "hawk:desktop",
+        "hawk:plugin",
+        "hawk:audio",
+        "hawk:dsp",
+        "hawk:ai",
+    ] {
+        assert!(
+            runtime.contains(module),
+            "runtime manual missing Hawk JS capability module {module}"
+        );
+    }
+
+    for required in [
+        "The Hawk JS API is default-deny",
+        "Capability denials include the manifest path",
+        "No raw filesystem, network, shell, environment, or secret access is exposed to JavaScript.",
+        "`js-runtime.module.unsupported-hawk-import`",
+    ] {
+        assert!(
+            runtime.contains(required),
+            "runtime manual missing Hawk JS capability boundary: {required}"
+        );
+    }
+}
+
+#[test]
+fn manual_runtime_documents_remaining_hawk_js_capability_operations() {
+    let runtime = manual("manual/runtime-apis.md");
+
+    for required in [
+        "`hawk:network` exposes these network operations: `request`.",
+        "`hawk:api` exposes these declared endpoint operations: `call`.",
+        "`hawk:storage` exposes these persistent storage and scoped JSON document/database operations: `getItem`, `setItem`, `getDocument`, `putDocument`, `transaction`, and `migrate`.",
+        "`hawk:secrets` exposes these secret handle operations: `read`, `isSecretHandle`, and `serializeSecretOptions`.",
+        "`hawk:files` exposes these picker-granted file operations: `readText`, `writeText`, `readBytes`, `writeBytes`, `pickFile`, `pickFolder`, `watch`, `importFile`, and `exportFile`.",
+        "`hawk:ai` exposes these declared provider operations: `callProvider` and `streamProvider`.",
+        "`hawk:runtime` re-exports `network`, `api`, `storage`, `secrets`, `files`, `desktop`, `plugin`, `audio`, `dsp`, and `ai`.",
+    ] {
+        assert!(
+            runtime.contains(required),
+            "runtime manual missing Hawk JS operation sentence: {required}"
+        );
+    }
+}
+
+#[test]
+fn manual_runtime_documents_desktop_capability_operations() {
+    let runtime = manual("manual/runtime-apis.md");
+
+    for operation in [
+        "setWindowTitle",
+        "showOpenDialog",
+        "readClipboard",
+        "writeClipboard",
+        "notify",
+        "registerShortcut",
+        "openExternal",
+        "onDeepLink",
+        "setWindowMode",
+        "closeWindow",
+    ] {
+        assert!(
+            runtime.contains(operation),
+            "runtime manual missing hawk:desktop operation {operation}"
+        );
+    }
+}
+
+#[test]
+fn manual_runtime_documents_plugin_audio_dsp_capability_operations() {
+    let runtime = manual("manual/runtime-apis.md");
+
+    for operation in [
+        "readParameter",
+        "writeParameter",
+        "beginAutomationGesture",
+        "endAutomationGesture",
+        "loadState",
+        "saveState",
+        "loadPreset",
+        "savePreset",
+        "getTransport",
+        "resizeEditor",
+        "focusEditor",
+    ] {
+        assert!(
+            runtime.contains(operation),
+            "runtime manual missing hawk:plugin operation {operation}"
+        );
+    }
+
+    for operation in ["subscribeMeters", "transport", "nextControl"] {
+        assert!(
+            runtime.contains(operation),
+            "runtime manual missing hawk:audio operation {operation}"
+        );
+    }
+
+    for operation in [
+        "sendControl",
+        "updateParameterGraph",
+        "startAnalysisJob",
+        "cancelAnalysisJob",
+        "startOfflineRender",
+        "exportOfflineRender",
+    ] {
+        assert!(
+            runtime.contains(operation),
+            "runtime manual missing hawk:dsp operation {operation}"
+        );
+    }
+}
+
+#[test]
 fn manual_examples_index_tracks_repository_examples() {
     let examples = manual("manual/examples.md");
 
@@ -560,8 +982,9 @@ fn manual_examples_index_tracks_repository_examples() {
         "examples/plugin-meter-analyzer/hawk.json",
         "examples/style-gallery/hawk.json",
         "examples/security-denials/hawk.json",
+        "examples/react-desktop-basic/hawk.json",
+        "examples/react-plugin-basic/hawk.json",
         "examples/frameworks/svelte-basic/hawk.json",
-        "examples/frameworks/react-basic/hawk.json",
         "examples/frameworks/vue-basic/hawk.json",
         "examples/frameworks/solid-basic/hawk.json",
         "examples/frameworks/native-basic/hawk.json",
@@ -582,5 +1005,72 @@ fn manual_examples_index_tracks_repository_examples() {
             entry_path.display()
         );
         assert!(examples.contains(path), "examples manual missing {path}");
+    }
+}
+
+#[test]
+fn manual_examples_do_not_document_legacy_react_framework_compiler_fixture() {
+    let examples = manual("manual/examples.md");
+
+    assert!(
+        examples.contains("## React First Runtime"),
+        "examples manual must document the React-first runtime examples"
+    );
+    assert!(
+        examples.contains("examples/react-desktop-basic/hawk.json"),
+        "examples manual must include the React desktop runtime example"
+    );
+    assert!(
+        examples.contains("examples/react-plugin-basic/hawk.json"),
+        "examples manual must include the React plugin runtime example"
+    );
+    assert!(
+        !examples.contains("examples/frameworks/react-basic/hawk.json"),
+        "examples manual must not document the legacy React framework compiler fixture"
+    );
+}
+
+#[test]
+fn react_examples_demonstrate_production_runtime_patterns() {
+    let desktop = read_workspace_file("examples/react-desktop-basic/src/App.tsx");
+    for required in [
+        "useState",
+        "useEffect",
+        "hawk:network",
+        "hawk:storage",
+        "hawk:files",
+        ".map(",
+        "<input",
+        "role=",
+        "ariaLabel=",
+        "onInput",
+    ] {
+        assert!(
+            desktop.contains(required),
+            "React desktop example must demonstrate production app pattern `{required}`"
+        );
+    }
+
+    let plugin = read_workspace_file("examples/react-plugin-basic/src/App.tsx");
+    for required in [
+        "hawk:plugin",
+        "readParameter",
+        "writeParameter",
+        "beginAutomationGesture",
+        "endAutomationGesture",
+        "loadState",
+        "saveState",
+        "loadPreset",
+        "savePreset",
+        "getTransport",
+        "hawk:audio",
+        "subscribeMeters",
+        "hawk:dsp",
+        "sendControl",
+    ] {
+        assert!(
+            plugin.contains(required),
+            "React plugin example must demonstrate production plugin pattern `{required}`"
+        );
     }
 }

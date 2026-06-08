@@ -59,6 +59,8 @@ pub struct CliDiagnostic {
     pub suggested_fix: Option<String>,
     /// Related capability.
     pub related_capability: Option<String>,
+    /// Manifest path related to the diagnostic.
+    pub manifest_path: Option<String>,
     /// Related target.
     pub related_target: Option<String>,
 }
@@ -117,6 +119,13 @@ impl CliDiagnostic {
         self
     }
 
+    /// Sets related manifest path.
+    #[must_use]
+    pub fn manifest_path(mut self, manifest_path: impl Into<String>) -> Self {
+        self.manifest_path = Some(manifest_path.into());
+        self
+    }
+
     /// Sets related target.
     #[must_use]
     pub fn related_target(mut self, target: impl Into<String>) -> Self {
@@ -147,6 +156,9 @@ impl CliDiagnostic {
         if let Some(capability) = &self.related_capability {
             parts.push(format!("capability={capability}"));
         }
+        if let Some(manifest_path) = &self.manifest_path {
+            parts.push(format!("manifest-path={manifest_path}"));
+        }
         if let Some(target) = &self.related_target {
             parts.push(format!("target={target}"));
         }
@@ -166,6 +178,7 @@ impl CliDiagnostic {
             message: message.into(),
             suggested_fix: None,
             related_capability: None,
+            manifest_path: None,
             related_target: None,
         }
     }

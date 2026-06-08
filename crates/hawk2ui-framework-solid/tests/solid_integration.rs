@@ -394,7 +394,7 @@ fn solid_smoke_app_declares_public_package_entrypoint() {
         .expect("Solid smoke app should exist");
 
     assert!(package_json.contains("@hawk2ui/solid"));
-    assert!(index_ts.contains("renderHawkSolid"));
+    assert!(index_ts.contains("compileHawkSolid"));
     assert!(app.contains("<For each={items()}"));
     assert!(app.contains("assets/logo.svg"));
 }

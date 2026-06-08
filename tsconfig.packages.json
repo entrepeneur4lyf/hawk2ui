@@ -2,6 +2,7 @@
   "compilerOptions": {
     "allowImportingTsExtensions": true,
     "exactOptionalPropertyTypes": true,
+    "jsx": "react-jsx",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "noEmit": true,
@@ -14,6 +15,8 @@
     "packages/hawk2ui-native/src/**/*.ts",
     "packages/hawk2ui-svelte/src/**/*.ts",
     "packages/hawk2ui-react/src/**/*.ts",
+    "packages/hawk2ui-react/src/**/*.tsx",
+    "packages/hawk2ui-react/src/**/*.d.ts",
     "packages/hawk2ui-vue/src/**/*.ts",
     "packages/hawk2ui-solid/src/**/*.ts",
     "packages/hawk2ui-compiler/src/**/*.ts"

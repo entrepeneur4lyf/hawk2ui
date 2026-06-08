@@ -26,6 +26,8 @@ rustc-ice-*.txt
 reference/
 node_modules/
 **/node_modules/
+examples/*/dist/
+examples/frameworks/*/dist/
 AGENTS.md
 CLAUDE.md
 docs/decisions/

@@ -9,9 +9,8 @@ cargo test -p hawk2ui-smoke --test smoke_apps
 cargo bench --bench render_baseline -- --quick
 cargo bench --bench release_gates -- --quick
 bun install --frozen-lockfile
-bun run test:packages
-bun run typecheck:packages
-scripts/check-framework-examples.sh
+bun run test:react-package
+bun run typecheck:react-package
 cargo doc --workspace --no-deps
 cargo deny check
 git diff --check

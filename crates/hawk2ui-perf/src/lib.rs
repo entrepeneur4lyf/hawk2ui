@@ -391,7 +391,7 @@ mod tests {
             .with_case(
                 BenchmarkCase::new(
                     "js-evaluate",
-                    "examples/frameworks/svelte-basic",
+                    "examples/react-desktop-basic",
                     BenchmarkKind::Script,
                 )
                 .with_measurement(BenchmarkMeasurement::new(25)),

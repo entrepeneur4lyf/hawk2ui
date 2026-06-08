@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
-//! Production script backend for `Hawk2UI` `JavaScript` and `TypeScript` execution.
+//! Compatibility script and TypeScript transform surface for `Hawk2UI` legacy fixtures.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::{self, Write as _},
     path::Path,
+    time::Duration,
 };
 
-use boa_engine::{Context, JsValue, JsVariant, Source};
 use hawk2ui_api::Diagnostic;
 use hawk2ui_authoring::{
     FrameworkDynamicBinding, FrameworkDynamicValue, FrameworkEventHandler,
@@ -15,6 +15,7 @@ use hawk2ui_authoring::{
     FrameworkListTemplate, FrameworkNativeProgram, NativeRuntimeBridgeArtifact,
     NativeRuntimeBridgeError, NativeRuntimeNodeMetadata, PropValue,
 };
+use hawk2ui_js_runtime::{HawkJsRuntime, JsRuntimeError, JsRuntimeValue};
 use hawk2ui_runtime::{
     RuntimeEvent, RuntimeEventKind, RuntimeViewTree, StructuredValue as RuntimeStructuredValue,
 };
@@ -1072,11 +1073,14 @@ const DEFAULT_MAX_COMPILED_SOURCE_BYTES: usize = 4_194_304;
 
 /// Default maximum loop iterations permitted before untrusted execution is aborted.
 ///
-/// `boa` leaves its loop-iteration limit at [`u64::MAX`] (unbounded) by default, so an
-/// infinite or pathological loop in untrusted script would run forever on the calling thread
-/// and wedge the host (or the DAW hosting a plugin editor). This bound makes such a loop
-/// terminate with a recoverable error instead.
+/// The embedded evaluator would otherwise allow an infinite or pathological loop in untrusted
+/// script to run until the timeout on the worker thread. This bound makes such a loop terminate
+/// with a recoverable error earlier.
 const DEFAULT_MAX_LOOP_ITERATIONS: u64 = 10_000_000;
+
+const DEFAULT_SCRIPT_TIMEOUT_MS: u64 = 1_000;
+
+const MIN_SCRIPT_TIMEOUT_MS: u64 = 10;
 
 /// Default maximum source nesting depth permitted before parsing.
 ///
@@ -1335,7 +1339,7 @@ impl From<ScriptBackendError> for Diagnostic {
     }
 }
 
-/// Production script backend boundary.
+/// Compatibility script backend boundary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScriptBackend {
     host_policy: HostCallPolicy,
@@ -1397,11 +1401,11 @@ impl ScriptBackend {
         Ok(execution)
     }
 
-    /// Executes a module after projecting Rust-owned host promises and timers into Boa.
+    /// Executes a module after projecting Rust-owned host promises and timers into the JS runtime.
     ///
     /// The module can call `hawk2ui.promise(label)` to receive a real JavaScript `Promise` backed
     /// by resolved host promise records, and `hawk2ui.onTimer(label, callback)` to register a
-    /// deterministic timer callback. After evaluation, Boa jobs are drained, registered timer
+    /// deterministic timer callback. After evaluation, runtime jobs are drained, registered timer
     /// callbacks for scheduled Rust timers are invoked, and jobs are drained again.
     ///
     /// The returned value is `globalThis.__hawk2uiResult` after host jobs settle when that global is
@@ -1433,9 +1437,9 @@ impl ScriptBackend {
 
     /// Evaluates one framework dynamic binding expression against a dependency environment.
     ///
-    /// The expression is executed by Boa under the backend's deterministic execution limits. Plain
-    /// dependencies are projected as `const name = value`; getter dependencies are projected as
-    /// `const name = () => value`, matching Solid-style signal reads.
+    /// The expression is executed by the Deno/V8-backed evaluator under deterministic execution
+    /// limits. Plain dependencies are projected as `const name = value`; getter dependencies are
+    /// projected as `const name = () => value`, matching Solid-style signal reads.
     ///
     /// # Errors
     ///
@@ -1679,7 +1683,7 @@ fn enforce_source_limit(
 /// Rejects source whose bracket nesting depth exceeds `max_depth`.
 ///
 /// `JavaScript`/`TypeScript` are parsed by unguarded recursive descent (neither `oxc_parser`
-/// nor `boa`'s parser bounds nesting depth), so deeply nested source can overflow the native
+/// nor the JS evaluator bounds nesting depth), so deeply nested source can overflow the native
 /// thread stack *during parsing* — a `SIGSEGV`/abort that [`std::panic::catch_unwind`] cannot
 /// recover. This bound therefore runs before either parser sees the source.
 ///
@@ -1708,18 +1712,6 @@ fn enforce_nesting_depth(source: &str, max_depth: usize) -> Result<(), ScriptBac
     Ok(())
 }
 
-/// Applies runtime resource limits to a freshly created context before untrusted execution.
-///
-/// `boa` leaves the loop-iteration limit unbounded ([`u64::MAX`]) by default; bounding it makes
-/// an infinite or pathological loop terminate with a recoverable error instead of hanging the
-/// calling thread. `boa`'s recursion and stack-size limits are already bounded by its own
-/// defaults.
-fn apply_runtime_limits(context: &mut Context, limits: ScriptExecutionLimits) {
-    context
-        .runtime_limits_mut()
-        .set_loop_iteration_limit(limits.max_loop_iterations());
-}
-
 /// Stack size for the worker thread that parses and evaluates untrusted source.
 ///
 /// Untrusted parsing runs on a dedicated thread with this fixed, generous stack so the
@@ -1733,7 +1725,7 @@ const SCRIPT_WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
 ///
 /// The worker has a known, generous stack ([`SCRIPT_WORKER_STACK_BYTES`]) so legitimately nested
 /// source parses regardless of the caller's stack size. Joining the worker also converts a
-/// catchable `boa`/`oxc` panic into a diagnostic instead of letting it unwind through the host. A
+/// catchable parser/evaluator panic into a diagnostic instead of letting it unwind through the host. A
 /// native stack overflow is not a catchable panic — that case is prevented up front by
 /// [`enforce_nesting_depth`].
 fn run_on_worker<T: Send>(
@@ -1826,21 +1818,16 @@ fn evaluate_javascript(
 ) -> Result<StructuredValue, ScriptBackendError> {
     enforce_nesting_depth(source, limits.max_nesting_depth())?;
     run_on_worker("script.eval.panicked", || {
-        let mut context = Context::default();
-        apply_runtime_limits(&mut context, limits);
-        let value = context.eval(Source::from_bytes(source)).map_err(|error| {
-            ScriptBackendError::new(
-                "script.eval.failed",
-                format!("JavaScript execution failed: {error}"),
+        let mut runtime =
+            HawkJsRuntime::new().map_err(|error| script_error_from_js_runtime(&error))?;
+        let value = runtime
+            .evaluate_script_value_with_timeout(
+                "hawk2ui-script:eval",
+                source,
+                script_execution_timeout(limits),
             )
-        })?;
-        context.run_jobs().map_err(|error| {
-            ScriptBackendError::new(
-                "script.jobs.failed",
-                format!("JavaScript job queue failed: {error}"),
-            )
-        })?;
-        structured_value_from_js(&value)
+            .map_err(|error| script_error_from_js_runtime(&error))?;
+        Ok(structured_value_from_js_runtime(value))
     })
 }
 
@@ -1990,6 +1977,27 @@ fn script_error_from_runtime_bridge(error: &NativeRuntimeBridgeError) -> ScriptB
     ScriptBackendError::new(error.rule(), error.message())
 }
 
+fn script_error_from_js_runtime(error: &JsRuntimeError) -> ScriptBackendError {
+    match error.rule() {
+        "js-runtime.execute-failed" => {
+            ScriptBackendError::new("script.eval.failed", error.message().to_owned())
+        }
+        "js-runtime.value.unsupported-string" => ScriptBackendError::new(
+            "script.value.unsupported-string",
+            error.message().to_owned(),
+        ),
+        "js-runtime.value.unsupported" => {
+            ScriptBackendError::new("script.value.unsupported", error.message().to_owned())
+        }
+        rule => ScriptBackendError::new(rule, error.message().to_owned()),
+    }
+}
+
+fn script_execution_timeout(limits: ScriptExecutionLimits) -> Duration {
+    let scaled_ms = limits.max_loop_iterations() / 10_000;
+    Duration::from_millis(scaled_ms.clamp(MIN_SCRIPT_TIMEOUT_MS, DEFAULT_SCRIPT_TIMEOUT_MS))
+}
+
 fn evaluate_javascript_with_host_jobs(
     source: &str,
     limits: ScriptExecutionLimits,
@@ -2008,61 +2016,84 @@ fn evaluate_javascript_with_host_jobs_inner(
     promises: &BTreeMap<PromiseId, PromiseState>,
     timers: &[TimerRecord],
 ) -> Result<StructuredValue, ScriptBackendError> {
-    let mut context = Context::default();
-    apply_runtime_limits(&mut context, limits);
-    eval_js_unit(
-        &mut context,
-        host_job_prelude(),
-        "script.host-jobs.bootstrap-failed",
-    )?;
+    let mut runtime = HawkJsRuntime::new().map_err(|error| script_error_from_js_runtime(&error))?;
+    let timeout = script_execution_timeout(limits);
+    runtime
+        .execute_script("hawk2ui-script:host-jobs/prelude", host_job_prelude())
+        .map_err(|error| {
+            ScriptBackendError::new(
+                "script.host-jobs.bootstrap-failed",
+                format!("JavaScript host job setup failed: {error}"),
+            )
+        })?;
     for promise in promises.values() {
         if let Some(value) = promise.value() {
-            eval_js_unit(
-                &mut context,
-                &format!(
-                    "globalThis.__hawk2uiResolve({}, {});",
-                    js_string_literal(&promise.label),
-                    structured_value_js_literal(value)?
-                ),
-                "script.host-jobs.promise-bootstrap-failed",
-            )?;
+            runtime
+                .execute_script(
+                    "hawk2ui-script:host-jobs/promise",
+                    format!(
+                        "globalThis.__hawk2uiResolve({}, {});",
+                        js_string_literal(&promise.label),
+                        structured_value_js_literal(value)?
+                    ),
+                )
+                .map_err(|error| {
+                    ScriptBackendError::new(
+                        "script.host-jobs.promise-bootstrap-failed",
+                        format!("JavaScript host job setup failed: {error}"),
+                    )
+                })?;
         }
     }
 
-    let evaluation_result = context.eval(Source::from_bytes(source)).map_err(|error| {
-        ScriptBackendError::new(
-            "script.eval.failed",
-            format!("JavaScript execution failed: {error}"),
-        )
-    })?;
-    run_boa_jobs(&mut context)?;
+    let evaluation_result = runtime
+        .evaluate_script_value_with_timeout("hawk2ui-script:eval", source, timeout)
+        .map_err(|error| script_error_from_js_runtime(&error))?;
 
     for timer in timers {
-        eval_js_unit(
-            &mut context,
-            &format!(
-                "globalThis.__hawk2uiFlushTimer({});",
-                js_string_literal(&timer.label)
-            ),
-            "script.host-jobs.timer-failed",
-        )?;
-        run_boa_jobs(&mut context)?;
+        runtime
+            .evaluate_script_value_with_timeout(
+                "hawk2ui-script:host-jobs/timer",
+                format!(
+                    "globalThis.__hawk2uiFlushTimer({}); undefined",
+                    js_string_literal(&timer.label)
+                ),
+                timeout,
+            )
+            .map_err(|error| {
+                ScriptBackendError::new(
+                    "script.host-jobs.timer-failed",
+                    format!("JavaScript host job setup failed: {error}"),
+                )
+            })?;
     }
 
-    let settled_result = context
-        .eval(Source::from_bytes(
-            "typeof globalThis.__hawk2uiResult === 'undefined' ? undefined : globalThis.__hawk2uiResult",
-        ))
+    let result_type = runtime
+        .evaluate_script_value(
+            "hawk2ui-script:host-jobs/result-type",
+            "typeof globalThis.__hawk2uiResult",
+        )
         .map_err(|error| {
             ScriptBackendError::new(
                 "script.host-jobs.result-read-failed",
                 format!("JavaScript host job result read failed: {error}"),
             )
         })?;
-    if matches!(settled_result.variant(), JsVariant::Undefined) {
-        structured_value_from_js(&evaluation_result)
+    if matches!(result_type, JsRuntimeValue::String(value) if value == "undefined") {
+        Ok(structured_value_from_js_runtime(evaluation_result))
     } else {
-        structured_value_from_js(&settled_result)
+        let settled_result = runtime
+            .evaluate_script_value(
+                "hawk2ui-script:host-jobs/result",
+                "globalThis.__hawk2uiResult",
+            )
+            .map_err(|error| {
+                ScriptBackendError::new(
+                    "script.host-jobs.result-read-failed",
+                    format!("JavaScript host job result read failed: {error}"),
+                )
+            })?;
+        Ok(structured_value_from_js_runtime(settled_result))
     }
 }
 
@@ -2095,26 +2126,6 @@ globalThis.hawk2ui = Object.freeze({
   }
 });
 "#
-}
-
-fn eval_js_unit(
-    context: &mut Context,
-    source: &str,
-    rule: &'static str,
-) -> Result<(), ScriptBackendError> {
-    context.eval(Source::from_bytes(source)).map_err(|error| {
-        ScriptBackendError::new(rule, format!("JavaScript host job setup failed: {error}"))
-    })?;
-    Ok(())
-}
-
-fn run_boa_jobs(context: &mut Context) -> Result<(), ScriptBackendError> {
-    context.run_jobs().map_err(|error| {
-        ScriptBackendError::new(
-            "script.jobs.failed",
-            format!("JavaScript job queue failed: {error}"),
-        )
-    })
 }
 
 fn structured_value_js_literal(value: &StructuredValue) -> Result<String, ScriptBackendError> {
@@ -2150,29 +2161,12 @@ fn js_string_literal(value: &str) -> String {
     escaped
 }
 
-fn structured_value_from_js(value: &JsValue) -> Result<StructuredValue, ScriptBackendError> {
-    match value.variant() {
-        JsVariant::Null | JsVariant::Undefined => Ok(StructuredValue::Null),
-        JsVariant::Boolean(value) => Ok(StructuredValue::Bool(value)),
-        JsVariant::Float64(value) => Ok(StructuredValue::Number(value)),
-        JsVariant::Integer32(value) => Ok(StructuredValue::Number(f64::from(value))),
-        JsVariant::String(value) => {
-            value
-                .to_std_string()
-                .map(StructuredValue::String)
-                .map_err(|_| {
-                    ScriptBackendError::new(
-                        "script.value.unsupported-string",
-                        "JavaScript string result cannot be represented as UTF-8",
-                    )
-                })
-        }
-        JsVariant::BigInt(_) | JsVariant::Object(_) | JsVariant::Symbol(_) => {
-            Err(ScriptBackendError::new(
-                "script.value.unsupported",
-                "JavaScript result type cannot be represented as a structured Hawk2UI value",
-            ))
-        }
+fn structured_value_from_js_runtime(value: JsRuntimeValue) -> StructuredValue {
+    match value {
+        JsRuntimeValue::Null => StructuredValue::Null,
+        JsRuntimeValue::Bool(value) => StructuredValue::Bool(value),
+        JsRuntimeValue::Number(value) => StructuredValue::Number(value),
+        JsRuntimeValue::String(value) => StructuredValue::String(value),
     }
 }
 

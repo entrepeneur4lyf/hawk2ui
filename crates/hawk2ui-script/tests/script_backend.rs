@@ -38,7 +38,7 @@ const values = [1, 2, 3];
 values.map((value) => value * 2).reduce((total, value) => total + value, 0);
 ",
         ))
-        .expect("boa executes standard JavaScript features");
+        .expect("runtime executes standard JavaScript features");
 
     assert_eq!(execution.value(), &StructuredValue::Number(12.0));
 }
@@ -105,7 +105,7 @@ fn script_backend_handles_promises_timers_and_structured_host_calls() {
 }
 
 #[test]
-fn script_backend_projects_host_promises_and_timers_into_boa_jobs() {
+fn script_backend_projects_host_promises_and_timers_into_runtime_jobs() {
     let mut backend = ScriptBackend::new(HostCallPolicy::deny_all(), TimerPolicy::deterministic());
     let promise = backend.create_promise("load-data");
     backend
@@ -128,7 +128,7 @@ hawk2ui.onTimer("animation", () => {
 });
 "#,
         ))
-        .expect("host jobs execute through Boa");
+        .expect("host jobs execute through the JS runtime");
 
     assert_eq!(
         execution.value(),

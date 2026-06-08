@@ -43,9 +43,9 @@ use hawk2ui_script::{
 use hawk2ui_security_model::{PackageTrustRecord, PackageTrustValidator, VerificationReportStatus};
 
 use crate::{
-    CliCommand, CliDiagnostic, CliExitCode, CliPresentationBackend, DevChangeBatch,
-    DevChangeClassifier, DevLoop, DevPatchKind, DevPatchPlan, DevWatchKind, DevWatchedPath,
-    FileSystemWatcher, NotifyFileSystemWatcher,
+    CliCommand, CliDiagnostic, CliExitCode, CliPackageManager, CliPresentationBackend,
+    CliProjectTemplate, DevChangeBatch, DevChangeClassifier, DevLoop, DevPatchKind, DevPatchPlan,
+    DevWatchKind, DevWatchedPath, FileSystemWatcher, NotifyFileSystemWatcher,
 };
 
 const ARTIFACT_SCHEMA_VERSION: ArtifactSchemaVersion = ArtifactSchemaVersion::new(1, 0);
@@ -392,7 +392,10 @@ impl WorkspaceCommandRunner {
     #[must_use]
     pub fn execute(&self, command: CliCommand) -> CommandExecution {
         match command {
-            CliCommand::NewProject => self.new_project(),
+            CliCommand::NewProject {
+                template,
+                package_manager,
+            } => self.new_project(template, package_manager),
             CliCommand::Run => self.run(),
             CliCommand::Dev => self.dev(),
             CliCommand::Validate => self.validate(),
@@ -413,7 +416,11 @@ impl WorkspaceCommandRunner {
         }
     }
 
-    fn new_project(&self) -> CommandExecution {
+    fn new_project(
+        &self,
+        template: CliProjectTemplate,
+        package_manager: CliPackageManager,
+    ) -> CommandExecution {
         let manifest_path = self.canonical_manifest_path();
         if manifest_path.exists() || self.legacy_manifest_path().exists() {
             return CommandExecution::failure(
@@ -425,9 +432,9 @@ impl WorkspaceCommandRunner {
             );
         }
 
-        for (relative_path, contents) in default_project_files() {
+        for (relative_path, contents) in default_project_files(template, package_manager) {
             let path = self.root.join(relative_path);
-            if let Err(error) = write_project_file(&path, contents) {
+            if let Err(error) = write_project_file(&path, &contents) {
                 return io_failure("project.write-file-failed", &path, &error);
             }
         }
@@ -795,11 +802,26 @@ impl WorkspaceCommandRunner {
                 vec![(*diagnostic).file(artifact_path.display().to_string())],
             );
         }
+        if let Err(diagnostic) = validate_artifact_runtime_payload(&artifact) {
+            return CommandExecution::failure(
+                CliExitCode::Verification,
+                vec![(*diagnostic).file(artifact_path.display().to_string())],
+            );
+        }
         CommandExecution::success(format!(
-            "verified artifact container\npath: {}\ncontent-hash: {}\nsignature-status: {}\ntrust-status: release-ready\n",
+            "verified artifact container\npath: {}\ncontent-hash: {}\nsignature-status: {}\ntrust-status: release-ready\ncompiled-scripts: {}\ncompiled-frameworks: {}\njs-module-graphs: {}\ncompiled-assets: {}\nruntime-scene: {}\n",
             artifact_path.display(),
             artifact.hashes.content.0,
             artifact_signature_status(&artifact),
+            artifact.compiled_scripts.len(),
+            artifact.compiled_frameworks.len(),
+            artifact.js_module_graphs.len(),
+            artifact.compiled_assets.len(),
+            if artifact.runtime_scene.is_some() {
+                "present"
+            } else {
+                "absent"
+            },
         ))
     }
 
@@ -1811,6 +1833,18 @@ fn build_workspace_error_diagnostic(error: BuildWorkspaceError, root: &Path) -> 
             ),
         )
         .file(root.join(path).display().to_string()),
+        BuildWorkspaceError::PackageManager(error) => CliDiagnostic::error(
+            error.rule(),
+            format!(
+                "package-manager metadata could not be captured: {}",
+                error.message()
+            ),
+        ),
+        BuildWorkspaceError::JsBundle { path, error } => CliDiagnostic::error(
+            error.rule(),
+            format!("JavaScript bundle could not be sealed: {}", error.message()),
+        )
+        .file(root.join(path).display().to_string()),
         BuildWorkspaceError::PipelineBlocked(error) => CliDiagnostic::error(
             "build.pipeline.blocked",
             format!("production build pipeline is blocked: {error:?}"),
@@ -1914,6 +1948,20 @@ fn sealed_artifact_error_diagnostic(error: SealedArtifactError) -> CliDiagnostic
         | SealedArtifactError::SignatureVerification { diagnostic } => diagnostic,
     };
     CliDiagnostic::error(diagnostic.rule, diagnostic.message)
+}
+
+fn validate_artifact_runtime_payload(artifact: &SealedArtifact) -> Result<(), Box<CliDiagnostic>> {
+    if artifact.compiled_scripts.is_empty()
+        && artifact.compiled_frameworks.is_empty()
+        && artifact.js_module_graphs.is_empty()
+        && artifact.runtime_scene.is_none()
+    {
+        return Err(Box::new(CliDiagnostic::error(
+            "artifact.runtime-payload.missing",
+            "sealed artifact does not include compiled scripts, sealed JS module graphs, runtime scene, or runtime assets",
+        )));
+    }
+    Ok(())
 }
 
 fn package_trust_violation_diagnostic(
@@ -2145,8 +2193,13 @@ const fn generated_plugin_binary_build(
             library_file_stem: "hawk2ui_generated_vst3",
             package_extension: "vst3",
         }),
-        PackageFormat::Au
-        | PackageFormat::Standalone
+        PackageFormat::Au => Some(GeneratedPluginBinaryBuild {
+            label: "AU",
+            generated_root: "generated-au",
+            library_file_stem: "hawk2ui_generated_au",
+            package_extension: "component",
+        }),
+        PackageFormat::Standalone
         | PackageFormat::DesktopBundle
         | PackageFormat::SealedArtifact => None,
     }
@@ -2217,6 +2270,12 @@ fn find_host_binary_slot(
     package_root: &Path,
     package_extension: &str,
 ) -> Result<PathBuf, Box<CliDiagnostic>> {
+    if package_extension == "component"
+        && let Some(path) = find_au_host_binary_slot(package_root)?
+    {
+        return Ok(path);
+    }
+
     let mut stack = vec![package_root.to_path_buf()];
     let mut matches = Vec::new();
     while let Some(dir) = stack.pop() {
@@ -2278,6 +2337,58 @@ fn find_host_binary_slot(
                 ),
             )
             .file(package_root.display().to_string()),
+        )),
+    }
+}
+
+fn find_au_host_binary_slot(package_root: &Path) -> Result<Option<PathBuf>, Box<CliDiagnostic>> {
+    let macos_dir = package_root.join("Contents").join("MacOS");
+    if !macos_dir.is_dir() {
+        return Ok(None);
+    }
+
+    let mut slots = Vec::new();
+    let entries = fs::read_dir(&macos_dir).map_err(|error| {
+        Box::new(
+            CliDiagnostic::error(
+                "package.plugin-binary.scan-failed",
+                format!(
+                    "failed to scan AU executable directory {}: {error}",
+                    macos_dir.display()
+                ),
+            )
+            .file(macos_dir.display().to_string()),
+        )
+    })?;
+    for entry in entries {
+        let path = entry
+            .map_err(|error| {
+                Box::new(
+                    CliDiagnostic::error(
+                        "package.plugin-binary.scan-failed",
+                        format!("failed to read AU executable directory entry: {error}"),
+                    )
+                    .file(macos_dir.display().to_string()),
+                )
+            })?
+            .path();
+        if path.is_file() {
+            slots.push(path);
+        }
+    }
+
+    match slots.as_slice() {
+        [path] => Ok(Some(path.clone())),
+        [] => Ok(None),
+        _ => Err(Box::new(
+            CliDiagnostic::error(
+                "package.plugin-binary.slot-ambiguous",
+                format!(
+                    "AU package {} contains multiple executable slots in Contents/MacOS",
+                    package_root.display()
+                ),
+            )
+            .file(macos_dir.display().to_string()),
         )),
     }
 }
@@ -2509,7 +2620,7 @@ fn plugin_editor_from_manifest(manifest: &HawkManifest) -> PluginEditor {
 }
 
 fn plugin_package_formats() -> impl Iterator<Item = PackageFormat> {
-    [PackageFormat::Clap, PackageFormat::Vst3].into_iter()
+    [PackageFormat::Clap, PackageFormat::Vst3, PackageFormat::Au].into_iter()
 }
 
 fn runtime_presentation_backend(
@@ -2587,10 +2698,32 @@ fn event_debug(event: &crate::DevLoopEvent) -> String {
 }
 
 fn dev_watched_paths(manifest: &HawkManifest) -> Vec<DevWatchedPath> {
+    const PROJECT_INPUTS: &[&str] = &[
+        "package.json",
+        "bun.lock",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "Cargo.toml",
+        "build.rs",
+        "src/lib.rs",
+        "src/main.rs",
+    ];
+
     let mut paths = BTreeSet::from([
         DevWatchedPath::new(CANONICAL_MANIFEST_FILE, DevWatchKind::Manifest),
-        DevWatchedPath::new(manifest.source.entry.clone(), DevWatchKind::RuntimeTree),
+        DevWatchedPath::new(
+            manifest.source.entry.clone(),
+            if manifest.source.framework.is_some() {
+                DevWatchKind::Script
+            } else {
+                DevWatchKind::RuntimeTree
+            },
+        ),
     ]);
+    for path in PROJECT_INPUTS {
+        paths.insert(DevWatchedPath::new(*path, DevWatchKind::Manifest));
+    }
     if let Some(style) = &manifest.source.style {
         paths.insert(DevWatchedPath::new(style.clone(), DevWatchKind::Style));
     }
@@ -3050,15 +3183,38 @@ fn runtime_scene_diagnostic(error: &RuntimeSceneError) -> Box<CliDiagnostic> {
     ))
 }
 
-fn default_project_files() -> [(&'static str, &'static str); 6] {
-    [
-        ("hawk.json", default_manifest()),
-        ("src/main.ts", default_entry_source()),
-        ("src/bootstrap.ts", default_bootstrap_source()),
-        ("styles/main.hawk.css", default_style_source()),
-        ("assets/logo.svg", default_logo_svg()),
-        ("README.md", default_project_readme()),
-    ]
+fn default_project_files(
+    template: CliProjectTemplate,
+    package_manager: CliPackageManager,
+) -> Vec<(&'static str, String)> {
+    match template {
+        CliProjectTemplate::Native => vec![
+            ("hawk.json", default_manifest().to_owned()),
+            ("src/main.ts", default_entry_source().to_owned()),
+            ("src/bootstrap.ts", default_bootstrap_source().to_owned()),
+            ("styles/main.hawk.css", default_style_source().to_owned()),
+            ("assets/logo.svg", default_logo_svg().to_owned()),
+            ("README.md", default_project_readme().to_owned()),
+        ],
+        CliProjectTemplate::ReactApp => vec![
+            ("hawk.json", react_app_manifest().to_owned()),
+            ("src/App.tsx", react_app_source().to_owned()),
+            (
+                "package.json",
+                react_package_json("hawk2ui-react-app", package_manager),
+            ),
+            ("README.md", react_app_readme().to_owned()),
+        ],
+        CliProjectTemplate::ReactPlugin => vec![
+            ("hawk.json", react_plugin_manifest().to_owned()),
+            ("src/App.tsx", react_plugin_source().to_owned()),
+            (
+                "package.json",
+                react_package_json("hawk2ui-react-plugin", package_manager),
+            ),
+            ("README.md", react_plugin_readme().to_owned()),
+        ],
+    }
 }
 
 fn default_manifest() -> &'static str {
@@ -3091,7 +3247,7 @@ fn default_manifest() -> &'static str {
     "plugin": [
       {
         "name": "clap",
-        "formats": ["clap", "vst3", "au", "standalone"],
+        "formats": ["clap", "vst3", "au"],
         "editor": {
           "width": 960,
           "height": 540
@@ -3137,6 +3293,185 @@ fn default_manifest() -> &'static str {
   }
 }
 "#
+}
+
+fn react_app_manifest() -> &'static str {
+    r#"{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.example.hawk2ui-react-app",
+    "name": "Hawk2UI React App",
+    "version": "0.1.0",
+    "bundleId": "com.example.hawk2ui-react-app"
+  },
+  "app": {
+    "entry": "src/App.tsx",
+    "framework": "react"
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "linux-wayland",
+        "platforms": ["linux-wayland"],
+        "window": {
+          "title": "Hawk2UI React App",
+          "width": 960,
+          "height": 540
+        }
+      }
+    ]
+  },
+  "permissions": {
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  }
+}
+"#
+}
+
+fn react_plugin_manifest() -> &'static str {
+    r#"{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.example.hawk2ui-react-plugin",
+    "name": "Hawk2UI React Plugin",
+    "version": "0.1.0",
+    "bundleId": "com.example.hawk2ui-react-plugin"
+  },
+  "app": {
+    "entry": "src/App.tsx",
+    "framework": "react"
+  },
+  "targets": {
+    "plugin": [
+      {
+        "name": "clap",
+        "formats": ["clap", "vst3", "au"],
+        "editor": {
+          "width": 960,
+          "height": 540
+        }
+      }
+    ]
+  },
+  "plugin": {
+    "id": "com.example.hawk2ui-react-plugin",
+    "name": "Hawk2UI React Plugin",
+    "parameters": [
+      {
+        "id": "gain",
+        "paramId": 0,
+        "name": "Gain",
+        "default": 0.5
+      }
+    ]
+  },
+  "permissions": {
+    "capabilities": ["plugin-parameters", "sealed-artifacts"]
+  }
+}
+"#
+}
+
+fn react_app_source() -> &'static str {
+    r#"import React, { useState } from "react";
+import { createRoot } from "@hawk2ui/react";
+
+function App() {
+  const [count, setCount] = useState(0);
+
+  return (
+    <view id="react-desktop-root">
+      <text id="count">{String(count)}</text>
+      <button id="increment" onPointerPress={() => setCount(count + 1)}>
+        Increment
+      </button>
+    </view>
+  );
+}
+
+createRoot("main").render(<App />);
+"#
+}
+
+fn react_plugin_source() -> &'static str {
+    r#"import React, { useEffect, useState } from "react";
+import { createRoot } from "@hawk2ui/react";
+import { readParameter, writeParameter } from "hawk:plugin";
+
+function App() {
+  const [gain, setGain] = useState(0);
+
+  useEffect(() => {
+    readParameter("gain").then(setGain);
+  }, []);
+
+  async function boost() {
+    await writeParameter("gain", 0.75);
+    setGain(await readParameter("gain"));
+  }
+
+  return (
+    <view id="react-plugin-root">
+      <text id="gain">{gain.toFixed(2)}</text>
+      <button id="boost" onPointerPress={boost}>
+        Boost
+      </button>
+    </view>
+  );
+}
+
+createRoot("editor").render(<App />);
+"#
+}
+
+fn react_package_json(name: &str, package_manager: CliPackageManager) -> String {
+    format!(
+        r#"{{
+  "name": "{name}",
+  "private": true,
+  "type": "module",
+  "packageManager": "{}",
+  "scripts": {{
+    "build": "hawk2ui build-release",
+    "dev": "hawk2ui dev",
+    "validate": "hawk2ui validate"
+  }},
+  "dependencies": {{
+    "@hawk2ui/react": "^0.1.0",
+    "react": "^19.0.0"
+  }}
+}}
+"#,
+        package_manager.package_manager_field()
+    )
+}
+
+fn react_app_readme() -> &'static str {
+    r"# Hawk2UI React App
+
+Generated React desktop app scaffold.
+
+Commands:
+
+- `hawk2ui validate`
+- `hawk2ui build-release`
+- `hawk2ui run-desktop`
+"
+}
+
+fn react_plugin_readme() -> &'static str {
+    r"# Hawk2UI React Plugin
+
+Generated React plugin editor scaffold.
+
+Commands:
+
+- `hawk2ui validate`
+- `hawk2ui build-release`
+- `hawk2ui package-plugin`
+"
 }
 
 fn default_entry_source() -> &'static str {
@@ -3391,6 +3726,66 @@ name = "linux-wayland"
             command,
             hawk2ui_runtime::RuntimeDrawCommand::Text { text, .. } if text == "Desktop Smoke"
         )));
+    }
+
+    #[test]
+    fn dev_watched_paths_cover_react_project_package_and_rust_inputs() {
+        let manifest = HawkManifest::parse(
+            r#"{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.example.react",
+    "name": "React Dev Watch",
+    "version": "0.1.0"
+  },
+  "app": {
+    "entry": "src/App.tsx",
+    "framework": "react",
+    "style": "styles/main.hawk.css"
+  },
+  "targets": {
+    "desktop": [{ "name": "linux-wayland" }]
+  },
+  "permissions": {
+    "capabilities": ["native-windowing"]
+  }
+}
+"#,
+        )
+        .expect("manifest parses");
+
+        let watched = dev_watched_paths(&manifest)
+            .into_iter()
+            .map(|path| (path.path().to_owned(), path.kind()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(
+            watched.get("src/App.tsx"),
+            Some(&DevWatchKind::Script),
+            "React entry changes must rebuild framework JS instead of patching the runtime tree"
+        );
+        assert_eq!(
+            watched.get("styles/main.hawk.css"),
+            Some(&DevWatchKind::Style)
+        );
+        for path in [
+            "package.json",
+            "bun.lock",
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "Cargo.toml",
+            "build.rs",
+            "src/lib.rs",
+            "src/main.rs",
+        ] {
+            assert_eq!(
+                watched.get(path),
+                Some(&DevWatchKind::Manifest),
+                "{path} should be watched as a full-rebuild project input"
+            );
+        }
     }
 
     #[test]

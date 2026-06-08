@@ -529,6 +529,8 @@ pub struct PackageTrustRecord {
     pub compiled_asset_hashes: Vec<String>,
     /// Hashes for compiled scripts.
     pub compiled_script_hashes: Vec<String>,
+    /// Hashes for sealed JavaScript module graph payloads.
+    pub js_module_graph_hashes: Vec<String>,
     /// Target metadata identifier.
     pub target_metadata: String,
     /// Package signature status.
@@ -610,11 +612,21 @@ impl PackageTrustRecord {
         compiled_script_hashes.sort();
         compiled_script_hashes.dedup();
 
+        let mut js_module_graph_hashes = artifact
+            .js_module_graphs
+            .iter()
+            .flat_map(|graph| graph.modules().iter())
+            .map(|module| format!("sha256:{}", module.sha256()))
+            .collect::<Vec<_>>();
+        js_module_graph_hashes.sort();
+        js_module_graph_hashes.dedup();
+
         Self {
             artifact_schema_version: artifact.schema_version.major,
             manifest_snapshot_hash: artifact.manifest_snapshot_hash.0.clone(),
             compiled_asset_hashes,
             compiled_script_hashes,
+            js_module_graph_hashes,
             target_metadata: artifact_target_metadata(artifact),
             signature_status,
             verification_report_status,
@@ -665,12 +677,19 @@ impl PackageTrustValidator {
             )?;
         }
 
-        if record.compiled_script_hashes.is_empty() {
+        if record.compiled_script_hashes.is_empty() && record.js_module_graph_hashes.is_empty() {
             return Err(PackageTrustViolation::MissingCompiledScriptHashes);
         }
         for hash in &record.compiled_script_hashes {
             require_hash(
                 "compiled_script_hashes",
+                hash,
+                PackageTrustViolation::MissingCompiledScriptHashes,
+            )?;
+        }
+        for hash in &record.js_module_graph_hashes {
+            require_hash(
+                "js_module_graph_hashes",
                 hash,
                 PackageTrustViolation::MissingCompiledScriptHashes,
             )?;

@@ -112,6 +112,26 @@ impl ShippedArtifactSecretCheck {
     }
 }
 
+/// Rejected shipped bundle literal secret leak.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SecretBundleLiteralLeak {
+    /// Artifact path.
+    pub artifact_path: String,
+    /// Redacted secret marker.
+    pub redacted_secret: String,
+}
+
+impl SecretBundleLiteralLeak {
+    /// Creates a redacted bundle leak record.
+    #[must_use]
+    pub fn new(artifact_path: impl Into<String>, secret: &SecretValue) -> Self {
+        Self {
+            artifact_path: artifact_path.into(),
+            redacted_secret: secret.redacted(),
+        }
+    }
+}
+
 /// Secret verification report.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SecretVerificationReport {
@@ -156,6 +176,33 @@ impl SecretVerificationReport {
     pub fn with_artifact_check(mut self, check: ShippedArtifactSecretCheck) -> Self {
         self.artifact_checks.push(check);
         self
+    }
+
+    /// Verifies that shipped bundle text does not contain verbatim private secret values.
+    ///
+    /// This is a literal-value check for final bundle text. It intentionally does not try to
+    /// detect encoded, split, hashed, or otherwise transformed secrets.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretBundleLiteralLeak`] when any provided secret value appears verbatim.
+    pub fn with_verified_bundle_text<'a>(
+        mut self,
+        artifact_path: impl Into<String>,
+        bundle_text: &str,
+        secrets: impl IntoIterator<Item = &'a SecretValue>,
+    ) -> Result<Self, SecretBundleLiteralLeak> {
+        let artifact_path = artifact_path.into();
+        for secret in secrets {
+            if !secret.is_absent_from(bundle_text) {
+                return Err(SecretBundleLiteralLeak::new(artifact_path, secret));
+            }
+            self.artifact_checks.push(ShippedArtifactSecretCheck::new(
+                artifact_path.clone(),
+                secret,
+            ));
+        }
+        Ok(self)
     }
 
     /// Serializes the report as deterministic redacted text.

@@ -40,9 +40,9 @@ cargo run -p hawk2ui-cli -- build-release  # produce a signed release artifact
 A project is driven by a canonical `hawk.json` manifest plus a framework/native entry point, CSS, scripts, and assets. Legacy `manifest.hawk.toml` projects are accepted only as migration inputs. The build pipeline validates and compiles the project into a signed, schema-versioned **sealed artifact**, which a host loads and renders. One engine drives two host surfaces:
 
 - **`desktop`** — native OS application windows (Hawk2UI owns the window lifecycle), via `winit`.
-- **`plugin`** — editor surfaces embedded in a DAW-owned parent window, via `baseview`, packaged as CLAP/VST3/AU/standalone.
+- **`plugin`** — editor surfaces embedded in a DAW-owned parent window, via `baseview`, packaged as CLAP/VST3/AU.
 
-The native stack: `skia-safe` rendering, `taffy` flexbox/grid layout, `parley`/`swash`/`fontdb` text shaping, `boa_engine` + `oxc` for JavaScript/TypeScript, and `accesskit` accessibility. `unsafe` is forbidden workspace-wide except at the plugin window-handle FFI boundary.
+The native stack: `skia-safe` rendering, `taffy` flexbox/grid layout, `parley`/`swash`/`fontdb` text shaping, `hawk2ui-js-runtime` Deno/V8 for React-first JavaScript, and `accesskit` accessibility. `unsafe` is forbidden workspace-wide except at the plugin window-handle FFI boundary.
 
 ## Status
 
@@ -54,7 +54,7 @@ A production release is blocked until every release-gated desktop, plugin, frame
 
 Subsystems may be usable before the full release gate passes, but README status must not describe the whole framework as production-ready or feature-complete until the release evidence proves that claim.
 
-Windows and macOS are mandatory production release targets, not optional follow-up work. A public release announcement is blocked until native Windows and macOS desktop/plugin-host paths have passing runtime, packaging, manual, and release-evidence coverage.
+Windows, macOS, Linux Wayland, and Linux X11 are mandatory production release targets, not optional follow-up work. A public release announcement is blocked until native Windows, macOS, Linux Wayland, and Linux X11 desktop/plugin-host paths have passing runtime, packaging, manual, and release-evidence coverage.
 
 ## Build & Test
 
@@ -79,7 +79,7 @@ HAWK2UI_TRUSTED_RELEASE_KEYS=local-release:<64-hex-public-key> \
 cargo run -p hawk2ui-cli -- verify-artifact # verify release trust
 HAWK2UI_RELEASE_SIGNING_KEY_ID=local-release \
 HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
-cargo run -p hawk2ui-cli -- package-plugin # CLAP / VST3
+cargo run -p hawk2ui-cli -- package-plugin # CLAP / VST3 / AU
 ```
 
 See `examples/` for working `hawk.json` layouts (`desktop-basic`, `plugin-synth-editor`), and `CLAUDE.md` for the architecture and crate layering.
@@ -143,7 +143,7 @@ checks, or source-truth conformance.
 | Runtime shader effects (`SkRuntimeEffect`) | Remediated | Runtime shader effects now cross the framework boundary: backend-neutral render APIs, retained runtime shader-effect visuals, runtime draw commands, authoring props, Skia replay, bounded `SkSL` compilation, typed float/int uniforms, registered image child shaders, cache stats, capability reporting, and Skia pixel tests. |
 | Desktop Wayland GPU backend | Remediated | `hawk2ui-host-winit` now exposes typed software/GPU-preferred/GPU-required presentation selection, creates native Wayland EGL/Glutin surfaces, renders through Skia Ganesh GL, verifies submitted frames with readback evidence, exposes GPU frame counts in runtime summaries, and has a gated native Wayland smoke test (`HAWK2UI_NATIVE_WAYLAND_GPU_SMOKE=1`). |
 | Baseview native Wayland plugin embedding | Remediated | The vendored Baseview adapter now accepts native Wayland parent handles, opens Wayland child surfaces, creates EGL/OpenGL contexts for GPU plugin editors, reports GL creation failures as hard diagnostics, accepts CLAP Wayland parent ABI calls, and has gated native software/GL Wayland smokes including resize-after-GL coverage. |
-| Windows/macOS native release coverage | Release blocker | Windows and macOS desktop windows, plugin-host embedding, GPU/software rendering, input/resize/close/DPI behavior, packaging/signing/notarization where applicable, manual coverage, and release evidence must be implemented and verified before any public production release announcement. |
+| Cross-platform native release coverage | Release blocker | Windows, macOS, Linux Wayland, and Linux X11 desktop windows, plugin-host embedding, GPU/software rendering, input/resize/close/DPI behavior, packaging/signing/notarization where applicable, manual coverage, and release evidence must be implemented and verified before any public production release announcement. |
 | Security evidence vocabulary | Remediated | `hawk2ui-security` remains an evidence vocabulary for decisions made by concrete validators in `hawk2ui-build`, `hawk2ui-assets`, `hawk2ui-script`, `hawk2ui-platform`, and `hawk2ui-security-model`; conformance tests require the manual to state that boundary. |
 
 Recently closed hardening items include CLAP multi-instance state isolation,

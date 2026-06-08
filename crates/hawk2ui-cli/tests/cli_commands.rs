@@ -1,6 +1,10 @@
-use hawk2ui_build::{ArtifactSignatureStatus, ArtifactSigningKey, SealedArtifact};
+use hawk2ui_build::{
+    ArtifactSchemaVersion, ArtifactSignaturePolicy, ArtifactSignatureStatus, ArtifactSigningKey,
+    HawkManifest, SealedArtifact,
+};
 use hawk2ui_cli::{
-    CliCommand, CliExitCode, CliPresentationBackend, CommandCatalog, WorkspaceCommandRunner,
+    CliCommand, CliExitCode, CliPackageManager, CliPresentationBackend, CliProjectTemplate,
+    CommandCatalog, WorkspaceCommandRunner,
 };
 use std::{
     fs,
@@ -15,6 +19,7 @@ fn cli_commands_help_lists_required_workflows() {
     let help = catalog.render_help();
 
     for command in [
+        "init",
         "new",
         "run",
         "dev",
@@ -35,10 +40,10 @@ fn cli_commands_help_lists_required_workflows() {
         assert!(help.contains(command), "help missing command: {command}");
     }
     assert!(
-        help.contains("CLAP and VST3"),
-        "package-plugin help must advertise only release-backed plugin binary formats"
+        help.contains("CLAP, VST3, and AU"),
+        "package-plugin help must advertise all release-backed plugin binary formats"
     );
-    for unsupported in ["AU", "standalone", "desktop bundle"] {
+    for unsupported in ["standalone", "desktop bundle"] {
         assert!(
             !help.contains(unsupported),
             "package-plugin help must not advertise unsupported target: {unsupported}"
@@ -52,7 +57,17 @@ fn cli_commands_parse_known_commands_and_reject_invalid_command() {
 
     assert_eq!(
         catalog.parse(["hawk2ui", "new"]).unwrap(),
-        CliCommand::NewProject
+        CliCommand::NewProject {
+            template: CliProjectTemplate::ReactApp,
+            package_manager: CliPackageManager::Bun,
+        }
+    );
+    assert_eq!(
+        catalog.parse(["hawk2ui", "init"]).unwrap(),
+        CliCommand::NewProject {
+            template: CliProjectTemplate::ReactApp,
+            package_manager: CliPackageManager::Bun,
+        }
     );
     assert_eq!(catalog.parse(["hawk2ui", "run"]).unwrap(), CliCommand::Run);
     assert_eq!(catalog.parse(["hawk2ui", "dev"]).unwrap(), CliCommand::Dev);
@@ -138,6 +153,28 @@ fn cli_commands_parse_known_commands_and_reject_invalid_command() {
 }
 
 #[test]
+fn cli_commands_parse_init_template_and_package_manager_options() {
+    let catalog = CommandCatalog;
+
+    assert_eq!(
+        catalog
+            .parse([
+                "hawk2ui",
+                "init",
+                "--template",
+                "react-plugin",
+                "--package-manager",
+                "npm",
+            ])
+            .unwrap(),
+        CliCommand::NewProject {
+            template: CliProjectTemplate::ReactPlugin,
+            package_manager: CliPackageManager::Npm,
+        }
+    );
+}
+
+#[test]
 fn workspace_dev_runs_validated_hot_reload_loop_without_rust_commands() {
     let root = temp_cli_workspace("dev");
     write_desktop_project(&root, "com.hawk2ui.cli-dev", "CLI Dev");
@@ -207,7 +244,10 @@ path = "assets/logo.svg"
 fn workspace_new_project_creates_buildable_desktop_and_plugin_scaffold() {
     let root = temp_cli_workspace("new-project");
 
-    let created = WorkspaceCommandRunner::new(&root).execute(CliCommand::NewProject);
+    let created = WorkspaceCommandRunner::new(&root).execute(CliCommand::NewProject {
+        template: CliProjectTemplate::Native,
+        package_manager: CliPackageManager::Bun,
+    });
 
     assert_eq!(created.exit_code, CliExitCode::Success);
     for path in [
@@ -244,6 +284,63 @@ fn workspace_new_project_creates_buildable_desktop_and_plugin_scaffold() {
         package
             .stdout
             .contains("layout-verification-status: passed")
+    );
+}
+
+#[test]
+fn workspace_init_react_templates_generate_framework_manifests_and_package_metadata() {
+    let app_root = temp_cli_workspace("init-react-app");
+    let app_created = WorkspaceCommandRunner::new(&app_root).execute(CliCommand::NewProject {
+        template: CliProjectTemplate::ReactApp,
+        package_manager: CliPackageManager::Bun,
+    });
+
+    assert_eq!(app_created.exit_code, CliExitCode::Success);
+    assert!(app_root.join("hawk.json").is_file());
+    assert!(app_root.join("src/App.tsx").is_file());
+    assert!(app_root.join("package.json").is_file());
+    let app_manifest_source =
+        fs::read_to_string(app_root.join("hawk.json")).expect("app manifest should read");
+    let app_manifest =
+        HawkManifest::parse(&app_manifest_source).expect("react app manifest should validate");
+    assert_eq!(app_manifest.source.entry, "src/App.tsx");
+    assert!(app_manifest_source.contains("\"framework\": \"react\""));
+    assert!(app_manifest_source.contains("\"desktop\""));
+    assert!(!app_manifest_source.contains("\"plugin\""));
+    assert!(
+        fs::read_to_string(app_root.join("package.json"))
+            .expect("app package should read")
+            .contains("\"packageManager\": \"bun@1.0.0\"")
+    );
+
+    let plugin_root = temp_cli_workspace("init-react-plugin");
+    let plugin_created =
+        WorkspaceCommandRunner::new(&plugin_root).execute(CliCommand::NewProject {
+            template: CliProjectTemplate::ReactPlugin,
+            package_manager: CliPackageManager::Npm,
+        });
+
+    assert_eq!(plugin_created.exit_code, CliExitCode::Success);
+    let plugin_manifest_source =
+        fs::read_to_string(plugin_root.join("hawk.json")).expect("plugin manifest should read");
+    let plugin_manifest = HawkManifest::parse(&plugin_manifest_source)
+        .expect("react plugin manifest should validate");
+    assert_eq!(plugin_manifest.source.entry, "src/App.tsx");
+    assert!(
+        plugin_manifest_source.contains("\"framework\": \"react\""),
+        "{plugin_manifest_source}"
+    );
+    assert!(plugin_manifest_source.contains("\"plugin\""));
+    assert!(plugin_manifest_source.contains("\"parameters\""));
+    assert!(
+        fs::read_to_string(plugin_root.join("package.json"))
+            .expect("plugin package should read")
+            .contains("\"packageManager\": \"npm@10.0.0\"")
+    );
+    assert!(
+        fs::read_to_string(plugin_root.join("src/App.tsx"))
+            .expect("plugin source should read")
+            .contains("hawk:plugin")
     );
 }
 
@@ -527,6 +624,22 @@ fn diagnostics_render_warning_error_capability_denial_and_target_incompatibility
     assert!(target.render().contains("target=plugin:vst3"));
 }
 
+#[test]
+fn diagnostics_render_capability_denial_manifest_path() {
+    let capability = CliDiagnostic::capability_denial(
+        "hawk:files.readText",
+        "file read denied by manifest permissions",
+    )
+    .manifest_path("permissions.capabilities[0]")
+    .suggested_fix("declare hawk:files.readText in hawk.json permissions.capabilities");
+
+    let rendered = capability.render();
+
+    assert!(rendered.contains("capability=hawk:files.readText"));
+    assert!(rendered.contains("manifest-path=permissions.capabilities[0]"));
+    assert!(rendered.contains("declare hawk:files.readText"));
+}
+
 use hawk2ui_cli::testkit::{BuildCommandRunner, BuildCommandScenario};
 
 #[test]
@@ -683,6 +796,9 @@ fn workspace_verify_artifact_reads_written_container_and_rejects_tampering() {
     assert!(verify.stdout.contains("verified artifact container"));
     assert!(verify.stdout.contains("signature-status: verified"));
     assert!(verify.stdout.contains("trust-status: release-ready"));
+    assert!(verify.stdout.contains("compiled-scripts: "));
+    assert!(verify.stdout.contains("compiled-assets: "));
+    assert!(verify.stdout.contains("runtime-scene: "));
 
     let mut bytes = fs::read(&artifact_path).expect("artifact container should be readable");
     let last = bytes
@@ -701,6 +817,25 @@ fn workspace_verify_artifact_reads_written_container_and_rejects_tampering() {
             .starts_with("artifact.container")
             || tampered.diagnostics[0].rule.starts_with("artifact.schema")
     );
+}
+
+#[test]
+fn workspace_verify_artifact_accepts_react_js_module_graph_payload() {
+    let root = temp_cli_workspace("verify-react-js-graph");
+    write_react_desktop_project(&root, "com.hawk2ui.cli-react-verify", "CLI React Verify");
+
+    let build = signed_runner(&root).execute(CliCommand::BuildRelease);
+    assert_eq!(build.exit_code, CliExitCode::Success);
+    let artifact_path = root.join("target/hawk2ui/release/hawk2ui-artifact.hawk");
+
+    let verify = signed_runner(&root).execute(CliCommand::VerifyArtifact {
+        path: Some(artifact_path.display().to_string()),
+    });
+
+    assert_eq!(verify.exit_code, CliExitCode::Success);
+    assert!(verify.stdout.contains("verified artifact container"));
+    assert!(verify.stdout.contains("js-module-graphs: 1"));
+    assert!(verify.stdout.contains("trust-status: release-ready"));
 }
 
 #[test]
@@ -724,6 +859,55 @@ fn workspace_verify_artifact_rejects_unsigned_development_container() {
     assert_eq!(
         verify.diagnostics[0].rule,
         "security.package.signature-missing"
+    );
+}
+
+#[test]
+fn workspace_verify_artifact_rejects_signed_container_without_runtime_payloads() {
+    let root = temp_cli_workspace("verify-empty-runtime-payload");
+    let manifest = HawkManifest::parse(
+        r#"
+[identity]
+id = "com.hawk2ui.cli-empty-runtime"
+name = "CLI Empty Runtime"
+version = "1.0.0"
+
+[source]
+entry = "src/main.ts"
+
+[capabilities]
+keys = ["native-windowing", "sealed-artifacts"]
+
+[[targets]]
+kind = "desktop"
+name = "linux-wayland"
+"#,
+    )
+    .expect("manifest parses");
+    let signing_key = ArtifactSigningKey::ed25519_sha256_v1("test-release-key", [7; 32]);
+    let artifact = signing_key.sign(&SealedArtifact::from_manifest(
+        ArtifactSchemaVersion::new(1, 0),
+        &manifest,
+    ));
+    let artifact_path = root.join("empty-runtime-payload.hawk");
+    fs::write(
+        &artifact_path,
+        artifact
+            .to_container_bytes(ArtifactSignaturePolicy::RequireVerifiedSignature)
+            .expect("signed artifact container serializes"),
+    )
+    .expect("signed artifact container writes");
+
+    let verify = WorkspaceCommandRunner::new(&root)
+        .with_trusted_release_key(signing_key.verification_key())
+        .execute(CliCommand::VerifyArtifact {
+            path: Some(artifact_path.display().to_string()),
+        });
+
+    assert_eq!(verify.exit_code, CliExitCode::Verification);
+    assert_eq!(
+        verify.diagnostics[0].rule,
+        "security.package.script-hashes-missing"
     );
 }
 
@@ -835,9 +1019,9 @@ fn workspace_package_plugin_materializes_plugin_outputs() {
     assert!(
         execution
             .stdout
-            .contains("host-loadable-binaries: produced=2")
+            .contains("host-loadable-binaries: produced=3")
     );
-    for extension in ["clap", "vst3"] {
+    for extension in ["clap", "vst3", "component"] {
         let package_root = root
             .join("target/hawk2ui")
             .join(format!("com-hawk2ui-cli-plugin.{extension}"));
@@ -881,16 +1065,12 @@ fn workspace_package_plugin_materializes_plugin_outputs() {
             ArtifactSignatureStatus::Verified
         );
     }
-    for extension in ["component", "app"] {
-        let package_root = root
-            .join("target/hawk2ui")
-            .join(format!("com-hawk2ui-cli-plugin.{extension}"));
-        assert!(
-            !package_root.exists(),
-            "{} should not be emitted until package-plugin can compile a real host binary for it",
-            package_root.display()
-        );
-    }
+    let standalone_package_root = root.join("target/hawk2ui/com-hawk2ui-cli-plugin.app");
+    assert!(
+        !standalone_package_root.exists(),
+        "{} should not be emitted until package-plugin can compile a real host binary for it",
+        standalone_package_root.display()
+    );
 
     #[cfg(target_os = "linux")]
     {
@@ -900,7 +1080,10 @@ fn workspace_package_plugin_materializes_plugin_outputs() {
         let vst3_binary = root
             .join("target/hawk2ui/com-hawk2ui-cli-plugin.vst3")
             .join("Contents/x86_64-linux/CLI Plugin.vst3");
-        for binary in [clap_binary, vst3_binary] {
+        let au_binary = root
+            .join("target/hawk2ui/com-hawk2ui-cli-plugin.component")
+            .join("Contents/MacOS/CLI Plugin");
+        for binary in [clap_binary, vst3_binary, au_binary] {
             let bytes = fs::read(&binary).unwrap_or_else(|error| {
                 panic!(
                     "host-loadable binary `{}` should read: {error}",
@@ -1176,6 +1359,39 @@ fn dev_loop_reports_visible_errors_before_runtime_reload() {
 }
 
 #[test]
+fn dev_loop_clears_visible_errors_after_recovered_validation() {
+    let watcher = RecordingWatcher::new(["src/App.tsx"]);
+    let reload_target = RecordingReloadTarget::default();
+    let mut dev_loop = DevLoop::new(watcher, reload_target).validation_fails("react.syntax");
+
+    let failed = dev_loop
+        .run_once()
+        .expect("first dev loop should expose validation errors");
+    assert_eq!(failed.events.last(), Some(&DevLoopEvent::ValidationFailed));
+    assert!(failed.error_overlay.is_some());
+
+    dev_loop.validation_passes();
+    let recovered = dev_loop
+        .run_once()
+        .expect("second dev loop should clear stale diagnostics and reload");
+
+    assert_eq!(
+        recovered.events,
+        vec![
+            DevLoopEvent::FileChanged("src/App.tsx".into()),
+            DevLoopEvent::IncrementalRebuildTriggered,
+            DevLoopEvent::ValidationPassed,
+            DevLoopEvent::DiagnosticsCleared,
+            DevLoopEvent::NativeSurfaceReloaded {
+                preserve_state: false
+            },
+        ]
+    );
+    assert!(recovered.visible_errors.is_empty());
+    assert!(recovered.error_overlay.is_none());
+}
+
+#[test]
 fn manual_presence_pages_exist_and_contain_required_headings() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let pages = [
@@ -1251,6 +1467,57 @@ name = "linux-wayland"
     write_file(
         &root.join("styles/main.hawk.css"),
         ".root { display: flex; font-size: 18px; background-color: token(color.surface); }",
+    );
+}
+
+fn write_react_desktop_project(root: &Path, id: &str, name: &str) {
+    let id_json = serde_json::to_string(id).expect("id serializes");
+    let name_json = serde_json::to_string(name).expect("name serializes");
+    write_file(
+        &root.join("hawk.json"),
+        &format!(
+            r#"{{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {{
+    "id": {id_json},
+    "name": {name_json},
+    "version": "1.0.0",
+    "bundleId": {id_json}
+  }},
+  "app": {{
+    "entry": "src/App.tsx",
+    "framework": "react"
+  }},
+  "build": {{
+    "output": "dist/main.js"
+  }},
+  "permissions": {{
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  }},
+  "targets": {{
+    "desktop": [
+      {{
+        "name": "linux-wayland",
+        "platforms": ["linux-wayland"]
+      }}
+    ]
+  }}
+}}"#,
+        ),
+    );
+    write_file(&root.join("bun.lock"), "lockfileVersion = 1\n");
+    write_file(
+        &root.join("src/App.tsx"),
+        r#"import { createRoot } from "@hawk2ui/react";
+function App() {
+  return <view id="root"><text>Ready</text></view>;
+}
+createRoot("root").render(<App />);"#,
+    );
+    write_file(
+        &root.join("dist/main.js"),
+        "globalThis.__hawk2uiCliReactBundle = true;",
     );
 }
 

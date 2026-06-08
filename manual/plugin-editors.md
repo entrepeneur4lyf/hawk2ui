@@ -34,7 +34,6 @@ The host compatibility matrix covers these formats:
 - `clap`
 - `vst3`
 - `au`
-- `standalone`
 
 For each format, the matrix covers host attachment, resize, DPI, keyboard focus, accessibility, state, automation, and realtime visual data.
 
@@ -66,5 +65,5 @@ hawk2ui verify-artifact
 hawk2ui diagnostics
 ```
 
-The command catalog reserves `hawk2ui package-plugin` for release-backed CLAP and VST3 targets.
+`hawk2ui package-plugin` implements release-backed CLAP, VST3, and AU targets through the truce.audio-backed plugin layer.
 The command compiles the generated `cdylib` crates and installs host-loadable shared libraries into the package before final hash verification.

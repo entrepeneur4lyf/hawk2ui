@@ -11,7 +11,7 @@ The legacy `manifest.hawk.toml` format remains a migration input. It is not a pa
 - All relative paths are resolved from the directory containing `hawk.json`.
 - Absolute paths, parent-directory escapes, and undeclared asset/script/style inputs are rejected.
 - Desktop apps and plugin editors are targets of one Hawk app model, not separate project types.
-- Framework compilers are authoring frontends selected by the manifest; the runtime consumes compiled Hawk artifacts, not framework source directly.
+- Framework selection is an authoring/build input. React release builds consume a sealed JavaScript module graph produced from the selected package-manager build output.
 - Release builds must be deterministic: the same manifest, sources, lock state, and signing inputs produce the same artifact hashes.
 
 ## Minimal Desktop App
@@ -34,7 +34,7 @@ The legacy `manifest.hawk.toml` format remains a migration input. It is not a pa
     "desktop": [
       {
         "name": "main",
-        "platforms": ["windows", "macos", "linux-wayland"],
+        "platforms": ["windows", "macos", "linux-wayland", "linux-x11"],
         "window": {
           "title": "Example Desktop",
           "width": 1280,
@@ -63,15 +63,15 @@ The legacy `manifest.hawk.toml` format remains a migration input. It is not a pa
     "bundleId": "com.example.synth"
   },
   "app": {
-    "entry": "src/App.svelte",
-    "framework": "svelte",
+    "entry": "src/App.tsx",
+    "framework": "react",
     "style": "src/styles.css"
   },
   "targets": {
     "desktop": [
       {
         "name": "standalone",
-        "platforms": ["windows", "macos", "linux-wayland"],
+          "platforms": ["windows", "macos", "linux-wayland", "linux-x11"],
         "window": {
           "title": "Example Synth",
           "width": 1180,
@@ -84,7 +84,7 @@ The legacy `manifest.hawk.toml` format remains a migration input. It is not a pa
     "plugin": [
       {
         "name": "editor",
-        "formats": ["clap", "vst3", "au", "standalone"],
+        "formats": ["clap", "vst3", "au"],
         "editor": {
           "width": 960,
           "height": 540,
@@ -149,12 +149,12 @@ The legacy `manifest.hawk.toml` format remains a migration input. It is not a pa
 | `$schema` | Recommended | Editor/tooling URL for the public JSON Schema. |
 | `schemaVersion` | Yes | Integer manifest schema version. The first canonical JSON schema is `1`. |
 | `package` | Yes | Stable product identity, display name, version, and bundle/package identifiers. |
-| `app` | Yes | Authoring entrypoint, framework compiler, and optional style/script entries. |
+| `app` | Yes | `app` declares the authoring entrypoint and framework used to produce package-manager build output. |
 | `targets` | Yes | Desktop and/or plugin targets to build from the app model. |
 | `plugin` | Required for plugin targets | Plugin identity, parameters, meters, presets, and state contract. |
 | `assets` | Optional | Asset include rules and explicit package inputs. |
 | `permissions` | Optional | Host service permissions granted to app code. Omitted means deny-by-default. |
-| `build` | Optional | Output directories, profile defaults, and release signing policy. |
+| `build` | Optional | Package-manager-produced JavaScript output path, package-manager selection, and lockfile detection. |
 
 Unknown top-level fields are rejected. Unknown nested fields are rejected unless the schema explicitly reserves an extension object.
 
@@ -178,7 +178,7 @@ Unknown top-level fields are rejected. Unknown nested fields are rejected unless
 
 ## `app`
 
-`app` declares the source entry used to compile the native UI model.
+`app` declares the source entry used to build the UI package output.
 
 ```json
 {
@@ -197,7 +197,22 @@ Supported `framework` values:
 - `svelte`
 - `vue`
 
-`entry` is required. `style` and `script` are optional. A framework entry produces a compiled framework artifact; a `native` entry produces a compiled script artifact.
+`entry` is required. `style` and `script` are optional. React release builds consume a sealed JavaScript module graph produced from the selected package-manager build output. Vue, Solid, and Svelte manifest values remain incubating until their runtime renderer adapters have equivalent release evidence.
+
+## `build`
+
+React release builds read the package-manager-produced JavaScript output declared by `build`.
+
+```json
+{
+  "output": "dist/main.js",
+  "packageManager": "bun"
+}
+```
+
+`output` is the package-manager-produced JavaScript bundle path sealed into the release artifact for React builds.
+
+`packageManager` accepts `bun`, `npm`, `pnpm`, or `yarn` and selects the lockfile when more than one supported lockfile is present. If `packageManager` is omitted, release builds detect `bun.lock`, `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`.
 
 ## `targets`
 
@@ -208,7 +223,7 @@ Supported `framework` values:
 ```json
 {
   "name": "main",
-  "platforms": ["windows", "macos", "linux-wayland"],
+  "platforms": ["windows", "macos", "linux-wayland", "linux-x11"],
   "window": {
     "title": "Example",
     "width": 1280,
@@ -220,6 +235,8 @@ Supported `framework` values:
   }
 }
 ```
+
+Desktop target `platforms` must include Windows, macOS, Linux Wayland, and Linux X11 before a production release claim.
 
 `presentationBackend` values:
 
@@ -234,7 +251,7 @@ Supported `framework` values:
 ```json
 {
   "name": "editor",
-  "formats": ["clap", "vst3", "au", "standalone"],
+  "formats": ["clap", "vst3", "au"],
   "editor": {
     "width": 960,
     "height": 540,
@@ -243,12 +260,7 @@ Supported `framework` values:
 }
 ```
 
-Supported `formats`:
-
-- `clap`
-- `vst3`
-- `au`
-- `standalone`
+Supported `formats`: `clap`, `vst3`, and `au`.
 
 Plugin targets require the top-level `plugin` object.
 

@@ -31,13 +31,14 @@ fn plugin_adapters_generate_all_supported_package_targets() {
     let request = PackageRequest::new(metadata, BundleOutput::new("dist", "Demo"), parameters)
         .with_format(PackageFormat::Clap)
         .with_format(PackageFormat::Vst3)
+        .with_format(PackageFormat::Au)
         .with_format(PackageFormat::SealedArtifact);
 
     let plan = PackageAdapterSet::new()
         .plan(&request)
         .expect("package plan succeeds");
 
-    assert_eq!(plan.targets().len(), 3);
+    assert_eq!(plan.targets().len(), 4);
     assert!(
         plan.targets()
             .iter()
@@ -56,6 +57,11 @@ fn plugin_adapters_generate_all_supported_package_targets() {
     assert!(
         plan.targets()
             .iter()
+            .any(|target| target.output_path().ends_with("Demo.component"))
+    );
+    assert!(
+        plan.targets()
+            .iter()
             .any(|target| target.output_path().ends_with("Demo.hawk2ui"))
     );
 }
@@ -68,7 +74,6 @@ fn plugin_adapters_reject_unimplemented_package_formats_before_materialization()
         BundleOutput::new("dist", "Unsupported"),
         ParameterModel::new([]),
     )
-    .with_format(PackageFormat::Au)
     .with_format(PackageFormat::Standalone)
     .with_format(PackageFormat::DesktopBundle);
 
@@ -76,7 +81,7 @@ fn plugin_adapters_reject_unimplemented_package_formats_before_materialization()
         .plan(&request)
         .expect_err("unimplemented host formats must not produce fake package plans");
 
-    assert_eq!(error.diagnostics().len(), 3);
+    assert_eq!(error.diagnostics().len(), 2);
     assert!(error.diagnostics().iter().all(|diagnostic| {
         diagnostic.rule() == "package.format.unsupported"
             && diagnostic
@@ -95,7 +100,8 @@ fn plugin_adapters_emit_metadata_and_verification_reports() {
         ParameterModel::new([]),
     )
     .with_format(PackageFormat::Clap)
-    .with_format(PackageFormat::Vst3);
+    .with_format(PackageFormat::Vst3)
+    .with_format(PackageFormat::Au);
 
     let plan = PackageAdapterSet::new()
         .plan(&request)
@@ -239,6 +245,73 @@ fn plugin_adapters_materialize_package_metadata_outputs() {
         .expect("artifact descriptor should be removable");
     let failed = plan.verify_materialized(&outputs);
     assert_eq!(failed.status(), VerificationStatus::Failed);
+}
+
+#[test]
+fn package_clap_materializes_release_backed_bundle_layout() {
+    let output_root = unique_temp_dir("hawk2ui-package-clap");
+    let outputs = materialize_single_release_package(PackageFormat::Clap, &output_root);
+
+    assert_eq!(outputs[0].format, PackageFormat::Clap);
+    let root = Path::new(&outputs[0].output_path);
+    assert!(root.join("Gate.clap").is_file());
+    assert!(root.join("Contents/Resources/clap.json").is_file());
+    assert!(root.join("Contents/Resources/clap-entry.toml").is_file());
+    assert!(
+        root.join("Contents/Resources/generated-clap/Cargo.toml")
+            .is_file()
+    );
+    assert!(
+        root.join("Contents/Resources/generated-clap/src/lib.rs")
+            .is_file()
+    );
+}
+
+#[test]
+fn package_vst3_materializes_release_backed_bundle_layout() {
+    let output_root = unique_temp_dir("hawk2ui-package-vst3");
+    let outputs = materialize_single_release_package(PackageFormat::Vst3, &output_root);
+
+    assert_eq!(outputs[0].format, PackageFormat::Vst3);
+    let root = Path::new(&outputs[0].output_path);
+    assert!(root.join("Contents/Info.plist").is_file());
+    assert!(root.join("Contents/x86_64-linux/Gate.vst3").is_file());
+    assert!(
+        root.join("Contents/Resources/generated-vst3/Cargo.toml")
+            .is_file()
+    );
+    assert!(
+        root.join("Contents/Resources/generated-vst3/src/lib.rs")
+            .is_file()
+    );
+}
+
+#[test]
+fn package_au_materializes_release_backed_component_layout() {
+    let output_root = unique_temp_dir("hawk2ui-package-au");
+    let outputs = materialize_single_release_package(PackageFormat::Au, &output_root);
+
+    assert_eq!(outputs[0].format, PackageFormat::Au);
+    let root = Path::new(&outputs[0].output_path);
+    assert!(root.ends_with("Gate.component"));
+    assert!(root.join("Contents/Info.plist").is_file());
+    assert!(root.join("Contents/MacOS/Gate").is_file());
+    assert!(
+        root.join("Contents/Resources/generated-au/Cargo.toml")
+            .is_file()
+    );
+    let generated_lib = root.join("Contents/Resources/generated-au/src/lib.rs");
+    assert!(generated_lib.is_file());
+    let generated_lib =
+        std::fs::read_to_string(generated_lib).expect("generated AU scaffold source reads");
+    assert!(generated_lib.contains("AudioComponentFactoryFunction"));
+
+    let manifest =
+        std::fs::read_to_string(&outputs[0].manifest_path).expect("AU package manifest reads");
+    assert!(manifest.contains("format = \"au\""));
+    let artifact = std::fs::read_to_string(&outputs[0].artifact_descriptor_path)
+        .expect("AU artifact descriptor reads");
+    assert!(artifact.contains("entry_library = \"Gate.component\""));
 }
 
 #[test]
@@ -824,6 +897,36 @@ fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
             .expect("system clock should be after unix epoch")
             .as_nanos()
     ))
+}
+
+fn materialize_single_release_package(
+    format: PackageFormat,
+    output_root: &Path,
+) -> Vec<MaterializedPackageOutput> {
+    let metadata = FormatMetadata::new("com.hawk2ui.package.gate", "Gate", "Hawk2UI")
+        .version("1.0.0")
+        .feature("audio-effect");
+    let parameters = ParameterModel::new([ParameterRecord::numeric(
+        "gain",
+        "Gain",
+        "dB",
+        ParameterRange::new(-60.0, 12.0, 0.0),
+    )]);
+    let request = PackageRequest::new(
+        metadata,
+        BundleOutput::new(output_root.to_string_lossy(), "Gate"),
+        parameters,
+    )
+    .with_format(format);
+    let plan = PackageAdapterSet::new()
+        .plan(&request)
+        .expect("release package target must plan");
+    let outputs = plan
+        .materialize()
+        .expect("release package target must materialize");
+
+    assert_eq!(outputs.len(), 1);
+    outputs
 }
 
 #[test]
@@ -2467,8 +2570,25 @@ fn plugin_adapters_materialize_format_specific_layouts_and_hash_manifest() {
                 assert!(hashes.contains("Contents/Resources/generated-vst3/Cargo.toml"));
                 assert!(hashes.contains("Contents/Resources/generated-vst3/src/lib.rs"));
             }
-            PackageFormat::Au
-            | PackageFormat::Standalone
+            PackageFormat::Au => {
+                assert!(root.join("Contents/Info.plist").is_file());
+                assert!(root.join("Contents/MacOS/Layout").is_file());
+                let generated_cargo = root.join("Contents/Resources/generated-au/Cargo.toml");
+                let generated_lib = root.join("Contents/Resources/generated-au/src/lib.rs");
+                assert!(generated_cargo.is_file());
+                assert!(generated_lib.is_file());
+                let generated_cargo =
+                    std::fs::read_to_string(generated_cargo).expect("AU scaffold manifest reads");
+                let generated_lib =
+                    std::fs::read_to_string(generated_lib).expect("AU scaffold source reads");
+                assert!(generated_cargo.contains("[workspace]"));
+                assert!(generated_cargo.contains("hawk2ui-generated-au"));
+                assert!(generated_lib.contains("AudioComponentFactoryFunction"));
+                assert!(hashes.contains("Contents/Info.plist"));
+                assert!(hashes.contains("Contents/Resources/generated-au/Cargo.toml"));
+                assert!(hashes.contains("Contents/Resources/generated-au/src/lib.rs"));
+            }
+            PackageFormat::Standalone
             | PackageFormat::DesktopBundle
             | PackageFormat::SealedArtifact => {
                 panic!("unexpected format in layout test");

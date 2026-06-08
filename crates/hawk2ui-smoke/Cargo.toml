@@ -27,6 +27,7 @@ hawk2ui-framework-vue = { version = "0.1.0", path = "../hawk2ui-framework-vue" }
 hawk2ui-host = { version = "0.1.0", path = "../hawk2ui-host" }
 hawk2ui-host-baseview = { version = "0.1.0", path = "../hawk2ui-host-baseview" }
 hawk2ui-host-winit = { version = "0.1.0", path = "../hawk2ui-host-winit" }
+hawk2ui-js-runtime = { version = "0.1.0", path = "../hawk2ui-js-runtime" }
 hawk2ui-layout = { version = "0.1.0", path = "../hawk2ui-layout" }
 hawk2ui-platform = { version = "0.1.0", path = "../hawk2ui-platform" }
 hawk2ui-plugin = { version = "0.1.0", path = "../hawk2ui-plugin" }

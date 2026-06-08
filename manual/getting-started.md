@@ -37,12 +37,15 @@ The implemented manifest parser recognizes these sections:
 The implemented CLI command catalog accepts these commands:
 
 - `hawk2ui new` is the project creation command name.
+- `hawk2ui init` is the project creation alias used for React app and plugin templates.
+- `hawk2ui dev` is the React development loop command name.
 - `hawk2ui validate` is the manifest/source/capability validation command name.
 - `hawk2ui build-dev` is the development artifact command name.
 - `hawk2ui build-release` is the release artifact command name.
 - `hawk2ui verify-artifact` is the sealed artifact verification command name.
 - `hawk2ui run-desktop` is the desktop native surface command name.
-- `hawk2ui package-plugin` is the plugin package command name for release-backed CLAP and VST3 targets.
+- `hawk2ui package-desktop` is the desktop package command name.
+- `hawk2ui package-plugin` is the plugin package command name for release-backed CLAP, VST3, and AU targets.
 - `hawk2ui diagnostics` is the structured diagnostics command name.
 
 Implemented process exit codes are `0` for success, `2` for usage errors, `10` for validation failures, `11` for artifact verification failures, and `12` for runtime failures.
@@ -59,6 +62,8 @@ hawk2ui diagnostics
 For desktop work, use the desktop flow:
 
 ```bash
+hawk2ui init
+hawk2ui dev
 hawk2ui build-dev
 hawk2ui run-desktop
 ```
@@ -67,6 +72,7 @@ For release artifacts, use the release verification flow:
 
 ```bash
 hawk2ui build-release
+hawk2ui package-desktop
 hawk2ui verify-artifact
 ```
 

@@ -2,9 +2,13 @@
 version = 2
 yanked = "deny"
 ignore = [
-    # Transitive dependency of boa_engine 0.21.1. The advisory is unmaintained,
-    # not a known vulnerability, and Boa has no safe replacement path for this
-    # dependency on the accepted release line.
+    # Transitive dependency of deno_core 0.403.0. bincode 1.3.3 is unmaintained
+    # but has no safe upgrade through the accepted deno_core release; deno_core is
+    # tracked in release/dependency-policy.toml with a runtime upgrade gate.
+    "RUSTSEC-2025-0141",
+    # Transitive dependency of v8 149.2.0. paste is unmaintained but has no safe
+    # upgrade through the accepted V8 binding release; v8 is tracked in
+    # release/dependency-policy.toml with artifact compatibility checks.
     "RUSTSEC-2024-0436",
 ]
 

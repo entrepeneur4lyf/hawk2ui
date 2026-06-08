@@ -2286,6 +2286,84 @@ pub struct Vst3CdylibScaffoldOutput {
     pub library_file_stem: String,
 }
 
+/// Files written for a generated AU `cdylib` scaffold.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuCdylibScaffoldOutput {
+    /// Root project path.
+    pub root_path: String,
+    /// Generated `Cargo.toml` path.
+    pub cargo_toml_path: String,
+    /// Generated `src/lib.rs` path.
+    pub lib_rs_path: String,
+    /// Generated Cargo package name.
+    pub package_name: String,
+    /// Generated dynamic library file stem.
+    pub library_file_stem: String,
+}
+
+struct AuCdylibScaffold {
+    metadata: FormatMetadata,
+    package_name: String,
+    library_file_stem: String,
+    parameter_count: usize,
+}
+
+impl AuCdylibScaffold {
+    fn from_metadata(metadata: &FormatMetadata) -> Self {
+        Self {
+            metadata: metadata.clone(),
+            package_name: "hawk2ui-generated-au".into(),
+            library_file_stem: "hawk2ui_generated_au".into(),
+            parameter_count: 0,
+        }
+    }
+
+    fn with_parameter_count(mut self, parameter_count: usize) -> Self {
+        self.parameter_count = parameter_count;
+        self
+    }
+
+    fn write_to(
+        &self,
+        root: impl AsRef<Path>,
+    ) -> Result<AuCdylibScaffoldOutput, PackageMaterializationError> {
+        let root = root.as_ref();
+        let src_dir = root.join("src");
+        create_package_dir(&src_dir)?;
+        let cargo_toml_path = root.join("Cargo.toml");
+        let lib_rs_path = src_dir.join("lib.rs");
+        write_package_file(&cargo_toml_path, self.cargo_toml())?;
+        write_package_file(&lib_rs_path, self.lib_rs())?;
+        Ok(AuCdylibScaffoldOutput {
+            root_path: root.to_string_lossy().into_owned(),
+            cargo_toml_path: cargo_toml_path.to_string_lossy().into_owned(),
+            lib_rs_path: lib_rs_path.to_string_lossy().into_owned(),
+            package_name: self.package_name.clone(),
+            library_file_stem: self.library_file_stem.clone(),
+        })
+    }
+
+    fn cargo_toml(&self) -> String {
+        format!(
+            "[workspace]\n\n[package]\nname = {}\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\nname = {}\ncrate-type = [\"cdylib\"]\n",
+            quoted_metadata_string(&self.package_name),
+            quoted_metadata_string(&self.library_file_stem)
+        )
+    }
+
+    fn lib_rs(&self) -> String {
+        format!(
+            "#![allow(non_snake_case)]\n\nuse core::ffi::c_void;\n\nconst PLUGIN_ID: &[u8] = {};\nconst PLUGIN_NAME: &[u8] = {};\nconst VENDOR: &[u8] = {};\nconst VERSION: &[u8] = {};\n\n#[unsafe(no_mangle)]\npub extern \"C\" fn AudioComponentFactoryFunction() -> *mut c_void {{\n    core::ptr::null_mut()\n}}\n\n#[unsafe(no_mangle)]\npub extern \"C\" fn Hawk2UIAudioUnitPluginId() -> *const u8 {{\n    PLUGIN_ID.as_ptr()\n}}\n\n#[unsafe(no_mangle)]\npub extern \"C\" fn Hawk2UIAudioUnitPluginName() -> *const u8 {{\n    PLUGIN_NAME.as_ptr()\n}}\n\n#[unsafe(no_mangle)]\npub extern \"C\" fn Hawk2UIAudioUnitVendor() -> *const u8 {{\n    VENDOR.as_ptr()\n}}\n\n#[unsafe(no_mangle)]\npub extern \"C\" fn Hawk2UIAudioUnitVersion() -> *const u8 {{\n    VERSION.as_ptr()\n}}\n\n#[unsafe(no_mangle)]\npub extern \"C\" fn Hawk2UIAudioUnitParameterCount() -> usize {{\n    {}\n}}\n",
+            rust_nul_terminated_byte_string(&self.metadata.id),
+            rust_nul_terminated_byte_string(&self.metadata.display_name),
+            rust_nul_terminated_byte_string(&self.metadata.vendor),
+            rust_nul_terminated_byte_string(&self.metadata.version),
+            self.parameter_count
+        )
+    }
+}
+
 struct Vst3CdylibScaffold {
     metadata: FormatMetadata,
     package_name: String,
@@ -3465,7 +3543,21 @@ impl PackageTargetPlan {
                 written.push(PathBuf::from(scaffold_output.cargo_toml_path));
                 written.push(PathBuf::from(scaffold_output.lib_rs_path));
             }
-            PackageFormat::Au | PackageFormat::Standalone | PackageFormat::DesktopBundle => {
+            PackageFormat::Au => {
+                let package_type = self.format.manifest_key();
+                let info_path = output_path.join("Contents").join("Info.plist");
+                write_package_file(&info_path, self.info_plist(package_type))?;
+                written.push(info_path);
+                let binary_dir = output_path.join("Contents").join("MacOS");
+                create_package_dir(&binary_dir)?;
+                let binary_path = binary_dir.join(&self.metadata.display_name);
+                write_package_file(&binary_path, self.entry_descriptor(package_type))?;
+                written.push(binary_path);
+                let scaffold_output = self.write_au_cdylib_scaffold(resources_path)?;
+                written.push(PathBuf::from(scaffold_output.cargo_toml_path));
+                written.push(PathBuf::from(scaffold_output.lib_rs_path));
+            }
+            PackageFormat::Standalone | PackageFormat::DesktopBundle => {
                 let package_type = self.format.manifest_key();
                 let info_path = output_path.join("Contents").join("Info.plist");
                 write_package_file(&info_path, self.info_plist(package_type))?;
@@ -3575,6 +3667,13 @@ impl PackageTargetPlan {
                         .join("Contents")
                         .join("MacOS")
                         .join(&self.metadata.display_name),
+                );
+                files.push(resources_path.join("generated-au").join("Cargo.toml"));
+                files.push(
+                    resources_path
+                        .join("generated-au")
+                        .join("src")
+                        .join("lib.rs"),
                 );
             }
             PackageFormat::Standalone | PackageFormat::DesktopBundle => {
@@ -3723,8 +3822,8 @@ impl PackageTargetPlan {
         match self.format {
             PackageFormat::Clap => vec!["clap_entry"],
             PackageFormat::Vst3 => vec!["GetPluginFactory"],
-            PackageFormat::Au
-            | PackageFormat::Standalone
+            PackageFormat::Au => vec!["AudioComponentFactoryFunction"],
+            PackageFormat::Standalone
             | PackageFormat::DesktopBundle
             | PackageFormat::SealedArtifact => Vec::new(),
         }
@@ -3764,6 +3863,15 @@ impl PackageTargetPlan {
                 self.parameter_count,
             )
             .write_to(resources_path.join("generated-vst3"))
+    }
+
+    fn write_au_cdylib_scaffold(
+        &self,
+        resources_path: &Path,
+    ) -> Result<AuCdylibScaffoldOutput, PackageMaterializationError> {
+        AuCdylibScaffold::from_metadata(&self.metadata)
+            .with_parameter_count(self.parameter_count)
+            .write_to(resources_path.join("generated-au"))
     }
 }
 
@@ -4165,7 +4273,7 @@ fn validate_request(request: &PackageRequest) -> Result<(), PackagePlanningError
     for format in &request.formats {
         if matches!(
             format,
-            PackageFormat::Au | PackageFormat::Standalone | PackageFormat::DesktopBundle
+            PackageFormat::Standalone | PackageFormat::DesktopBundle
         ) {
             diagnostics.push(PackageDiagnostic::new(
                 "package.format.unsupported",

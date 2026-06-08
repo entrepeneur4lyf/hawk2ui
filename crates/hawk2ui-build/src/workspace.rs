@@ -13,12 +13,15 @@ use crate::{
     ArtifactHash, ArtifactSchemaVersion, AssetCompilationError, AssetCompilationPlan,
     AssetManifestEntry, AssetSource, AssetSourceIndex, BuildDiagnostic, BuildDiagnosticSeverity,
     BuildPhase, BuildPipeline, BuildPipelineError, CompiledAssetRecord, CompiledFrameworkRecord,
-    CompiledScriptRecord, CompiledStyleRecord, HawkManifest, ManifestError, PackageTargetRecord,
-    SealedArtifact, SourceFramework, VerificationReport,
+    CompiledScriptRecord, CompiledStyleRecord, HawkManifest, JsBundleError, ManifestError,
+    PackageManagerError, PackageManagerSelection, PackageTargetRecord, SealedArtifact,
+    SealedJsDependencyOrigin, SealedJsModule, SealedJsModuleGraph, SourceFramework,
+    VerificationReport,
 };
 use hawk2ui_authoring::{AdapterError, FrameworkNativeProgram, FrameworkNativeProgramWire};
 use hawk2ui_script::{ScriptBackend, ScriptBackendError, ScriptExecutionLimits, ScriptModule};
 use hawk2ui_style::{StyleCompileError, compile_style_source};
+use sha2::{Digest, Sha256};
 
 const MAX_DECLARED_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const FRAMEWORK_COMPILER_TIMEOUT: Duration = Duration::from_secs(30);
@@ -103,9 +106,11 @@ impl BuildWorkspace {
 
         let mut artifact = SealedArtifact::from_manifest(schema_version, &self.manifest);
         artifact = match self.manifest.source.framework {
+            Some(SourceFramework::React) => {
+                artifact.with_js_module_graph(self.sealed_react_bundle_graph()?)
+            }
             Some(
-                framework @ (SourceFramework::React
-                | SourceFramework::Solid
+                framework @ (SourceFramework::Solid
                 | SourceFramework::Svelte
                 | SourceFramework::Vue),
             ) => artifact.with_compiled_framework(self.compiled_framework(
@@ -245,6 +250,37 @@ impl BuildWorkspace {
             })
     }
 
+    fn sealed_react_bundle_graph(&self) -> Result<SealedJsModuleGraph, BuildWorkspaceError> {
+        let output_path =
+            self.manifest
+                .build
+                .output
+                .as_deref()
+                .ok_or_else(|| BuildWorkspaceError::FrameworkCompilation {
+                    path: self.manifest.source.entry.clone(),
+                    framework: SourceFramework::React,
+                    message: "compiler.framework.react-runtime: React production uses @hawk2ui/react createRoot with the sealed Deno runtime; set build.output to the package-manager-produced JavaScript bundle".into(),
+                })?;
+        let bytes = self.read_declared_file(output_path)?;
+        let source = String::from_utf8(bytes.clone())
+            .map_err(|_| BuildWorkspaceError::UnreadableFile(output_path.into()))?;
+        let package_manager =
+            PackageManagerSelection::detect(&self.root, self.manifest.build.package_manager)
+                .map_err(BuildWorkspaceError::PackageManager)?;
+        let specifier = js_module_specifier(output_path);
+        let module = SealedJsModule::new(specifier.clone(), source, sha256_hex(&bytes))
+            .with_dependency_origin(SealedJsDependencyOrigin::workspace(output_path));
+        let graph =
+            SealedJsModuleGraph::new(specifier, package_manager.metadata()).with_module(module);
+        graph
+            .validate()
+            .map_err(|error| BuildWorkspaceError::JsBundle {
+                path: output_path.into(),
+                error,
+            })?;
+        Ok(graph)
+    }
+
     fn asset_sources(&self) -> Result<AssetSourceIndex, BuildWorkspaceError> {
         self.manifest
             .assets
@@ -277,11 +313,14 @@ impl BuildWorkspace {
         mut report: VerificationReport,
         artifact: &SealedArtifact,
     ) -> VerificationReport {
-        if artifact.compiled_scripts.is_empty() && artifact.compiled_frameworks.is_empty() {
+        if artifact.compiled_scripts.is_empty()
+            && artifact.compiled_frameworks.is_empty()
+            && artifact.js_module_graphs.is_empty()
+        {
             report = report.with_diagnostic(BuildDiagnostic::new(
                 BuildDiagnosticSeverity::Error,
                 "verification.entry-payload.missing",
-                "artifact must contain at least one compiled script or framework artifact",
+                "artifact must contain at least one compiled script, framework artifact, or sealed JS module graph",
             ));
         }
         if self.manifest.source.style.is_some() && artifact.compiled_styles.is_empty() {
@@ -354,6 +393,20 @@ fn validate_workspace_relative_path(path: &str) -> Result<(), BuildWorkspaceErro
     Ok(())
 }
 
+fn js_module_specifier(path: &str) -> String {
+    format!("file:///{}", path.replace('\\', "/"))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
+}
+
 fn asset_kind_label(kind: crate::AssetKind) -> &'static str {
     match kind {
         crate::AssetKind::Image => "image",
@@ -418,6 +471,15 @@ pub enum BuildWorkspaceError {
         framework: SourceFramework,
         /// Compiler failure message.
         message: String,
+    },
+    /// Package-manager detection or metadata capture failed.
+    PackageManager(PackageManagerError),
+    /// JavaScript bundle graph validation failed.
+    JsBundle {
+        /// Bundle path that failed sealing.
+        path: String,
+        /// Bundle graph validation error.
+        error: JsBundleError,
     },
     /// Script file extension is not supported by the production compiler.
     UnsupportedScriptExtension(String),

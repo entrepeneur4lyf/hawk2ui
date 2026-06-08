@@ -40,11 +40,43 @@ evidence = "target/release-evidence/compatibility-matrix.txt"
 
 [[criteria]]
 id = "framework-compilers"
-title = "Framework compiler examples"
+title = "Incubating framework compiler examples"
 owner = "framework"
 command = "rtk bash scripts/check-framework-examples.sh"
-blocking = "release"
+blocking = "advisory"
 evidence = "target/release-evidence/framework-compilers.txt"
+
+[[criteria]]
+id = "react-deno-runtime"
+title = "React Deno runtime path"
+owner = "runtime"
+command = "rtk cargo test -p hawk2ui-js-runtime -- --nocapture && rtk bun test packages/hawk2ui-react/test/react-reconciler.test.ts --reporter=dot && rtk cargo test -p hawk2ui-smoke react_ -- --nocapture"
+blocking = "release"
+evidence = "target/release-evidence/react-deno-runtime.txt"
+
+[[criteria]]
+id = "developer-experience"
+title = "React developer experience"
+owner = "developer-experience"
+command = "rtk cargo test -p hawk2ui-cli workspace_init_react_templates_generate_framework_manifests_and_package_metadata -- --nocapture && rtk cargo test -p hawk2ui-cli workspace_dev_ -- --nocapture && rtk cargo test -p hawk2ui-cli dev_loop_ -- --nocapture && rtk cargo test -p hawk2ui-smoke cli_end_to_end_smoke_builds_verifies_runs_desktop_and_packages_plugin -- --nocapture"
+blocking = "release"
+evidence = "target/release-evidence/developer-experience.txt"
+
+[[criteria]]
+id = "capability-apis"
+title = "Hawk JS capability APIs"
+owner = "runtime"
+command = "rtk cargo test -p hawk2ui-js-runtime capabilities -- --nocapture && rtk cargo test -p hawk2ui-platform --test platform_capabilities -- --nocapture && rtk cargo test -p hawk2ui-security -- --nocapture && rtk cargo test -p hawk2ui-smoke react_ -- --nocapture"
+blocking = "release"
+evidence = "target/release-evidence/capability-apis.txt"
+
+[[criteria]]
+id = "v8-artifact-policy"
+title = "Rusty V8 artifact policy"
+owner = "runtime"
+command = "rtk cargo test -p hawk2ui-js-runtime --test v8_artifacts -- --nocapture && rtk cargo test -p xtask repository_package_targets_cover_required_outputs -- --nocapture"
+blocking = "release"
+evidence = "target/release-evidence/v8-artifact-policy.txt"
 
 [[criteria]]
 id = "performance-budgets"

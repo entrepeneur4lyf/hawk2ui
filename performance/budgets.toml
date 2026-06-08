@@ -113,7 +113,7 @@ unit = "milliseconds"
 target = 12
 maximum = 24
 release_gate = false
-fixture = "examples/frameworks/svelte-basic"
+fixture = "examples/react-desktop-basic"
 
 [[budgets]]
 name = "asset-decode"
@@ -141,6 +141,24 @@ target = 52428800
 maximum = 104857600
 release_gate = true
 fixture = "examples/desktop-basic"
+
+[[budgets]]
+name = "react-package-size"
+category = "package"
+unit = "bytes"
+target = 52428800
+maximum = 104857600
+release_gate = true
+fixture = "examples/react-desktop-basic"
+
+[[budgets]]
+name = "react-plugin-package-size"
+category = "package"
+unit = "bytes"
+target = 52428800
+maximum = 104857600
+release_gate = true
+fixture = "examples/react-plugin-basic"
 
 [[budgets]]
 name = "package-verify"

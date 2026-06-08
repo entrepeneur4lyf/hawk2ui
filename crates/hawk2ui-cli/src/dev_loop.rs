@@ -28,6 +28,8 @@ pub enum DevLoopEvent {
     ValidationPassed,
     /// Validation failed.
     ValidationFailed,
+    /// Previously visible diagnostics were cleared after a successful validation.
+    DiagnosticsCleared,
     /// Native surface was reloaded.
     NativeSurfaceReloaded {
         /// Whether runtime state was preserved.
@@ -588,6 +590,7 @@ pub struct DevLoop<R = DevReloadAcknowledgement> {
     reload_target: R,
     preserve_state: bool,
     validation_failure_rule: Option<String>,
+    has_visible_diagnostics: bool,
 }
 
 impl DevLoop<DevReloadAcknowledgement> {
@@ -610,6 +613,7 @@ where
             reload_target,
             preserve_state: false,
             validation_failure_rule: None,
+            has_visible_diagnostics: false,
         }
     }
 
@@ -625,6 +629,11 @@ where
     pub fn validation_fails(mut self, rule: impl Into<String>) -> Self {
         self.validation_failure_rule = Some(rule.into());
         self
+    }
+
+    /// Clears the configured validation failure for the next loop iteration.
+    pub fn validation_passes(&mut self) {
+        self.validation_failure_rule = None;
     }
 
     /// Runs one development loop iteration.
@@ -648,6 +657,7 @@ where
         if let Some(rule) = &self.validation_failure_rule {
             events.push(DevLoopEvent::ValidationFailed);
             let diagnostic = CliDiagnostic::error(rule.clone(), "validation failed");
+            self.has_visible_diagnostics = true;
             return Ok(DevLoopReport {
                 events,
                 error_overlay: Some(DevErrorOverlay::from_diagnostic(&diagnostic)),
@@ -656,6 +666,10 @@ where
         }
 
         events.push(DevLoopEvent::ValidationPassed);
+        if self.has_visible_diagnostics {
+            events.push(DevLoopEvent::DiagnosticsCleared);
+            self.has_visible_diagnostics = false;
+        }
         self.reload_target.reload(self.preserve_state)?;
         events.push(DevLoopEvent::NativeSurfaceReloaded {
             preserve_state: self.preserve_state,

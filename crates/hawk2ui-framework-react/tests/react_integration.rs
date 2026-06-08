@@ -413,7 +413,7 @@ fn react_smoke_app_declares_public_package_entrypoint() {
         .expect("React smoke app should exist");
 
     assert!(package_json.contains("@hawk2ui/react"));
-    assert!(index_ts.contains("createHawkReactRoot"));
+    assert!(index_ts.contains("createRoot"));
     assert!(app.contains("items.map"));
     assert!(app.contains("assets/logo.svg"));
 }

@@ -11,7 +11,9 @@
     "packages/hawk2ui-compiler"
   ],
   "scripts": {
-    "test:packages": "bun test packages/hawk2ui-native/test/native-records.test.ts packages/hawk2ui-svelte/test/svelte-compile.test.ts packages/hawk2ui-react/test/react-root.test.ts packages/hawk2ui-vue/test/vue-renderer.test.ts packages/hawk2ui-solid/test/solid-renderer.test.ts packages/hawk2ui-compiler/test/compiler.test.ts packages/test/package-conformance.test.ts packages/test/framework-production-api.test.ts",
+    "test:react-package": "bun test packages/hawk2ui-react/test/react-reconciler.test.ts packages/test/react-production-api.test.ts",
+    "test:packages": "bun test packages/hawk2ui-native/test/native-records.test.ts packages/hawk2ui-svelte/test/svelte-compile.test.ts packages/hawk2ui-react/test/react-reconciler.test.ts packages/hawk2ui-vue/test/vue-renderer.test.ts packages/hawk2ui-solid/test/solid-renderer.test.ts packages/hawk2ui-compiler/test/compiler.test.ts packages/test/framework-production-api.test.ts",
+    "typecheck:react-package": "tsc -p tsconfig.react-package.json --noEmit",
     "typecheck:packages": "tsc -p tsconfig.packages.json --noEmit"
   },
   "dependencies": {},
@@ -23,9 +25,13 @@
     "@babel/preset-typescript": "7.29.7",
     "@types/babel__core": "7.20.5",
     "@types/babel__generator": "^7.27.0",
+    "@types/react": "19.2.17",
+    "@types/react-reconciler": "0.33.0",
     "@vue/compiler-dom": "3.5.35",
     "@vue/compiler-sfc": "3.5.35",
     "babel-preset-solid": "1.9.12",
+    "react": "19.2.7",
+    "react-reconciler": "0.33.0",
     "svelte": "5.56.2",
     "typescript": "6.0.3"
   }

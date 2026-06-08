@@ -4,13 +4,6 @@ import { compileHawkSource, compilerArtifactJson } from "../src/index.ts";
 test("framework compiler dispatch emits canonical compiler artifacts", () => {
   const fixtures = [
     {
-      framework: "react" as const,
-      filename: "App.tsx",
-      source:
-        'let label = "Idle"; function handlePress() { label = "Pressed"; } export function App() { return <hawk-view id="root" onPointerDown={handlePress}><hawk-text id="title">{label}</hawk-text></hawk-view>; }',
-      expression: "label",
-    },
-    {
       framework: "solid" as const,
       filename: "App.tsx",
       source:
@@ -59,6 +52,17 @@ test("framework compiler dispatch emits canonical compiler artifacts", () => {
     ]);
     expect(JSON.parse(compilerArtifactJson(output))).toEqual(output.compilerArtifact);
   }
+});
+
+test("framework compiler dispatch rejects React production compilation", () => {
+  expect(() =>
+    compileHawkSource({
+      framework: "react",
+      filename: "App.tsx",
+      source:
+        'export function App() { return <hawk-view id="root"><hawk-text id="title">React</hawk-text></hawk-view>; }',
+    }),
+  ).toThrow("compiler.framework.react-runtime");
 });
 
 test("framework compiler dispatch requires explicit framework for TSX", () => {

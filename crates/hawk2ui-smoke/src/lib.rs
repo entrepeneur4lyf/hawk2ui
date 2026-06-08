@@ -14,10 +14,10 @@ use hawk2ui_authoring::{
 };
 use hawk2ui_build::{
     ArtifactSchemaVersion, ArtifactSigningKey, BuildWorkspace, BuildWorkspaceError,
-    BuildWorkspaceOutput, CompiledFrameworkRecord, SourceFramework,
+    BuildWorkspaceOutput, CompiledFrameworkRecord, SealedJsModuleGraph as BuildSealedJsModuleGraph,
+    SourceFramework,
 };
 use hawk2ui_cli::{CliCommand, CliExitCode, CommandExecution, WorkspaceCommandRunner};
-use hawk2ui_framework_react::{ReactElementTree, ReactIntegration};
 use hawk2ui_framework_solid::{SolidComponentSource, SolidIntegration};
 use hawk2ui_framework_svelte::{SvelteComponentSource, SvelteIntegration};
 use hawk2ui_framework_vue::{VueIntegration, VueSingleFileComponent};
@@ -29,7 +29,12 @@ use hawk2ui_host_baseview::{
     BaseviewNativeParentBackend, BaseviewParentFixture, BaseviewPluginAdapter,
 };
 use hawk2ui_host_winit::{
-    SoftwareFrame, SoftwareFrameRenderer, WinitDesktopAdapter, WinitPlatformFixture,
+    SoftwareFrame, SoftwareFrameRenderer, WinitDesktopAdapter, WinitDesktopRuntimeConfig,
+    WinitPlatformFixture,
+};
+use hawk2ui_js_runtime::{
+    HawkHostContext, HawkJsModule, HawkJsModuleGraph, HawkJsRuntime, HawkNetworkResponse,
+    HawkPluginTransportInfo, HawkRuntimeCapabilities, JsRuntimeValue, RuntimeSceneOpAdapter,
 };
 use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, Viewport};
 use hawk2ui_platform::{
@@ -43,8 +48,8 @@ use hawk2ui_plugin::{
 };
 use hawk2ui_render::Color;
 use hawk2ui_runtime::{
-    RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId, RuntimeViewNode, RuntimeViewTree,
-    RuntimeVisual,
+    RuntimeDrawCommand, RuntimeSceneBridge, RuntimeSceneFrame, RuntimeViewId, RuntimeViewNode,
+    RuntimeViewTree, RuntimeVisual,
 };
 use hawk2ui_script::{HostCallPolicy, ScriptBackend, StructuredValue, TimerPolicy};
 use hawk2ui_style::compile_style_source;
@@ -100,6 +105,8 @@ pub struct SmokeBuildResult {
     pub compiled_script_count: usize,
     /// Number of framework compiler payloads embedded in the sealed artifact.
     pub compiled_framework_count: usize,
+    /// Number of sealed JavaScript module graphs embedded in the sealed artifact.
+    pub js_module_graph_count: usize,
     /// Number of style payloads compiled into the sealed artifact.
     pub compiled_style_count: usize,
     /// Number of asset payloads compiled into the sealed artifact.
@@ -186,6 +193,43 @@ pub struct DesktopSmokeResult {
     pub window_events: Vec<String>,
 }
 
+/// Smoke run result for the React/Deno desktop fixture.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReactDenoDesktopSmokeResult {
+    /// Fixture name.
+    pub fixture_name: String,
+    /// Number of application modules sealed into the runtime graph.
+    pub sealed_module_count: usize,
+    /// Entrypoint specifier executed by the Deno runtime.
+    pub bundle_entrypoint: String,
+    /// Package manager that produced the sealed bundle.
+    pub package_manager: String,
+    /// Lockfile hash recorded by package-manager metadata.
+    pub package_manager_lockfile_sha256: Option<String>,
+    /// SHA-256 hash of the executed JS bundle module.
+    pub bundle_sha256: String,
+    /// Scene export.
+    pub scene: SmokeSceneExport,
+    /// Real software-rendered first-frame evidence.
+    pub first_frame: SmokeSoftwareFrameEvidence,
+    /// Real software-rendered second-frame evidence.
+    pub second_frame: SmokeSoftwareFrameEvidence,
+    /// Text values observed across the initial and updated frames.
+    pub text_updates: Vec<String>,
+    /// Network status values observed across the initial and async-updated frames.
+    pub network_updates: Vec<String>,
+    /// Storage operations executed by the sealed React/Deno bundle.
+    pub storage_operations: Vec<String>,
+    /// File operations executed by the sealed React/Deno bundle.
+    pub file_operations: Vec<String>,
+    /// Real Winit host lifecycle evidence.
+    pub host_winit: SmokeWinitHostEvidence,
+    /// Whether the Winit runtime config accepts the React/Deno runtime tree.
+    pub window_config_valid: bool,
+    /// Whether the smoke lifecycle reached a clean close.
+    pub close_cleanly: bool,
+}
+
 /// Smoke run result for the dense dashboard fixture.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DashboardSmokeResult {
@@ -238,6 +282,49 @@ pub struct PluginEditorSmokeResult {
     pub baseview_surface_size: [u32; 2],
     /// Whether the presented `Baseview` frame contains visible scene pixels.
     pub baseview_visible_pixel: bool,
+}
+
+/// Smoke run result for the React/Deno plugin fixture.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReactDenoPluginSmokeResult {
+    /// Fixture name.
+    pub fixture_name: String,
+    /// Number of application modules sealed into the runtime graph.
+    pub sealed_module_count: usize,
+    /// Entrypoint specifier executed by the Deno runtime.
+    pub bundle_entrypoint: String,
+    /// Package manager that produced the sealed bundle.
+    pub package_manager: String,
+    /// Lockfile hash recorded by package-manager metadata.
+    pub package_manager_lockfile_sha256: Option<String>,
+    /// SHA-256 hash of the executed JS bundle module.
+    pub bundle_sha256: String,
+    /// Parameter updates observed through `hawk:plugin`.
+    pub parameter_updates: Vec<String>,
+    /// Text values observed across the initial and updated frames.
+    pub text_updates: Vec<String>,
+    /// Plugin state save/load evidence from the sealed React/Deno bundle.
+    pub state_roundtrip: Vec<String>,
+    /// Plugin preset save/load evidence from the sealed React/Deno bundle.
+    pub preset_roundtrip: Vec<String>,
+    /// Plugin host transport snapshots observed through `hawk:plugin`.
+    pub transport_snapshots: Vec<String>,
+    /// Realtime visual stream frames observed through `hawk:audio`.
+    pub realtime_visual_streams: Vec<String>,
+    /// DSP control queue evidence observed through `hawk:dsp`.
+    pub dsp_control_messages: Vec<String>,
+    /// Frames presented by the `Baseview` adapter.
+    pub baseview_presented_frames: u64,
+    /// Last `Baseview` software surface size.
+    pub baseview_surface_size: [u32; 2],
+    /// Whether the `Baseview` frame had visible pixels.
+    pub baseview_visible_pixel: bool,
+    /// Realtime denial rule observed when plugin ops are attempted in audio realtime context.
+    pub realtime_denial_rule: String,
+    /// Whether JavaScript execution was kept out of the audio realtime context.
+    pub no_js_on_audio_thread: bool,
+    /// Whether the editor was destroyed cleanly.
+    pub destroyed_cleanly: bool,
 }
 
 /// Smoke run result for realtime visual fixture.
@@ -344,7 +431,7 @@ pub struct CliEndToEndSmokeResult {
     pub plugin_package: CliWorkflowStatus,
     /// Plugin package layout verification status.
     pub plugin_layout_verification: CliWorkflowStatus,
-    /// Number of host-loadable CLAP/VST3 binaries reported by `package-plugin`.
+    /// Number of host-loadable CLAP/VST3/AU binaries reported by `package-plugin`.
     pub plugin_host_loadable_binaries: usize,
     /// Whether unsupported AU/standalone/desktop package outputs were absent from the package dir.
     pub plugin_unsupported_outputs_absent: bool,
@@ -357,6 +444,16 @@ pub enum CliWorkflowStatus {
     Passed,
     /// Workflow evidence failed.
     Failed,
+}
+
+struct ReactBundleSmokeEvidence {
+    runtime_graph: HawkJsModuleGraph,
+    source: String,
+    sealed_module_count: usize,
+    entrypoint: String,
+    package_manager: String,
+    package_manager_lockfile_sha256: Option<String>,
+    bundle_sha256: String,
 }
 
 /// Smoke runner.
@@ -420,6 +517,122 @@ impl SmokeRunner {
                 "repainted".into(),
                 "closed".into(),
             ],
+        })
+    }
+
+    /// Runs the React/Deno desktop smoke fixture.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when fixture files are missing, JavaScript execution fails, scene ops do
+    /// not produce a runtime tree, or the Winit desktop host rejects the resulting surface config.
+    pub fn run_react_desktop_basic(
+        &self,
+        fixture: &SmokeFixture,
+    ) -> Result<ReactDenoDesktopSmokeResult, String> {
+        if fixture.target != SmokeTargetKind::Desktop {
+            return Err("react-desktop-basic fixture must use desktop target".into());
+        }
+        let root = fixture.absolute_path();
+        require_file(&root.join("hawk.json"))?;
+        require_file(&root.join("src/App.tsx"))?;
+
+        let bundle = react_bundle_from_build_artifact(&root)?;
+        let sealed_module_count = bundle.sealed_module_count;
+        let bundle_entrypoint = bundle.entrypoint.clone();
+        let package_manager = bundle.package_manager.clone();
+        let package_manager_lockfile_sha256 = bundle.package_manager_lockfile_sha256.clone();
+        let bundle_sha256 = bundle.bundle_sha256.clone();
+        let graph = bundle.runtime_graph;
+        let capabilities = react_desktop_capabilities();
+        let mut runtime = HawkJsRuntime::from_module_graph_with_capabilities(graph, capabilities)
+            .map_err(|error| error.to_string())?;
+        runtime
+            .execute_entrypoint_module()
+            .map_err(|error| error.to_string())?;
+
+        let mut adapter = RuntimeSceneOpAdapter::default();
+        let initial_batch = runtime.scene_batches().first().cloned().ok_or_else(|| {
+            "React/Deno desktop entrypoint did not commit an initial scene".to_owned()
+        })?;
+        adapter
+            .apply_batch(&initial_batch)
+            .map_err(|error| error.to_string())?;
+        let initial_tree = adapter
+            .runtime_tree()
+            .ok_or_else(|| "React/Deno desktop initial scene did not produce a root".to_owned())?;
+        let root_id = initial_tree.root_id().as_str().to_owned();
+        let (first_frame, first_text) =
+            react_deno_desktop_frame_evidence(initial_tree, "react-desktop-basic first frame")?;
+
+        let network_batch = runtime.scene_batches().get(1).cloned().ok_or_else(|| {
+            "React/Deno desktop capability load did not commit a network update scene".to_owned()
+        })?;
+        adapter
+            .apply_batch(&network_batch)
+            .map_err(|error| error.to_string())?;
+        let network_tree = adapter.runtime_tree().ok_or_else(|| {
+            "React/Deno desktop network update removed the runtime tree".to_owned()
+        })?;
+        let (_, network_text) = react_deno_desktop_frame_evidence(
+            network_tree,
+            "react-desktop-basic network update frame",
+        )?;
+
+        runtime
+            .execute_script(
+                "react-desktop-basic:pointer-press",
+                "globalThis.__hawk2uiReactDesktopIncrement();",
+            )
+            .map_err(|error| error.to_string())?;
+        let second_batch =
+            runtime.scene_batches().get(2).cloned().ok_or_else(|| {
+                "React/Deno desktop event did not commit a second scene".to_owned()
+            })?;
+        adapter
+            .apply_batch(&second_batch)
+            .map_err(|error| error.to_string())?;
+        let updated_tree = adapter
+            .runtime_tree()
+            .ok_or_else(|| "React/Deno desktop update removed the runtime tree".to_owned())?;
+        let (second_frame, second_text) =
+            react_deno_desktop_frame_evidence(updated_tree, "react-desktop-basic second frame")?;
+        let capability_evidence = react_desktop_capability_evidence(&mut runtime)?;
+
+        let config = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+            "react-desktop-basic",
+            SurfaceMetrics::new(320.0, 180.0, 1.0),
+        ))
+        .with_runtime_tree(updated_tree.clone())
+        .with_exit_after_first_frame(true);
+        config
+            .validate()
+            .map_err(|error| format!("React/Deno Winit config rejected: {}", error.rule()))?;
+        let host_winit = exercise_winit_host_lifecycle(
+            "react-desktop-basic",
+            SurfaceMetrics::new(320.0, 180.0, 1.0),
+            SurfaceMetrics::new(640.0, 360.0, 1.5),
+            1.5,
+        )?;
+        let close_cleanly = host_winit.close_requested;
+
+        Ok(ReactDenoDesktopSmokeResult {
+            fixture_name: fixture.name(),
+            sealed_module_count,
+            bundle_entrypoint,
+            package_manager,
+            package_manager_lockfile_sha256,
+            bundle_sha256,
+            scene: SmokeSceneExport { root_id },
+            first_frame,
+            second_frame,
+            text_updates: vec![first_text.count, second_text.count],
+            network_updates: vec![first_text.network, network_text.network],
+            storage_operations: vec![capability_evidence.storage_operation],
+            file_operations: vec![capability_evidence.file_operation],
+            host_winit,
+            window_config_valid: true,
+            close_cleanly,
         })
     }
 
@@ -529,6 +742,115 @@ impl SmokeRunner {
             baseview_presented_frames: adapter.presented_frame_count(),
             baseview_surface_size: [snapshot.width(), snapshot.height()],
             baseview_visible_pixel: snapshot.pixels().contains(&PLUGIN_SMOKE_FILL_PIXEL),
+        })
+    }
+
+    /// Runs the React/Deno plugin smoke fixture.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when fixture files are missing, JavaScript capability routing fails,
+    /// scene ops do not produce frames, or the Baseview adapter rejects the plugin editor.
+    pub fn run_react_plugin_basic(
+        &self,
+        fixture: &SmokeFixture,
+    ) -> Result<ReactDenoPluginSmokeResult, String> {
+        if fixture.target != SmokeTargetKind::Plugin {
+            return Err("react-plugin-basic fixture must use plugin target".into());
+        }
+        let root = fixture.absolute_path();
+        require_file(&root.join("hawk.json"))?;
+        require_file(&root.join("src/App.tsx"))?;
+
+        let bundle = react_bundle_from_build_artifact(&root)?;
+        let bundle_source = bundle.source.clone();
+        let sealed_module_count = bundle.sealed_module_count;
+        let bundle_entrypoint = bundle.entrypoint.clone();
+        let package_manager = bundle.package_manager.clone();
+        let package_manager_lockfile_sha256 = bundle.package_manager_lockfile_sha256.clone();
+        let bundle_sha256 = bundle.bundle_sha256.clone();
+        let graph = bundle.runtime_graph;
+        let capabilities = react_plugin_capabilities();
+        let mut runtime = HawkJsRuntime::from_module_graph_with_capabilities(graph, capabilities)
+            .map_err(|error| error.to_string())?;
+        runtime
+            .execute_entrypoint_module()
+            .map_err(|error| error.to_string())?;
+
+        let mut scene_adapter = RuntimeSceneOpAdapter::default();
+        let initial_batch = runtime.scene_batches().first().cloned().ok_or_else(|| {
+            "React/Deno plugin entrypoint did not commit an initial scene".to_owned()
+        })?;
+        scene_adapter
+            .apply_batch(&initial_batch)
+            .map_err(|error| error.to_string())?;
+
+        let mut adapter = BaseviewPluginAdapter::attach(
+            PluginEditorConfig::new(
+                "react-plugin-basic",
+                PluginParentHandle::opaque("react-plugin-parent"),
+                SurfaceMetrics::new(640.0, 360.0, 1.0),
+            ),
+            BaseviewParentFixture::linux_xwayland(),
+        )
+        .map_err(|error| format!("baseview React plugin attach failed: {}", error.rule()))?;
+        let first_frame = render_react_plugin_frame(
+            &mut adapter,
+            scene_adapter.runtime_tree().ok_or_else(|| {
+                "React/Deno plugin initial scene did not produce a root".to_owned()
+            })?,
+            "react-plugin-basic first frame",
+        )?;
+
+        runtime
+            .execute_script(
+                "react-plugin-basic:pointer-press",
+                "globalThis.__hawk2uiReactPluginBoost();",
+            )
+            .map_err(|error| error.to_string())?;
+        let second_batch =
+            runtime.scene_batches().get(1).cloned().ok_or_else(|| {
+                "React/Deno plugin event did not commit a second scene".to_owned()
+            })?;
+        scene_adapter
+            .apply_batch(&second_batch)
+            .map_err(|error| error.to_string())?;
+        let second_frame = render_react_plugin_frame(
+            &mut adapter,
+            scene_adapter
+                .runtime_tree()
+                .ok_or_else(|| "React/Deno plugin update removed the runtime tree".to_owned())?,
+            "react-plugin-basic second frame",
+        )?;
+        adapter.destroy_editor("React/Deno plugin smoke complete");
+
+        let realtime_denial_rule = react_plugin_realtime_denial_rule(&bundle_source)?;
+        let parameter_updates = vec![
+            format!("gain={}", first_frame.text),
+            format!("gain={}", second_frame.text),
+        ];
+        let capability_evidence = react_plugin_capability_evidence(&mut runtime)?;
+
+        Ok(ReactDenoPluginSmokeResult {
+            fixture_name: fixture.name(),
+            sealed_module_count,
+            bundle_entrypoint,
+            package_manager,
+            package_manager_lockfile_sha256,
+            bundle_sha256,
+            parameter_updates,
+            text_updates: vec![first_frame.text, second_frame.text],
+            state_roundtrip: vec![capability_evidence.state_roundtrip],
+            preset_roundtrip: vec![capability_evidence.preset_roundtrip],
+            transport_snapshots: vec![capability_evidence.transport_snapshot],
+            realtime_visual_streams: vec![capability_evidence.realtime_visual_stream],
+            dsp_control_messages: capability_evidence.dsp_control_messages,
+            baseview_presented_frames: adapter.presented_frame_count(),
+            baseview_surface_size: second_frame.surface_size,
+            baseview_visible_pixel: second_frame.visible_pixel,
+            realtime_denial_rule,
+            no_js_on_audio_thread: true,
+            destroyed_cleanly: true,
         })
     }
 
@@ -912,7 +1234,7 @@ fn unsupported_package_outputs_absent(plugin_root: &Path) -> Result<bool, String
             .map_err(|error| format!("plugin package directory entry cannot be read: {error}"))?
             .path();
         let extension = path.extension().and_then(|extension| extension.to_str());
-        if matches!(extension, Some("component" | "app")) {
+        if matches!(extension, Some("app")) {
             return Ok(false);
         }
     }
@@ -1060,12 +1382,45 @@ fn build_workspace_output_verified(root: &Path) -> Result<BuildWorkspaceOutput, 
         .map_err(|error| format!("smoke build failed: {error:?}"))
 }
 
+fn react_bundle_from_build_artifact(root: &Path) -> Result<ReactBundleSmokeEvidence, String> {
+    let output = build_workspace_output_verified(root)?;
+    let sealed_graph =
+        output.artifact.js_module_graphs.first().ok_or_else(|| {
+            "React smoke build did not produce a sealed JS module graph".to_owned()
+        })?;
+    react_bundle_smoke_evidence(sealed_graph)
+}
+
+fn react_bundle_smoke_evidence(
+    sealed_graph: &BuildSealedJsModuleGraph,
+) -> Result<ReactBundleSmokeEvidence, String> {
+    let entrypoint = sealed_graph.entrypoint().to_owned();
+    let entry_module = sealed_graph
+        .module(&entrypoint)
+        .ok_or_else(|| format!("sealed JS graph missing entrypoint module: {entrypoint}"))?;
+    let mut runtime_graph = HawkJsModuleGraph::new(&entrypoint);
+    for module in sealed_graph.modules() {
+        runtime_graph =
+            runtime_graph.with_module(HawkJsModule::new(module.specifier(), module.source()));
+    }
+    Ok(ReactBundleSmokeEvidence {
+        runtime_graph,
+        source: entry_module.source().to_owned(),
+        sealed_module_count: sealed_graph.modules().len(),
+        entrypoint,
+        package_manager: sealed_graph.package_manager().kind.as_str().to_owned(),
+        package_manager_lockfile_sha256: sealed_graph.package_manager().lockfile_sha256.clone(),
+        bundle_sha256: entry_module.sha256().to_owned(),
+    })
+}
+
 fn smoke_build_result(output: &BuildWorkspaceOutput) -> SmokeBuildResult {
     SmokeBuildResult {
         built: true,
         artifact_verified: output.verification.is_release_ready(),
         compiled_script_count: output.artifact.compiled_scripts.len(),
         compiled_framework_count: output.artifact.compiled_frameworks.len(),
+        js_module_graph_count: output.artifact.js_module_graphs.len(),
         compiled_style_count: output.artifact.compiled_styles.len(),
         compiled_asset_count: output.artifact.compiled_assets.len(),
         target_count: output.artifact.target_metadata.len(),
@@ -1149,6 +1504,227 @@ fn render_runtime_tree_evidence(
         physical_size: [software_frame.width(), software_frame.height()],
         visible_pixel: true,
     })
+}
+
+fn react_deno_desktop_frame_evidence(
+    tree: &RuntimeViewTree,
+    label: &str,
+) -> Result<(SmokeSoftwareFrameEvidence, ReactDesktopFrameText), String> {
+    let frame = RuntimeSceneBridge::new(Viewport::new(320.0, 180.0))
+        .build(tree)
+        .map_err(|error| format!("{label} scene build failed: {error:?}"))?;
+    let count = text_draw_for(&frame, "count")
+        .ok_or_else(|| format!("{label} did not draw the React count text"))?
+        .to_owned();
+    let network = text_draw_for(&frame, "status")
+        .ok_or_else(|| format!("{label} did not draw the React network status text"))?
+        .to_owned();
+    let software_frame = SoftwareFrameRenderer::default()
+        .render_scene_frame(&frame, 320, 180, 1.0)
+        .map_err(|error| format!("{label} software frame render failed: {}", error.rule()))?;
+    require_any_visible_pixel(&software_frame, label)?;
+    Ok((
+        SmokeSoftwareFrameEvidence {
+            physical_size: [software_frame.width(), software_frame.height()],
+            visible_pixel: true,
+        },
+        ReactDesktopFrameText { count, network },
+    ))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReactDesktopFrameText {
+    count: String,
+    network: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReactDesktopCapabilityEvidence {
+    storage_operation: String,
+    file_operation: String,
+}
+
+fn react_desktop_capabilities() -> HawkRuntimeCapabilities {
+    HawkRuntimeCapabilities::for_test()
+        .allow_network_host("api.example.test")
+        .with_network_response(
+            "https://api.example.test/status",
+            HawkNetworkResponse::json(200, r#"{"ok":true}"#),
+        )
+        .allow_storage_namespace("react-desktop-basic")
+        .with_storage_value("react-desktop-basic", "count", "0")
+        .with_file_pick_result("/tmp/hawk2ui-react-desktop.txt")
+        .with_file_text("/tmp/hawk2ui-react-desktop.txt", "seed")
+}
+
+fn react_desktop_capability_evidence(
+    runtime: &mut HawkJsRuntime,
+) -> Result<ReactDesktopCapabilityEvidence, String> {
+    Ok(ReactDesktopCapabilityEvidence {
+        storage_operation: runtime_string_value(
+            runtime,
+            "react-desktop-basic:storage-evidence",
+            "globalThis.__hawk2uiReactDesktopStorageEvidence ?? ''",
+        )?,
+        file_operation: runtime_string_value(
+            runtime,
+            "react-desktop-basic:file-evidence",
+            "globalThis.__hawk2uiReactDesktopFileEvidence ?? ''",
+        )?,
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReactPluginCapabilityEvidence {
+    state_roundtrip: String,
+    preset_roundtrip: String,
+    transport_snapshot: String,
+    realtime_visual_stream: String,
+    dsp_control_messages: Vec<String>,
+}
+
+fn react_plugin_capabilities() -> HawkRuntimeCapabilities {
+    HawkRuntimeCapabilities::for_test()
+        .with_host_context(HawkHostContext::PluginUi)
+        .allow_plugin_parameter("gain")
+        .with_plugin_parameter("gain", 0.25)
+        .allow_plugin_state()
+        .with_plugin_state(r#"{"preset":"Init"}"#)
+        .with_plugin_preset("init", r#"{"name":"Init"}"#)
+        .with_plugin_transport_info(HawkPluginTransportInfo {
+            playing: true,
+            sample_rate: 48_000.0,
+            sample_position: 96_000,
+            tempo_bpm: 128.0,
+            beat_position: 12.5,
+            time_signature_numerator: 7,
+            time_signature_denominator: 8,
+        })
+        .allow_audio_meter_stream("master")
+        .with_audio_meter_frame("master", vec![0.125, 0.5])
+        .allow_dsp_control_queue(1)
+}
+
+fn react_plugin_capability_evidence(
+    runtime: &mut HawkJsRuntime,
+) -> Result<ReactPluginCapabilityEvidence, String> {
+    let dsp_control = runtime_string_value(
+        runtime,
+        "react-plugin-basic:dsp-evidence",
+        "globalThis.__hawk2uiReactPluginDspEvidence ?? ''",
+    )?;
+    Ok(ReactPluginCapabilityEvidence {
+        state_roundtrip: runtime_string_value(
+            runtime,
+            "react-plugin-basic:state-evidence",
+            "globalThis.__hawk2uiReactPluginStateEvidence ?? ''",
+        )?,
+        preset_roundtrip: runtime_string_value(
+            runtime,
+            "react-plugin-basic:preset-evidence",
+            "globalThis.__hawk2uiReactPluginPresetEvidence ?? ''",
+        )?,
+        transport_snapshot: runtime_string_value(
+            runtime,
+            "react-plugin-basic:transport-evidence",
+            "globalThis.__hawk2uiReactPluginTransportEvidence ?? ''",
+        )?,
+        realtime_visual_stream: runtime_string_value(
+            runtime,
+            "react-plugin-basic:meter-evidence",
+            "globalThis.__hawk2uiReactPluginMeterEvidence ?? ''",
+        )?,
+        dsp_control_messages: dsp_control
+            .split('|')
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    })
+}
+
+fn runtime_string_value(
+    runtime: &mut HawkJsRuntime,
+    name: &str,
+    source: &str,
+) -> Result<String, String> {
+    match runtime
+        .evaluate_script_value(name, source)
+        .map_err(|error| error.to_string())?
+    {
+        JsRuntimeValue::String(value) => Ok(value),
+        value => Err(format!("{name} did not evaluate to a string: {value:?}")),
+    }
+}
+
+fn text_draw_for<'a>(frame: &'a RuntimeSceneFrame, node_id: &str) -> Option<&'a str> {
+    frame
+        .draw_commands()
+        .iter()
+        .find_map(|command| match command {
+            RuntimeDrawCommand::Text { id, text, .. } if id.as_str() == node_id => {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReactPluginFrameEvidence {
+    text: String,
+    surface_size: [u32; 2],
+    visible_pixel: bool,
+}
+
+fn render_react_plugin_frame(
+    adapter: &mut BaseviewPluginAdapter,
+    tree: &RuntimeViewTree,
+    label: &str,
+) -> Result<ReactPluginFrameEvidence, String> {
+    let frame = RuntimeSceneBridge::new(Viewport::new(640.0, 360.0))
+        .build(tree)
+        .map_err(|error| format!("{label} scene build failed: {error:?}"))?;
+    let text = text_draw_for(&frame, "gain")
+        .ok_or_else(|| format!("{label} did not draw the plugin gain text"))?
+        .to_owned();
+    let snapshot = adapter
+        .render_scene_frame(&frame)
+        .map_err(|error| format!("{label} Baseview render failed: {}", error.rule()))?
+        .clone();
+    Ok(ReactPluginFrameEvidence {
+        text,
+        surface_size: [snapshot.width(), snapshot.height()],
+        visible_pixel: snapshot.pixels().iter().any(|pixel| *pixel != 0),
+    })
+}
+
+fn react_plugin_realtime_denial_rule(bundle: &str) -> Result<String, String> {
+    let graph =
+        HawkJsModuleGraph::new("file:///react-plugin-basic/realtime-denial.js").with_module(
+            HawkJsModule::new("file:///react-plugin-basic/realtime-denial.js", bundle),
+        );
+    let capabilities = HawkRuntimeCapabilities::for_test()
+        .with_host_context(HawkHostContext::AudioRealtime)
+        .allow_plugin_parameter("gain")
+        .with_plugin_parameter("gain", 0.25);
+    let mut runtime = HawkJsRuntime::from_module_graph_with_capabilities(graph, capabilities)
+        .map_err(|error| error.to_string())?;
+    let error = match runtime.execute_entrypoint_module() {
+        Ok(()) => {
+            return Err("plugin ops unexpectedly succeeded in realtime audio context".to_owned());
+        }
+        Err(error) => error,
+    };
+    if error
+        .message()
+        .contains("js-runtime.capability.realtime-denied")
+    {
+        Ok("js-runtime.capability.realtime-denied".to_owned())
+    } else {
+        Err(format!(
+            "realtime plugin denial used unexpected diagnostic: {}",
+            error.message()
+        ))
+    }
 }
 
 fn exercise_winit_host_lifecycle(
@@ -1408,7 +1984,7 @@ fn framework_contract(
     match framework {
         "native" => native_contract(source_file, source, build_output),
         "svelte" => svelte_contract(source_file, build_output),
-        "react" => react_contract(source_file, build_output),
+        "react" => react_contract(source_file, source, build_output),
         "vue" => vue_contract(source_file, build_output),
         "solid" => solid_contract(source_file, build_output),
         _ => Err(format!("unsupported framework smoke example: {framework}")),
@@ -1524,22 +2100,81 @@ fn svelte_contract(
 
 fn react_contract(
     source_file: &Path,
+    source: &str,
     build_output: &BuildWorkspaceOutput,
 ) -> Result<FrameworkExampleContract, String> {
-    let (record, program) = compiled_framework_program(build_output, "react")?;
-    let artifact = ReactIntegration::new()
-        .render_to_runtime(ReactElementTree::from_native_program(
-            source_file.display().to_string(),
-            program.clone(),
-        ))
+    for required in [
+        "useState",
+        "surface.card",
+        "assets/logo.svg",
+        "title",
+        "cta",
+    ] {
+        if !source.contains(required) {
+            return Err(format!("react example missing contract token: {required}"));
+        }
+    }
+    let graph = match build_output.artifact.js_module_graphs.as_slice() {
+        [graph] => graph,
+        graphs => {
+            return Err(format!(
+                "react smoke expected exactly one sealed JS graph, found {}",
+                graphs.len()
+            ));
+        }
+    };
+    if graph.entrypoint() != "file:///dist/main.js" {
+        return Err(format!(
+            "react smoke expected file:///dist/main.js entrypoint, got {}",
+            graph.entrypoint()
+        ));
+    }
+    let entry_module = graph
+        .module(graph.entrypoint())
+        .ok_or_else(|| "react smoke sealed graph missing entrypoint module".to_owned())?;
+    if !entry_module
+        .source()
+        .contains("__hawk2uiFrameworkReactBasic")
+    {
+        return Err("react smoke bundle missing framework runtime marker".into());
+    }
+
+    let mut runtime = NativeAuthoringRuntime::new(source_file.display().to_string());
+    runtime.mount(native_root());
+    let artifact = runtime.finish().map_err(|error| format!("{error:?}"))?;
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact(&artifact)
         .map_err(|error| format!("{error:?}"))?;
-    framework_program_contract(
-        "react",
-        build_output,
-        record,
-        &program,
-        artifact.runtime_tree(),
-    )
+    let software_frame =
+        render_runtime_tree_evidence(bridged.runtime_tree(), "react runtime framework smoke")?;
+    Ok(FrameworkExampleContract {
+        framework: "react".into(),
+        root_id: artifact.root().id().as_str().to_string(),
+        keyed_children: artifact
+            .root()
+            .keyed_child_order()
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        style_refs: artifact
+            .root()
+            .style_refs()
+            .iter()
+            .map(|style| style.name().to_string())
+            .collect(),
+        asset_paths: artifact
+            .root()
+            .asset_refs()
+            .iter()
+            .map(|asset| asset.path().to_string())
+            .collect(),
+        build: smoke_build_result(build_output),
+        compiler_artifact: None,
+        list_template_count: 0,
+        dynamic_binding_count: 0,
+        runtime_bridged: true,
+        software_frame,
+    })
 }
 
 fn vue_contract(

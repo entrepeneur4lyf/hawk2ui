@@ -43,6 +43,47 @@ fn desktop_basic_builds_verifies_exports_scene_first_frame_and_window_lifecycle(
 }
 
 #[test]
+fn react_desktop_basic_runs_sealed_deno_graph_through_winit_smoke() {
+    let fixture =
+        SmokeFixture::from_workspace("examples/react-desktop-basic", SmokeTargetKind::Desktop);
+    let runner = SmokeRunner;
+
+    let result = runner
+        .run_react_desktop_basic(&fixture)
+        .expect("React/Deno desktop smoke app should run");
+
+    assert_eq!(result.fixture_name, "react-desktop-basic");
+    assert_eq!(result.sealed_module_count, 1);
+    let result_debug = format!("{result:?}");
+    assert!(result_debug.contains("bundle_entrypoint: \"file:///dist/main.js\""));
+    assert!(result_debug.contains("package_manager: \"bun\""));
+    assert!(result_debug.contains("package_manager_lockfile_sha256: Some("));
+    assert_eq!(result.bundle_sha256.len(), 64);
+    assert!(
+        result
+            .bundle_sha256
+            .chars()
+            .all(|value| value.is_ascii_hexdigit())
+    );
+    assert_eq!(result.scene.root_id, "react-desktop-root");
+    assert_eq!(result.text_updates, vec!["0", "1"]);
+    assert_eq!(result.network_updates, vec!["loading", "network:200"]);
+    assert_eq!(result.storage_operations, vec!["storage:0->1"]);
+    assert_eq!(
+        result.file_operations,
+        vec!["files:/tmp/hawk2ui-react-desktop.txt:seed->seed:saved"]
+    );
+    assert_eq!(result.first_frame.physical_size, [320, 180]);
+    assert!(result.first_frame.visible_pixel);
+    assert_eq!(result.second_frame.physical_size, [320, 180]);
+    assert!(result.second_frame.visible_pixel);
+    assert!(result.window_config_valid);
+    assert!(result.close_cleanly);
+    assert_eq!(result.host_winit.platform, "wayland");
+    assert!(result.host_winit.close_requested);
+}
+
+#[test]
 fn desktop_dashboard_builds_compiles_style_renders_and_checks_recorded_interactions() {
     let fixture =
         SmokeFixture::from_workspace("examples/desktop-dashboard", SmokeTargetKind::Desktop);
@@ -112,6 +153,55 @@ fn plugin_synth_editor_exercises_baseview_lifecycle_resize_dpi_render_and_destro
     assert_eq!(result.baseview_presented_frames, 1);
     assert_eq!(result.baseview_surface_size, [960, 540]);
     assert!(result.baseview_visible_pixel);
+}
+
+#[test]
+fn react_plugin_basic_runs_deno_ui_parameters_and_realtime_denial() {
+    let fixture =
+        SmokeFixture::from_workspace("examples/react-plugin-basic", SmokeTargetKind::Plugin);
+    let runner = SmokeRunner;
+
+    let result = runner
+        .run_react_plugin_basic(&fixture)
+        .expect("React/Deno plugin smoke fixture should run");
+
+    assert_eq!(result.fixture_name, "react-plugin-basic");
+    assert_eq!(result.sealed_module_count, 1);
+    let result_debug = format!("{result:?}");
+    assert!(result_debug.contains("bundle_entrypoint: \"file:///dist/main.js\""));
+    assert!(result_debug.contains("package_manager: \"bun\""));
+    assert!(result_debug.contains("package_manager_lockfile_sha256: Some("));
+    assert_eq!(result.parameter_updates, vec!["gain=0.25", "gain=0.75"]);
+    assert_eq!(result.text_updates, vec!["0.25", "0.75"]);
+    assert_eq!(
+        result.state_roundtrip,
+        vec![r#"state:{"preset":"Init"}->{"preset":"Wide","version":2}"#]
+    );
+    assert_eq!(
+        result.preset_roundtrip,
+        vec![r#"preset:{"name":"Init"}->{"name":"Wide","version":2}"#]
+    );
+    assert_eq!(
+        result.transport_snapshots,
+        vec!["transport:true:48000:96000:128:12.5:7/8"]
+    );
+    assert_eq!(
+        result.realtime_visual_streams,
+        vec!["meter:master=0.125,0.5 dropped=0"]
+    );
+    assert_eq!(
+        result.dsp_control_messages,
+        vec!["dsp:first=true:1", "dsp:second=false:1"]
+    );
+    assert_eq!(result.baseview_presented_frames, 2);
+    assert_eq!(result.baseview_surface_size, [640, 360]);
+    assert!(result.baseview_visible_pixel);
+    assert_eq!(
+        result.realtime_denial_rule,
+        "js-runtime.capability.realtime-denied"
+    );
+    assert!(result.no_js_on_audio_thread);
+    assert!(result.destroyed_cleanly);
 }
 
 #[test]
@@ -263,17 +353,29 @@ fn framework_examples_cover_all_public_framework_fixtures() {
         .find(|contract| contract.framework == "native")
         .expect("native example should be covered");
     assert_eq!(native.build.compiled_script_count, 1);
+    assert_eq!(native.build.js_module_graph_count, 0);
     assert!(native.compiler_artifact.is_none());
+
+    let react = result
+        .contracts
+        .iter()
+        .find(|contract| contract.framework == "react")
+        .expect("react example should be covered");
+    assert_eq!(react.build.compiled_script_count, 0);
+    assert_eq!(react.build.compiled_framework_count, 0);
+    assert_eq!(react.build.js_module_graph_count, 1);
+    assert!(react.compiler_artifact.is_none());
 
     let compiled_frameworks: Vec<_> = result
         .contracts
         .iter()
-        .filter(|contract| contract.framework != "native")
+        .filter(|contract| contract.framework != "native" && contract.framework != "react")
         .collect();
-    assert_eq!(compiled_frameworks.len(), 4);
+    assert_eq!(compiled_frameworks.len(), 3);
     for contract in compiled_frameworks {
         assert_eq!(contract.build.compiled_script_count, 0);
         assert_eq!(contract.build.compiled_framework_count, 1);
+        assert_eq!(contract.build.js_module_graph_count, 0);
         let compiler_artifact = contract
             .compiler_artifact
             .as_ref()
@@ -326,6 +428,6 @@ fn cli_end_to_end_smoke_builds_verifies_runs_desktop_and_packages_plugin() {
     assert_eq!(result.desktop_frames_presented, 1);
     assert_eq!(result.plugin_package, CliWorkflowStatus::Passed);
     assert_eq!(result.plugin_layout_verification, CliWorkflowStatus::Passed);
-    assert_eq!(result.plugin_host_loadable_binaries, 2);
+    assert_eq!(result.plugin_host_loadable_binaries, 3);
     assert!(result.plugin_unsupported_outputs_absent);
 }

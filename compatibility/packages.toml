@@ -1,7 +1,16 @@
 [[packages]]
-output = "desktop-linux"
+output = "desktop-linux-wayland"
 kind = "desktop-bundle"
-platform = "linux"
+platform = "linux-wayland"
+signing = false
+notarization = false
+installer = true
+verify_command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
+
+[[packages]]
+output = "desktop-linux-x11"
+kind = "desktop-bundle"
+platform = "linux-x11"
 signing = false
 notarization = false
 installer = true

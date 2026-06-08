@@ -996,6 +996,237 @@ impl RuntimeViewTree {
         Ok(self)
     }
 
+    /// Moves an existing child to the end of its current parent child list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when the parent or child is missing, or the child is
+    /// not already attached to the requested parent.
+    pub fn move_child_to_end(
+        mut self,
+        parent_id: &RuntimeViewId,
+        child_id: &RuntimeViewId,
+    ) -> Result<Self, RuntimeSceneError> {
+        let Some(parent_index) = self.index_of(parent_id) else {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        };
+        let Some(child_index) = self.index_of(child_id) else {
+            return Err(RuntimeSceneError::MissingNode(
+                child_id.as_str().to_string(),
+            ));
+        };
+        if self.entries[child_index].parent.as_ref() != Some(parent_id) {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        }
+        let children = &mut self.entries[parent_index].children;
+        let previous_len = children.len();
+        children.retain(|id| id.as_str() != child_id.as_str());
+        if children.len() == previous_len {
+            return Err(RuntimeSceneError::MissingNode(
+                child_id.as_str().to_string(),
+            ));
+        }
+        children.push(child_id.clone());
+        self.entries[parent_index].invalidated = true;
+        self.entries[child_index].invalidated = true;
+        Ok(self)
+    }
+
+    /// Moves an existing child before a sibling under the same parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when the parent, child, or anchor is missing, or the
+    /// child is not already attached to the requested parent.
+    pub fn move_child_before(
+        mut self,
+        parent_id: &RuntimeViewId,
+        child_id: &RuntimeViewId,
+        anchor_id: &RuntimeViewId,
+    ) -> Result<Self, RuntimeSceneError> {
+        if child_id.as_str() == anchor_id.as_str() {
+            return Ok(self);
+        }
+        let Some(parent_index) = self.index_of(parent_id) else {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        };
+        let Some(child_index) = self.index_of(child_id) else {
+            return Err(RuntimeSceneError::MissingNode(
+                child_id.as_str().to_string(),
+            ));
+        };
+        if self.entries[child_index].parent.as_ref() != Some(parent_id) {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        }
+        if self.index_of(anchor_id).is_none() {
+            return Err(RuntimeSceneError::MissingNode(
+                anchor_id.as_str().to_string(),
+            ));
+        }
+
+        let children = &mut self.entries[parent_index].children;
+        let previous_len = children.len();
+        children.retain(|id| id.as_str() != child_id.as_str());
+        if children.len() == previous_len {
+            return Err(RuntimeSceneError::MissingNode(
+                child_id.as_str().to_string(),
+            ));
+        }
+        let Some(anchor_child_index) = children
+            .iter()
+            .position(|id| id.as_str() == anchor_id.as_str())
+        else {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        };
+        children.insert(anchor_child_index, child_id.clone());
+        self.entries[parent_index].invalidated = true;
+        self.entries[child_index].invalidated = true;
+        Ok(self)
+    }
+
+    /// Detaches an existing child from its current parent without removing its subtree.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when the parent or child is missing, or the child is
+    /// not attached to the requested parent.
+    pub fn detach_child(
+        mut self,
+        parent_id: &RuntimeViewId,
+        child_id: &RuntimeViewId,
+    ) -> Result<Self, RuntimeSceneError> {
+        let Some(parent_index) = self.index_of(parent_id) else {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        };
+        let Some(child_index) = self.index_of(child_id) else {
+            return Err(RuntimeSceneError::MissingNode(
+                child_id.as_str().to_string(),
+            ));
+        };
+        if self.entries[child_index].parent.as_ref() != Some(parent_id) {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        }
+        let children = &mut self.entries[parent_index].children;
+        let previous_len = children.len();
+        children.retain(|id| id.as_str() != child_id.as_str());
+        if children.len() == previous_len {
+            return Err(RuntimeSceneError::MissingNode(
+                child_id.as_str().to_string(),
+            ));
+        }
+        self.entries[child_index].parent = None;
+        self.entries[parent_index].invalidated = true;
+        self.entries[child_index].invalidated = true;
+        Ok(self)
+    }
+
+    /// Appends an existing attached-or-detached child to a parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when the parent or child is missing, the child is attached
+    /// to a different parent, or the append would make a node its own descendant.
+    pub fn append_existing_child(
+        mut self,
+        parent_id: &RuntimeViewId,
+        child_id: &RuntimeViewId,
+    ) -> Result<Self, RuntimeSceneError> {
+        if let Some(current_parent) = self.parent_of(child_id)? {
+            if current_parent.as_str() == parent_id.as_str() {
+                return self.move_child_to_end(parent_id, child_id);
+            }
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        }
+
+        self.ensure_can_attach_existing(parent_id, child_id)?;
+        let Some(parent_index) = self.index_of(parent_id) else {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        };
+        let Some(child_index) = self.index_of(child_id) else {
+            return Err(RuntimeSceneError::MissingNode(
+                child_id.as_str().to_string(),
+            ));
+        };
+        self.entries[parent_index].children.push(child_id.clone());
+        self.entries[child_index].parent = Some(parent_id.clone());
+        self.entries[parent_index].invalidated = true;
+        self.entries[child_index].invalidated = true;
+        self.place_subtree_after_parent(parent_id, child_id)
+    }
+
+    /// Inserts an existing attached-or-detached child before a sibling under a parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeSceneError`] when the parent, child, or anchor is missing, the child is
+    /// attached to a different parent, or the insert would make a node its own descendant.
+    pub fn insert_existing_child_before(
+        mut self,
+        parent_id: &RuntimeViewId,
+        child_id: &RuntimeViewId,
+        anchor_id: &RuntimeViewId,
+    ) -> Result<Self, RuntimeSceneError> {
+        if let Some(current_parent) = self.parent_of(child_id)? {
+            if current_parent.as_str() == parent_id.as_str() {
+                return self.move_child_before(parent_id, child_id, anchor_id);
+            }
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        }
+
+        self.ensure_can_attach_existing(parent_id, child_id)?;
+        if self.index_of(anchor_id).is_none() {
+            return Err(RuntimeSceneError::MissingNode(
+                anchor_id.as_str().to_string(),
+            ));
+        }
+        let Some(parent_index) = self.index_of(parent_id) else {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        };
+        let Some(child_index) = self.index_of(child_id) else {
+            return Err(RuntimeSceneError::MissingNode(
+                child_id.as_str().to_string(),
+            ));
+        };
+        let Some(anchor_child_index) = self.entries[parent_index]
+            .children
+            .iter()
+            .position(|id| id.as_str() == anchor_id.as_str())
+        else {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        };
+        self.entries[parent_index]
+            .children
+            .insert(anchor_child_index, child_id.clone());
+        self.entries[child_index].parent = Some(parent_id.clone());
+        self.entries[parent_index].invalidated = true;
+        self.entries[child_index].invalidated = true;
+        self.place_subtree_after_parent(parent_id, child_id)
+    }
+
     /// Removes the requested subtree roots and all descendants.
     ///
     /// # Errors
@@ -1137,6 +1368,77 @@ impl RuntimeViewTree {
         self.entries
             .iter()
             .position(|entry| entry.node.id().as_str() == node_id.as_str())
+    }
+
+    fn parent_of(
+        &self,
+        node_id: &RuntimeViewId,
+    ) -> Result<Option<RuntimeViewId>, RuntimeSceneError> {
+        let Some(child_index) = self.index_of(node_id) else {
+            return Err(RuntimeSceneError::MissingNode(node_id.as_str().to_string()));
+        };
+        Ok(self.entries[child_index].parent.clone())
+    }
+
+    fn ensure_can_attach_existing(
+        &self,
+        parent_id: &RuntimeViewId,
+        child_id: &RuntimeViewId,
+    ) -> Result<(), RuntimeSceneError> {
+        let Some(child_index) = self.index_of(child_id) else {
+            return Err(RuntimeSceneError::MissingNode(
+                child_id.as_str().to_string(),
+            ));
+        };
+        if self.index_of(parent_id).is_none() {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        }
+
+        let mut subtree = BTreeSet::new();
+        self.collect_subtree_ids(child_index, &mut subtree);
+        if subtree.contains(parent_id.as_str()) {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn place_subtree_after_parent(
+        mut self,
+        parent_id: &RuntimeViewId,
+        child_id: &RuntimeViewId,
+    ) -> Result<Self, RuntimeSceneError> {
+        let Some(child_index) = self.index_of(child_id) else {
+            return Err(RuntimeSceneError::MissingNode(
+                child_id.as_str().to_string(),
+            ));
+        };
+        let mut subtree = BTreeSet::new();
+        self.collect_subtree_ids(child_index, &mut subtree);
+        let mut moving = Vec::new();
+        let mut remaining = Vec::new();
+        for entry in self.entries {
+            if subtree.contains(entry.node.id().as_str()) {
+                moving.push(entry);
+            } else {
+                remaining.push(entry);
+            }
+        }
+        let Some(parent_index) = remaining
+            .iter()
+            .position(|entry| entry.node.id().as_str() == parent_id.as_str())
+        else {
+            return Err(RuntimeSceneError::MissingParent(
+                parent_id.as_str().to_string(),
+            ));
+        };
+        let insert_at = parent_index + 1;
+        remaining.splice(insert_at..insert_at, moving);
+        self.entries = remaining;
+        Ok(self)
     }
 
     fn collect_subtree_ids(&self, index: usize, removed: &mut BTreeSet<String>) {

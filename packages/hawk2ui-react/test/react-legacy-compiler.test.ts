@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { compileHawkReact } from "../src/index.ts";
+import { compileHawkReact } from "../src/legacyCompiler.ts";
 import { createHawkReactRoot } from "../src/testkit.ts";
 
 test("React compiler emits versioned native compiler artifacts from TSX", () => {

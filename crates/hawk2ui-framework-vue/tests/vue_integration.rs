@@ -462,7 +462,7 @@ fn vue_smoke_app_declares_public_package_entrypoint() {
         .expect("Vue smoke app should exist");
 
     assert!(package_json.contains("@hawk2ui/vue"));
-    assert!(index_ts.contains("createHawkVueRenderer"));
+    assert!(index_ts.contains("compileHawkVue"));
     assert!(app.contains("v-for=\"item in items\""));
     assert!(app.contains("assets/logo.svg"));
 }

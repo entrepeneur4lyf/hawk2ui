@@ -1,10 +1,20 @@
 [[targets]]
-id = "desktop-linux"
+id = "desktop-linux-wayland"
 kind = "desktop-bundle"
-platform = "linux"
+platform = "linux-wayland"
 command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
-evidence = "target/release-evidence/desktop-linux.txt"
+evidence = "target/release-evidence/desktop-linux-wayland.txt"
 release_gate = true
+runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
+
+[[targets]]
+id = "desktop-linux-x11"
+kind = "desktop-bundle"
+platform = "linux-x11"
+command = "rtk cargo test -p hawk2ui-build package_desktop_linux"
+evidence = "target/release-evidence/desktop-linux-x11.txt"
+release_gate = true
+runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
 
 [[targets]]
 id = "desktop-windows"
@@ -13,6 +23,7 @@ platform = "windows"
 command = "rtk cargo test -p hawk2ui-build package_desktop_windows"
 evidence = "target/release-evidence/desktop-windows.txt"
 release_gate = true
+runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
 
 [[targets]]
 id = "desktop-macos"
@@ -21,6 +32,7 @@ platform = "macos"
 command = "rtk cargo test -p hawk2ui-build package_desktop_macos"
 evidence = "target/release-evidence/desktop-macos.txt"
 release_gate = true
+runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
 
 [[targets]]
 id = "plugin-clap"
@@ -29,6 +41,7 @@ platform = "cross-platform"
 command = "rtk cargo test -p hawk2ui-plugin-adapters package_clap"
 evidence = "target/release-evidence/plugin-clap.txt"
 release_gate = true
+runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
 
 [[targets]]
 id = "plugin-vst3"
@@ -37,6 +50,7 @@ platform = "cross-platform"
 command = "rtk cargo test -p hawk2ui-plugin-adapters package_vst3"
 evidence = "target/release-evidence/plugin-vst3.txt"
 release_gate = true
+runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
 
 [[targets]]
 id = "plugin-au"
@@ -45,6 +59,25 @@ platform = "macos"
 command = "rtk cargo test -p hawk2ui-plugin-adapters package_au"
 evidence = "target/release-evidence/plugin-au.txt"
 release_gate = true
+runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
+
+[[targets]]
+id = "react-desktop-smoke"
+kind = "desktop-smoke"
+platform = "linux"
+command = "rtk cargo test -p hawk2ui-smoke react_desktop_basic_runs_sealed_deno_graph_through_winit_smoke"
+evidence = "target/release-evidence/react-desktop-smoke.txt"
+release_gate = true
+runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
+
+[[targets]]
+id = "react-plugin-smoke"
+kind = "plugin-smoke"
+platform = "linux"
+command = "rtk cargo test -p hawk2ui-smoke react_plugin_basic_runs_deno_ui_parameters_and_realtime_denial"
+evidence = "target/release-evidence/react-plugin-smoke.txt"
+release_gate = true
+runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
 
 [[targets]]
 id = "sealed-artifact"

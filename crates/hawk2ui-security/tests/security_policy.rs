@@ -1,9 +1,10 @@
 use hawk2ui_api::{Diagnostic, DiagnosticSeverity};
 use hawk2ui_security::{
     AssetHashVerification, AssetImageMetadataStatus, AssetSecurityPolicy, AssetSecurityRule,
-    ScriptSandboxOperation, ScriptSandboxPolicy, SecretDiagnostic, SecretScanFinding, SecretValue,
-    SecretVerificationReport, SecurityDiagnostic, SecuritySeverity, ShippedArtifactSecretCheck,
-    SourceValidationPolicy, SourceValidationRule, TrustBoundary, TrustRecord, VectorSafetyStatus,
+    ScriptSandboxOperation, ScriptSandboxPolicy, SecretBundleLiteralLeak, SecretDiagnostic,
+    SecretScanFinding, SecretValue, SecretVerificationReport, SecurityDiagnostic, SecuritySeverity,
+    ShippedArtifactSecretCheck, SourceValidationPolicy, SourceValidationRule, TrustBoundary,
+    TrustRecord, VectorSafetyStatus,
 };
 
 #[test]
@@ -128,6 +129,11 @@ fn script_sandbox_records_all_direct_privileged_denials() {
             "direct network access is denied",
         ),
         (
+            ScriptSandboxOperation::EnvironmentAccess,
+            "script.environment.denied",
+            "environment access is denied",
+        ),
+        (
             ScriptSandboxOperation::ProcessSpawning,
             "script.process.denied",
             "process spawning is denied",
@@ -247,4 +253,38 @@ fn secret_redaction_hides_values_in_debug_diagnostics_and_reports() {
     assert!(!secret.is_absent_from("leaked super-secret-value"));
     assert!(secret.is_absent_from("clean diagnostic"));
     assert!(SecretValue::new("empty", "").is_absent_from("any diagnostic"));
+}
+
+#[test]
+fn secret_bundle_scan_rejects_verbatim_private_literals_without_leaking_them() {
+    let secret = SecretValue::new("api-token", "super-secret-value");
+
+    let leak: SecretBundleLiteralLeak = SecretVerificationReport::new("com.hawk2ui.secret")
+        .with_verified_bundle_text(
+            "dist/app.bundle.js",
+            "export const token = 'super-secret-value';",
+            [&secret],
+        )
+        .unwrap_err();
+
+    assert_eq!(leak.artifact_path, "dist/app.bundle.js");
+    assert_eq!(leak.redacted_secret, "[REDACTED:api-token]");
+    assert!(!format!("{leak:?}").contains("super-secret-value"));
+
+    let report = SecretVerificationReport::new("com.hawk2ui.secret")
+        .with_verified_bundle_text(
+            "dist/app.bundle.js",
+            "export const token = '[REDACTED:api-token]';",
+            [&secret],
+        )
+        .unwrap();
+
+    assert_eq!(
+        report.artifact_checks,
+        vec![ShippedArtifactSecretCheck::new(
+            "dist/app.bundle.js",
+            &secret
+        )]
+    );
+    assert!(!report.serialize_text().contains("super-secret-value"));
 }

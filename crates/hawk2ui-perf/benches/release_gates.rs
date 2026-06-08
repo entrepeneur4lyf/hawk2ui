@@ -9,6 +9,8 @@ fn main() {
     let budgets = common::budgets();
     let config = common::config();
     let runtime_fixture = "examples/desktop-basic";
+    let react_desktop_fixture = "examples/react-desktop-basic";
+    let react_plugin_fixture = "examples/react-plugin-basic";
     let dashboard_fixture = "examples/desktop-dashboard";
     let style_fixture = "examples/style-gallery";
     let plugin_fixture = "examples/plugin-meter-analyzer";
@@ -57,6 +59,26 @@ fn main() {
                 .with_measurement(common::measure_build_artifact_payload_bytes(
                     runtime_fixture,
                 )),
+        )
+        .with_case(
+            BenchmarkCase::new(
+                "react-package-size",
+                react_desktop_fixture,
+                BenchmarkKind::Package,
+            )
+            .with_measurement(common::measure_build_artifact_payload_bytes(
+                react_desktop_fixture,
+            )),
+        )
+        .with_case(
+            BenchmarkCase::new(
+                "react-plugin-package-size",
+                react_plugin_fixture,
+                BenchmarkKind::Package,
+            )
+            .with_measurement(common::measure_build_artifact_payload_bytes(
+                react_plugin_fixture,
+            )),
         )
         .with_case(
             BenchmarkCase::new(
