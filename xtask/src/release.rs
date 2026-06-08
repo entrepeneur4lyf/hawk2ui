@@ -1000,6 +1000,7 @@ evidence = "target/release-evidence/manuals.txt"
             "compatibility-matrix",
             "framework-compilers",
             "react-deno-runtime",
+            "vue-deno-runtime",
             "developer-experience",
             "capability-apis",
             "v8-artifact-policy",

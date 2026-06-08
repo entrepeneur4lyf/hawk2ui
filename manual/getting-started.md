@@ -37,8 +37,8 @@ The implemented manifest parser recognizes these sections:
 The implemented CLI command catalog accepts these commands:
 
 - `hawk2ui new` is the project creation command name.
-- `hawk2ui init` is the project creation alias used for React app and plugin templates.
-- `hawk2ui dev` is the React development loop command name.
+- `hawk2ui init` is the project creation alias used for React and Vue app and plugin templates.
+- `hawk2ui dev` is the React and Vue development loop command name.
 - `hawk2ui validate` is the manifest/source/capability validation command name.
 - `hawk2ui build-dev` is the development artifact command name.
 - `hawk2ui build-release` is the release artifact command name.
@@ -67,6 +67,8 @@ hawk2ui dev
 hawk2ui build-dev
 hawk2ui run-desktop
 ```
+
+React 19+ and Vue 3.5+ projects use package-manager output for the sealed Deno runtime. Set `app.framework` to `react` or `vue`, declare `build.output`, and keep the selected lockfile with the project so release artifacts can record package-manager metadata.
 
 For release artifacts, use the release verification flow:
 

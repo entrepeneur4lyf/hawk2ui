@@ -64,8 +64,8 @@ fn readme_states_evidence_based_production_release_gate() {
     }
 
     assert!(
-        readme.contains("`hawk2ui-js-runtime` Deno/V8 for React-first JavaScript"),
-        "README native stack must describe the production React-first Deno/V8 runtime"
+        readme.contains("`hawk2ui-js-runtime` Deno/V8 for React and Vue JavaScript"),
+        "README native stack must describe the production React/Vue Deno/V8 runtime"
     );
     assert!(
         readme.contains("packaged as CLAP/VST3/AU."),
@@ -74,6 +74,28 @@ fn readme_states_evidence_based_production_release_gate() {
     assert!(
         !readme.contains("CLAP/VST3/AU/standalone"),
         "README must not advertise standalone plugin packaging as release-backed"
+    );
+}
+
+#[test]
+fn readme_lists_vue_as_first_class_developer_option() {
+    let readme = manual("README.md");
+
+    for required in [
+        "React 19+ and Vue 3.5+ are first-class package-manager authoring options",
+        "`@hawk2ui/vue`",
+        "examples/vue-desktop-basic/hawk.json",
+        "examples/vue-plugin-basic/hawk.json",
+    ] {
+        assert!(
+            readme.contains(required),
+            "README must list Vue as a first-class developer option: {required}"
+        );
+    }
+
+    assert!(
+        !readme.contains("Vue, Solid, and Svelte are incubating framework adapters."),
+        "README must not describe Vue as an incubating framework adapter"
     );
 }
 
@@ -439,6 +461,56 @@ fn react_desktop_example_declares_all_release_desktop_platforms_and_capabilities
 }
 
 #[test]
+fn vue_desktop_example_declares_production_runtime_entrypoint() {
+    let manifest_path = "examples/vue-desktop-basic/hawk.json";
+    let app_path = "examples/vue-desktop-basic/src/App.vue";
+    let main_path = "examples/vue-desktop-basic/src/main.ts";
+
+    assert!(workspace_path(manifest_path).is_file());
+    assert!(workspace_path(app_path).is_file());
+    assert!(workspace_path(main_path).is_file());
+
+    let manifest = read_workspace_file(manifest_path);
+    for required in [
+        "\"framework\": \"vue\"",
+        "\"entry\": \"src/main.ts\"",
+        "\"output\": \"dist/main.js\"",
+        "\"packageManager\": \"bun\"",
+    ] {
+        assert!(
+            manifest.contains(required),
+            "Vue desktop example manifest missing production runtime evidence: {required}"
+        );
+    }
+}
+
+#[test]
+fn vue_plugin_example_declares_release_formats_and_plugin_capabilities() {
+    let manifest_path = "examples/vue-plugin-basic/hawk.json";
+    let app_path = "examples/vue-plugin-basic/src/App.vue";
+
+    assert!(workspace_path(manifest_path).is_file());
+    assert!(workspace_path(app_path).is_file());
+
+    let manifest = read_workspace_file(manifest_path);
+    for required in [
+        "\"framework\": \"vue\"",
+        "\"entry\": \"src/main.ts\"",
+        "\"clap\"",
+        "\"vst3\"",
+        "\"au\"",
+        "\"plugin-host\"",
+        "\"audio-dsp\"",
+        "\"output\": \"dist/main.js\"",
+    ] {
+        assert!(
+            manifest.contains(required),
+            "Vue plugin example manifest missing release capability evidence: {required}"
+        );
+    }
+}
+
+#[test]
 fn manual_reference_links_cover_style_layout_and_rendering_source_truth() {
     let style = manual("manual/style-reference.md");
     let layout = manual("manual/layout-reference.md");
@@ -762,13 +834,15 @@ fn manual_runtime_framework_claims_match_react_first_deno_release_scope() {
     let runtime = manual("manual/runtime-apis.md");
 
     for required in [
+        "Vue 3.5+ and React 19+ are production-supported sealed runtime renderers.",
         "React 19+ production support uses `@hawk2ui/react` `createRoot` with the sealed Deno runtime.",
-        "React emits Hawk2UI scene operations through `hawk2ui-js-runtime`, not `FrameworkNativeProgram` or the legacy source-string compiler path.",
-        "Vue, Solid, and Svelte are incubating framework adapters.",
+        "Vue 3.5+ production support uses `@hawk2ui/vue` `createApp` with the sealed Deno runtime.",
+        "React and Vue emit Hawk2UI scene operations through `hawk2ui-js-runtime`, not `FrameworkNativeProgram` or the legacy source-string compiler path.",
+        "Solid and Svelte remain incubating compiler adapters.",
     ] {
         assert!(
             runtime.contains(required),
-            "runtime manual missing React-first Deno source-truth claim: {required}"
+            "runtime manual missing React/Vue Deno source-truth claim: {required}"
         );
     }
 
@@ -777,6 +851,28 @@ fn manual_runtime_framework_claims_match_react_first_deno_release_scope() {
             .contains("Svelte 5, React 19+, Vue 3.5+, and Solid adapters all accept this boundary"),
         "runtime manual must not present React as part of the legacy framework compiler boundary"
     );
+    assert!(
+        !runtime.contains("Vue, Solid, and Svelte are incubating framework adapters."),
+        "runtime manual must not present Vue as an incubating framework adapter"
+    );
+}
+
+#[test]
+fn manual_runtime_documents_vue_as_production_runtime_renderer() {
+    let runtime = manual("manual/runtime-apis.md");
+
+    for required in [
+        "## React And Vue Deno Runtime Renderers",
+        "Vue production manifests declare `app.framework` as `vue` and package-manager `build.output` as the sealed graph entrypoint.",
+        "Vue release artifacts carry sealed JS module graphs, not legacy framework compiler payloads.",
+        "`@hawk2ui/vue`",
+        "`createApp`",
+    ] {
+        assert!(
+            runtime.contains(required),
+            "runtime manual missing Vue production renderer documentation: {required}"
+        );
+    }
 }
 
 #[test]
@@ -785,10 +881,12 @@ fn manual_project_manifest_describes_react_sealed_js_graph_release_path() {
 
     for required in [
         "`app` declares the authoring entrypoint and framework used to produce package-manager build output.",
-        "React release builds consume a sealed JavaScript module graph produced from the selected package-manager build output.",
-        "Vue, Solid, and Svelte manifest values remain incubating until their runtime renderer adapters have equivalent release evidence.",
+        "React and Vue release builds consume a sealed JavaScript module graph produced from the selected package-manager build output.",
+        "Solid and Svelte manifest values remain incubating compiler adapter values until their runtime renderer adapters have equivalent release evidence.",
         "\"entry\": \"src/App.tsx\"",
         "\"framework\": \"react\"",
+        "\"entry\": \"src/main.ts\"",
+        "\"framework\": \"vue\"",
         "\"formats\": [\"clap\", \"vst3\", \"au\"]",
         "Supported `formats`: `clap`, `vst3`, and `au`.",
     ] {
@@ -804,6 +902,7 @@ fn manual_project_manifest_describes_react_sealed_js_graph_release_path() {
         "A framework entry produces a compiled framework artifact; a `native` entry produces a compiled script artifact.",
         "\"entry\": \"src/App.svelte\"",
         "\"formats\": [\"clap\", \"vst3\", \"au\", \"standalone\"]",
+        "Vue, Solid, and Svelte manifest values remain incubating",
         "- `standalone`",
     ] {
         assert!(
@@ -820,7 +919,7 @@ fn manual_project_manifest_documents_react_build_output_and_package_manager_fiel
     for required in [
         "## `build`",
         "Package-manager-produced JavaScript output path, package-manager selection, and lockfile detection.",
-        "`output` is the package-manager-produced JavaScript bundle path sealed into the release artifact for React builds.",
+        "`output` is the package-manager-produced JavaScript bundle path sealed into the release artifact for React and Vue builds.",
         "`packageManager` accepts `bun`, `npm`, `pnpm`, or `yarn` and selects the lockfile when more than one supported lockfile is present.",
         "If `packageManager` is omitted, release builds detect `bun.lock`, `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`.",
     ] {
@@ -984,6 +1083,8 @@ fn manual_examples_index_tracks_repository_examples() {
         "examples/security-denials/hawk.json",
         "examples/react-desktop-basic/hawk.json",
         "examples/react-plugin-basic/hawk.json",
+        "examples/vue-desktop-basic/hawk.json",
+        "examples/vue-plugin-basic/hawk.json",
         "examples/frameworks/svelte-basic/hawk.json",
         "examples/frameworks/vue-basic/hawk.json",
         "examples/frameworks/solid-basic/hawk.json",
@@ -1013,8 +1114,8 @@ fn manual_examples_do_not_document_legacy_react_framework_compiler_fixture() {
     let examples = manual("manual/examples.md");
 
     assert!(
-        examples.contains("## React First Runtime"),
-        "examples manual must document the React-first runtime examples"
+        examples.contains("## React And Vue Sealed Runtime"),
+        "examples manual must document the React/Vue sealed runtime examples"
     );
     assert!(
         examples.contains("examples/react-desktop-basic/hawk.json"),
@@ -1023,6 +1124,14 @@ fn manual_examples_do_not_document_legacy_react_framework_compiler_fixture() {
     assert!(
         examples.contains("examples/react-plugin-basic/hawk.json"),
         "examples manual must include the React plugin runtime example"
+    );
+    assert!(
+        examples.contains("examples/vue-desktop-basic/hawk.json"),
+        "examples manual must include the Vue desktop runtime example"
+    );
+    assert!(
+        examples.contains("examples/vue-plugin-basic/hawk.json"),
+        "examples manual must include the Vue plugin runtime example"
     );
     assert!(
         !examples.contains("examples/frameworks/react-basic/hawk.json"),
@@ -1071,6 +1180,53 @@ fn react_examples_demonstrate_production_runtime_patterns() {
         assert!(
             plugin.contains(required),
             "React plugin example must demonstrate production plugin pattern `{required}`"
+        );
+    }
+}
+
+#[test]
+fn vue_examples_demonstrate_production_runtime_patterns() {
+    let desktop = read_workspace_file("examples/vue-desktop-basic/src/App.vue");
+    for required in [
+        "ref",
+        "computed",
+        "onMounted",
+        "hawk:network",
+        "hawk:storage",
+        "hawk:files",
+        "v-for",
+        "v-if",
+        "v-model",
+        "role=",
+        "aria-label",
+        "@pointer-press",
+    ] {
+        assert!(
+            desktop.contains(required),
+            "Vue desktop example must demonstrate production app pattern `{required}`"
+        );
+    }
+
+    let plugin = read_workspace_file("examples/vue-plugin-basic/src/App.vue");
+    for required in [
+        "hawk:plugin",
+        "readParameter",
+        "writeParameter",
+        "beginAutomationGesture",
+        "endAutomationGesture",
+        "loadState",
+        "saveState",
+        "loadPreset",
+        "savePreset",
+        "getTransport",
+        "hawk:audio",
+        "subscribeMeters",
+        "hawk:dsp",
+        "sendControl",
+    ] {
+        assert!(
+            plugin.contains(required),
+            "Vue plugin example must demonstrate production plugin pattern `{required}`"
         );
     }
 }

@@ -55,10 +55,18 @@ blocking = "release"
 evidence = "target/release-evidence/react-deno-runtime.txt"
 
 [[criteria]]
+id = "vue-deno-runtime"
+title = "Vue Deno runtime path"
+owner = "runtime"
+command = "rtk cargo test -p hawk2ui-js-runtime vue_ -- --nocapture && rtk bun run test:vue-package && rtk bun run typecheck:vue-package && rtk cargo test -p hawk2ui-smoke vue_ -- --nocapture"
+blocking = "release"
+evidence = "target/release-evidence/vue-deno-runtime.txt"
+
+[[criteria]]
 id = "developer-experience"
-title = "React developer experience"
+title = "React and Vue developer experience"
 owner = "developer-experience"
-command = "rtk cargo test -p hawk2ui-cli workspace_init_react_templates_generate_framework_manifests_and_package_metadata -- --nocapture && rtk cargo test -p hawk2ui-cli workspace_dev_ -- --nocapture && rtk cargo test -p hawk2ui-cli dev_loop_ -- --nocapture && rtk cargo test -p hawk2ui-smoke cli_end_to_end_smoke_builds_verifies_runs_desktop_and_packages_plugin -- --nocapture"
+command = "rtk cargo test -p hawk2ui-cli workspace_init_ -- --nocapture && rtk cargo test -p hawk2ui-cli workspace_dev_ -- --nocapture && rtk cargo test -p hawk2ui-cli dev_loop_ -- --nocapture && rtk cargo test -p hawk2ui-smoke cli_end_to_end_smoke_builds_verifies_runs_desktop_and_packages_plugin -- --nocapture"
 blocking = "release"
 evidence = "target/release-evidence/developer-experience.txt"
 
@@ -66,7 +74,7 @@ evidence = "target/release-evidence/developer-experience.txt"
 id = "capability-apis"
 title = "Hawk JS capability APIs"
 owner = "runtime"
-command = "rtk cargo test -p hawk2ui-js-runtime capabilities -- --nocapture && rtk cargo test -p hawk2ui-platform --test platform_capabilities -- --nocapture && rtk cargo test -p hawk2ui-security -- --nocapture && rtk cargo test -p hawk2ui-smoke react_ -- --nocapture"
+command = "rtk cargo test -p hawk2ui-js-runtime capabilities -- --nocapture && rtk cargo test -p hawk2ui-platform --test platform_capabilities -- --nocapture && rtk cargo test -p hawk2ui-security -- --nocapture && rtk cargo test -p hawk2ui-smoke react_ -- --nocapture && rtk cargo test -p hawk2ui-smoke vue_ -- --nocapture"
 blocking = "release"
 evidence = "target/release-evidence/capability-apis.txt"
 

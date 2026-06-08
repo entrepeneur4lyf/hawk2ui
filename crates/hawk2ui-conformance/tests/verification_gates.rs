@@ -51,6 +51,8 @@ fn verification_gate_definitions_full_script_lists_release_blocking_checks() {
         "bun install --frozen-lockfile",
         "bun run test:react-package",
         "bun run typecheck:react-package",
+        "bun run test:vue-package",
+        "bun run typecheck:vue-package",
         "cargo doc --workspace --no-deps",
         "cargo deny check",
         "git diff --check",
@@ -79,8 +81,12 @@ fn release_blocking_full_script_uses_react_package_checks_not_incubating_suite()
 
     assert_contains(&package_json, "\"test:react-package\"");
     assert_contains(&package_json, "\"typecheck:react-package\"");
+    assert_contains(&package_json, "\"test:vue-package\"");
+    assert_contains(&package_json, "\"typecheck:vue-package\"");
     assert_contains(&script, "bun run test:react-package");
     assert_contains(&script, "bun run typecheck:react-package");
+    assert_contains(&script, "bun run test:vue-package");
+    assert_contains(&script, "bun run typecheck:vue-package");
     assert!(
         !script.contains("bun run test:packages"),
         "release-blocking check.sh must not run the all-framework package suite"
@@ -158,6 +164,39 @@ fn release_criteria_execute_capability_api_gate_tests() {
         "cargo test -p hawk2ui-platform --test platform_capabilities -- --nocapture",
         "cargo test -p hawk2ui-security -- --nocapture",
         "cargo test -p hawk2ui-smoke react_ -- --nocapture",
+        "cargo test -p hawk2ui-smoke vue_ -- --nocapture",
+    ] {
+        assert_contains(&criteria, required);
+    }
+}
+
+#[test]
+fn release_criteria_execute_vue_deno_runtime_gate_tests() {
+    let criteria = read_workspace_file("release/release-criteria.toml");
+
+    for required in [
+        "id = \"vue-deno-runtime\"",
+        "title = \"Vue Deno runtime path\"",
+        "cargo test -p hawk2ui-js-runtime vue_ -- --nocapture",
+        "bun run test:vue-package",
+        "bun run typecheck:vue-package",
+        "cargo test -p hawk2ui-smoke vue_ -- --nocapture",
+        "target/release-evidence/vue-deno-runtime.txt",
+    ] {
+        assert_contains(&criteria, required);
+    }
+}
+
+#[test]
+fn release_criteria_execute_react_and_vue_developer_experience_gate_tests() {
+    let criteria = read_workspace_file("release/release-criteria.toml");
+
+    for required in [
+        "id = \"developer-experience\"",
+        "title = \"React and Vue developer experience\"",
+        "cargo test -p hawk2ui-cli workspace_init_ -- --nocapture",
+        "cargo test -p hawk2ui-cli workspace_dev_ -- --nocapture",
+        "cargo test -p hawk2ui-cli dev_loop_ -- --nocapture",
     ] {
         assert_contains(&criteria, required);
     }

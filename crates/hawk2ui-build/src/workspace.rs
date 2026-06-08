@@ -109,6 +109,8 @@ impl BuildWorkspace {
             Some(SourceFramework::React) => {
                 artifact.with_js_module_graph(self.sealed_react_bundle_graph()?)
             }
+            Some(SourceFramework::Vue) if self.manifest.build.output.is_some() => artifact
+                .with_js_module_graph(self.sealed_runtime_bundle_graph(SourceFramework::Vue)?),
             Some(
                 framework @ (SourceFramework::Solid
                 | SourceFramework::Svelte
@@ -251,16 +253,20 @@ impl BuildWorkspace {
     }
 
     fn sealed_react_bundle_graph(&self) -> Result<SealedJsModuleGraph, BuildWorkspaceError> {
-        let output_path =
-            self.manifest
-                .build
-                .output
-                .as_deref()
-                .ok_or_else(|| BuildWorkspaceError::FrameworkCompilation {
-                    path: self.manifest.source.entry.clone(),
-                    framework: SourceFramework::React,
-                    message: "compiler.framework.react-runtime: React production uses @hawk2ui/react createRoot with the sealed Deno runtime; set build.output to the package-manager-produced JavaScript bundle".into(),
-                })?;
+        self.sealed_runtime_bundle_graph(SourceFramework::React)
+    }
+
+    fn sealed_runtime_bundle_graph(
+        &self,
+        framework: SourceFramework,
+    ) -> Result<SealedJsModuleGraph, BuildWorkspaceError> {
+        let output_path = self.manifest.build.output.as_deref().ok_or_else(|| {
+            BuildWorkspaceError::FrameworkCompilation {
+                path: self.manifest.source.entry.clone(),
+                framework,
+                message: sealed_runtime_output_required_message(framework).into(),
+            }
+        })?;
         let bytes = self.read_declared_file(output_path)?;
         let source = String::from_utf8(bytes.clone())
             .map_err(|_| BuildWorkspaceError::UnreadableFile(output_path.into()))?;
@@ -395,6 +401,20 @@ fn validate_workspace_relative_path(path: &str) -> Result<(), BuildWorkspaceErro
 
 fn js_module_specifier(path: &str) -> String {
     format!("file:///{}", path.replace('\\', "/"))
+}
+
+fn sealed_runtime_output_required_message(framework: SourceFramework) -> &'static str {
+    match framework {
+        SourceFramework::React => {
+            "compiler.framework.react-runtime: React production uses @hawk2ui/react createRoot with the sealed Deno runtime; set build.output to the package-manager-produced JavaScript bundle"
+        }
+        SourceFramework::Vue => {
+            "compiler.framework.vue-runtime: Vue production uses @hawk2ui/vue createApp with the sealed Deno runtime; set build.output to the package-manager-produced JavaScript bundle"
+        }
+        SourceFramework::Solid | SourceFramework::Svelte | SourceFramework::Native => {
+            "compiler.framework.runtime: production runtime framework builds require build.output to point at the package-manager-produced JavaScript bundle"
+        }
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

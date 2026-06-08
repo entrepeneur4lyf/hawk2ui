@@ -172,6 +172,38 @@ fn cli_commands_parse_init_template_and_package_manager_options() {
             package_manager: CliPackageManager::Npm,
         }
     );
+    assert_eq!(
+        catalog
+            .parse([
+                "hawk2ui",
+                "init",
+                "--template",
+                "vue-app",
+                "--package-manager",
+                "pnpm",
+            ])
+            .unwrap(),
+        CliCommand::NewProject {
+            template: CliProjectTemplate::VueApp,
+            package_manager: CliPackageManager::Pnpm,
+        }
+    );
+    assert_eq!(
+        catalog
+            .parse([
+                "hawk2ui",
+                "new",
+                "--template",
+                "vue-plugin",
+                "--package-manager",
+                "yarn",
+            ])
+            .unwrap(),
+        CliCommand::NewProject {
+            template: CliProjectTemplate::VuePlugin,
+            package_manager: CliPackageManager::Yarn,
+        }
+    );
 }
 
 #[test]
@@ -339,6 +371,84 @@ fn workspace_init_react_templates_generate_framework_manifests_and_package_metad
     );
     assert!(
         fs::read_to_string(plugin_root.join("src/App.tsx"))
+            .expect("plugin source should read")
+            .contains("hawk:plugin")
+    );
+}
+
+#[test]
+fn workspace_init_vue_templates_generate_framework_manifests_and_package_metadata() {
+    let app_root = temp_cli_workspace("init-vue-app");
+    let app_created = WorkspaceCommandRunner::new(&app_root).execute(CliCommand::NewProject {
+        template: CliProjectTemplate::VueApp,
+        package_manager: CliPackageManager::Bun,
+    });
+
+    assert_eq!(app_created.exit_code, CliExitCode::Success);
+    assert!(app_root.join("hawk.json").is_file());
+    assert!(app_root.join("src/main.ts").is_file());
+    assert!(app_root.join("src/App.vue").is_file());
+    assert!(app_root.join("vite.hawk.config.ts").is_file());
+    assert!(app_root.join("package.json").is_file());
+    let app_manifest_source =
+        fs::read_to_string(app_root.join("hawk.json")).expect("app manifest should read");
+    let app_manifest =
+        HawkManifest::parse(&app_manifest_source).expect("vue app manifest should validate");
+    assert_eq!(app_manifest.source.entry, "src/main.ts");
+    assert!(app_manifest_source.contains("\"framework\": \"vue\""));
+    assert!(app_manifest_source.contains("\"packageManager\": \"bun\""));
+    assert!(app_manifest_source.contains("\"output\": \"dist/main.js\""));
+    assert!(app_manifest_source.contains("\"desktop\""));
+    assert!(!app_manifest_source.contains("\"plugin\""));
+    assert!(
+        fs::read_to_string(app_root.join("package.json"))
+            .expect("app package should read")
+            .contains("\"packageManager\": \"bun@1.0.0\"")
+    );
+    assert!(
+        fs::read_to_string(app_root.join("src/main.ts"))
+            .expect("app entry should read")
+            .contains("createApp")
+    );
+    assert!(
+        fs::read_to_string(app_root.join("src/App.vue"))
+            .expect("app component should read")
+            .contains("<template>")
+    );
+    assert!(
+        fs::read_to_string(app_root.join("vite.hawk.config.ts"))
+            .expect("vite config should read")
+            .contains("fileName: () => \"main.js\"")
+    );
+
+    let plugin_root = temp_cli_workspace("init-vue-plugin");
+    let plugin_created =
+        WorkspaceCommandRunner::new(&plugin_root).execute(CliCommand::NewProject {
+            template: CliProjectTemplate::VuePlugin,
+            package_manager: CliPackageManager::Npm,
+        });
+
+    assert_eq!(plugin_created.exit_code, CliExitCode::Success);
+    let plugin_manifest_source =
+        fs::read_to_string(plugin_root.join("hawk.json")).expect("plugin manifest should read");
+    let plugin_manifest =
+        HawkManifest::parse(&plugin_manifest_source).expect("vue plugin manifest should validate");
+    assert_eq!(plugin_manifest.source.entry, "src/main.ts");
+    assert!(
+        plugin_manifest_source.contains("\"framework\": \"vue\""),
+        "{plugin_manifest_source}"
+    );
+    assert!(plugin_manifest_source.contains("\"packageManager\": \"npm\""));
+    assert!(plugin_manifest_source.contains("\"output\": \"dist/main.js\""));
+    assert!(plugin_manifest_source.contains("\"plugin\""));
+    assert!(plugin_manifest_source.contains("\"parameters\""));
+    assert!(
+        fs::read_to_string(plugin_root.join("package.json"))
+            .expect("plugin package should read")
+            .contains("\"packageManager\": \"npm@10.0.0\"")
+    );
+    assert!(
+        fs::read_to_string(plugin_root.join("src/App.vue"))
             .expect("plugin source should read")
             .contains("hawk:plugin")
     );
@@ -836,6 +946,59 @@ fn workspace_verify_artifact_accepts_react_js_module_graph_payload() {
     assert!(verify.stdout.contains("verified artifact container"));
     assert!(verify.stdout.contains("js-module-graphs: 1"));
     assert!(verify.stdout.contains("trust-status: release-ready"));
+}
+
+#[test]
+fn workspace_build_release_accepts_vue_sealed_js_graph_payload() {
+    let root = temp_cli_workspace("build-vue-js-graph");
+    write_vue_desktop_project(&root, "com.hawk2ui.cli-vue-build", "CLI Vue Build");
+
+    let build = signed_runner(&root).execute(CliCommand::BuildRelease);
+
+    assert_eq!(build.exit_code, CliExitCode::Success);
+    assert!(build.stdout.contains("built production artifact"));
+    assert!(build.stdout.contains("compiled-frameworks: 0"));
+    assert!(build.stdout.contains("js-module-graphs: 1"));
+}
+
+#[test]
+fn workspace_verify_artifact_accepts_vue_sealed_js_graph_payload() {
+    let root = temp_cli_workspace("verify-vue-js-graph");
+    write_vue_desktop_project(&root, "com.hawk2ui.cli-vue-verify", "CLI Vue Verify");
+
+    let build = signed_runner(&root).execute(CliCommand::BuildRelease);
+    assert_eq!(build.exit_code, CliExitCode::Success);
+    let artifact_path = root.join("target/hawk2ui/release/hawk2ui-artifact.hawk");
+
+    let verify = signed_runner(&root).execute(CliCommand::VerifyArtifact {
+        path: Some(artifact_path.display().to_string()),
+    });
+
+    assert_eq!(verify.exit_code, CliExitCode::Success);
+    assert!(verify.stdout.contains("verified artifact container"));
+    assert!(verify.stdout.contains("js-module-graphs: 1"));
+    assert!(verify.stdout.contains("trust-status: release-ready"));
+}
+
+#[test]
+fn workspace_run_desktop_accepts_vue_sealed_js_graph_payload() {
+    let root = temp_cli_workspace("run-vue-js-graph");
+    write_vue_desktop_project(&root, "com.hawk2ui.cli-vue-run", "CLI Vue Run");
+
+    let execution = Command::new(env!("CARGO_BIN_EXE_hawk2ui-cli"))
+        .current_dir(&root)
+        .env("HAWK2UI_EXIT_AFTER_FIRST_FRAME", "1")
+        .arg("run-desktop")
+        .output()
+        .expect("hawk2ui-cli run-desktop child process should execute");
+    let stdout = String::from_utf8_lossy(&execution.stdout);
+    let stderr = String::from_utf8_lossy(&execution.stderr);
+
+    assert!(
+        execution.status.success(),
+        "run-desktop should accept Vue sealed JS graphs\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("desktop runtime exited cleanly"));
 }
 
 #[test]
@@ -1518,6 +1681,56 @@ createRoot("root").render(<App />);"#,
     write_file(
         &root.join("dist/main.js"),
         "globalThis.__hawk2uiCliReactBundle = true;",
+    );
+}
+
+fn write_vue_desktop_project(root: &Path, id: &str, name: &str) {
+    let id_json = serde_json::to_string(id).expect("id serializes");
+    let name_json = serde_json::to_string(name).expect("name serializes");
+    write_file(
+        &root.join("hawk.json"),
+        &format!(
+            r#"{{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {{
+    "id": {id_json},
+    "name": {name_json},
+    "version": "1.0.0",
+    "bundleId": {id_json}
+  }},
+  "app": {{
+    "entry": "src/main.ts",
+    "framework": "vue"
+  }},
+  "build": {{
+    "output": "dist/main.js"
+  }},
+  "permissions": {{
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  }},
+  "targets": {{
+    "desktop": [
+      {{
+        "name": "linux-wayland",
+        "platforms": ["linux-wayland"]
+      }}
+    ]
+  }}
+}}"#,
+        ),
+    );
+    write_file(&root.join("bun.lock"), "lockfileVersion = 1\n");
+    write_file(
+        &root.join("src/main.ts"),
+        r#"import { createApp } from "@hawk2ui/vue";
+import App from "./App.vue";
+
+createApp(App).mount();"#,
+    );
+    write_file(
+        &root.join("dist/main.js"),
+        "globalThis.__hawk2uiCliVueBundle = true;",
     );
 }
 

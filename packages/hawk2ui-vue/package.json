@@ -13,5 +13,5 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "description": "Vue 3.5 renderer integration for Hawk2UI native records."
+  "description": "Vue 3.5+ native runtime renderer for Hawk2UI scene operations."
 }

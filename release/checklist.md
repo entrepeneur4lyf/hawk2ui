@@ -13,6 +13,7 @@ Run these commands from the repository root before tagging or publishing a relea
 
 - Confirm release criteria evidence files are written under `target/release-evidence/`.
 - Confirm package target evidence covers Windows, macOS, Linux Wayland, Linux X11, release-backed CLAP/VST3/AU plugin bundles, sealed artifacts, debug packages, and release packages.
+- Confirm React and Vue Deno runtime evidence covers package API checks, sealed JS module graph execution, desktop smoke evidence, and plugin smoke evidence.
 - Confirm runtime bundle evidence records sealed JS module source-map hashes, dependency origins, lockfile hash, graph entrypoint, static imports, dynamic imports, and chunk membership.
 - Confirm changelog verification evidence is linked before tagging.
 - Confirm `CHANGELOG.md` includes Added, Changed, Fixed, Security, Compatibility, Migration, and Known Limitations sections.

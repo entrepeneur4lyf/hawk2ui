@@ -18,6 +18,7 @@
     "packages/hawk2ui-react/src/**/*.tsx",
     "packages/hawk2ui-react/src/**/*.d.ts",
     "packages/hawk2ui-vue/src/**/*.ts",
+    "packages/hawk2ui-vue/src/**/*.d.ts",
     "packages/hawk2ui-solid/src/**/*.ts",
     "packages/hawk2ui-compiler/src/**/*.ts"
   ]

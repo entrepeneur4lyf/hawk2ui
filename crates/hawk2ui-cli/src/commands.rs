@@ -9,7 +9,7 @@ pub enum CliCommand {
     NewProject {
         /// Project scaffold template.
         template: CliProjectTemplate,
-        /// JavaScript package manager metadata to write into generated React projects.
+        /// JavaScript package manager metadata to write into generated framework projects.
         package_manager: CliPackageManager,
     },
     /// Build and run the default target.
@@ -61,6 +61,10 @@ pub enum CliProjectTemplate {
     ReactApp,
     /// React plugin editor template.
     ReactPlugin,
+    /// Vue desktop app template.
+    VueApp,
+    /// Vue plugin editor template.
+    VuePlugin,
     /// Legacy native desktop+plugin scaffold.
     Native,
 }
@@ -72,6 +76,8 @@ impl CliProjectTemplate {
         match name {
             "react-app" => Some(Self::ReactApp),
             "react-plugin" => Some(Self::ReactPlugin),
+            "vue-app" => Some(Self::VueApp),
+            "vue-plugin" => Some(Self::VuePlugin),
             "native" => Some(Self::Native),
             _ => None,
         }
@@ -83,12 +89,14 @@ impl CliProjectTemplate {
         match self {
             Self::ReactApp => "react-app",
             Self::ReactPlugin => "react-plugin",
+            Self::VueApp => "vue-app",
+            Self::VuePlugin => "vue-plugin",
             Self::Native => "native",
         }
     }
 }
 
-/// JavaScript package manager selected for generated React projects.
+/// JavaScript package manager selected for generated framework projects.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CliPackageManager {
     /// Bun package manager.

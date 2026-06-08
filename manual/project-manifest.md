@@ -11,7 +11,7 @@ The legacy `manifest.hawk.toml` format remains a migration input. It is not a pa
 - All relative paths are resolved from the directory containing `hawk.json`.
 - Absolute paths, parent-directory escapes, and undeclared asset/script/style inputs are rejected.
 - Desktop apps and plugin editors are targets of one Hawk app model, not separate project types.
-- Framework selection is an authoring/build input. React release builds consume a sealed JavaScript module graph produced from the selected package-manager build output.
+- Framework selection is an authoring/build input. React and Vue release builds consume a sealed JavaScript module graph produced from the selected package-manager build output.
 - Release builds must be deterministic: the same manifest, sources, lock state, and signing inputs produce the same artifact hashes.
 
 ## Minimal Desktop App
@@ -41,6 +41,44 @@ The legacy `manifest.hawk.toml` format remains a migration input. It is not a pa
           "height": 800,
           "minWidth": 640,
           "minHeight": 400,
+          "resizable": true,
+          "presentationBackend": "gpu-preferred"
+        }
+      }
+    ]
+  }
+}
+```
+
+## Minimal Vue Desktop App
+
+```json
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.example.vue-desktop",
+    "name": "Example Vue Desktop",
+    "version": "0.1.0",
+    "bundleId": "com.example.vue-desktop"
+  },
+  "app": {
+    "entry": "src/main.ts",
+    "framework": "vue"
+  },
+  "build": {
+    "output": "dist/main.js",
+    "packageManager": "bun"
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "main",
+        "platforms": ["windows", "macos", "linux-wayland", "linux-x11"],
+        "window": {
+          "title": "Example Vue Desktop",
+          "width": 1280,
+          "height": 800,
           "resizable": true,
           "presentationBackend": "gpu-preferred"
         }
@@ -197,11 +235,11 @@ Supported `framework` values:
 - `svelte`
 - `vue`
 
-`entry` is required. `style` and `script` are optional. React release builds consume a sealed JavaScript module graph produced from the selected package-manager build output. Vue, Solid, and Svelte manifest values remain incubating until their runtime renderer adapters have equivalent release evidence.
+`entry` is required. `style` and `script` are optional. React and Vue release builds consume a sealed JavaScript module graph produced from the selected package-manager build output. Solid and Svelte manifest values remain incubating compiler adapter values until their runtime renderer adapters have equivalent release evidence.
 
 ## `build`
 
-React release builds read the package-manager-produced JavaScript output declared by `build`.
+React and Vue release builds read the package-manager-produced JavaScript output declared by `build`.
 
 ```json
 {
@@ -210,7 +248,7 @@ React release builds read the package-manager-produced JavaScript output declare
 }
 ```
 
-`output` is the package-manager-produced JavaScript bundle path sealed into the release artifact for React builds.
+`output` is the package-manager-produced JavaScript bundle path sealed into the release artifact for React and Vue builds.
 
 `packageManager` accepts `bun`, `npm`, `pnpm`, or `yarn` and selects the lockfile when more than one supported lockfile is present. If `packageManager` is omitted, release builds detect `bun.lock`, `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`.
 

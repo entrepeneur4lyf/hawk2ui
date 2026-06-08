@@ -61,7 +61,7 @@ Runtime event handlers that change visible output should update `RuntimeViewTree
 
 ## Hawk JS Capability Imports
 
-React-first applications and plugin UIs import host capability APIs from stable `hawk:*` modules:
+React and Vue sealed-runtime applications and plugin UIs import host capability APIs from stable `hawk:*` modules:
 
 - `hawk:runtime`: aggregate module for the declared runtime capability surface.
 - `hawk:network`: bounded HTTP requests for declared hosts.
@@ -107,20 +107,28 @@ Framework integrations should emit native records through `CustomRendererProtoco
 
 The implemented operation surface covers create node, set prop, set style ref, set asset ref, set native ref, bind event, bind lifecycle, append keyed or unkeyed children, enter error boundary, commit, and remove node. Protocol diagnostics use stable rules such as `custom-renderer.node.duplicate` and `custom-renderer.node.missing`.
 
-## React Deno Runtime Renderer
+## React And Vue Deno Runtime Renderers
+
+Vue 3.5+ and React 19+ are production-supported sealed runtime renderers.
 
 React 19+ production support uses `@hawk2ui/react` `createRoot` with the sealed Deno runtime.
 
-React emits Hawk2UI scene operations through `hawk2ui-js-runtime`, not `FrameworkNativeProgram` or the legacy source-string compiler path.
+Vue 3.5+ production support uses `@hawk2ui/vue` `createApp` with the sealed Deno runtime.
 
-The React renderer path is release-gated by runtime scene operation tests, React reconciler tests, source-mapped diagnostics, package-manager bundle execution, desktop async network/storage/file evidence, and plugin parameter/state/preset/transport/meter/DSP evidence.
+React and Vue emit Hawk2UI scene operations through `hawk2ui-js-runtime`, not `FrameworkNativeProgram` or the legacy source-string compiler path.
 
-React release artifacts carry sealed JS module graphs, not legacy framework compiler payloads. The graph entrypoint comes from `hawk.json` `build.output`, and package-manager lockfile metadata is recorded with the graph before runtime execution.
+The React and Vue renderer paths are release-gated by runtime scene operation tests, framework renderer tests, source-mapped diagnostics, package-manager bundle execution, desktop async network/storage/file evidence, and plugin parameter/state/preset/transport/meter/DSP evidence.
+
+React and Vue release artifacts carry sealed JS module graphs, not legacy framework compiler payloads. The graph entrypoint comes from `hawk.json` `build.output`, and package-manager lockfile metadata is recorded with the graph before runtime execution.
+
+Vue production manifests declare `app.framework` as `vue` and package-manager `build.output` as the sealed graph entrypoint.
+
+Vue release artifacts carry sealed JS module graphs, not legacy framework compiler payloads.
 
 ## Incubating Framework Compiler Boundary
 
 Framework compilers and runtime adapters should hand Rust an explicit `FrameworkNativeProgram` made of `FrameworkNativeNode` records. The program carries the root node, keyed children, props, refs, style refs, asset refs, events, lifecycle handlers, and child node props without requiring Rust to inspect framework source syntax.
 
-Vue, Solid, and Svelte are incubating framework adapters.
+Solid and Svelte remain incubating compiler adapters.
 
-Svelte 5, Vue 3.5+, and Solid adapters can still accept this boundary through `from_native_program(...)`, and framework conformance uses it for normalized snapshot and runtime evidence. Source-string parsing remains a compatibility fixture path; non-React production integrations must move to explicit runtime renderer or compiler/protocol inputs before release claims.
+Svelte 5 and Solid adapters can still accept this boundary through `from_native_program(...)`, and framework conformance uses it for normalized snapshot and runtime evidence. Source-string parsing remains a compatibility fixture path; non-React and non-Vue production integrations must move to explicit runtime renderer or compiler/protocol inputs before release claims.

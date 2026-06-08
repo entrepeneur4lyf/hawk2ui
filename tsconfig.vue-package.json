@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.packages.json",
+  "include": [
+    "packages/hawk2ui-vue/src/**/*.ts",
+    "packages/hawk2ui-vue/src/**/*.d.ts"
+  ]
+}

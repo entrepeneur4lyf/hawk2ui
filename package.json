@@ -12,8 +12,10 @@
   ],
   "scripts": {
     "test:react-package": "bun test packages/hawk2ui-react/test/react-reconciler.test.ts packages/test/react-production-api.test.ts",
-    "test:packages": "bun test packages/hawk2ui-native/test/native-records.test.ts packages/hawk2ui-svelte/test/svelte-compile.test.ts packages/hawk2ui-react/test/react-reconciler.test.ts packages/hawk2ui-vue/test/vue-renderer.test.ts packages/hawk2ui-solid/test/solid-renderer.test.ts packages/hawk2ui-compiler/test/compiler.test.ts packages/test/framework-production-api.test.ts",
+    "test:vue-package": "bun test packages/hawk2ui-vue/test/vue-runtime-renderer.test.ts packages/test/framework-production-api.test.ts",
+    "test:packages": "bun test packages/hawk2ui-native/test/native-records.test.ts packages/hawk2ui-svelte/test/svelte-compile.test.ts packages/hawk2ui-react/test/react-reconciler.test.ts packages/hawk2ui-vue/test/vue-renderer.test.ts packages/hawk2ui-vue/test/vue-runtime-renderer.test.ts packages/hawk2ui-solid/test/solid-renderer.test.ts packages/hawk2ui-compiler/test/compiler.test.ts packages/test/framework-production-api.test.ts",
     "typecheck:react-package": "tsc -p tsconfig.react-package.json --noEmit",
+    "typecheck:vue-package": "tsc -p tsconfig.vue-package.json --noEmit",
     "typecheck:packages": "tsc -p tsconfig.packages.json --noEmit"
   },
   "dependencies": {},
@@ -33,6 +35,7 @@
     "react": "19.2.7",
     "react-reconciler": "0.33.0",
     "svelte": "5.56.2",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "vue": "3.5.35"
   }
 }

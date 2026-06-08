@@ -47,13 +47,15 @@ The package compatibility matrix currently names these outputs and verification 
 - `plugin-au`: `rtk cargo test -p hawk2ui-plugin-adapters package_au`
 - `react-desktop-smoke`: `rtk cargo test -p hawk2ui-smoke react_desktop_basic_runs_sealed_deno_graph_through_winit_smoke`
 - `react-plugin-smoke`: `rtk cargo test -p hawk2ui-smoke react_plugin_basic_runs_deno_ui_parameters_and_realtime_denial`
+- `vue-desktop-smoke`: `rtk cargo test -p hawk2ui-smoke vue_desktop_basic_runs_sealed_deno_graph_through_winit_smoke`
+- `vue-plugin-smoke`: `rtk cargo test -p hawk2ui-smoke vue_plugin_basic_runs_deno_ui_parameters_and_realtime_denial`
 - `sealed-artifact`: `rtk cargo test -p hawk2ui-build sealed_artifact`
 - `debug-package`: `rtk cargo test -p hawk2ui-build debug_package`
 - `release-package`: `rtk cargo test -p hawk2ui-build release_package`
 
 Every release-gated desktop and plugin bundle must verify these runtime bundle evidence records:
 
-- `embedded-deno-runtime`: the package includes the embedded `hawk2ui-js-runtime` Deno/V8 runtime needed to execute React-first UI code.
+- `embedded-deno-runtime`: the package includes the embedded `hawk2ui-js-runtime` Deno/V8 runtime needed to execute React and Vue UI code.
 - `rusty-v8-static-archive`: the package evidence records the verified upstream `rusty_v8` static archive used by the selected target/runtime build.
 - `rusty-v8-source-binding`: the package evidence records the matching generated `src_binding_*` artifact for the same `rusty_v8` version, target, profile, and feature flavor.
 - `sealed-js-module-graph`: the package includes the sealed JavaScript module graph manifest loaded by the runtime.
@@ -67,7 +69,7 @@ Every release-gated desktop and plugin bundle must verify these runtime bundle e
 - `sealed-module-import-metadata`: static imports, dynamic imports, and chunk membership are recorded for the sealed module graph.
 - `bundle-content-hash`: the artifact records the hash of each sealed JavaScript bundle/module payload.
 
-React-first manifests declare the package-manager-produced bundle with `build.output`, for example `dist/main.js`. Release builds detect the example or project lockfile (`bun.lock`, `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`), record the package-manager metadata, seal the declared bundle as a JS module graph, and make `hawk2ui verify-artifact` report `js-module-graphs`. If more than one supported lockfile is present, set `build.packageManager` to `bun`, `npm`, `pnpm`, or `yarn`.
+React and Vue manifests declare the package-manager-produced bundle with `build.output`, for example `dist/main.js`. Release builds detect the example or project lockfile (`bun.lock`, `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`), record the package-manager metadata, seal the declared bundle as a JS module graph, and make `hawk2ui verify-artifact` report `js-module-graphs`. If more than one supported lockfile is present, set `build.packageManager` to `bun`, `npm`, `pnpm`, or `yarn`.
 
 Sealed JS module graph metadata records every module specifier, content hash, source-map hash, dependency origin, static import, dynamic import, chunk membership, package manager, lockfile hash, and graph entrypoint. `SealedJsDependencyOrigin` records whether a module came from workspace build output, an installed package dependency, or generated build tooling.
 

@@ -710,7 +710,7 @@ impl WorkspaceCommandRunner {
             Err(execution) => return execution,
         };
         CommandExecution::success(format!(
-            "built {} artifact for {}\nartifact-path: {}\nmanifest-hash: {}\ncontent-hash: {}\ncompiled-scripts: {}\ncompiled-frameworks: {}\ncompiled-styles: {}\ncompiled-assets: {}\nverification-status: release-ready\nsignature-policy: {}\n",
+            "built {} artifact for {}\nartifact-path: {}\nmanifest-hash: {}\ncontent-hash: {}\ncompiled-scripts: {}\ncompiled-frameworks: {}\njs-module-graphs: {}\ncompiled-styles: {}\ncompiled-assets: {}\nverification-status: release-ready\nsignature-policy: {}\n",
             profile.label(),
             output.manifest.identity.id,
             artifact_path.display(),
@@ -718,6 +718,7 @@ impl WorkspaceCommandRunner {
             artifact.hashes.content.0,
             artifact.compiled_scripts.len(),
             artifact.compiled_frameworks.len(),
+            artifact.js_module_graphs.len(),
             artifact.compiled_styles.len(),
             artifact.compiled_assets.len(),
             artifact_signature_policy_label(profile)
@@ -3214,6 +3215,28 @@ fn default_project_files(
             ),
             ("README.md", react_plugin_readme().to_owned()),
         ],
+        CliProjectTemplate::VueApp => vec![
+            ("hawk.json", vue_app_manifest(package_manager)),
+            ("src/main.ts", vue_main_source().to_owned()),
+            ("src/App.vue", vue_app_source().to_owned()),
+            ("vite.hawk.config.ts", vue_vite_config().to_owned()),
+            (
+                "package.json",
+                vue_package_json("hawk2ui-vue-app", package_manager),
+            ),
+            ("README.md", vue_app_readme().to_owned()),
+        ],
+        CliProjectTemplate::VuePlugin => vec![
+            ("hawk.json", vue_plugin_manifest(package_manager)),
+            ("src/main.ts", vue_main_source().to_owned()),
+            ("src/App.vue", vue_plugin_source().to_owned()),
+            ("vite.hawk.config.ts", vue_vite_config().to_owned()),
+            (
+                "package.json",
+                vue_package_json("hawk2ui-vue-plugin", package_manager),
+            ),
+            ("README.md", vue_plugin_readme().to_owned()),
+        ],
     }
 }
 
@@ -3448,6 +3471,213 @@ fn react_package_json(name: &str, package_manager: CliPackageManager) -> String 
     )
 }
 
+fn package_manager_manifest_value(package_manager: CliPackageManager) -> &'static str {
+    match package_manager {
+        CliPackageManager::Bun => "bun",
+        CliPackageManager::Npm => "npm",
+        CliPackageManager::Pnpm => "pnpm",
+        CliPackageManager::Yarn => "yarn",
+    }
+}
+
+fn vue_app_manifest(package_manager: CliPackageManager) -> String {
+    let package_manager = package_manager_manifest_value(package_manager);
+    format!(
+        r#"{{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {{
+    "id": "com.example.hawk2ui-vue-app",
+    "name": "Hawk2UI Vue App",
+    "version": "0.1.0",
+    "bundleId": "com.example.hawk2ui-vue-app"
+  }},
+  "app": {{
+    "entry": "src/main.ts",
+    "framework": "vue"
+  }},
+  "build": {{
+    "packageManager": "{package_manager}",
+    "output": "dist/main.js"
+  }},
+  "targets": {{
+    "desktop": [
+      {{
+        "name": "linux-wayland",
+        "platforms": ["windows", "macos", "linux-wayland", "linux-x11"],
+        "window": {{
+          "title": "Hawk2UI Vue App",
+          "width": 960,
+          "height": 540
+        }}
+      }}
+    ]
+  }},
+  "permissions": {{
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  }}
+}}
+"#
+    )
+}
+
+fn vue_plugin_manifest(package_manager: CliPackageManager) -> String {
+    let package_manager = package_manager_manifest_value(package_manager);
+    format!(
+        r#"{{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {{
+    "id": "com.example.hawk2ui-vue-plugin",
+    "name": "Hawk2UI Vue Plugin",
+    "version": "0.1.0",
+    "bundleId": "com.example.hawk2ui-vue-plugin"
+  }},
+  "app": {{
+    "entry": "src/main.ts",
+    "framework": "vue"
+  }},
+  "build": {{
+    "packageManager": "{package_manager}",
+    "output": "dist/main.js"
+  }},
+  "targets": {{
+    "plugin": [
+      {{
+        "name": "clap",
+        "formats": ["clap", "vst3", "au"],
+        "editor": {{
+          "width": 960,
+          "height": 540
+        }}
+      }}
+    ]
+  }},
+  "plugin": {{
+    "id": "com.example.hawk2ui-vue-plugin",
+    "name": "Hawk2UI Vue Plugin",
+    "parameters": [
+      {{
+        "id": "gain",
+        "paramId": 0,
+        "name": "Gain",
+        "kind": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5
+      }}
+    ]
+  }},
+  "permissions": {{
+    "capabilities": ["plugin-host", "plugin-parameters", "audio-dsp", "sealed-artifacts"]
+  }}
+}}
+"#
+    )
+}
+
+fn vue_main_source() -> &'static str {
+    r#"import { createApp } from "@hawk2ui/vue";
+import App from "./App.vue";
+
+createApp(App).mount();
+"#
+}
+
+fn vue_app_source() -> &'static str {
+    r#"<script setup lang="ts">
+import { computed, ref } from "vue";
+
+const count = ref(0);
+const countLabel = computed(() => `Count ${count.value}`);
+</script>
+
+<template>
+  <hawk-view id="vue-desktop-root">
+    <hawk-text id="count">{{ countLabel }}</hawk-text>
+    <hawk-button id="increment" @pointer-press="count += 1">Increment</hawk-button>
+  </hawk-view>
+</template>
+"#
+}
+
+fn vue_plugin_source() -> &'static str {
+    r#"<script setup lang="ts">
+import { onMounted, ref } from "vue";
+import { readParameter, writeParameter } from "hawk:plugin";
+
+const gain = ref(0);
+
+onMounted(async () => {
+  gain.value = await readParameter("gain");
+});
+
+async function boost() {
+  await writeParameter("gain", 0.75);
+  gain.value = await readParameter("gain");
+}
+</script>
+
+<template>
+  <hawk-view id="vue-plugin-root">
+    <hawk-text id="gain">{{ gain.toFixed(2) }}</hawk-text>
+    <hawk-button id="boost" @pointer-press="boost">Boost</hawk-button>
+  </hawk-view>
+</template>
+"#
+}
+
+fn vue_vite_config() -> &'static str {
+    r#"import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
+
+export default defineConfig({
+  plugins: [vue()],
+  build: {
+    emptyOutDir: true,
+    sourcemap: true,
+    lib: {
+      entry: "src/main.ts",
+      formats: ["es"],
+      fileName: () => "main.js",
+    },
+    rollupOptions: {
+      external: [/^hawk:/],
+    },
+  },
+});
+"#
+}
+
+fn vue_package_json(name: &str, package_manager: CliPackageManager) -> String {
+    format!(
+        r#"{{
+  "name": "{name}",
+  "private": true,
+  "type": "module",
+  "packageManager": "{}",
+  "scripts": {{
+    "bundle": "vite build --config vite.hawk.config.ts",
+    "build": "vite build --config vite.hawk.config.ts",
+    "build:artifact": "hawk2ui build-release",
+    "dev": "hawk2ui dev",
+    "validate": "hawk2ui validate"
+  }},
+  "dependencies": {{
+    "@hawk2ui/vue": "^0.1.0",
+    "vue": "^3.5.0"
+  }},
+  "devDependencies": {{
+    "@vitejs/plugin-vue": "^5.0.0",
+    "typescript": "^5.0.0",
+    "vite": "^6.0.0"
+  }}
+}}
+"#,
+        package_manager.package_manager_field()
+    )
+}
+
 fn react_app_readme() -> &'static str {
     r"# Hawk2UI React App
 
@@ -3470,6 +3700,34 @@ Commands:
 
 - `hawk2ui validate`
 - `hawk2ui build-release`
+- `hawk2ui package-plugin`
+"
+}
+
+fn vue_app_readme() -> &'static str {
+    r"# Hawk2UI Vue App
+
+Generated Vue desktop app scaffold.
+
+Commands:
+
+- `hawk2ui validate`
+- `npm run build`
+- `npm run build:artifact`
+- `hawk2ui run-desktop`
+"
+}
+
+fn vue_plugin_readme() -> &'static str {
+    r"# Hawk2UI Vue Plugin
+
+Generated Vue plugin editor scaffold.
+
+Commands:
+
+- `hawk2ui validate`
+- `npm run build`
+- `npm run build:artifact`
 - `hawk2ui package-plugin`
 "
 }

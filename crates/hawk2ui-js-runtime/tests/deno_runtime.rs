@@ -725,6 +725,81 @@ fn deno_runtime_executes_react_counter_bundle_and_second_update() {
 }
 
 #[test]
+fn vue_sealed_bundle_executes_and_commits_scene_operations() {
+    let mut runtime = HawkJsRuntime::new().expect("runtime initializes");
+
+    runtime
+        .execute_script(
+            "vue-counter-bundle.js",
+            include_str!("fixtures/vue_counter_bundle.js"),
+        )
+        .expect("vue counter fixture executes");
+
+    assert_eq!(
+        runtime.scene_batches(),
+        vec![SceneOpBatch::new([
+            SceneOp::CreateNode {
+                id: "root".to_owned(),
+                kind: SceneNodeKind::View,
+            },
+            SceneOp::CreateNode {
+                id: "status".to_owned(),
+                kind: SceneNodeKind::Text,
+            },
+            SceneOp::SetProp {
+                id: "status".to_owned(),
+                name: "text".to_owned(),
+                value: hawk2ui_js_runtime::SceneValue::String("Ready".to_owned()),
+            },
+            SceneOp::AppendChild {
+                parent: "root".to_owned(),
+                child: "status".to_owned(),
+            },
+            SceneOp::CreateNode {
+                id: "press".to_owned(),
+                kind: SceneNodeKind::Button,
+            },
+            SceneOp::SetProp {
+                id: "press".to_owned(),
+                name: "text".to_owned(),
+                value: hawk2ui_js_runtime::SceneValue::String("Press".to_owned()),
+            },
+            SceneOp::RegisterEvent {
+                id: "press".to_owned(),
+                event: "pointer.press".to_owned(),
+                handler: "press".to_owned(),
+            },
+            SceneOp::AppendChild {
+                parent: "root".to_owned(),
+                child: "press".to_owned(),
+            },
+            SceneOp::Commit,
+        ])]
+    );
+
+    runtime
+        .execute_script(
+            "dispatch-vue-event.js",
+            r#"
+globalThis.__hawk2uiDispatchEvent("press", "pointer.press", {});
+"#,
+        )
+        .expect("synthetic Vue event dispatch executes");
+
+    assert_eq!(
+        runtime.scene_batches()[1],
+        SceneOpBatch::new([
+            SceneOp::SetProp {
+                id: "status".to_owned(),
+                name: "text".to_owned(),
+                value: hawk2ui_js_runtime::SceneValue::String("Pressed".to_owned()),
+            },
+            SceneOp::Commit,
+        ])
+    );
+}
+
+#[test]
 fn react_deno_second_frame_renders_changed_pixels() {
     let mut runtime = HawkJsRuntime::new().expect("runtime initializes");
     let mut adapter = RuntimeSceneOpAdapter::default();

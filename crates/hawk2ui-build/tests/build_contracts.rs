@@ -2351,6 +2351,87 @@ createRoot("root").render(<App />);"#,
 }
 
 #[test]
+fn build_workspace_seals_vue_package_manager_output_as_js_module_graph() {
+    let root = temp_build_workspace("vue-package-manager-js-graph");
+    write_file(
+        &root.join("hawk.json"),
+        r#"
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.vue-package-manager-js-graph",
+    "name": "Vue Package Manager JS Graph",
+    "version": "1.0.0",
+    "bundleId": "com.hawk2ui.vue-package-manager-js-graph"
+  },
+  "app": {
+    "framework": "vue",
+    "entry": "src/main.ts"
+  },
+  "build": {
+    "output": "dist/main.js"
+  },
+  "permissions": {
+    "capabilities": ["native-windowing", "sealed-artifacts"]
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "standalone",
+        "platforms": ["linux-wayland"]
+      }
+    ]
+  }
+}
+"#,
+    );
+    write_file(&root.join("bun.lock"), "lockfileVersion = 1\n");
+    write_file(
+        &root.join("src/main.ts"),
+        r#"import { createApp } from "@hawk2ui/vue";
+import App from "./App.vue";
+
+createApp(App).mount();"#,
+    );
+    write_file(
+        &root.join("dist/main.js"),
+        r#"globalThis.__hawk2uiVueBundleProducedByPackageManager = true;"#,
+    );
+
+    let output = BuildWorkspace::load(&root)
+        .and_then(|workspace| workspace.build(ArtifactSchemaVersion::new(1, 0)))
+        .expect("Vue build should seal the package-manager-produced JS bundle");
+
+    assert_eq!(output.manifest.source.framework, Some(SourceFramework::Vue));
+    assert_eq!(output.manifest.source.entry, "src/main.ts");
+    assert!(output.artifact.compiled_scripts.is_empty());
+    assert!(
+        output.artifact.compiled_frameworks.is_empty(),
+        "Vue production builds must not require the legacy framework compiler artifact"
+    );
+    assert_eq!(output.artifact.js_module_graphs.len(), 1);
+
+    let graph = &output.artifact.js_module_graphs[0];
+    assert_eq!(graph.entrypoint(), "file:///dist/main.js");
+    assert_eq!(graph.package_manager().kind, PackageManagerKind::Bun);
+    assert!(
+        graph.package_manager().lockfile_sha256.is_some(),
+        "Vue sealed builds should record lockfile hash evidence"
+    );
+    assert_eq!(graph.modules().len(), 1);
+    assert_eq!(
+        graph.modules()[0].source(),
+        "globalThis.__hawk2uiVueBundleProducedByPackageManager = true;"
+    );
+    assert_eq!(graph.modules()[0].specifier(), "file:///dist/main.js");
+    assert_eq!(
+        graph.modules()[0].dependency_origin(),
+        &SealedJsDependencyOrigin::workspace("dist/main.js")
+    );
+}
+
+#[test]
 fn build_workspace_uses_manifest_package_manager_selection_for_react_bundle() {
     let root = temp_build_workspace("react-package-manager-explicit-selection");
     write_file(

@@ -84,6 +84,37 @@ fn react_desktop_basic_runs_sealed_deno_graph_through_winit_smoke() {
 }
 
 #[test]
+fn vue_desktop_basic_runs_sealed_deno_graph_through_winit_smoke() {
+    let fixture =
+        SmokeFixture::from_workspace("examples/vue-desktop-basic", SmokeTargetKind::Desktop);
+    let runner = SmokeRunner;
+
+    let result = runner
+        .run_vue_desktop_basic(&fixture)
+        .expect("Vue/Deno desktop smoke app should run");
+
+    assert_eq!(result.fixture_name, "vue-desktop-basic");
+    assert_eq!(result.sealed_module_count, 1);
+    let result_debug = format!("{result:?}");
+    assert!(result_debug.contains("bundle_entrypoint: \"file:///dist/main.js\""));
+    assert!(result_debug.contains("package_manager: \"bun\""));
+    assert!(result_debug.contains("package_manager_lockfile_sha256: Some("));
+    assert_eq!(result.bundle_sha256.len(), 64);
+    assert_eq!(result.scene.root_id, "vue-desktop-root");
+    assert_eq!(result.text_updates, vec!["0", "1"]);
+    assert_eq!(result.network_updates, vec!["loading", "network:200"]);
+    assert_eq!(result.storage_operations, vec!["storage:0->1"]);
+    assert_eq!(
+        result.file_operations,
+        vec!["files:/tmp/hawk2ui-vue-desktop.txt:seed->seed:saved"]
+    );
+    assert!(result.first_frame.visible_pixel);
+    assert!(result.second_frame.visible_pixel);
+    assert!(result.window_config_valid);
+    assert!(result.close_cleanly);
+}
+
+#[test]
 fn desktop_dashboard_builds_compiles_style_renders_and_checks_recorded_interactions() {
     let fixture =
         SmokeFixture::from_workspace("examples/desktop-dashboard", SmokeTargetKind::Desktop);
@@ -166,6 +197,55 @@ fn react_plugin_basic_runs_deno_ui_parameters_and_realtime_denial() {
         .expect("React/Deno plugin smoke fixture should run");
 
     assert_eq!(result.fixture_name, "react-plugin-basic");
+    assert_eq!(result.sealed_module_count, 1);
+    let result_debug = format!("{result:?}");
+    assert!(result_debug.contains("bundle_entrypoint: \"file:///dist/main.js\""));
+    assert!(result_debug.contains("package_manager: \"bun\""));
+    assert!(result_debug.contains("package_manager_lockfile_sha256: Some("));
+    assert_eq!(result.parameter_updates, vec!["gain=0.25", "gain=0.75"]);
+    assert_eq!(result.text_updates, vec!["0.25", "0.75"]);
+    assert_eq!(
+        result.state_roundtrip,
+        vec![r#"state:{"preset":"Init"}->{"preset":"Wide","version":2}"#]
+    );
+    assert_eq!(
+        result.preset_roundtrip,
+        vec![r#"preset:{"name":"Init"}->{"name":"Wide","version":2}"#]
+    );
+    assert_eq!(
+        result.transport_snapshots,
+        vec!["transport:true:48000:96000:128:12.5:7/8"]
+    );
+    assert_eq!(
+        result.realtime_visual_streams,
+        vec!["meter:master=0.125,0.5 dropped=0"]
+    );
+    assert_eq!(
+        result.dsp_control_messages,
+        vec!["dsp:first=true:1", "dsp:second=false:1"]
+    );
+    assert_eq!(result.baseview_presented_frames, 2);
+    assert_eq!(result.baseview_surface_size, [640, 360]);
+    assert!(result.baseview_visible_pixel);
+    assert_eq!(
+        result.realtime_denial_rule,
+        "js-runtime.capability.realtime-denied"
+    );
+    assert!(result.no_js_on_audio_thread);
+    assert!(result.destroyed_cleanly);
+}
+
+#[test]
+fn vue_plugin_basic_runs_deno_ui_parameters_and_realtime_denial() {
+    let fixture =
+        SmokeFixture::from_workspace("examples/vue-plugin-basic", SmokeTargetKind::Plugin);
+    let runner = SmokeRunner;
+
+    let result = runner
+        .run_vue_plugin_basic(&fixture)
+        .expect("Vue/Deno plugin smoke fixture should run");
+
+    assert_eq!(result.fixture_name, "vue-plugin-basic");
     assert_eq!(result.sealed_module_count, 1);
     let result_debug = format!("{result:?}");
     assert!(result_debug.contains("bundle_entrypoint: \"file:///dist/main.js\""));

@@ -1,0 +1,11 @@
+.root {
+  display: flex;
+  background-color: token(color.surface);
+  color: #f8fafc;
+  font-size: 15px;
+}
+
+.meter {
+  border-width: 1px;
+  border-radius: 8px;
+}

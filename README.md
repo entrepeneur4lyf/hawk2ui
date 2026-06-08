@@ -42,7 +42,9 @@ A project is driven by a canonical `hawk.json` manifest plus a framework/native 
 - **`desktop`** — native OS application windows (Hawk2UI owns the window lifecycle), via `winit`.
 - **`plugin`** — editor surfaces embedded in a DAW-owned parent window, via `baseview`, packaged as CLAP/VST3/AU.
 
-The native stack: `skia-safe` rendering, `taffy` flexbox/grid layout, `parley`/`swash`/`fontdb` text shaping, `hawk2ui-js-runtime` Deno/V8 for React-first JavaScript, and `accesskit` accessibility. `unsafe` is forbidden workspace-wide except at the plugin window-handle FFI boundary.
+The native stack: `skia-safe` rendering, `taffy` flexbox/grid layout, `parley`/`swash`/`fontdb` text shaping, `hawk2ui-js-runtime` Deno/V8 for React and Vue JavaScript, and `accesskit` accessibility. `unsafe` is forbidden workspace-wide except at the plugin window-handle FFI boundary.
+
+React 19+ and Vue 3.5+ are first-class package-manager authoring options for the sealed Deno runtime. React applications use `@hawk2ui/react` `createRoot`; Vue applications use `@hawk2ui/vue` `createApp`. Production runtime fixtures live at `examples/react-desktop-basic/hawk.json`, `examples/react-plugin-basic/hawk.json`, `examples/vue-desktop-basic/hawk.json`, and `examples/vue-plugin-basic/hawk.json`.
 
 ## Status
 
@@ -82,7 +84,7 @@ HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
 cargo run -p hawk2ui-cli -- package-plugin # CLAP / VST3 / AU
 ```
 
-See `examples/` for working `hawk.json` layouts (`desktop-basic`, `plugin-synth-editor`), and `CLAUDE.md` for the architecture and crate layering.
+See `examples/` for working `hawk.json` layouts (`desktop-basic`, `plugin-synth-editor`, `react-desktop-basic`, `react-plugin-basic`, `vue-desktop-basic`, `vue-plugin-basic`), and `CLAUDE.md` for the architecture and crate layering.
 
 ## Documentation
 

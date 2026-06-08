@@ -1,0 +1,61 @@
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.examples.vue-plugin-basic",
+    "name": "Hawk2UI Vue Plugin Basic",
+    "version": "0.1.0",
+    "bundleId": "com.hawk2ui.examples.vue-plugin-basic"
+  },
+  "app": {
+    "entry": "src/main.ts",
+    "framework": "vue",
+    "style": "styles/main.hawk.css"
+  },
+  "build": {
+    "packageManager": "bun",
+    "output": "dist/main.js"
+  },
+  "targets": {
+    "plugin": [
+      {
+        "name": "clap",
+        "formats": ["clap", "vst3", "au"],
+        "editor": {
+          "width": 960,
+          "height": 540
+        }
+      }
+    ]
+  },
+  "plugin": {
+    "id": "com.hawk2ui.examples.vue-plugin-basic",
+    "name": "Hawk2UI Vue Plugin Basic",
+    "parameters": [
+      {
+        "id": "gain",
+        "paramId": 4001,
+        "name": "Gain",
+        "kind": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.25
+      }
+    ],
+    "meters": [
+      {
+        "id": "master",
+        "name": "Master"
+      }
+    ]
+  },
+  "permissions": {
+    "capabilities": [
+      "plugin-host",
+      "plugin-parameters",
+      "audio-transport",
+      "audio-dsp",
+      "sealed-artifacts"
+    ]
+  }
+}

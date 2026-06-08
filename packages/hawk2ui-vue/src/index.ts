@@ -20,6 +20,14 @@ import {
     type HawkLifecycleSpec,
   } from "../../hawk2ui-native/src/index.ts";
 
+export {
+  createApp,
+  createHawkVueApp,
+  type HawkVueApp,
+  type HawkVueMountOptions,
+  type HawkVueRoot,
+} from "./renderer.ts";
+
 export interface HawkVueCompileInput {
   readonly filename: string;
   readonly source: string;

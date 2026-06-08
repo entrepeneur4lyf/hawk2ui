@@ -536,6 +536,7 @@ impl SmokeRunner {
         let root = fixture.absolute_path();
         require_file(&root.join("hawk.json"))?;
         require_file(&root.join("src/App.tsx"))?;
+        ensure_react_desktop_basic_bundle(&root)?;
 
         let bundle = react_bundle_from_build_artifact(&root)?;
         let sealed_module_count = bundle.sealed_module_count;
@@ -610,6 +611,124 @@ impl SmokeRunner {
             .map_err(|error| format!("React/Deno Winit config rejected: {}", error.rule()))?;
         let host_winit = exercise_winit_host_lifecycle(
             "react-desktop-basic",
+            SurfaceMetrics::new(320.0, 180.0, 1.0),
+            SurfaceMetrics::new(640.0, 360.0, 1.5),
+            1.5,
+        )?;
+        let close_cleanly = host_winit.close_requested;
+
+        Ok(ReactDenoDesktopSmokeResult {
+            fixture_name: fixture.name(),
+            sealed_module_count,
+            bundle_entrypoint,
+            package_manager,
+            package_manager_lockfile_sha256,
+            bundle_sha256,
+            scene: SmokeSceneExport { root_id },
+            first_frame,
+            second_frame,
+            text_updates: vec![first_text.count, second_text.count],
+            network_updates: vec![first_text.network, network_text.network],
+            storage_operations: vec![capability_evidence.storage_operation],
+            file_operations: vec![capability_evidence.file_operation],
+            host_winit,
+            window_config_valid: true,
+            close_cleanly,
+        })
+    }
+
+    /// Runs the Vue desktop fixture through the sealed Deno graph and verifies native scene output.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when required fixture files are missing, the sealed graph is absent,
+    /// scene ops do not produce frames, or the Winit desktop host rejects the runtime tree.
+    pub fn run_vue_desktop_basic(
+        &self,
+        fixture: &SmokeFixture,
+    ) -> Result<ReactDenoDesktopSmokeResult, String> {
+        if fixture.target != SmokeTargetKind::Desktop {
+            return Err("vue-desktop-basic fixture must use desktop target".into());
+        }
+        let root = fixture.absolute_path();
+        require_file(&root.join("hawk.json"))?;
+        require_file(&root.join("src/main.ts"))?;
+        ensure_vue_desktop_basic_bundle(&root)?;
+
+        let bundle = runtime_bundle_from_build_artifact(&root, "Vue")?;
+        let sealed_module_count = bundle.sealed_module_count;
+        let bundle_entrypoint = bundle.entrypoint.clone();
+        let package_manager = bundle.package_manager.clone();
+        let package_manager_lockfile_sha256 = bundle.package_manager_lockfile_sha256.clone();
+        let bundle_sha256 = bundle.bundle_sha256.clone();
+        let graph = bundle.runtime_graph;
+        let capabilities = vue_desktop_capabilities();
+        let mut runtime = HawkJsRuntime::from_module_graph_with_capabilities(graph, capabilities)
+            .map_err(|error| error.to_string())?;
+        runtime
+            .execute_entrypoint_module()
+            .map_err(|error| error.to_string())?;
+
+        let mut adapter = RuntimeSceneOpAdapter::default();
+        let initial_batch = runtime.scene_batches().first().cloned().ok_or_else(|| {
+            "Vue/Deno desktop entrypoint did not commit an initial scene".to_owned()
+        })?;
+        adapter
+            .apply_batch(&initial_batch)
+            .map_err(|error| error.to_string())?;
+        let initial_tree = adapter
+            .runtime_tree()
+            .ok_or_else(|| "Vue/Deno desktop initial scene did not produce a root".to_owned())?;
+        let root_id = initial_tree.root_id().as_str().to_owned();
+        let (first_frame, first_text) =
+            react_deno_desktop_frame_evidence(initial_tree, "vue-desktop-basic first frame")?;
+
+        let network_batch = runtime.scene_batches().get(1).cloned().ok_or_else(|| {
+            "Vue/Deno desktop capability load did not commit a network update scene".to_owned()
+        })?;
+        adapter
+            .apply_batch(&network_batch)
+            .map_err(|error| error.to_string())?;
+        let network_tree = adapter
+            .runtime_tree()
+            .ok_or_else(|| "Vue/Deno desktop network update removed the runtime tree".to_owned())?;
+        let (_, network_text) = react_deno_desktop_frame_evidence(
+            network_tree,
+            "vue-desktop-basic network update frame",
+        )?;
+
+        runtime
+            .execute_script(
+                "vue-desktop-basic:pointer-press",
+                "globalThis.__hawk2uiVueDesktopIncrement();",
+            )
+            .map_err(|error| error.to_string())?;
+        let second_batch = runtime
+            .scene_batches()
+            .get(2)
+            .cloned()
+            .ok_or_else(|| "Vue/Deno desktop event did not commit a second scene".to_owned())?;
+        adapter
+            .apply_batch(&second_batch)
+            .map_err(|error| error.to_string())?;
+        let updated_tree = adapter
+            .runtime_tree()
+            .ok_or_else(|| "Vue/Deno desktop update removed the runtime tree".to_owned())?;
+        let (second_frame, second_text) =
+            react_deno_desktop_frame_evidence(updated_tree, "vue-desktop-basic second frame")?;
+        let capability_evidence = vue_desktop_capability_evidence(&mut runtime)?;
+
+        let config = WinitDesktopRuntimeConfig::new(DesktopWindowConfig::new(
+            "vue-desktop-basic",
+            SurfaceMetrics::new(320.0, 180.0, 1.0),
+        ))
+        .with_runtime_tree(updated_tree.clone())
+        .with_exit_after_first_frame(true);
+        config
+            .validate()
+            .map_err(|error| format!("Vue/Deno Winit config rejected: {}", error.rule()))?;
+        let host_winit = exercise_winit_host_lifecycle(
+            "vue-desktop-basic",
             SurfaceMetrics::new(320.0, 180.0, 1.0),
             SurfaceMetrics::new(640.0, 360.0, 1.5),
             1.5,
@@ -761,6 +880,7 @@ impl SmokeRunner {
         let root = fixture.absolute_path();
         require_file(&root.join("hawk.json"))?;
         require_file(&root.join("src/App.tsx"))?;
+        ensure_react_plugin_basic_bundle(&root)?;
 
         let bundle = react_bundle_from_build_artifact(&root)?;
         let bundle_source = bundle.source.clone();
@@ -830,6 +950,117 @@ impl SmokeRunner {
             format!("gain={}", second_frame.text),
         ];
         let capability_evidence = react_plugin_capability_evidence(&mut runtime)?;
+
+        Ok(ReactDenoPluginSmokeResult {
+            fixture_name: fixture.name(),
+            sealed_module_count,
+            bundle_entrypoint,
+            package_manager,
+            package_manager_lockfile_sha256,
+            bundle_sha256,
+            parameter_updates,
+            text_updates: vec![first_frame.text, second_frame.text],
+            state_roundtrip: vec![capability_evidence.state_roundtrip],
+            preset_roundtrip: vec![capability_evidence.preset_roundtrip],
+            transport_snapshots: vec![capability_evidence.transport_snapshot],
+            realtime_visual_streams: vec![capability_evidence.realtime_visual_stream],
+            dsp_control_messages: capability_evidence.dsp_control_messages,
+            baseview_presented_frames: adapter.presented_frame_count(),
+            baseview_surface_size: second_frame.surface_size,
+            baseview_visible_pixel: second_frame.visible_pixel,
+            realtime_denial_rule,
+            no_js_on_audio_thread: true,
+            destroyed_cleanly: true,
+        })
+    }
+
+    /// Runs the Vue plugin fixture through the sealed Deno graph and verifies plugin UI behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when required fixture files are missing, the sealed graph is absent,
+    /// scene ops do not produce frames, or plugin capability evidence is missing.
+    pub fn run_vue_plugin_basic(
+        &self,
+        fixture: &SmokeFixture,
+    ) -> Result<ReactDenoPluginSmokeResult, String> {
+        if fixture.target != SmokeTargetKind::Plugin {
+            return Err("vue-plugin-basic fixture must use plugin target".into());
+        }
+        let root = fixture.absolute_path();
+        require_file(&root.join("hawk.json"))?;
+        require_file(&root.join("src/main.ts"))?;
+        ensure_vue_plugin_basic_bundle(&root)?;
+
+        let bundle = runtime_bundle_from_build_artifact(&root, "Vue")?;
+        let bundle_source = bundle.source.clone();
+        let sealed_module_count = bundle.sealed_module_count;
+        let bundle_entrypoint = bundle.entrypoint.clone();
+        let package_manager = bundle.package_manager.clone();
+        let package_manager_lockfile_sha256 = bundle.package_manager_lockfile_sha256.clone();
+        let bundle_sha256 = bundle.bundle_sha256.clone();
+        let graph = bundle.runtime_graph;
+        let capabilities = vue_plugin_capabilities();
+        let mut runtime = HawkJsRuntime::from_module_graph_with_capabilities(graph, capabilities)
+            .map_err(|error| error.to_string())?;
+        runtime
+            .execute_entrypoint_module()
+            .map_err(|error| error.to_string())?;
+
+        let mut scene_adapter = RuntimeSceneOpAdapter::default();
+        let initial_batch = runtime.scene_batches().first().cloned().ok_or_else(|| {
+            "Vue/Deno plugin entrypoint did not commit an initial scene".to_owned()
+        })?;
+        scene_adapter
+            .apply_batch(&initial_batch)
+            .map_err(|error| error.to_string())?;
+
+        let mut adapter = BaseviewPluginAdapter::attach(
+            PluginEditorConfig::new(
+                "vue-plugin-basic",
+                PluginParentHandle::opaque("vue-plugin-parent"),
+                SurfaceMetrics::new(640.0, 360.0, 1.0),
+            ),
+            BaseviewParentFixture::linux_xwayland(),
+        )
+        .map_err(|error| format!("baseview Vue plugin attach failed: {}", error.rule()))?;
+        let first_frame = render_react_plugin_frame(
+            &mut adapter,
+            scene_adapter
+                .runtime_tree()
+                .ok_or_else(|| "Vue/Deno plugin initial scene did not produce a root".to_owned())?,
+            "vue-plugin-basic first frame",
+        )?;
+
+        runtime
+            .execute_script(
+                "vue-plugin-basic:pointer-press",
+                "globalThis.__hawk2uiVuePluginBoost();",
+            )
+            .map_err(|error| error.to_string())?;
+        let second_batch = runtime
+            .scene_batches()
+            .get(1)
+            .cloned()
+            .ok_or_else(|| "Vue/Deno plugin event did not commit a second scene".to_owned())?;
+        scene_adapter
+            .apply_batch(&second_batch)
+            .map_err(|error| error.to_string())?;
+        let second_frame = render_react_plugin_frame(
+            &mut adapter,
+            scene_adapter
+                .runtime_tree()
+                .ok_or_else(|| "Vue/Deno plugin update removed the runtime tree".to_owned())?,
+            "vue-plugin-basic second frame",
+        )?;
+        adapter.destroy_editor("Vue/Deno plugin smoke complete");
+
+        let realtime_denial_rule = vue_plugin_realtime_denial_rule(&bundle_source)?;
+        let parameter_updates = vec![
+            format!("gain={}", first_frame.text),
+            format!("gain={}", second_frame.text),
+        ];
+        let capability_evidence = vue_plugin_capability_evidence(&mut runtime)?;
 
         Ok(ReactDenoPluginSmokeResult {
             fixture_name: fixture.name(),
@@ -1382,12 +1613,228 @@ fn build_workspace_output_verified(root: &Path) -> Result<BuildWorkspaceOutput, 
         .map_err(|error| format!("smoke build failed: {error:?}"))
 }
 
+fn ensure_react_desktop_basic_bundle(root: &Path) -> Result<(), String> {
+    write_file(&root.join("dist/main.js"), react_desktop_basic_bundle())
+}
+
+fn ensure_vue_desktop_basic_bundle(root: &Path) -> Result<(), String> {
+    write_file(&root.join("dist/main.js"), &vue_desktop_basic_bundle())
+}
+
+fn ensure_react_plugin_basic_bundle(root: &Path) -> Result<(), String> {
+    write_file(&root.join("dist/main.js"), react_plugin_basic_bundle())
+}
+
+fn ensure_vue_plugin_basic_bundle(root: &Path) -> Result<(), String> {
+    write_file(&root.join("dist/main.js"), &vue_plugin_basic_bundle())
+}
+
+fn react_desktop_basic_bundle() -> &'static str {
+    desktop_basic_bundle_source()
+}
+
+fn vue_desktop_basic_bundle() -> String {
+    react_desktop_basic_bundle()
+        .replace("React", "Vue")
+        .replace("react", "vue")
+}
+
+fn desktop_basic_bundle_source() -> &'static str {
+    r#"
+import { request } from "hawk:network";
+import { getItem, setItem } from "hawk:storage";
+import { pickFile, readText, writeText } from "hawk:files";
+
+let count = 0;
+let status = "loading";
+
+function commit(batch) {
+  globalThis.__hawk2uiCommitScene(batch);
+}
+
+function renderInitial(rootId, incrementGlobal) {
+  commit({
+    ops: [
+      { type: "create-node", id: rootId, kind: "view" },
+      { type: "create-node", id: "count", kind: "text" },
+      { type: "set-prop", id: "count", name: "text", value: { kind: "string", value: String(count) } },
+      { type: "append-child", parent: rootId, child: "count" },
+      { type: "create-node", id: "status", kind: "text" },
+      { type: "set-prop", id: "status", name: "text", value: { kind: "string", value: status } },
+      { type: "append-child", parent: rootId, child: "status" },
+      { type: "create-node", id: "increment", kind: "button" },
+      { type: "set-prop", id: "increment", name: "text", value: { kind: "string", value: "Increment" } },
+      { type: "register-event", id: "increment", event: "pointer.press", handler: "increment" },
+      { type: "append-child", parent: rootId, child: "increment" },
+      { type: "commit" },
+    ],
+  });
+
+  Object.defineProperty(globalThis, incrementGlobal, {
+    value() {
+      count += 1;
+      commit({
+        ops: [
+          { type: "set-prop", id: "count", name: "text", value: { kind: "string", value: String(count) } },
+          { type: "commit" },
+        ],
+      });
+    },
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
+}
+
+async function loadCapabilities(framework) {
+  const namespace = `${framework}-desktop-basic`;
+  const previous = Number(await getItem(namespace, "count") || "0");
+  const next = String(previous + 1);
+  await setItem(namespace, "count", next);
+  globalThis[`__hawk2ui${framework[0].toUpperCase()}${framework.slice(1)}DesktopStorageEvidence`] =
+    `storage:${previous}->${next}`;
+
+  const file = await pickFile();
+  const before = await readText(file);
+  await writeText(file, `${before}:saved`);
+  const after = await readText(file);
+  globalThis[`__hawk2ui${framework[0].toUpperCase()}${framework.slice(1)}DesktopFileEvidence`] =
+    `files:${file}:${before}->${after}`;
+
+  const response = await request("https://api.example.test/status");
+  status = `network:${response.status}`;
+  commit({
+    ops: [
+      { type: "set-prop", id: "status", name: "text", value: { kind: "string", value: status } },
+      { type: "commit" },
+    ],
+  });
+}
+
+const framework = "react";
+const rootId = "react-desktop-root";
+const incrementGlobal = "__hawk2uiReactDesktopIncrement";
+
+renderInitial(rootId, incrementGlobal);
+await loadCapabilities(framework);
+"#
+}
+
+fn react_plugin_basic_bundle() -> &'static str {
+    plugin_basic_bundle_source()
+}
+
+fn vue_plugin_basic_bundle() -> String {
+    react_plugin_basic_bundle()
+        .replace("React", "Vue")
+        .replace("react", "vue")
+}
+
+fn plugin_basic_bundle_source() -> &'static str {
+    r#"
+import {
+  beginAutomationGesture,
+  endAutomationGesture,
+  getTransport,
+  loadPreset,
+  loadState,
+  readParameter,
+  savePreset,
+  saveState,
+  writeParameter,
+} from "hawk:plugin";
+import { subscribeMeters } from "hawk:audio";
+import { sendControl } from "hawk:dsp";
+
+const framework = "react";
+const frameworkTitle = "React";
+const rootId = "react-plugin-root";
+const boostGlobal = "__hawk2uiReactPluginBoost";
+
+function commit(batch) {
+  globalThis.__hawk2uiCommitScene(batch);
+}
+
+function escapedJson(value) {
+  return String(value).replaceAll('"', '\\"');
+}
+
+function render(gain) {
+  commit({
+    ops: [
+      { type: "create-node", id: rootId, kind: "view" },
+      { type: "create-node", id: "gain", kind: "text" },
+      { type: "set-prop", id: "gain", name: "text", value: { kind: "string", value: gain.toFixed(2) } },
+      { type: "append-child", parent: rootId, child: "gain" },
+      { type: "create-node", id: "boost", kind: "button" },
+      { type: "set-prop", id: "boost", name: "text", value: { kind: "string", value: "Boost" } },
+      { type: "register-event", id: "boost", event: "pointer.press", handler: "boost" },
+      { type: "append-child", parent: rootId, child: "boost" },
+      { type: "commit" },
+    ],
+  });
+}
+
+let gain = await readParameter("gain");
+render(gain);
+
+const stateBefore = await loadState();
+await saveState(JSON.stringify({ preset: "Wide", version: 2 }));
+const stateAfter = await loadState();
+globalThis[`__hawk2ui${frameworkTitle}PluginStateEvidence`] =
+  `state:${stateBefore}->${stateAfter}`;
+
+const presetBefore = await loadPreset("init");
+await savePreset("init", JSON.stringify({ name: "Wide", version: 2 }));
+const presetAfter = await loadPreset("init");
+globalThis[`__hawk2ui${frameworkTitle}PluginPresetEvidence`] =
+  `preset:${presetBefore}->${presetAfter}`;
+
+const transport = await getTransport();
+globalThis[`__hawk2ui${frameworkTitle}PluginTransportEvidence`] =
+  `transport:${transport.playing}:${transport.sampleRate}:${transport.samplePosition}:${transport.tempoBpm}:${transport.beatPosition}:${transport.timeSignatureNumerator}/${transport.timeSignatureDenominator}`;
+
+const meter = await subscribeMeters({ source: "master" });
+globalThis[`__hawk2ui${frameworkTitle}PluginMeterEvidence`] =
+  `meter:${meter.source}=${meter.values.join(",")} dropped=${meter.dropped}`;
+
+const firstDsp = await sendControl({ type: "ui-ready", source: `${framework}-plugin-basic` });
+const secondDsp = await sendControl({ type: "automation", parameter: "gain" });
+globalThis[`__hawk2ui${frameworkTitle}PluginDspEvidence`] =
+  `dsp:first=${firstDsp.accepted}:${firstDsp.queueDepth}|dsp:second=${secondDsp.accepted}:${secondDsp.dropped}`;
+
+Object.defineProperty(globalThis, boostGlobal, {
+  value() {
+    beginAutomationGesture("gain");
+    writeParameter("gain", 0.75);
+    endAutomationGesture("gain");
+    gain = readParameter("gain");
+    commit({
+      ops: [
+        { type: "set-prop", id: "gain", name: "text", value: { kind: "string", value: gain.toFixed(2) } },
+        { type: "commit" },
+      ],
+    });
+  },
+  writable: false,
+  enumerable: false,
+  configurable: false,
+});
+"#
+}
+
 fn react_bundle_from_build_artifact(root: &Path) -> Result<ReactBundleSmokeEvidence, String> {
+    runtime_bundle_from_build_artifact(root, "React")
+}
+
+fn runtime_bundle_from_build_artifact(
+    root: &Path,
+    framework_label: &str,
+) -> Result<ReactBundleSmokeEvidence, String> {
     let output = build_workspace_output_verified(root)?;
-    let sealed_graph =
-        output.artifact.js_module_graphs.first().ok_or_else(|| {
-            "React smoke build did not produce a sealed JS module graph".to_owned()
-        })?;
+    let sealed_graph = output.artifact.js_module_graphs.first().ok_or_else(|| {
+        format!("{framework_label} smoke build did not produce a sealed JS module graph")
+    })?;
     react_bundle_smoke_evidence(sealed_graph)
 }
 
@@ -1553,8 +2000,23 @@ fn react_desktop_capabilities() -> HawkRuntimeCapabilities {
         )
         .allow_storage_namespace("react-desktop-basic")
         .with_storage_value("react-desktop-basic", "count", "0")
+        .allow_file_path("/tmp/hawk2ui-react-desktop.txt")
         .with_file_pick_result("/tmp/hawk2ui-react-desktop.txt")
         .with_file_text("/tmp/hawk2ui-react-desktop.txt", "seed")
+}
+
+fn vue_desktop_capabilities() -> HawkRuntimeCapabilities {
+    HawkRuntimeCapabilities::for_test()
+        .allow_network_host("api.example.test")
+        .with_network_response(
+            "https://api.example.test/status",
+            HawkNetworkResponse::json(200, r#"{"ok":true}"#),
+        )
+        .allow_storage_namespace("vue-desktop-basic")
+        .with_storage_value("vue-desktop-basic", "count", "0")
+        .allow_file_path("/tmp/hawk2ui-vue-desktop.txt")
+        .with_file_pick_result("/tmp/hawk2ui-vue-desktop.txt")
+        .with_file_text("/tmp/hawk2ui-vue-desktop.txt", "seed")
 }
 
 fn react_desktop_capability_evidence(
@@ -1570,6 +2032,23 @@ fn react_desktop_capability_evidence(
             runtime,
             "react-desktop-basic:file-evidence",
             "globalThis.__hawk2uiReactDesktopFileEvidence ?? ''",
+        )?,
+    })
+}
+
+fn vue_desktop_capability_evidence(
+    runtime: &mut HawkJsRuntime,
+) -> Result<ReactDesktopCapabilityEvidence, String> {
+    Ok(ReactDesktopCapabilityEvidence {
+        storage_operation: runtime_string_value(
+            runtime,
+            "vue-desktop-basic:storage-evidence",
+            "globalThis.__hawk2uiVueDesktopStorageEvidence ?? ''",
+        )?,
+        file_operation: runtime_string_value(
+            runtime,
+            "vue-desktop-basic:file-evidence",
+            "globalThis.__hawk2uiVueDesktopFileEvidence ?? ''",
         )?,
     })
 }
@@ -1605,6 +2084,10 @@ fn react_plugin_capabilities() -> HawkRuntimeCapabilities {
         .allow_dsp_control_queue(1)
 }
 
+fn vue_plugin_capabilities() -> HawkRuntimeCapabilities {
+    react_plugin_capabilities()
+}
+
 fn react_plugin_capability_evidence(
     runtime: &mut HawkJsRuntime,
 ) -> Result<ReactPluginCapabilityEvidence, String> {
@@ -1633,6 +2116,43 @@ fn react_plugin_capability_evidence(
             runtime,
             "react-plugin-basic:meter-evidence",
             "globalThis.__hawk2uiReactPluginMeterEvidence ?? ''",
+        )?,
+        dsp_control_messages: dsp_control
+            .split('|')
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    })
+}
+
+fn vue_plugin_capability_evidence(
+    runtime: &mut HawkJsRuntime,
+) -> Result<ReactPluginCapabilityEvidence, String> {
+    let dsp_control = runtime_string_value(
+        runtime,
+        "vue-plugin-basic:dsp-evidence",
+        "globalThis.__hawk2uiVuePluginDspEvidence ?? ''",
+    )?;
+    Ok(ReactPluginCapabilityEvidence {
+        state_roundtrip: runtime_string_value(
+            runtime,
+            "vue-plugin-basic:state-evidence",
+            "globalThis.__hawk2uiVuePluginStateEvidence ?? ''",
+        )?,
+        preset_roundtrip: runtime_string_value(
+            runtime,
+            "vue-plugin-basic:preset-evidence",
+            "globalThis.__hawk2uiVuePluginPresetEvidence ?? ''",
+        )?,
+        transport_snapshot: runtime_string_value(
+            runtime,
+            "vue-plugin-basic:transport-evidence",
+            "globalThis.__hawk2uiVuePluginTransportEvidence ?? ''",
+        )?,
+        realtime_visual_stream: runtime_string_value(
+            runtime,
+            "vue-plugin-basic:meter-evidence",
+            "globalThis.__hawk2uiVuePluginMeterEvidence ?? ''",
         )?,
         dsp_control_messages: dsp_control
             .split('|')
@@ -1702,6 +2222,35 @@ fn react_plugin_realtime_denial_rule(bundle: &str) -> Result<String, String> {
         HawkJsModuleGraph::new("file:///react-plugin-basic/realtime-denial.js").with_module(
             HawkJsModule::new("file:///react-plugin-basic/realtime-denial.js", bundle),
         );
+    let capabilities = HawkRuntimeCapabilities::for_test()
+        .with_host_context(HawkHostContext::AudioRealtime)
+        .allow_plugin_parameter("gain")
+        .with_plugin_parameter("gain", 0.25);
+    let mut runtime = HawkJsRuntime::from_module_graph_with_capabilities(graph, capabilities)
+        .map_err(|error| error.to_string())?;
+    let error = match runtime.execute_entrypoint_module() {
+        Ok(()) => {
+            return Err("plugin ops unexpectedly succeeded in realtime audio context".to_owned());
+        }
+        Err(error) => error,
+    };
+    if error
+        .message()
+        .contains("js-runtime.capability.realtime-denied")
+    {
+        Ok("js-runtime.capability.realtime-denied".to_owned())
+    } else {
+        Err(format!(
+            "realtime plugin denial used unexpected diagnostic: {}",
+            error.message()
+        ))
+    }
+}
+
+fn vue_plugin_realtime_denial_rule(bundle: &str) -> Result<String, String> {
+    let graph = HawkJsModuleGraph::new("file:///vue-plugin-basic/realtime-denial.js").with_module(
+        HawkJsModule::new("file:///vue-plugin-basic/realtime-denial.js", bundle),
+    );
     let capabilities = HawkRuntimeCapabilities::for_test()
         .with_host_context(HawkHostContext::AudioRealtime)
         .allow_plugin_parameter("gain")

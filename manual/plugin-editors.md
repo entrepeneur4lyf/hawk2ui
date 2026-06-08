@@ -9,6 +9,7 @@ The implemented plugin fixtures are:
 - `examples/plugin-basic/hawk.json`: target `vst3-clap`, parameters `gain` and `mix`, editor size `960 x 540`.
 - `examples/plugin-synth-editor/hawk.json`: target `clap-vst3`, parameters `osc.mix` and `filter.cutoff`, editor size `960 x 540`.
 - `examples/plugin-meter-analyzer/hawk.json`: target `clap-vst3`, capability `realtime-visuals`, editor size `960 x 540`.
+- `examples/vue-plugin-basic/hawk.json`: target `clap-vst3-au`, Vue sealed-runtime entrypoint, parameters `gain` and `mix`, editor size `960 x 540`.
 
 A plugin manifest can include:
 
@@ -67,3 +68,4 @@ hawk2ui diagnostics
 
 `hawk2ui package-plugin` implements release-backed CLAP, VST3, and AU targets through the truce.audio-backed plugin layer.
 The command compiles the generated `cdylib` crates and installs host-loadable shared libraries into the package before final hash verification.
+React and Vue plugin editors run through the same sealed Deno runtime bundle path used by desktop applications, so plugin capability evidence is recorded from package-manager output rather than legacy framework compiler payloads.
