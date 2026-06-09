@@ -1271,7 +1271,8 @@ fn workspace_package_desktop_materializes_signed_native_launcher_bundle() {
         "CLI Desktop Package",
     );
 
-    let execution = signed_runner(&root).execute(CliCommand::PackageDesktop);
+    let execution =
+        signed_runner_with_packaged_desktop_launcher(&root).execute(CliCommand::PackageDesktop);
 
     assert_eq!(execution.exit_code, CliExitCode::Success);
     assert!(execution.stdout.contains("materialized desktop package"));
@@ -1287,7 +1288,7 @@ fn workspace_package_desktop_materializes_signed_native_launcher_bundle() {
     let artifact_path = package_root.join("usr/share/hawk2ui/hawk2ui-artifact.hawk");
     let manifest_path = package_root.join("hawk2ui-desktop-package.json");
     let hash_manifest_path = package_root.join("usr/share/hawk2ui/hawk2ui-hashes.json");
-    let generated_target_dir = package_root.join("usr/share/hawk2ui/generated-launcher/target");
+    let generated_launcher_dir = package_root.join("usr/share/hawk2ui/generated-launcher");
 
     assert!(launcher.is_file(), "desktop launcher should exist");
     assert!(artifact_path.is_file(), "signed artifact should be bundled");
@@ -1300,8 +1301,8 @@ fn workspace_package_desktop_materializes_signed_native_launcher_bundle() {
         "desktop package hash manifest should exist"
     );
     assert!(
-        !generated_target_dir.exists(),
-        "desktop package must not retain generated Cargo build cache"
+        !generated_launcher_dir.exists(),
+        "desktop package should not generate a Cargo launcher workspace when a prebuilt launcher is supplied"
     );
 
     let artifact: SealedArtifact =
@@ -1337,7 +1338,8 @@ fn workspace_package_desktop_writes_json_metadata_values() {
     let display_name = "CLI \"Quoted\" Desktop";
     write_desktop_project(&root, "com.hawk2ui.cli-desktop-escaping", display_name);
 
-    let execution = signed_runner(&root).execute(CliCommand::PackageDesktop);
+    let execution =
+        signed_runner_with_packaged_desktop_launcher(&root).execute(CliCommand::PackageDesktop);
 
     assert_eq!(
         execution.exit_code,
@@ -1599,6 +1601,10 @@ fn signed_runner(root: &Path) -> WorkspaceCommandRunner {
     WorkspaceCommandRunner::new(root)
         .with_release_signing_key(signing_key.clone())
         .with_trusted_release_key(signing_key.verification_key())
+}
+
+fn signed_runner_with_packaged_desktop_launcher(root: &Path) -> WorkspaceCommandRunner {
+    signed_runner(root).with_desktop_launcher_binary(env!("CARGO_BIN_EXE_hawk2ui-packaged-desktop"))
 }
 
 fn write_desktop_project(root: &Path, id: &str, name: &str) {

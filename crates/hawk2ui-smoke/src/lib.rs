@@ -1238,6 +1238,9 @@ impl SmokeRunner {
             require_file(&example.join(source_file))?;
             require_file(&example.join("assets/logo.svg"))?;
             require_file(&example.join("styles/main.hawk.css"))?;
+            if framework == "react" {
+                ensure_framework_react_basic_bundle(&example)?;
+            }
             let manifest =
                 fs::read_to_string(example.join("hawk.json")).map_err(|error| error.to_string())?;
             let source =
@@ -1627,6 +1630,16 @@ fn ensure_react_plugin_basic_bundle(root: &Path) -> Result<(), String> {
 
 fn ensure_vue_plugin_basic_bundle(root: &Path) -> Result<(), String> {
     write_file(&root.join("dist/main.js"), &vue_plugin_basic_bundle())
+}
+
+fn ensure_framework_react_basic_bundle(root: &Path) -> Result<(), String> {
+    write_file(
+        &root.join("dist/main.js"),
+        r#"
+globalThis.__hawk2uiFrameworkReactBasic = true;
+export const framework = "react";
+"#,
+    )
 }
 
 fn react_desktop_basic_bundle() -> &'static str {

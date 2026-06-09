@@ -8,10 +8,15 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 description = "Command-line interface for Hawk2UI validation, builds, runs, packaging, and diagnostics."
+default-run = "hawk2ui-cli"
 
 [[bin]]
 name = "hawk2ui-cli"
 path = "src/main.rs"
+
+[[bin]]
+name = "hawk2ui-packaged-desktop"
+path = "src/packaged_desktop_main.rs"
 
 [lib]
 name = "hawk2ui_cli"

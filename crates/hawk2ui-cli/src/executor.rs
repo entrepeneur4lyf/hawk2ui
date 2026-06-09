@@ -54,6 +54,7 @@ const MAX_RUNTIME_ASSET_BYTES: u64 = 64 * 1024 * 1024;
 const RELEASE_SIGNING_KEY_ID_ENV: &str = "HAWK2UI_RELEASE_SIGNING_KEY_ID";
 const RELEASE_SIGNING_KEY_HEX_ENV: &str = "HAWK2UI_RELEASE_SIGNING_KEY_HEX";
 const TRUSTED_RELEASE_KEYS_ENV: &str = "HAWK2UI_TRUSTED_RELEASE_KEYS";
+const DESKTOP_LAUNCHER_BINARY_ENV: &str = "HAWK2UI_DESKTOP_LAUNCHER_BINARY";
 const CANONICAL_MANIFEST_FILE: &str = "hawk.json";
 const LEGACY_MANIFEST_FILE: &str = "manifest.hawk.toml";
 
@@ -233,6 +234,7 @@ pub struct WorkspaceCommandRunner {
     release_signing_key: Option<ArtifactSigningKey>,
     trusted_release_keys: Vec<ArtifactSignatureVerificationKey>,
     desktop_exit_after_first_frame: bool,
+    desktop_launcher_binary: Option<PathBuf>,
 }
 
 impl WorkspaceCommandRunner {
@@ -245,6 +247,7 @@ impl WorkspaceCommandRunner {
             release_signing_key: None,
             trusted_release_keys: Vec::new(),
             desktop_exit_after_first_frame: false,
+            desktop_launcher_binary: None,
         }
     }
 
@@ -267,6 +270,22 @@ impl WorkspaceCommandRunner {
     pub const fn with_desktop_exit_after_first_frame(mut self) -> Self {
         self.desktop_exit_after_first_frame = true;
         self
+    }
+
+    /// Uses an already-built native launcher binary when packaging desktop targets.
+    #[must_use]
+    pub fn with_desktop_launcher_binary(mut self, launcher: impl Into<PathBuf>) -> Self {
+        self.desktop_launcher_binary = Some(launcher.into());
+        self
+    }
+
+    /// Loads an optional prebuilt desktop launcher path from process environment.
+    #[must_use]
+    pub fn with_desktop_launcher_binary_from_environment(self) -> Self {
+        match env::var_os(DESKTOP_LAUNCHER_BINARY_ENV) {
+            Some(path) if !path.is_empty() => self.with_desktop_launcher_binary(path),
+            _ => self,
+        }
     }
 
     /// Configures the release signing key used by `build-release`.
@@ -962,10 +981,14 @@ impl WorkspaceCommandRunner {
             )?,
         ];
         package_files.extend(self.copy_packaged_desktop_assets(manifest, &resource_dir)?);
-        let generated_root = Self::write_desktop_launcher_workspace(manifest, &resource_dir)?;
-        package_files.push(generated_root.join("Cargo.toml"));
-        package_files.push(generated_root.join("src").join("main.rs"));
-        let launcher_path = Self::build_desktop_launcher(manifest, &package_root, &generated_root)?;
+        let launcher_path = if let Some(launcher_binary) = &self.desktop_launcher_binary {
+            Self::install_prebuilt_desktop_launcher(manifest, &package_root, launcher_binary)?
+        } else {
+            let generated_root = Self::write_desktop_launcher_workspace(manifest, &resource_dir)?;
+            package_files.push(generated_root.join("Cargo.toml"));
+            package_files.push(generated_root.join("src").join("main.rs"));
+            Self::build_desktop_launcher(manifest, &package_root, &generated_root)?
+        };
         verify_native_desktop_launcher(&launcher_path)?;
         package_files.push(launcher_path);
 
@@ -1096,10 +1119,7 @@ impl WorkspaceCommandRunner {
                 .join(executable_filename(&desktop_launcher_package_name(
                     manifest,
                 )));
-        let launcher_path = package_root
-            .join("usr")
-            .join("bin")
-            .join(&manifest.identity.name);
+        let launcher_path = desktop_launcher_install_path(manifest, package_root);
         fs::copy(&built_launcher, &launcher_path).map_err(|error| {
             Box::new(
                 CliDiagnostic::error(
@@ -1125,6 +1145,77 @@ impl WorkspaceCommandRunner {
                 .file(target_dir.display().to_string()),
             )
         })?;
+        Ok(launcher_path)
+    }
+
+    fn install_prebuilt_desktop_launcher(
+        manifest: &HawkManifest,
+        package_root: &Path,
+        launcher_binary: &Path,
+    ) -> Result<PathBuf, Box<CliDiagnostic>> {
+        if !launcher_binary.is_file() {
+            return Err(Box::new(
+                CliDiagnostic::error(
+                    "package.desktop.launcher-prebuilt-missing",
+                    format!(
+                        "prebuilt desktop launcher binary {} does not exist",
+                        launcher_binary.display()
+                    ),
+                )
+                .file(launcher_binary.display().to_string()),
+            ));
+        }
+
+        let launcher_path = desktop_launcher_install_path(manifest, package_root);
+        fs::copy(launcher_binary, &launcher_path).map_err(|error| {
+            Box::new(
+                CliDiagnostic::error(
+                    "package.desktop.launcher-prebuilt-install-failed",
+                    format!(
+                        "failed to install prebuilt desktop launcher {} into {}: {error}",
+                        launcher_binary.display(),
+                        launcher_path.display()
+                    ),
+                )
+                .file(launcher_path.display().to_string()),
+            )
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let source_mode = fs::metadata(launcher_binary)
+                .map_err(|error| {
+                    Box::new(
+                        CliDiagnostic::error(
+                            "package.desktop.launcher-prebuilt-metadata-failed",
+                            format!(
+                                "failed to read prebuilt desktop launcher metadata {}: {error}",
+                                launcher_binary.display()
+                            ),
+                        )
+                        .file(launcher_binary.display().to_string()),
+                    )
+                })?
+                .permissions()
+                .mode();
+            fs::set_permissions(
+                &launcher_path,
+                fs::Permissions::from_mode(source_mode | 0o755),
+            )
+            .map_err(|error| {
+                Box::new(
+                    CliDiagnostic::error(
+                        "package.desktop.launcher-prebuilt-permissions-failed",
+                        format!(
+                            "failed to mark packaged desktop launcher {} executable: {error}",
+                            launcher_path.display()
+                        ),
+                    )
+                    .file(launcher_path.display().to_string()),
+                )
+            })?;
+        }
         Ok(launcher_path)
     }
 
@@ -2078,6 +2169,13 @@ fn desktop_launcher_package_name(manifest: &HawkManifest) -> String {
         "hawk2ui_desktop_launcher_{}",
         bundle_name(&manifest.identity.id).replace('-', "_")
     )
+}
+
+fn desktop_launcher_install_path(manifest: &HawkManifest, package_root: &Path) -> PathBuf {
+    package_root
+        .join("usr")
+        .join("bin")
+        .join(&manifest.identity.name)
 }
 
 fn desktop_launcher_cargo_toml(manifest: &HawkManifest, cli_crate_path: &Path) -> String {
