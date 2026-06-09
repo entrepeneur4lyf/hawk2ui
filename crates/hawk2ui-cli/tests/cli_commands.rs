@@ -10,6 +10,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -468,6 +469,68 @@ fn workspace_init_vue_templates_generate_framework_manifests_and_package_metadat
             .expect("plugin source should read")
             .contains("hawk:plugin")
     );
+}
+
+#[test]
+fn generated_react_app_template_installs_from_generated_packages() {
+    let package_dir = generate_npm_packages();
+    let app_root = temp_cli_workspace("react-generated-install");
+    let created = WorkspaceCommandRunner::new(&app_root).execute(CliCommand::NewProject {
+        template: CliProjectTemplate::ReactApp,
+        package_manager: CliPackageManager::Npm,
+    });
+
+    assert_eq!(created.exit_code, CliExitCode::Success);
+    rewrite_hawk_package_deps_to_local_tarballs(&app_root, &package_dir);
+    assert_npm_install_succeeds(&app_root);
+}
+
+#[test]
+fn generated_react_plugin_template_installs_from_generated_packages() {
+    let package_dir = generate_npm_packages();
+    let plugin_root = temp_cli_workspace("react-plugin-generated-install");
+    let created = WorkspaceCommandRunner::new(&plugin_root).execute(CliCommand::NewProject {
+        template: CliProjectTemplate::ReactPlugin,
+        package_manager: CliPackageManager::Npm,
+    });
+
+    assert_eq!(created.exit_code, CliExitCode::Success);
+    rewrite_hawk_package_deps_to_local_tarballs(&plugin_root, &package_dir);
+    assert_npm_install_succeeds(&plugin_root);
+}
+
+#[test]
+fn generated_vue_app_template_installs_from_generated_packages() {
+    let package_dir = generate_npm_packages();
+    let app_root = temp_cli_workspace("vue-generated-install");
+    let created = WorkspaceCommandRunner::new(&app_root).execute(CliCommand::NewProject {
+        template: CliProjectTemplate::VueApp,
+        package_manager: CliPackageManager::Npm,
+    });
+
+    assert_eq!(created.exit_code, CliExitCode::Success);
+    assert!(app_root.join("src/main.ts").is_file());
+    assert!(app_root.join("src/App.vue").is_file());
+    assert!(app_root.join("vite.hawk.config.ts").is_file());
+    rewrite_hawk_package_deps_to_local_tarballs(&app_root, &package_dir);
+    assert_npm_install_succeeds(&app_root);
+}
+
+#[test]
+fn generated_vue_plugin_template_installs_from_generated_packages() {
+    let package_dir = generate_npm_packages();
+    let plugin_root = temp_cli_workspace("vue-plugin-generated-install");
+    let created = WorkspaceCommandRunner::new(&plugin_root).execute(CliCommand::NewProject {
+        template: CliProjectTemplate::VuePlugin,
+        package_manager: CliPackageManager::Npm,
+    });
+
+    assert_eq!(created.exit_code, CliExitCode::Success);
+    assert!(plugin_root.join("src/main.ts").is_file());
+    assert!(plugin_root.join("src/App.vue").is_file());
+    assert!(plugin_root.join("vite.hawk.config.ts").is_file());
+    rewrite_hawk_package_deps_to_local_tarballs(&plugin_root, &package_dir);
+    assert_npm_install_succeeds(&plugin_root);
 }
 
 #[test]
@@ -1699,6 +1762,89 @@ fn temp_cli_workspace(label: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("hawk2ui-cli-{label}-{now}"));
     fs::create_dir_all(&root).expect("temp cli workspace should be created");
     root
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+fn generate_npm_packages() -> PathBuf {
+    static PACKAGE_DIR: OnceLock<PathBuf> = OnceLock::new();
+    PACKAGE_DIR
+        .get_or_init(|| {
+            let root = workspace_root();
+            let status = Command::new("cargo")
+                .args(["run", "-p", "xtask", "--", "npm-packages", "--verify"])
+                .current_dir(&root)
+                .status()
+                .expect("xtask should run");
+            assert!(status.success(), "npm package generation must pass");
+            root.join("target/npm-packages")
+        })
+        .clone()
+}
+
+fn rewrite_hawk_package_deps_to_local_tarballs(project: &Path, package_dir: &Path) {
+    let package_path = project.join("package.json");
+    let package_json = fs::read_to_string(&package_path).expect("package should read");
+    let mut package_json: serde_json::Value =
+        serde_json::from_str(&package_json).expect("package should parse");
+    let dependencies = package_json
+        .get_mut("dependencies")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("generated package.json has dependencies");
+
+    for package in ["native", "react", "vue"] {
+        let dependency = format!("@hawk2ui/{package}");
+        let tarball = package_dir
+            .join(format!(
+                "hawk2ui-{package}-{}.tgz",
+                env!("CARGO_PKG_VERSION")
+            ))
+            .display()
+            .to_string();
+        if dependencies.contains_key(&dependency) || dependency == "@hawk2ui/native" {
+            dependencies.insert(
+                dependency,
+                serde_json::Value::String(format!("file:{tarball}")),
+            );
+        }
+    }
+
+    fs::write(
+        package_path,
+        serde_json::to_string_pretty(&package_json).expect("package should serialize"),
+    )
+    .expect("package should write");
+}
+
+fn assert_npm_install_succeeds(project: &Path) {
+    let status = Command::new("npm")
+        .args([
+            "install",
+            "--ignore-scripts",
+            "--package-lock=false",
+            "--no-audit",
+            "--fund=false",
+            "--prefer-offline",
+        ])
+        .current_dir(project)
+        .status()
+        .expect("npm install should run");
+    let success = status.success();
+    if success {
+        let _ = fs::remove_dir_all(project.join("node_modules"));
+        let _ = fs::remove_file(project.join("package-lock.json"));
+    }
+    assert!(
+        success,
+        "npm install should succeed in {}",
+        project.display()
+    );
 }
 
 fn write_file(path: &Path, contents: &str) {
