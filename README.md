@@ -46,6 +46,8 @@ The native stack: `skia-safe` rendering, `taffy` flexbox/grid layout, `parley`/`
 
 React 19+ and Vue 3.5+ are first-class package-manager authoring options for the sealed Deno runtime. React applications use `@hawk2ui/react` `createRoot`; Vue applications use `@hawk2ui/vue` `createApp`. Production runtime fixtures live at `examples/react-desktop-basic/hawk.json`, `examples/react-plugin-basic/hawk.json`, `examples/vue-desktop-basic/hawk.json`, and `examples/vue-plugin-basic/hawk.json`.
 
+`hawk2ui-cli` is the installable Rust CLI. React and Vue project templates consume generated `@hawk2ui/react` and `@hawk2ui/vue` npm packages; those packages, plus `@hawk2ui/native`, are generated from the Hawk2UI repository by the release package generator. npm is the distribution channel for those generated artifacts, not a separate source of truth.
+
 ## Status
 
 Implemented against an enforced production baseline. The core engine, runtime, desktop host, plugin host layers, framework adapters, and build/CLI toolchain are covered by CI (format, clippy, unit + integration + smoke tests, render benchmark, docs, dependency policy), but whole-framework production release status is gated by the release evidence below.
@@ -83,6 +85,8 @@ HAWK2UI_RELEASE_SIGNING_KEY_ID=local-release \
 HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
 cargo run -p hawk2ui-cli -- package-plugin # CLAP / VST3 / AU
 ```
+
+Release package generation is handled by `cargo run -p xtask -- npm-packages --verify`. The publish gate is `cargo run -p xtask -- npm-packages --publish-dry-run`; both commands stage generated npm artifacts under `target/npm-packages`.
 
 See `examples/` for working `hawk.json` layouts (`desktop-basic`, `plugin-synth-editor`, `react-desktop-basic`, `react-plugin-basic`, `vue-desktop-basic`, `vue-plugin-basic`), and `CLAUDE.md` for the architecture and crate layering.
 

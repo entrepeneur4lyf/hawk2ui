@@ -115,6 +115,8 @@ React 19+ production support uses `@hawk2ui/react` `createRoot` with the sealed 
 
 Vue 3.5+ production support uses `@hawk2ui/vue` `createApp` with the sealed Deno runtime.
 
+The `@hawk2ui/react`, `@hawk2ui/vue`, and `@hawk2ui/native` package artifacts are generated from the Hawk2UI repository. Runtime applications consume those npm packages through normal package-manager installs, then Hawk2UI seals the package-manager-produced JavaScript output named by `hawk.json` `build.output`.
+
 React and Vue emit Hawk2UI scene operations through `hawk2ui-js-runtime`, not `FrameworkNativeProgram` or the legacy source-string compiler path.
 
 The React and Vue renderer paths are release-gated by runtime scene operation tests, framework renderer tests, source-mapped diagnostics, package-manager bundle execution, desktop async network/storage/file evidence, and plugin parameter/state/preset/transport/meter/DSP evidence.

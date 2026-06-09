@@ -248,6 +248,8 @@ React and Vue release builds read the package-manager-produced JavaScript output
 
 `packageManager` accepts `bun`, `npm`, `pnpm`, or `yarn` and selects the lockfile when more than one supported lockfile is present. If `packageManager` is omitted, release builds detect `bun.lock`, `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`.
 
+React and Vue scaffolded projects depend on generated `@hawk2ui/react` and `@hawk2ui/vue` npm packages. The manifest still points at the project entry and build output; package generation for those framework adapters is a release process in the Hawk2UI repository, not manifest metadata.
+
 ## `targets`
 
 `targets` is an object of target arrays. This shape supports multiple desktop windows/packages, multiple plugin package variants, and future target classes without overloading one flat list.

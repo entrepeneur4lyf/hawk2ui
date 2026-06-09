@@ -100,6 +100,23 @@ fn readme_lists_vue_as_first_class_developer_option() {
 }
 
 #[test]
+fn manual_documents_generated_npm_framework_packages() {
+    let getting_started = manual("manual/getting-started.md");
+    let packaging = manual("manual/packaging.md");
+
+    for required in [
+        "generated `@hawk2ui/react` and `@hawk2ui/vue` npm packages",
+        "`hawk2ui-cli` remains the installable Rust CLI",
+        "generated from the Hawk2UI repository",
+    ] {
+        assert!(
+            getting_started.contains(required) || packaging.contains(required),
+            "manual missing generated npm package claim: {required}"
+        );
+    }
+}
+
+#[test]
 fn readme_states_desktop_and_baseview_wayland_gpu_backends_are_remediated() {
     let readme = manual("README.md");
 

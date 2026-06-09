@@ -92,6 +92,8 @@ hawk2ui run-desktop
 
 React 19+ and Vue 3.5+ projects use package-manager output for the sealed Deno runtime. Set `app.framework` to `react` or `vue`, declare `build.output`, and keep the selected lockfile with the project so release artifacts can record package-manager metadata.
 
+`hawk2ui-cli` remains the installable Rust CLI. React and Vue projects consume generated `@hawk2ui/react` and `@hawk2ui/vue` npm packages. Those packages are generated from the Hawk2UI repository during release; npm is the distribution channel, not a separate source of truth.
+
 For release artifacts, use the release verification flow:
 
 ```bash

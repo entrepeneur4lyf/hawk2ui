@@ -73,6 +73,12 @@ React and Vue manifests declare the package-manager-produced bundle with `build.
 
 Sealed JS module graph metadata records every module specifier, content hash, source-map hash, dependency origin, static import, dynamic import, chunk membership, package manager, lockfile hash, and graph entrypoint. `SealedJsDependencyOrigin` records whether a module came from workspace build output, an installed package dependency, or generated build tooling.
 
+## Generated Framework Npm Packages
+
+Release packaging generates `@hawk2ui/native`, `@hawk2ui/react`, and `@hawk2ui/vue` package tarballs under `target/npm-packages`, verifies tarball contents, and runs npm publish dry-run checks. Generated tarballs and package staging directories are release artifacts and are not committed.
+
+The React and Vue project templates consume generated `@hawk2ui/react` and `@hawk2ui/vue` npm packages. `hawk2ui-cli` remains the installable Rust CLI, and the generated npm packages are generated from the Hawk2UI repository so npm distribution does not become a separate source of truth.
+
 ## Packaging Workflow
 
 For desktop applications:
