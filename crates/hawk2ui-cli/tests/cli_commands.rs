@@ -43,6 +43,10 @@ fn cli_commands_help_lists_required_workflows() {
         help.contains("CLAP, VST3, and AU"),
         "package-plugin help must advertise all release-backed plugin binary formats"
     );
+    assert!(
+        help.contains("react-app|react-plugin|vue-app|vue-plugin|native"),
+        "init help must list every parsed project template"
+    );
     for unsupported in ["standalone", "desktop bundle"] {
         assert!(
             !help.contains(unsupported),
@@ -1284,7 +1288,7 @@ fn workspace_package_desktop_materializes_signed_native_launcher_bundle() {
     let package_root = root
         .join("target/hawk2ui")
         .join("com-hawk2ui-cli-desktop-package.AppDir");
-    let launcher = package_root.join("usr/bin/CLI Desktop Package");
+    let launcher = package_root.join("usr/bin/com-hawk2ui-cli-desktop-package");
     let artifact_path = package_root.join("usr/share/hawk2ui/hawk2ui-artifact.hawk");
     let manifest_path = package_root.join("hawk2ui-desktop-package.json");
     let hash_manifest_path = package_root.join("usr/share/hawk2ui/hawk2ui-hashes.json");
@@ -1366,15 +1370,62 @@ fn workspace_package_desktop_writes_json_metadata_values() {
     assert_eq!(manifest["displayName"].as_str(), Some(display_name));
     assert_eq!(
         manifest["entry"].as_str(),
-        Some("usr/bin/CLI \"Quoted\" Desktop")
+        Some("usr/bin/com-hawk2ui-cli-desktop-escaping")
     );
     assert!(hash_manifest["files"].as_array().is_some_and(|files| {
         files.iter().any(|file| {
             file["path"]
                 .as_str()
-                .is_some_and(|path| path == "usr/bin/CLI \"Quoted\" Desktop")
+                .is_some_and(|path| path == "usr/bin/com-hawk2ui-cli-desktop-escaping")
         })
     }));
+}
+
+#[test]
+fn workspace_package_desktop_uses_path_safe_launcher_name_from_identity_id() {
+    let root = temp_cli_workspace("package-desktop-safe-launcher");
+    let outside_launcher = root.join("escaped-launcher");
+    let display_name = outside_launcher.to_string_lossy();
+    write_desktop_project(
+        &root,
+        "com.hawk2ui.cli-desktop-safe-launcher",
+        &display_name,
+    );
+
+    let execution =
+        signed_runner_with_packaged_desktop_launcher(&root).execute(CliCommand::PackageDesktop);
+
+    assert_eq!(
+        execution.exit_code,
+        CliExitCode::Success,
+        "package-desktop should not treat display names as paths\nstdout:\n{}\nstderr:\n{}\ndiagnostics:\n{:#?}",
+        execution.stdout,
+        execution.stderr,
+        execution.diagnostics
+    );
+    let package_root = root
+        .join("target/hawk2ui")
+        .join("com-hawk2ui-cli-desktop-safe-launcher.AppDir");
+    let launcher = package_root.join("usr/bin/com-hawk2ui-cli-desktop-safe-launcher");
+    let manifest_path = package_root.join("hawk2ui-desktop-package.json");
+    let manifest_source =
+        fs::read_to_string(&manifest_path).expect("desktop package manifest should read");
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_source)
+        .expect("desktop package manifest should be valid JSON");
+
+    assert!(launcher.is_file(), "launcher should use the package id");
+    assert!(
+        !outside_launcher.exists(),
+        "package-desktop must not write a launcher outside the package root"
+    );
+    assert_eq!(
+        manifest["displayName"].as_str(),
+        Some(display_name.as_ref())
+    );
+    assert_eq!(
+        manifest["entry"].as_str(),
+        Some("usr/bin/com-hawk2ui-cli-desktop-safe-launcher")
+    );
 }
 
 #[test]

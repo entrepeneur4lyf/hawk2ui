@@ -324,7 +324,7 @@ impl CommandCatalog {
             "Hawk2UI CLI",
             "",
             "Commands:",
-            "  init             Create a new Hawk2UI project [--template react-app|react-plugin|native] [--package-manager bun|npm|pnpm|yarn]",
+            "  init             Create a new Hawk2UI project [--template react-app|react-plugin|vue-app|vue-plugin|native] [--package-manager bun|npm|pnpm|yarn]",
             "  new              Alias for init",
             "  run              Build and run the default native target",
             "  dev              Watch, rebuild, validate, and hot-reload the native surface",

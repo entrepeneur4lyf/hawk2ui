@@ -1,29 +1,42 @@
 # Hawk2UI Desktop Apps
 
-Desktop apps are projects with at least one manifest target whose `kind` is `desktop`. The repository fixtures that exercise this path are `examples/desktop-basic/hawk.json` and `examples/desktop-dashboard/hawk.json`.
+Desktop apps are projects with at least one `targets.desktop[]` manifest entry. The repository fixtures that exercise this path are `examples/desktop-basic/hawk.json` and `examples/desktop-dashboard/hawk.json`.
 
 ## Desktop Manifest
 
 The implemented desktop fixtures use this shape:
 
-```toml
-[identity]
-id = "com.hawk2ui.examples.desktop-basic"
-name = "Hawk2UI Desktop Basic"
-version = "0.1.0"
-
-[source]
-entry = "src/main.ts"
-
-[capabilities]
-keys = ["native-windowing", "sealed-artifacts"]
-
-[[targets]]
-kind = "desktop"
-name = "linux-wayland"
+```json
+{
+  "$schema": "https://hawk2ui.dev/schemas/hawk.schema.json",
+  "schemaVersion": 1,
+  "package": {
+    "id": "com.hawk2ui.examples.desktop-basic",
+    "name": "Hawk2UI Desktop Basic",
+    "version": "0.1.0",
+    "bundleId": "com.hawk2ui.examples.desktop-basic"
+  },
+  "app": {
+    "entry": "src/main.ts",
+    "framework": "native"
+  },
+  "targets": {
+    "desktop": [
+      {
+        "name": "main",
+        "platforms": ["windows", "macos", "linux-wayland", "linux-x11"]
+      }
+    ]
+  },
+  "permissions": {
+    "capabilities": ["native-windowing", "sealed-artifacts"],
+    "network": false,
+    "filesystem": []
+  }
+}
 ```
 
-Required sections for a desktop app are `[identity]`, `[source]`, and at least one `[[targets]]` entry with `kind = "desktop"`. `[capabilities]` is used by packaged applications to declare required host services.
+Required canonical fields for a desktop app are `schemaVersion`, `package`, `app`, and at least one `targets.desktop[]` entry. `permissions.capabilities` is used by packaged applications to declare required host services.
 
 ## Desktop Workflow
 

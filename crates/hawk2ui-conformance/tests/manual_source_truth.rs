@@ -272,6 +272,7 @@ fn assert_security_manual_documents_release_and_evidence_boundaries(security: &s
         "HAWK2UI_RELEASE_SIGNING_KEY_HEX",
         "HAWK2UI_TRUSTED_RELEASE_KEYS",
         "build-release",
+        "package-desktop",
         "package-plugin",
         "verify-artifact",
         "evidence vocabulary",
@@ -326,14 +327,23 @@ fn manual_desktop_commands_document_implemented_cli_commands() {
     .join("\n");
 
     for command in [
+        "init",
         "new",
+        "run",
+        "dev",
         "validate",
         "build-dev",
         "build-release",
         "verify-artifact",
         "run-desktop",
+        "package-desktop",
         "package-plugin",
+        "export-schemas",
+        "export-params",
+        "pin-ids",
+        "migrate-manifest",
         "diagnostics",
+        "explain",
     ] {
         catalog.parse(["hawk2ui", command]).unwrap_or_else(|error| {
             panic!("test command `{command}` is not implemented: {error:?}")
@@ -820,7 +830,12 @@ fn manual_getting_started_documents_react_developer_experience_commands() {
         "hawk2ui package-desktop",
         "hawk2ui package-plugin",
         "hawk2ui verify-artifact",
+        "hawk2ui export-schemas",
+        "hawk2ui export-params",
+        "hawk2ui pin-ids",
+        "hawk2ui migrate-manifest",
         "hawk2ui diagnostics",
+        "hawk2ui explain",
     ] {
         assert!(
             getting_started.contains(command),
@@ -888,7 +903,9 @@ fn manual_project_manifest_describes_react_sealed_js_graph_release_path() {
         "\"entry\": \"src/main.ts\"",
         "\"framework\": \"vue\"",
         "\"formats\": [\"clap\", \"vst3\", \"au\"]",
-        "Supported `formats`: `clap`, `vst3`, and `au`.",
+        "Manifest-accepted `formats`: `clap`, `vst3`, `au`, and `standalone`.",
+        "`hawk2ui package-plugin` materializes the release-backed CLAP, VST3, and AU package layouts.",
+        "The `standalone` manifest value is accepted by validation but is not a release-backed `package-plugin` output.",
     ] {
         assert!(
             manifest.contains(required),
@@ -903,7 +920,6 @@ fn manual_project_manifest_describes_react_sealed_js_graph_release_path() {
         "\"entry\": \"src/App.svelte\"",
         "\"formats\": [\"clap\", \"vst3\", \"au\", \"standalone\"]",
         "Vue, Solid, and Svelte manifest values remain incubating",
-        "- `standalone`",
     ] {
         assert!(
             !manifest.contains(forbidden),
@@ -918,7 +934,7 @@ fn manual_project_manifest_documents_react_build_output_and_package_manager_fiel
 
     for required in [
         "## `build`",
-        "Package-manager-produced JavaScript output path, package-manager selection, and lockfile detection.",
+        "Package-manager-produced JavaScript output path and package-manager selection.",
         "`output` is the package-manager-produced JavaScript bundle path sealed into the release artifact for React and Vue builds.",
         "`packageManager` accepts `bun`, `npm`, `pnpm`, or `yarn` and selects the lockfile when more than one supported lockfile is present.",
         "If `packageManager` is omitted, release builds detect `bun.lock`, `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`.",
@@ -926,6 +942,22 @@ fn manual_project_manifest_documents_react_build_output_and_package_manager_fiel
         assert!(
             manifest.contains(required),
             "project manifest manual missing React build field documentation: {required}"
+        );
+    }
+
+    for forbidden in [
+        "\"outDir\"",
+        "\"profiles\"",
+        "\"format\": \"json-v1\"",
+        "\"clipboard\"",
+        "\"secrets\"",
+        "\"read\":",
+        "\"write\":",
+        "Release profiles without required signing policy.",
+    ] {
+        assert!(
+            !manifest.contains(forbidden),
+            "project manifest manual must not document fields rejected by the canonical JSON parser: {forbidden}"
         );
     }
 }

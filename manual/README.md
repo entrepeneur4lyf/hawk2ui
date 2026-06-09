@@ -4,7 +4,7 @@ Hawk2UI is a native windowing and rendering framework for production desktop app
 
 ## Project Manifest
 
-Hawk2UI projects are manifest-driven. The canonical source manifest is `hawk.json`, which declares package identity, app entrypoints, desktop targets, plugin targets, assets, permissions, and release policy. Legacy `manifest.hawk.toml` files are accepted as migration inputs, not as the long-term project format. Start with [Project Manifest](project-manifest.md).
+Hawk2UI projects are manifest-driven. The canonical source manifest is `hawk.json`, which declares package identity, app entrypoints, desktop targets, plugin targets, assets, permissions, and package-manager build output. Legacy `manifest.hawk.toml` files are accepted as migration inputs, not as the long-term project format. Start with [Project Manifest](project-manifest.md).
 
 ## Desktop Applications
 

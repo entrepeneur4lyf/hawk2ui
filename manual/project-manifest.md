@@ -162,20 +162,16 @@ The legacy `manifest.hawk.toml` format remains a migration input. It is not a pa
       { "id": "output.level", "name": "Output Level" }
     ],
     "state": {
-      "format": "json-v1"
+      "version": 1
     }
   },
   "assets": {
     "include": ["assets/**"]
   },
   "permissions": {
+    "capabilities": ["native-windowing", "sealed-artifacts"],
     "network": false,
-    "filesystem": {
-      "read": [],
-      "write": []
-    },
-    "clipboard": "none",
-    "secrets": []
+    "filesystem": []
   }
 }
 ```
@@ -192,7 +188,7 @@ The legacy `manifest.hawk.toml` format remains a migration input. It is not a pa
 | `plugin` | Required for plugin targets | Plugin identity, parameters, meters, presets, and state contract. |
 | `assets` | Optional | Asset include rules and explicit package inputs. |
 | `permissions` | Optional | Host service permissions granted to app code. Omitted means deny-by-default. |
-| `build` | Optional | Package-manager-produced JavaScript output path, package-manager selection, and lockfile detection. |
+| `build` | Optional | Package-manager-produced JavaScript output path and package-manager selection. |
 
 Unknown top-level fields are rejected. Unknown nested fields are rejected unless the schema explicitly reserves an extension object.
 
@@ -298,7 +294,9 @@ Desktop target `platforms` must include Windows, macOS, Linux Wayland, and Linux
 }
 ```
 
-Supported `formats`: `clap`, `vst3`, and `au`.
+Manifest-accepted `formats`: `clap`, `vst3`, `au`, and `standalone`.
+
+`hawk2ui package-plugin` materializes the release-backed CLAP, VST3, and AU package layouts. The `standalone` manifest value is accepted by validation but is not a release-backed `package-plugin` output.
 
 Plugin targets require the top-level `plugin` object.
 
@@ -346,37 +344,23 @@ Permissions are deny-by-default.
 
 ```json
 {
+  "capabilities": ["native-windowing", "sealed-artifacts"],
   "network": false,
-  "filesystem": {
-    "read": ["assets/**"],
-    "write": []
-  },
-  "clipboard": "text",
-  "secrets": ["license-key"]
+  "filesystem": ["assets/**"]
 }
 ```
 
-`network` is either `false` or an allow-list object in future schema revisions. `filesystem.read` and `filesystem.write` are scoped path allow lists. `clipboard` is `none` or `text`. `secrets` names declared secret keys that host policy may provide at runtime.
+`capabilities` is a list of manifest capability keys. Capability keys must be non-empty and must not contain spaces.
 
-## `build`
+`network` is a boolean. `false` denies network access through the canonical manifest permission field; `true` records that the manifest requests network access.
 
-`build` configures deterministic output and release policy.
+`filesystem` is a flat list of scoped path strings. The canonical JSON manifest does not have `filesystem.read`, `filesystem.write`, `clipboard`, or `secrets` fields.
 
-```json
-{
-  "outDir": "target/hawk2ui",
-  "profiles": {
-    "dev": {
-      "signing": "unsigned-development"
-    },
-    "release": {
-      "signing": "required"
-    }
-  }
-}
-```
+## Release Signing
 
-Release builds require signature metadata and trust verification. Development builds may produce unsigned local artifacts with explicit `unsigned-development` status.
+Release signing is not configured inside `hawk.json`.
+
+`hawk2ui build-release` requires release signing configuration from the CLI environment. `hawk2ui verify-artifact` verifies sealed artifact containers with the configured trust keys. Development builds may produce unsigned local artifacts with explicit `unsigned-development` status.
 
 ## Validation Rules
 
@@ -389,8 +373,8 @@ The manifest validator must reject:
 - Plugin targets without `plugin` metadata.
 - Parameter/meter id collisions.
 - Unsafe paths, absolute paths, parent-directory escapes, and undeclared inputs.
-- Permissions that request unsupported host capabilities.
-- Release profiles without required signing policy.
+- Empty capability keys or capability keys containing spaces.
+- Unknown permission/build fields such as `filesystem.read`, `filesystem.write`, `clipboard`, `secrets`, `outDir`, or `profiles`.
 
 ## CLI Resolution
 
@@ -422,7 +406,7 @@ hawk2ui migrate-manifest --force
 | `[identity]` | `package.id`, `package.name`, `package.version` |
 | `[package].bundle_id` | `package.bundleId` |
 | `[source]` | `app` |
-| `[capabilities].keys` | `permissions` or compatibility capability metadata |
+| `[capabilities].keys` | `permissions.capabilities` |
 | `[[targets]] kind = "desktop"` | `targets.desktop[]` |
 | `[[targets]] kind = "plugin"` | `targets.plugin[]` |
 | `[plugin]` | `plugin.id`, `plugin.name` |

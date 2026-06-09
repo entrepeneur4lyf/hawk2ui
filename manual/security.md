@@ -4,7 +4,7 @@ Hawk2UI projects declare capabilities explicitly and must fail closed when sourc
 
 ## Capability Model
 
-Manifest capabilities are declared in `[capabilities]` as string keys. Runtime code should consume declared capabilities through `CapabilityKey` and host binding records, not ambient process authority.
+Canonical `hawk.json` capabilities are declared in `permissions.capabilities` as string keys. Legacy `manifest.hawk.toml` maps `[capabilities].keys` into the same validated capability list during migration and compatibility parsing. Runtime code should consume declared capabilities through `CapabilityKey` and host binding records, not ambient process authority.
 
 ## Security Fixtures
 
@@ -22,15 +22,16 @@ The example manifest `examples/security-denials/hawk.json` exercises this domain
 
 ## Release Key Management
 
-Release artifacts are signed before distribution and verified before runtime loading. Treat signing keys as release infrastructure secrets, not project source.
+Release artifacts are signed before distribution and verified by the CLI before release. Packaged desktop launchers require verified signature metadata in their runtime descriptor before loading. Treat signing keys as release infrastructure secrets, not project source.
 
 Required release commands and environment variables:
 
 - `build-release` requires `HAWK2UI_RELEASE_SIGNING_KEY_ID` and `HAWK2UI_RELEASE_SIGNING_KEY_HEX`.
+- `package-desktop` requires `HAWK2UI_RELEASE_SIGNING_KEY_ID` and `HAWK2UI_RELEASE_SIGNING_KEY_HEX`.
 - `package-plugin` requires `HAWK2UI_RELEASE_SIGNING_KEY_ID` and `HAWK2UI_RELEASE_SIGNING_KEY_HEX`.
 - `verify-artifact` requires trusted release keys through `HAWK2UI_TRUSTED_RELEASE_KEYS`.
 
-`HAWK2UI_RELEASE_SIGNING_KEY_HEX` is a 64-hex-byte Ed25519 private signing key. Keep it outside the repository, inject it through the release environment, rotate it when access changes, and never ship it in a sealed artifact. `HAWK2UI_TRUSTED_RELEASE_KEYS` is a comma-separated trust list of `key-id:64-hex-public-key` entries used by verification and runtime loaders.
+`HAWK2UI_RELEASE_SIGNING_KEY_HEX` is a 64-hex-byte Ed25519 private signing key. Keep it outside the repository, inject it through the release environment, rotate it when access changes, and never ship it in a sealed artifact. `HAWK2UI_TRUSTED_RELEASE_KEYS` is a comma-separated trust list of `key-id:64-hex-public-key` entries used by `hawk2ui verify-artifact`.
 
 The release workflow is:
 
@@ -38,6 +39,10 @@ The release workflow is:
 HAWK2UI_RELEASE_SIGNING_KEY_ID=local-release \
 HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
 hawk2ui build-release
+
+HAWK2UI_RELEASE_SIGNING_KEY_ID=local-release \
+HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \
+hawk2ui package-desktop
 
 HAWK2UI_RELEASE_SIGNING_KEY_ID=local-release \
 HAWK2UI_RELEASE_SIGNING_KEY_HEX=<64-hex-private-key> \

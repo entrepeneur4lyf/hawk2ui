@@ -2130,12 +2130,13 @@ fn write_desktop_package_json<T: serde::Serialize>(
 }
 
 fn desktop_package_manifest(manifest: &HawkManifest, content_hash: &str) -> serde_json::Value {
+    let launcher_file_name = desktop_launcher_file_name(manifest);
     serde_json::json!({
         "packageType": "desktop",
         "id": manifest.identity.id,
         "displayName": manifest.identity.name,
         "version": manifest.identity.version,
-        "entry": format!("usr/bin/{}", manifest.identity.name),
+        "entry": format!("usr/bin/{launcher_file_name}"),
         "runtimeDescriptor": "usr/share/hawk2ui/hawk2ui-desktop-runtime.json",
         "artifact": "usr/share/hawk2ui/hawk2ui-artifact.hawk",
         "contentHash": content_hash,
@@ -2175,7 +2176,11 @@ fn desktop_launcher_install_path(manifest: &HawkManifest, package_root: &Path) -
     package_root
         .join("usr")
         .join("bin")
-        .join(&manifest.identity.name)
+        .join(desktop_launcher_file_name(manifest))
+}
+
+fn desktop_launcher_file_name(manifest: &HawkManifest) -> String {
+    executable_filename(&bundle_name(&manifest.identity.id))
 }
 
 fn desktop_launcher_cargo_toml(manifest: &HawkManifest, cli_crate_path: &Path) -> String {
