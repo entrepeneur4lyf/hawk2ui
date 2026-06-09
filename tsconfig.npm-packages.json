@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.packages.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "noEmit": false,
+    "outDir": "target/npm-packages/types",
+    "rootDir": "packages"
+  },
+  "include": [
+    "packages/hawk2ui-native/src/**/*.ts",
+    "packages/hawk2ui-react/src/**/*.ts",
+    "packages/hawk2ui-react/src/**/*.tsx",
+    "packages/hawk2ui-vue/src/**/*.ts"
+  ]
+}

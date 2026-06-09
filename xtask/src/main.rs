@@ -3,6 +3,7 @@
 
 use std::process::Command as ProcessCommand;
 
+mod npm_packages;
 mod release;
 
 const CRATE_NAME: &str = "xtask";
@@ -12,6 +13,7 @@ enum Command {
     CheckFast,
     Check,
     ReleaseCheck(release::ReleaseCheckMode),
+    NpmPackagesVerify,
 }
 
 fn main() {
@@ -41,6 +43,8 @@ where
         "check-fast" if rest.is_empty() => Ok(Command::CheckFast),
         "check" if rest.is_empty() => Ok(Command::Check),
         "release-check" => parse_release_check(&rest),
+        "npm-packages" if rest == ["--verify"] => Ok(Command::NpmPackagesVerify),
+        "npm-packages" => Err(format!("npm-packages requires --verify\n{}", usage())),
         "check-fast" | "check" => Err(format!("too many arguments\n{}", usage())),
         unknown => Err(format!("unknown command '{unknown}'\n{}", usage())),
     }
@@ -65,7 +69,7 @@ fn parse_release_check(args: &[String]) -> Result<Command, String> {
 
 fn usage() -> String {
     format!(
-        "Usage: {CRATE_NAME} <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]>"
+        "Usage: {CRATE_NAME} <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]|npm-packages --verify>"
     )
 }
 
@@ -74,6 +78,7 @@ fn run_command(command: Command) -> Result<(), String> {
         Command::CheckFast => Some("scripts/check-fast.sh"),
         Command::Check => Some("scripts/check.sh"),
         Command::ReleaseCheck(mode) => return release::run_release_check(mode),
+        Command::NpmPackagesVerify => return npm_packages::verify_generated_packages(),
     }) else {
         return Ok(());
     };
@@ -93,6 +98,8 @@ fn run_command(command: Command) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const EXPECTED_USAGE: &str = "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]|npm-packages --verify>";
 
     #[test]
     fn parses_check_fast_command() {
@@ -140,30 +147,36 @@ mod tests {
     }
 
     #[test]
+    fn parses_npm_packages_verify_command() {
+        let command = parse_command(["xtask", "npm-packages", "--verify"]);
+        assert_eq!(command, Ok(Command::NpmPackagesVerify));
+    }
+
+    #[test]
+    fn rejects_npm_packages_without_verify_flag() {
+        let error = parse_command(["xtask", "npm-packages"]).expect_err("flag is required");
+        assert!(error.contains("npm-packages requires --verify"));
+    }
+
+    #[test]
     fn rejects_unknown_command_with_usage() {
         let error = parse_command(["xtask", "wat"]).expect_err("unknown command must fail");
         assert!(error.contains("unknown command 'wat'"));
-        assert!(error.contains(
-            "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]>"
-        ));
+        assert!(error.contains(EXPECTED_USAGE));
     }
 
     #[test]
     fn rejects_missing_command_with_usage() {
         let error = parse_command(["xtask"]).expect_err("missing command must fail");
         assert!(error.contains("missing command"));
-        assert!(error.contains(
-            "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]>"
-        ));
+        assert!(error.contains(EXPECTED_USAGE));
     }
 
     #[test]
     fn rejects_extra_arguments_with_usage() {
         let error = parse_command(["xtask", "check", "again"]).expect_err("extra args must fail");
         assert!(error.contains("too many arguments"));
-        assert!(error.contains(
-            "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]>"
-        ));
+        assert!(error.contains(EXPECTED_USAGE));
     }
 
     #[test]
