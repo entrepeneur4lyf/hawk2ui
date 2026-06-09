@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 /// CLI command.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CliCommand {
+    /// Render top-level help.
+    Help,
     /// Create a new project.
     NewProject {
         /// Project scaffold template.
@@ -173,6 +175,7 @@ impl CliPresentationBackend {
 impl CliCommand {
     fn from_name(name: &str) -> Option<Self> {
         match name {
+            "help" | "--help" | "-h" => Some(Self::Help),
             "init" | "new" => Some(Self::NewProject {
                 template: CliProjectTemplate::default(),
                 package_manager: CliPackageManager::default(),
@@ -226,6 +229,14 @@ pub struct CliError {
 /// CLI command catalog.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommandCatalog;
+
+const HAWK2UI_CLI_LOGO: &str = r#"░▒▓█▓▒░░▒▓█▓▒░░▒▓██████▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░      ░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░
+░▒▓████████▓▒░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓███████▓▒░ ░▒▓██████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░
+░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█████████████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓████████▓▒░░▒▓██████▓▒░░▒▓█▓▒░"#;
 
 impl CommandCatalog {
     /// Parses a command from argv-like input.
@@ -321,26 +332,33 @@ impl CommandCatalog {
     #[must_use]
     pub fn render_help(&self) -> String {
         [
+            HAWK2UI_CLI_LOGO,
+            "",
             "Hawk2UI CLI",
             "",
             "Commands:",
+            "  help             Show this help",
             "  init             Create a new Hawk2UI project [--template react-app|react-plugin|vue-app|vue-plugin|native] [--package-manager bun|npm|pnpm|yarn]",
-            "  new              Alias for init",
+            "  new              Alias for init; accepts the same scaffold options",
             "  run              Build and run the default native target",
             "  dev              Watch, rebuild, validate, and hot-reload the native surface",
             "  validate         Validate manifests, sources, and capabilities",
             "  build-dev        Build and write a development sealed artifact",
             "  build-release    Build and write a production sealed artifact",
-              "  verify-artifact  Verify a sealed artifact container",
-              "  run-desktop      Run a desktop native surface [--presentation-backend software|gpu-preferred|gpu-required]",
-              "  package-desktop  Materialize a signed native desktop launcher bundle",
-              "  package-plugin   Materialize release-backed CLAP, VST3, and AU package layouts",
+            "  verify-artifact  Verify a sealed artifact container",
+            "  run-desktop      Run a desktop native surface [--presentation-backend software|gpu-preferred|gpu-required]",
+            "  package-desktop  Materialize a signed native desktop launcher bundle",
+            "  package-plugin   Materialize release-backed CLAP, VST3, and AU package layouts",
             "  export-schemas   Export the central generated JSON Schema catalog",
             "  export-params    Emit truce parameter source generated from the manifest",
             "  pin-ids          Pin a stable numeric id to every unpinned manifest parameter",
             "  migrate-manifest Convert legacy manifest.hawk.toml into canonical hawk.json [--force]",
             "  diagnostics      Render structured diagnostics",
             "  explain          Explain project targets, capabilities, and next commands",
+            "",
+            "Scaffold options:",
+            "  --template react-app|react-plugin|vue-app|vue-plugin|native",
+            "  --package-manager bun|npm|pnpm|yarn",
         ]
         .join("\n")
     }

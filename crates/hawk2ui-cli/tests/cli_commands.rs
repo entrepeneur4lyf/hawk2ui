@@ -19,7 +19,17 @@ fn cli_commands_help_lists_required_workflows() {
     let catalog = CommandCatalog;
     let help = catalog.render_help();
 
+    assert!(
+        help.starts_with("░▒▓█▓▒░░▒▓█▓▒░░▒▓██████▓▒░"),
+        "help must start with the Hawk2UI CLI logo"
+    );
+    let help_execution =
+        WorkspaceCommandRunner::new(temp_cli_workspace("help-logo")).execute(CliCommand::Help);
+    assert_eq!(help_execution.exit_code, CliExitCode::Success);
+    assert_eq!(help_execution.stdout, help);
+
     for command in [
+        "help",
         "init",
         "new",
         "run",
@@ -48,6 +58,19 @@ fn cli_commands_help_lists_required_workflows() {
         help.contains("react-app|react-plugin|vue-app|vue-plugin|native"),
         "init help must list every parsed project template"
     );
+    assert!(
+        help.contains("Scaffold options:"),
+        "help must include a dedicated scaffold options section"
+    );
+    for option in [
+        "  --template react-app|react-plugin|vue-app|vue-plugin|native",
+        "  --package-manager bun|npm|pnpm|yarn",
+    ] {
+        assert!(
+            help.contains(option),
+            "help missing scaffold option: {option}"
+        );
+    }
     for unsupported in ["standalone", "desktop bundle"] {
         assert!(
             !help.contains(unsupported),
@@ -60,6 +83,15 @@ fn cli_commands_help_lists_required_workflows() {
 fn cli_commands_parse_known_commands_and_reject_invalid_command() {
     let catalog = CommandCatalog;
 
+    assert_eq!(
+        catalog.parse(["hawk2ui", "help"]).unwrap(),
+        CliCommand::Help
+    );
+    assert_eq!(
+        catalog.parse(["hawk2ui", "--help"]).unwrap(),
+        CliCommand::Help
+    );
+    assert_eq!(catalog.parse(["hawk2ui", "-h"]).unwrap(), CliCommand::Help);
     assert_eq!(
         catalog.parse(["hawk2ui", "new"]).unwrap(),
         CliCommand::NewProject {

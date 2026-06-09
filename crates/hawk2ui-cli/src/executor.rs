@@ -44,8 +44,8 @@ use hawk2ui_security_model::{PackageTrustRecord, PackageTrustValidator, Verifica
 
 use crate::{
     CliCommand, CliDiagnostic, CliExitCode, CliPackageManager, CliPresentationBackend,
-    CliProjectTemplate, DevChangeBatch, DevChangeClassifier, DevLoop, DevPatchKind, DevPatchPlan,
-    DevWatchKind, DevWatchedPath, FileSystemWatcher, NotifyFileSystemWatcher,
+    CliProjectTemplate, CommandCatalog, DevChangeBatch, DevChangeClassifier, DevLoop, DevPatchKind,
+    DevPatchPlan, DevWatchKind, DevWatchedPath, FileSystemWatcher, NotifyFileSystemWatcher,
 };
 
 const ARTIFACT_SCHEMA_VERSION: ArtifactSchemaVersion = ArtifactSchemaVersion::new(1, 0);
@@ -391,6 +391,7 @@ impl WorkspaceCommandRunner {
     #[must_use]
     pub fn execute(&self, command: CliCommand) -> CommandExecution {
         match command {
+            CliCommand::Help => CommandExecution::success(CommandCatalog.render_help()),
             CliCommand::NewProject {
                 template,
                 package_manager,
