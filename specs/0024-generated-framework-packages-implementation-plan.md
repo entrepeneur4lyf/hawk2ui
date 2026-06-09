@@ -37,8 +37,17 @@
 
 - Modify: `packages/hawk2ui-react/src/legacyCompiler.ts`
 - Modify: `packages/hawk2ui-react/src/testkit.ts`
+- Modify: `packages/hawk2ui-react/src/index.ts`
+- Modify: `packages/hawk2ui-react/src/hostConfig.ts`
+- Modify: `packages/hawk2ui-react/src/sceneBridge.ts`
+- Modify: `packages/hawk2ui-react/src/jsx-runtime.ts`
+- Modify: `packages/hawk2ui-react/src/jsx-dev-runtime.ts`
+- Modify: `packages/hawk2ui-react/src/jsx.d.ts`
+- Modify: `packages/hawk2ui-react/src/jsx-contract.ts`
 - Modify: `packages/hawk2ui-vue/src/index.ts`
 - Modify: `packages/hawk2ui-vue/src/testkit.ts`
+- Modify: `packages/hawk2ui-vue/src/renderer.ts`
+- Modify: `packages/hawk2ui-vue/src/sceneBridge.ts`
 - Modify: `packages/hawk2ui-compiler/src/index.ts`
 - Modify: `packages/hawk2ui-react/package.json`
 - Modify: `packages/hawk2ui-vue/package.json`
@@ -90,6 +99,32 @@ test("React and Vue package source does not import native through monorepo-relat
 });
 ```
 
+Add an assertion that package source entrypoints do not use `.ts` or `.tsx` import specifiers. Generated declaration output must be consumable from npm without TypeScript-only import extensions:
+
+```ts
+test("React and Vue package source uses package-safe import specifiers", () => {
+  for (const path of [
+    "packages/hawk2ui-react/src/index.ts",
+    "packages/hawk2ui-react/src/hostConfig.ts",
+    "packages/hawk2ui-react/src/sceneBridge.ts",
+    "packages/hawk2ui-react/src/jsx-runtime.ts",
+    "packages/hawk2ui-react/src/jsx-dev-runtime.ts",
+    "packages/hawk2ui-react/src/jsx.d.ts",
+    "packages/hawk2ui-react/src/jsx-contract.ts",
+    "packages/hawk2ui-react/src/legacyCompiler.ts",
+    "packages/hawk2ui-react/src/testkit.ts",
+    "packages/hawk2ui-vue/src/index.ts",
+    "packages/hawk2ui-vue/src/renderer.ts",
+    "packages/hawk2ui-vue/src/sceneBridge.ts",
+    "packages/hawk2ui-vue/src/testkit.ts",
+  ]) {
+    const source = readFileSync(path, "utf8");
+    expect(source).not.toMatch(/from ["'][^"']+\.tsx?["']/);
+    expect(source).not.toMatch(/export\s+(?:type\s+)?[^;]*from ["'][^"']+\.tsx?["']/);
+  }
+});
+```
+
 - [ ] **Step 3: Run tests and confirm failure**
 
 Run:
@@ -136,9 +171,24 @@ import {
 } from "@hawk2ui/native";
 ```
 
-- [ ] **Step 5: Change compiler package imports**
+- [ ] **Step 5: Normalize package imports and compiler package imports**
 
-Update `packages/hawk2ui-compiler/src/index.ts`:
+Normalize internal React/Vue package source imports at the same time. Use these replacements:
+
+```ts
+// React source
+from "./hostConfig.ts" -> from "./hostConfig"
+from "./nativeTypes.ts" -> from "./nativeTypes"
+from "./sceneBridge.ts" -> from "./sceneBridge"
+from "./jsx-runtime.ts" -> from "./jsx-runtime"
+
+// Vue source
+from "./renderer.ts" -> from "./renderer"
+from "./nativeTypes.ts" -> from "./nativeTypes"
+from "./sceneBridge.ts" -> from "./sceneBridge"
+```
+
+Then update `packages/hawk2ui-compiler/src/index.ts`:
 
 ```ts
 import { compileHawkReact, type HawkReactCompileOutput } from "@hawk2ui/react/compiler";
@@ -342,7 +392,8 @@ use std::{
     process::Command,
 };
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+use serde::Deserialize;
+
 const PACKAGES: &[PackageSpec] = &[
     PackageSpec {
         id: "native",
@@ -387,19 +438,39 @@ struct EntrySpec {
 
 pub(crate) fn verify_generated_packages() -> Result<(), String> {
     let root = workspace_root();
+    let version = cli_package_version(&root)?;
     let out = root.join("target/npm-packages");
     if out.exists() {
         fs::remove_dir_all(&out).map_err(|error| format!("failed to clean {}: {error}", out.display()))?;
     }
     fs::create_dir_all(&out).map_err(|error| format!("failed to create {}: {error}", out.display()))?;
-    build_packages(&root, &out)?;
+    build_packages(&root, &out, &version)?;
     pack_packages(&root, &out)?;
-    verify_tarballs(&out)
+    verify_tarballs(&out, &version)
 }
 
 fn workspace_root() -> PathBuf {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     manifest_dir.parent().map_or_else(|| manifest_dir.to_path_buf(), Path::to_path_buf)
+}
+
+#[derive(Deserialize)]
+struct CargoManifest {
+    package: CargoPackage,
+}
+
+#[derive(Deserialize)]
+struct CargoPackage {
+    version: String,
+}
+
+fn cli_package_version(root: &Path) -> Result<String, String> {
+    let manifest_path = root.join("crates/hawk2ui-cli/Cargo.toml");
+    let source = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    let manifest: CargoManifest = toml::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
+    Ok(manifest.package.version)
 }
 ```
 
@@ -427,7 +498,7 @@ fn run(root: &Path, program: &str, args: &[&str]) -> Result<(), String> {
 Add build steps:
 
 ```rust
-fn build_packages(root: &Path, out: &Path) -> Result<(), String> {
+fn build_packages(root: &Path, out: &Path, version: &str) -> Result<(), String> {
     run(root, "bun", &[
         "x",
         "tsc",
@@ -439,7 +510,7 @@ fn build_packages(root: &Path, out: &Path) -> Result<(), String> {
         let target = out.join(package.id);
         fs::create_dir_all(target.join("dist"))
             .map_err(|error| format!("failed to create {}: {error}", target.display()))?;
-        write_generated_package_json(root, out, package)?;
+        write_generated_package_json(out, package, version)?;
         build_package_javascript(root, out, package)?;
         copy_package_declarations(root, out, package)?;
     }
@@ -512,38 +583,119 @@ fn copy_package_declarations(root: &Path, out: &Path, package: &PackageSpec) -> 
 
 - [ ] **Step 8: Implement generated manifest writing**
 
-Generated package manifests must use this shape:
+Add `write_generated_package_json` to `xtask/src/npm_packages.rs`:
 
-```json
-{
-  "name": "@hawk2ui/vue",
-  "version": "0.1.0",
+```rust
+fn write_generated_package_json(
+    out: &Path,
+    package: &PackageSpec,
+    version: &str,
+) -> Result<(), String> {
+    let manifest = match package.id {
+        "native" => format!(
+            r#"{{
+  "name": "{name}",
+  "version": "{version}",
   "type": "module",
-  "exports": {
-    ".": {
+  "exports": {{
+    ".": {{
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./compiler": {
+    }}
+  }},
+  "files": ["dist", "package.json"],
+  "description": "Direct native authoring package for Hawk2UI records."
+}}
+"#,
+            name = package.name,
+            version = version
+        ),
+        "react" => format!(
+            r#"{{
+  "name": "{name}",
+  "version": "{version}",
+  "type": "module",
+  "exports": {{
+    ".": {{
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./testkit": {
+    }},
+    "./compiler": {{
+      "types": "./dist/compiler.d.ts",
+      "import": "./dist/compiler.js"
+    }},
+    "./testkit": {{
       "types": "./dist/testkit.d.ts",
       "import": "./dist/testkit.js"
-    }
-  },
-  "files": ["dist", "package.json", "README.md"],
-  "dependencies": {
-    "@hawk2ui/native": "0.1.0"
-  },
-  "peerDependencies": {
+    }},
+    "./jsx-runtime": {{
+      "types": "./dist/jsx-runtime.d.ts",
+      "import": "./dist/jsx-runtime.js"
+    }},
+    "./jsx-dev-runtime": {{
+      "types": "./dist/jsx-dev-runtime.d.ts",
+      "import": "./dist/jsx-dev-runtime.js"
+    }}
+  }},
+  "files": ["dist", "package.json"],
+  "dependencies": {{
+    "@hawk2ui/native": "{version}",
+    "react-reconciler": "0.33.0"
+  }},
+  "peerDependencies": {{
+    "react": ">=19"
+  }},
+  "description": "React 19 custom renderer integration for Hawk2UI scene operations."
+}}
+"#,
+            name = package.name,
+            version = version
+        ),
+        "vue" => format!(
+            r#"{{
+  "name": "{name}",
+  "version": "{version}",
+  "type": "module",
+  "exports": {{
+    ".": {{
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }},
+    "./compiler": {{
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }},
+    "./testkit": {{
+      "types": "./dist/testkit.d.ts",
+      "import": "./dist/testkit.js"
+    }}
+  }},
+  "files": ["dist", "package.json"],
+  "dependencies": {{
+    "@babel/parser": "7.29.7",
+    "@vue/compiler-dom": "3.5.35",
+    "@vue/compiler-sfc": "3.5.35",
+    "@hawk2ui/native": "{version}"
+  }},
+  "peerDependencies": {{
     "vue": ">=3.5"
-  }
+  }},
+  "description": "Vue 3.5+ native runtime renderer for Hawk2UI scene operations."
+}}
+"#,
+            name = package.name,
+            version = version
+        ),
+        other => return Err(format!("unknown package id {other}")),
+    };
+
+    let path = out.join(package.id).join("package.json");
+    fs::write(&path, manifest)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 ```
 
-React keeps `react-reconciler` as a dependency and `react` as a peer dependency. Native has no `@hawk2ui/*` dependency.
+Generated manifests must not include `workspace:*`, `file:`, `link:`, or package paths from the source monorepo.
 
 - [ ] **Step 9: Implement pack and verification**
 
@@ -563,12 +715,49 @@ fn pack_packages(root: &Path, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn verify_tarballs(out: &Path) -> Result<(), String> {
+fn verify_tarballs(out: &Path, version: &str) -> Result<(), String> {
     for package in PACKAGES {
-        let file_name = format!("hawk2ui-{}-{VERSION}.tgz", package.id);
+        let file_name = format!("hawk2ui-{}-{version}.tgz", package.id);
         let path = out.join(file_name);
         if !path.is_file() {
             return Err(format!("missing generated package tarball {}", path.display()));
+        }
+        verify_generated_manifest(out, package)?;
+        verify_tarball_contents(&path)?;
+    }
+    Ok(())
+}
+
+fn verify_generated_manifest(out: &Path, package: &PackageSpec) -> Result<(), String> {
+    let path = out.join(package.id).join("package.json");
+    let manifest = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    for forbidden in ["workspace:", "file:", "link:", "packages/", "target/"] {
+        if manifest.contains(forbidden) {
+            return Err(format!("{} contains forbidden value {forbidden}", path.display()));
+        }
+    }
+    Ok(())
+}
+
+fn verify_tarball_contents(path: &Path) -> Result<(), String> {
+    let output = Command::new("tar")
+        .args(["-tzf", path.to_str().ok_or("tarball path is not valid UTF-8")?])
+        .output()
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if !output.status.success() {
+        return Err(format!("tar inspection failed for {}", path.display()));
+    }
+    let listing = String::from_utf8(output.stdout)
+        .map_err(|error| format!("tar listing for {} was not UTF-8: {error}", path.display()))?;
+    for required in ["package/package.json", "package/dist/index.js", "package/dist/index.d.ts"] {
+        if !listing.lines().any(|line| line == required) {
+            return Err(format!("{} missing required entry {required}", path.display()));
+        }
+    }
+    for forbidden in ["/test/", ".test.", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "target/", "release-evidence"] {
+        if listing.contains(forbidden) {
+            return Err(format!("{} contains forbidden entry matching {forbidden}", path.display()));
         }
     }
     Ok(())
@@ -715,18 +904,33 @@ In `crates/hawk2ui-cli/tests/cli_commands.rs`, add a helper that rewrites genera
 ```rust
 fn rewrite_hawk_package_deps_to_local_tarballs(project: &Path, package_dir: &Path) {
     let package_path = project.join("package.json");
-    let mut package_json = fs::read_to_string(&package_path).expect("package should read");
+    let package_json = fs::read_to_string(&package_path).expect("package should read");
+    let mut package_json: serde_json::Value =
+        serde_json::from_str(&package_json).expect("package should parse");
+    let dependencies = package_json
+        .get_mut("dependencies")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("generated package.json has dependencies");
+
     for package in ["native", "react", "vue"] {
         let dependency = format!("@hawk2ui/{package}");
         let tarball = package_dir
             .join(format!("hawk2ui-{package}-0.1.0.tgz"))
             .display()
             .to_string();
-        let pattern = format!(r#""{dependency}": "^0.1.0""#);
-        let replacement = format!(r#""{dependency}": "file:{tarball}""#);
-        package_json = package_json.replace(&pattern, &replacement);
+        if dependencies.contains_key(&dependency) || dependency == "@hawk2ui/native" {
+            dependencies.insert(
+                dependency,
+                serde_json::Value::String(format!("file:{tarball}")),
+            );
+        }
     }
-    fs::write(package_path, package_json).expect("package should write");
+
+    fs::write(
+        package_path,
+        serde_json::to_string_pretty(&package_json).expect("package should serialize"),
+    )
+    .expect("package should write");
 }
 ```
 
@@ -747,11 +951,24 @@ fn generate_npm_packages() -> PathBuf {
 }
 ```
 
-- [ ] **Step 3: Add React generated install test**
+- [ ] **Step 3: Add npm install command helper**
+
+```rust
+fn assert_npm_install_succeeds(project: &Path) {
+    assert!(std::process::Command::new("npm")
+        .args(["install", "--ignore-scripts"])
+        .current_dir(project)
+        .status()
+        .expect("npm install should run")
+        .success());
+}
+```
+
+- [ ] **Step 4: Add React generated install tests**
 
 ```rust
 #[test]
-fn generated_react_templates_install_from_generated_packages() {
+fn generated_react_app_template_installs_from_generated_packages() {
     let package_dir = generate_npm_packages();
     let app_root = temp_cli_workspace("react-generated-install");
     let created = WorkspaceCommandRunner::new(&app_root).execute(CliCommand::NewProject {
@@ -760,20 +977,28 @@ fn generated_react_templates_install_from_generated_packages() {
     });
     assert_eq!(created.exit_code, CliExitCode::Success);
     rewrite_hawk_package_deps_to_local_tarballs(&app_root, &package_dir);
-    assert!(std::process::Command::new("npm")
-        .args(["install", "--ignore-scripts"])
-        .current_dir(&app_root)
-        .status()
-        .expect("npm install should run")
-        .success());
+    assert_npm_install_succeeds(&app_root);
+}
+
+#[test]
+fn generated_react_plugin_template_installs_from_generated_packages() {
+    let package_dir = generate_npm_packages();
+    let plugin_root = temp_cli_workspace("react-plugin-generated-install");
+    let created = WorkspaceCommandRunner::new(&plugin_root).execute(CliCommand::NewProject {
+        template: CliProjectTemplate::ReactPlugin,
+        package_manager: CliPackageManager::Npm,
+    });
+    assert_eq!(created.exit_code, CliExitCode::Success);
+    rewrite_hawk_package_deps_to_local_tarballs(&plugin_root, &package_dir);
+    assert_npm_install_succeeds(&plugin_root);
 }
 ```
 
-- [ ] **Step 4: Add Vue generated install test**
+- [ ] **Step 5: Add Vue generated install tests**
 
 ```rust
 #[test]
-fn generated_vue_templates_install_from_generated_packages() {
+fn generated_vue_app_template_installs_from_generated_packages() {
     let package_dir = generate_npm_packages();
     let app_root = temp_cli_workspace("vue-generated-install");
     let created = WorkspaceCommandRunner::new(&app_root).execute(CliCommand::NewProject {
@@ -785,23 +1010,36 @@ fn generated_vue_templates_install_from_generated_packages() {
     assert!(app_root.join("src/App.vue").is_file());
     assert!(app_root.join("vite.hawk.config.ts").is_file());
     rewrite_hawk_package_deps_to_local_tarballs(&app_root, &package_dir);
-    assert!(std::process::Command::new("npm")
-        .args(["install", "--ignore-scripts"])
-        .current_dir(&app_root)
-        .status()
-        .expect("npm install should run")
-        .success());
+    assert_npm_install_succeeds(&app_root);
+}
+
+#[test]
+fn generated_vue_plugin_template_installs_from_generated_packages() {
+    let package_dir = generate_npm_packages();
+    let plugin_root = temp_cli_workspace("vue-plugin-generated-install");
+    let created = WorkspaceCommandRunner::new(&plugin_root).execute(CliCommand::NewProject {
+        template: CliProjectTemplate::VuePlugin,
+        package_manager: CliPackageManager::Npm,
+    });
+    assert_eq!(created.exit_code, CliExitCode::Success);
+    assert!(plugin_root.join("src/main.ts").is_file());
+    assert!(plugin_root.join("src/App.vue").is_file());
+    assert!(plugin_root.join("vite.hawk.config.ts").is_file());
+    rewrite_hawk_package_deps_to_local_tarballs(&plugin_root, &package_dir);
+    assert_npm_install_succeeds(&plugin_root);
 }
 ```
 
-- [ ] **Step 5: Verify focused generated install path**
+- [ ] **Step 6: Verify focused generated install path**
 
 ```bash
-rtk cargo test -p hawk2ui-cli generated_react_templates_install_from_generated_packages
-rtk cargo test -p hawk2ui-cli generated_vue_templates_install_from_generated_packages
+rtk cargo test -p hawk2ui-cli generated_react_app_template_installs_from_generated_packages
+rtk cargo test -p hawk2ui-cli generated_react_plugin_template_installs_from_generated_packages
+rtk cargo test -p hawk2ui-cli generated_vue_app_template_installs_from_generated_packages
+rtk cargo test -p hawk2ui-cli generated_vue_plugin_template_installs_from_generated_packages
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 rtk git add crates/hawk2ui-cli .gitignore
@@ -815,6 +1053,7 @@ rtk git commit -m "test: verify generated package installs"
 **Files:**
 
 - Modify: `xtask/src/release.rs`
+- Modify: `xtask/src/main.rs`
 - Modify: `release/release-criteria.toml`
 - Modify: `release/package-targets.toml`
 - Modify: `crates/hawk2ui-conformance/tests/verification_gates.rs`
@@ -838,7 +1077,32 @@ ReleaseCheckMode::PackagesOnly => {
 }
 ```
 
-- [ ] **Step 3: Add publish dry-run helper**
+- [ ] **Step 3: Add publish dry-run command and helper**
+
+Add an xtask command variant in `xtask/src/main.rs`:
+
+```rust
+enum Command {
+    CheckFast,
+    Check,
+    ReleaseCheck(release::ReleaseCheckMode),
+    NpmPackagesVerify,
+    NpmPackagesPublishDryRun,
+}
+```
+
+Add parser and runner branches:
+
+```rust
+"npm-packages" if rest == ["--publish-dry-run"] => Ok(Command::NpmPackagesPublishDryRun),
+Command::NpmPackagesPublishDryRun => return npm_packages::verify_publish_dry_run(),
+```
+
+Update usage to include both npm package commands:
+
+```rust
+"Usage: xtask <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]|npm-packages --verify|npm-packages --publish-dry-run>"
+```
 
 In `xtask/src/npm_packages.rs`, add:
 
@@ -870,6 +1134,12 @@ id = "generated-npm-packages"
 title = "Generated npm package artifacts"
 command = "rtk cargo run -p xtask -- npm-packages --verify"
 evidence = "target/release-evidence/generated-npm-packages.txt"
+
+[[checks]]
+id = "generated-npm-packages-publish-dry-run"
+title = "Generated npm package publish dry-run"
+command = "rtk cargo run -p xtask -- npm-packages --publish-dry-run"
+evidence = "target/release-evidence/generated-npm-packages-publish-dry-run.txt"
 ```
 
 - [ ] **Step 5: Add conformance gate assertions**
@@ -879,6 +1149,8 @@ In `crates/hawk2ui-conformance/tests/verification_gates.rs`, assert:
 ```rust
 assert_contains(&criteria, "id = \"generated-npm-packages\"");
 assert_contains(&criteria, "cargo run -p xtask -- npm-packages --verify");
+assert_contains(&criteria, "id = \"generated-npm-packages-publish-dry-run\"");
+assert_contains(&criteria, "cargo run -p xtask -- npm-packages --publish-dry-run");
 ```
 
 - [ ] **Step 6: Verify release gates**
@@ -887,6 +1159,7 @@ assert_contains(&criteria, "cargo run -p xtask -- npm-packages --verify");
 rtk cargo test -p xtask
 rtk cargo test -p hawk2ui-conformance verification_gates
 rtk scripts/release-check.sh --packages-only
+rtk cargo run -p xtask -- npm-packages --publish-dry-run
 ```
 
 - [ ] **Step 7: Commit**
@@ -979,6 +1252,7 @@ rtk cargo test -p hawk2ui-conformance
 rtk cargo test -p hawk2ui-js-runtime vue_ -- --nocapture
 rtk cargo test -p hawk2ui-smoke vue_ -- --nocapture
 rtk cargo run -p xtask -- npm-packages --verify
+rtk cargo run -p xtask -- npm-packages --publish-dry-run
 rtk scripts/release-check.sh --packages-only
 ```
 
