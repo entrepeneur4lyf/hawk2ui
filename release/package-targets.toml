@@ -80,6 +80,24 @@ release_gate = true
 runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
 
 [[targets]]
+id = "vue-desktop-smoke"
+kind = "desktop-smoke"
+platform = "linux"
+command = "rtk cargo test -p hawk2ui-smoke vue_desktop_basic_runs_sealed_deno_graph_through_winit_smoke"
+evidence = "target/release-evidence/vue-desktop-smoke.txt"
+release_gate = true
+runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
+
+[[targets]]
+id = "vue-plugin-smoke"
+kind = "plugin-smoke"
+platform = "linux"
+command = "rtk cargo test -p hawk2ui-smoke vue_plugin_basic_runs_deno_ui_parameters_and_realtime_denial"
+evidence = "target/release-evidence/vue-plugin-smoke.txt"
+release_gate = true
+runtime_bundle_evidence = ["embedded-deno-runtime", "rusty-v8-static-archive", "rusty-v8-source-binding", "sealed-js-module-graph", "runtime-assets", "package-manager-metadata", "lockfile-hash", "dependency-graph-metadata", "sealed-module-dependency-origin", "sealed-module-source-map-hash", "sealed-module-entrypoint", "sealed-module-import-metadata", "bundle-content-hash"]
+
+[[targets]]
 id = "sealed-artifact"
 kind = "sealed-artifact"
 platform = "cross-platform"

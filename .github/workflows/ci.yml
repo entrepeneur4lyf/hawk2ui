@@ -19,6 +19,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: restore native binary caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/.rusty_v8
+            target/*/build/skia-bindings-*/out
+            target/*/build/v8-*/out
+          key: ${{ runner.os }}-rusty-v8-skia-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rusty-v8-skia-
       - name: cargo clippy
         run: cargo clippy --workspace -- -D warnings
 
@@ -32,6 +44,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: restore native binary caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/.rusty_v8
+            target/*/build/skia-bindings-*/out
+            target/*/build/v8-*/out
+          key: ${{ runner.os }}-rusty-v8-skia-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rusty-v8-skia-
       - name: workspace tests
         run: cargo test --workspace
 
@@ -41,6 +65,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: restore native binary caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/.rusty_v8
+            target/*/build/skia-bindings-*/out
+            target/*/build/v8-*/out
+          key: ${{ runner.os }}-rusty-v8-skia-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rusty-v8-skia-
       - name: source to render
         run: cargo test --test source_to_render
       - name: api contract filter
@@ -64,6 +100,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: restore native binary caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/.rusty_v8
+            target/*/build/skia-bindings-*/out
+            target/*/build/v8-*/out
+          key: ${{ runner.os }}-rusty-v8-skia-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rusty-v8-skia-
       - name: cargo doc
         run: cargo doc --workspace --no-deps
 
@@ -88,6 +136,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: restore native binary caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/.rusty_v8
+            target/*/build/skia-bindings-*/out
+            target/*/build/v8-*/out
+          key: ${{ runner.os }}-rusty-v8-skia-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rusty-v8-skia-
       - name: smoke apps
         run: cargo test -p hawk2ui-smoke --test smoke_apps
       - name: render baseline benchmark
