@@ -18,7 +18,7 @@ import {
       type HawkElementSpec,
       type HawkEventSpec,
     type HawkLifecycleSpec,
-  } from "../../hawk2ui-native/src/index.ts";
+  } from "@hawk2ui/native";
 
 export {
   createApp,
@@ -26,7 +26,7 @@ export {
   type HawkVueApp,
   type HawkVueMountOptions,
   type HawkVueRoot,
-} from "./renderer.ts";
+} from "./renderer";
 
 export interface HawkVueCompileInput {
   readonly filename: string;

@@ -1,6 +1,6 @@
 import { compileHawkSolid, type HawkSolidCompileOutput } from "../../hawk2ui-solid/src/index.ts";
 import { compileHawkSvelte, type HawkSvelteCompileOutput } from "../../hawk2ui-svelte/src/index.ts";
-import { compileHawkVue, type HawkVueCompileOutput } from "../../hawk2ui-vue/src/index.ts";
+import { compileHawkVue, type HawkVueCompileOutput } from "@hawk2ui/vue/compiler";
 
 export type HawkFrameworkKind = "react" | "solid" | "svelte" | "vue";
 

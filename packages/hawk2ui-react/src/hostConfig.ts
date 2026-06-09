@@ -12,8 +12,8 @@ import type {
   HawkSceneOp,
   HawkSceneOpBatch,
   HawkSceneValue,
-} from "./nativeTypes.ts";
-import { createGlobalSceneBridge } from "./sceneBridge.ts";
+} from "./nativeTypes";
+import { createGlobalSceneBridge } from "./sceneBridge";
 
 export type HawkHostType =
   | "hawk-view"

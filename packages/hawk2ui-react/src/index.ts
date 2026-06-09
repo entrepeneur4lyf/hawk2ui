@@ -5,14 +5,14 @@ import {
   createReconcilerRoot,
   updateReconcilerRoot,
   type HawkRootContainer,
-} from "./hostConfig.ts";
+} from "./hostConfig";
 import type {
   HawkReactRoot,
   HawkReactRootConfig,
   HawkReactRootOptions,
   HawkReactRootTarget,
   HawkSceneOpBatch,
-} from "./nativeTypes.ts";
+} from "./nativeTypes";
 export type {
   HawkEventHandler,
   HawkNativeNodeHandle,
@@ -27,8 +27,8 @@ export type {
   HawkSceneOp,
   HawkSceneOpBatch,
   HawkSceneValue,
-} from "./nativeTypes.ts";
-export { createGlobalSceneBridge, createRecordingSceneBridge, RecordingSceneBridge } from "./sceneBridge.ts";
+} from "./nativeTypes";
+export { createGlobalSceneBridge, createRecordingSceneBridge, RecordingSceneBridge } from "./sceneBridge";
 
 export function createRoot(target: HawkReactRootTarget, options: HawkReactRootOptions = {}): HawkReactRoot {
   const config = rootConfig(target, options);

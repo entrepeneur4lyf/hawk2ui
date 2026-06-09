@@ -1,9 +1,16 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
-import { createHawkApp } from "../hawk2ui-native/src/index.ts";
-import { compileHawkReact } from "../hawk2ui-react/src/legacyCompiler.ts";
+import { createHawkApp } from "@hawk2ui/native";
+import { compileHawkReact } from "@hawk2ui/react/compiler";
+import { compileHawkVue } from "@hawk2ui/vue/compiler";
 import { compileHawkSolid } from "../hawk2ui-solid/src/index.ts";
 import { compileHawkSvelte } from "../hawk2ui-svelte/src/index.ts";
-import { compileHawkVue } from "../hawk2ui-vue/src/index.ts";
+
+type PackageJson = {
+  dependencies?: Record<string, string>;
+  exports?: Record<string, string>;
+  version?: string;
+};
 
 const expectedRecords = [
   "mount-element:root",
@@ -14,6 +21,40 @@ const expectedRecords = [
   "mount-element:title",
   "mount-element:cta",
 ];
+
+const readPackageJson = (packageName: string): PackageJson =>
+  JSON.parse(
+    readFileSync(new URL(`../${packageName}/package.json`, import.meta.url), "utf8"),
+  ) as PackageJson;
+
+const sourceFilesForPackage = (packageName: string): string[] => {
+  const files: string[] = [];
+
+  const visit = (directory: URL) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const entryUrl = new URL(entry.name + (entry.isDirectory() ? "/" : ""), directory);
+
+      if (entry.isDirectory()) {
+        visit(entryUrl);
+        continue;
+      }
+
+      if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+        files.push(readFileSync(entryUrl, "utf8"));
+      }
+    }
+  };
+
+  visit(new URL(`../${packageName}/src/`, import.meta.url));
+  return files;
+};
+
+const importSpecifierPattern = /\b(?:import|export)\s+(?:type\s+)?(?:[^"'()]+?\s+from\s+)?["']([^"']+)["']/g;
+
+const collectImportSpecifiers = (sources: string[]): string[] =>
+  sources.flatMap((source) =>
+    [...source.matchAll(importSpecifierPattern)].map((match) => match[1] ?? ""),
+  );
 
 test("framework packages emit equivalent native records for the shared fixture", () => {
   const native = createHawkApp({
@@ -76,4 +117,32 @@ test("framework packages emit equivalent native records for the shared fixture",
   expect(react.compilerArtifact.root.events.map((event) => event.handler)).toEqual([
     "handlePress",
   ]);
+});
+
+test("react and vue packages declare native as a package dependency", () => {
+  const nativePackage = readPackageJson("hawk2ui-native");
+  const reactPackage = readPackageJson("hawk2ui-react");
+  const vuePackage = readPackageJson("hawk2ui-vue");
+
+  expect(reactPackage.dependencies?.["@hawk2ui/native"]).toBe(nativePackage.version);
+  expect(vuePackage.dependencies?.["@hawk2ui/native"]).toBe(nativePackage.version);
+});
+
+test("react and vue package source imports native through its package name", () => {
+  for (const packageName of ["hawk2ui-react", "hawk2ui-vue"]) {
+    const importSpecifiers = collectImportSpecifiers(sourceFilesForPackage(packageName));
+
+    expect(importSpecifiers).toContain("@hawk2ui/native");
+    expect(importSpecifiers).not.toContain("../../hawk2ui-native/src/index.ts");
+  }
+});
+
+test("react and vue package source uses package-safe import specifiers", () => {
+  for (const packageName of ["hawk2ui-react", "hawk2ui-vue"]) {
+    const unsafeImportSpecifiers = collectImportSpecifiers(sourceFilesForPackage(packageName))
+      .filter((specifier) => specifier.startsWith("."))
+      .filter((specifier) => specifier.endsWith(".ts") || specifier.endsWith(".tsx"));
+
+    expect(unsafeImportSpecifiers).toEqual([]);
+  }
 });

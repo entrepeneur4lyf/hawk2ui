@@ -20,6 +20,9 @@
   },
   "dependencies": {},
   "devDependencies": {
+    "@hawk2ui/native": "workspace:*",
+    "@hawk2ui/react": "workspace:*",
+    "@hawk2ui/vue": "workspace:*",
     "@babel/core": "7.29.7",
     "@babel/generator": "7.29.7",
     "@babel/parser": "7.29.7",

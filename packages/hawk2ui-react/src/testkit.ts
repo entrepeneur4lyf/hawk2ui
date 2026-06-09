@@ -3,7 +3,7 @@ import {
   type HawkElementSpec,
   type HawkEventSpec,
   type HawkLifecycleSpec,
-} from "../../hawk2ui-native/src/index.ts";
+} from "@hawk2ui/native";
 
 export interface HawkReactRoot {
   readonly records: readonly string[];

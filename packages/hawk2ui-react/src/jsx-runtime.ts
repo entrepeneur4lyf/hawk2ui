@@ -1,6 +1,6 @@
 import type * as React from "react";
 
-import type { HawkNativeProps } from "./nativeTypes.ts";
+import type { HawkNativeProps } from "./nativeTypes";
 
 export { Fragment, jsx, jsxs } from "react/jsx-runtime";
 

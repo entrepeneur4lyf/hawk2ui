@@ -9,6 +9,9 @@
         "@babel/parser": "7.29.7",
         "@babel/preset-react": "7.29.7",
         "@babel/preset-typescript": "7.29.7",
+        "@hawk2ui/native": "workspace:*",
+        "@hawk2ui/react": "workspace:*",
+        "@hawk2ui/vue": "workspace:*",
         "@types/babel__core": "7.20.5",
         "@types/babel__generator": "^7.27.0",
         "@types/react": "19.2.17",
@@ -38,6 +41,7 @@
       "name": "@hawk2ui/react",
       "version": "0.1.0",
       "dependencies": {
+        "@hawk2ui/native": "0.1.0",
         "react-reconciler": "0.33.0",
       },
       "peerDependencies": {
@@ -70,6 +74,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@babel/parser": "7.29.7",
+        "@hawk2ui/native": "0.1.0",
         "@vue/compiler-dom": "3.5.35",
         "@vue/compiler-sfc": "3.5.35",
       },

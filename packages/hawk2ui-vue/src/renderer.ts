@@ -8,8 +8,8 @@ import type {
   HawkVueRoot,
   HawkVueSceneBridge,
   HawkVueSceneOpBatch,
-} from "./nativeTypes.ts";
-import { createGlobalVueSceneBridge } from "./sceneBridge.ts";
+} from "./nativeTypes";
+import { createGlobalVueSceneBridge } from "./sceneBridge";
 
 type VueNativeNode = VueNativeElement | VueNativeText;
 type VueParent = VueNativeElement;
@@ -400,7 +400,7 @@ function createRootContainer(id: string, bridge: HawkVueSceneBridge): VueNativeE
   };
 }
 
-export type { HawkVueApp, HawkVueMountOptions, HawkVueRoot } from "./nativeTypes.ts";
+export type { HawkVueApp, HawkVueMountOptions, HawkVueRoot } from "./nativeTypes";
 
 function requiredElementId(element: VueNativeElement): string {
   if (element.id?.trim()) return element.id;

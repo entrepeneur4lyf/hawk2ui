@@ -1,4 +1,4 @@
-import type { HawkNativeProps } from "./nativeTypes.ts";
+import type { HawkNativeProps } from "./nativeTypes";
 
 declare module "react" {
   namespace JSX {

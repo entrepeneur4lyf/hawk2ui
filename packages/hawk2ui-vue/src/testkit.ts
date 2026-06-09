@@ -2,7 +2,7 @@ import {
   recordsForApp,
   type HawkElementSpec,
   type HawkEventSpec,
-} from "../../hawk2ui-native/src/index.ts";
+} from "@hawk2ui/native";
 
 export interface HawkVueRenderer {
   readonly records: readonly string[];

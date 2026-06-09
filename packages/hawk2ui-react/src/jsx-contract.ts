@@ -1,5 +1,5 @@
-import type { JSX } from "./jsx-runtime.ts";
-import type { HawkNativeProps } from "./nativeTypes.ts";
+import type { JSX } from "./jsx-runtime";
+import type { HawkNativeProps } from "./nativeTypes";
 
 type HawkIntrinsicName = keyof JSX.IntrinsicElements;
 

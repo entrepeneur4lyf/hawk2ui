@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "allowImportingTsExtensions": true,
+    "baseUrl": ".",
     "exactOptionalPropertyTypes": true,
+    "ignoreDeprecations": "6.0",
     "jsx": "react-jsx",
     "module": "ESNext",
     "moduleResolution": "Bundler",
@@ -9,7 +11,18 @@
     "noUncheckedIndexedAccess": true,
     "strict": true,
     "skipLibCheck": true,
-    "target": "ES2022"
+    "target": "ES2022",
+    "paths": {
+      "@hawk2ui/native": ["packages/hawk2ui-native/src/index.ts"],
+      "@hawk2ui/react": ["packages/hawk2ui-react/src/index.ts"],
+      "@hawk2ui/react/compiler": ["packages/hawk2ui-react/src/legacyCompiler.ts"],
+      "@hawk2ui/react/testkit": ["packages/hawk2ui-react/src/testkit.ts"],
+      "@hawk2ui/solid": ["packages/hawk2ui-solid/src/index.ts"],
+      "@hawk2ui/svelte": ["packages/hawk2ui-svelte/src/index.ts"],
+      "@hawk2ui/vue": ["packages/hawk2ui-vue/src/index.ts"],
+      "@hawk2ui/vue/compiler": ["packages/hawk2ui-vue/src/index.ts"],
+      "@hawk2ui/vue/testkit": ["packages/hawk2ui-vue/src/testkit.ts"]
+    }
   },
   "include": [
     "packages/hawk2ui-native/src/**/*.ts",

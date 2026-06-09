@@ -5,7 +5,7 @@ import type {
   HawkVueSceneOp,
   HawkVueSceneOpBatch,
   HawkVueSceneValue,
-} from "./nativeTypes.ts";
+} from "./nativeTypes";
 
 const GLOBAL_COMMIT_FUNCTION = "__hawk2uiCommitScene";
 const UNSUPPORTED_DOM_PROPS = new Set([

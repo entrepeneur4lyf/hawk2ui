@@ -1,4 +1,4 @@
-import type { HawkSceneBridge, HawkSceneOpBatch } from "./nativeTypes.ts";
+import type { HawkSceneBridge, HawkSceneOpBatch } from "./nativeTypes";
 
 const GLOBAL_COMMIT_FUNCTION = "__hawk2uiCommitScene";
 
