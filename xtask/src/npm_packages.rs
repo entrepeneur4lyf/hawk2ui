@@ -89,6 +89,28 @@ pub(crate) fn verify_generated_packages() -> Result<(), String> {
     verify_tarballs(&out, &version)
 }
 
+pub(crate) fn verify_publish_dry_run() -> Result<(), String> {
+    verify_generated_packages()?;
+    let root = workspace_root();
+
+    for package in ["native", "react", "vue"] {
+        let path = root.join("target/npm-packages").join(package);
+        run(
+            &root,
+            "npm",
+            &[
+                "publish",
+                path_to_str(&path, "publish path")?,
+                "--dry-run",
+                "--access",
+                "public",
+            ],
+        )?;
+    }
+
+    Ok(())
+}
+
 fn workspace_root() -> PathBuf {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     manifest_dir

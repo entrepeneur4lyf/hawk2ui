@@ -87,6 +87,22 @@ blocking = "release"
 evidence = "target/release-evidence/v8-artifact-policy.txt"
 
 [[criteria]]
+id = "generated-npm-packages"
+title = "Generated npm package artifacts"
+owner = "release"
+command = "rtk cargo run -p xtask -- npm-packages --verify"
+blocking = "release"
+evidence = "target/release-evidence/generated-npm-packages.txt"
+
+[[criteria]]
+id = "generated-npm-packages-publish-dry-run"
+title = "Generated npm package publish dry-run"
+owner = "release"
+command = "rtk cargo run -p xtask -- npm-packages --publish-dry-run"
+blocking = "release"
+evidence = "target/release-evidence/generated-npm-packages-publish-dry-run.txt"
+
+[[criteria]]
 id = "performance-budgets"
 title = "Performance budgets"
 owner = "performance"

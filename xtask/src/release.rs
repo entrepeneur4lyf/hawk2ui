@@ -36,7 +36,10 @@ pub(crate) enum ReleaseCheckMode {
 pub(crate) fn run_release_check(mode: ReleaseCheckMode) -> Result<(), String> {
     match mode {
         ReleaseCheckMode::VersionOnly => validate_repository_version_policy(),
-        ReleaseCheckMode::PackagesOnly => validate_repository_package_targets(),
+        ReleaseCheckMode::PackagesOnly => {
+            validate_repository_package_targets()?;
+            crate::npm_packages::verify_generated_packages()
+        }
         ReleaseCheckMode::ChangelogOnly => validate_repository_changelog(),
         ReleaseCheckMode::Full => run_full_release_check(),
     }
@@ -1006,6 +1009,8 @@ evidence = "target/release-evidence/manuals.txt"
             "developer-experience",
             "capability-apis",
             "v8-artifact-policy",
+            "generated-npm-packages",
+            "generated-npm-packages-publish-dry-run",
             "performance-budgets",
             "visual-regression",
             "plugin-realtime-safety",

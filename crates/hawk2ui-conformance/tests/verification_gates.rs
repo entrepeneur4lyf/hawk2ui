@@ -115,6 +115,10 @@ fn verification_gate_definitions_ci_has_named_jobs_for_each_gate_family() {
         "bun install --frozen-lockfile",
         "bun run test:packages",
         "bun run typecheck:packages",
+        "generated npm package verification",
+        "cargo run -p xtask -- npm-packages --verify",
+        "generated npm package publish dry-run",
+        "cargo run -p xtask -- npm-packages --publish-dry-run",
         "scripts/check-framework-examples.sh",
         "cargo bench --bench release_gates -- --quick",
         "ubuntu-latest",
@@ -182,6 +186,20 @@ fn release_criteria_execute_vue_deno_runtime_gate_tests() {
         "bun run typecheck:vue-package",
         "cargo test -p hawk2ui-smoke vue_ -- --nocapture",
         "target/release-evidence/vue-deno-runtime.txt",
+    ] {
+        assert_contains(&criteria, required);
+    }
+}
+
+#[test]
+fn release_criteria_execute_generated_npm_package_gate_tests() {
+    let criteria = read_workspace_file("release/release-criteria.toml");
+
+    for required in [
+        "id = \"generated-npm-packages\"",
+        "cargo run -p xtask -- npm-packages --verify",
+        "id = \"generated-npm-packages-publish-dry-run\"",
+        "cargo run -p xtask -- npm-packages --publish-dry-run",
     ] {
         assert_contains(&criteria, required);
     }

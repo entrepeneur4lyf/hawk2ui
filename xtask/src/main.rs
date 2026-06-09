@@ -14,6 +14,7 @@ enum Command {
     Check,
     ReleaseCheck(release::ReleaseCheckMode),
     NpmPackagesVerify,
+    NpmPackagesPublishDryRun,
 }
 
 fn main() {
@@ -44,7 +45,11 @@ where
         "check" if rest.is_empty() => Ok(Command::Check),
         "release-check" => parse_release_check(&rest),
         "npm-packages" if rest == ["--verify"] => Ok(Command::NpmPackagesVerify),
-        "npm-packages" => Err(format!("npm-packages requires --verify\n{}", usage())),
+        "npm-packages" if rest == ["--publish-dry-run"] => Ok(Command::NpmPackagesPublishDryRun),
+        "npm-packages" => Err(format!(
+            "npm-packages requires --verify or --publish-dry-run\n{}",
+            usage()
+        )),
         "check-fast" | "check" => Err(format!("too many arguments\n{}", usage())),
         unknown => Err(format!("unknown command '{unknown}'\n{}", usage())),
     }
@@ -69,7 +74,7 @@ fn parse_release_check(args: &[String]) -> Result<Command, String> {
 
 fn usage() -> String {
     format!(
-        "Usage: {CRATE_NAME} <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]|npm-packages --verify>"
+        "Usage: {CRATE_NAME} <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]|npm-packages --verify|npm-packages --publish-dry-run>"
     )
 }
 
@@ -79,6 +84,7 @@ fn run_command(command: Command) -> Result<(), String> {
         Command::Check => Some("scripts/check.sh"),
         Command::ReleaseCheck(mode) => return release::run_release_check(mode),
         Command::NpmPackagesVerify => return npm_packages::verify_generated_packages(),
+        Command::NpmPackagesPublishDryRun => return npm_packages::verify_publish_dry_run(),
     }) else {
         return Ok(());
     };
@@ -99,7 +105,7 @@ fn run_command(command: Command) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    const EXPECTED_USAGE: &str = "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]|npm-packages --verify>";
+    const EXPECTED_USAGE: &str = "Usage: xtask <check-fast|check|release-check [--version-only|--packages-only|--changelog-only]|npm-packages --verify|npm-packages --publish-dry-run>";
 
     #[test]
     fn parses_check_fast_command() {
@@ -153,9 +159,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_npm_packages_publish_dry_run_command() {
+        let command = parse_command(["xtask", "npm-packages", "--publish-dry-run"]);
+        assert_eq!(command, Ok(Command::NpmPackagesPublishDryRun));
+    }
+
+    #[test]
     fn rejects_npm_packages_without_verify_flag() {
         let error = parse_command(["xtask", "npm-packages"]).expect_err("flag is required");
-        assert!(error.contains("npm-packages requires --verify"));
+        assert!(error.contains("npm-packages requires --verify or --publish-dry-run"));
     }
 
     #[test]

@@ -120,6 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: oven-sh/setup-bun@v2
       - name: install package dependencies
         run: bun install --frozen-lockfile
@@ -127,6 +128,10 @@ jobs:
         run: bun run test:packages
       - name: framework package typecheck
         run: bun run typecheck:packages
+      - name: generated npm package verification
+        run: cargo run -p xtask -- npm-packages --verify
+      - name: generated npm package publish dry-run
+        run: cargo run -p xtask -- npm-packages --publish-dry-run
       - name: framework example builds
         run: scripts/check-framework-examples.sh
 
