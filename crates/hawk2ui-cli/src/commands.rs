@@ -1,5 +1,6 @@
 //! CLI command surface definitions.
 
+use richrs::prelude::{Column, Panel, Table};
 use serde::{Deserialize, Serialize};
 
 /// CLI command.
@@ -238,6 +239,59 @@ const HAWK2UI_CLI_LOGO: &str = r#"░▒▓█▓▒░░▒▓█▓▒░░�
 ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░
 ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█████████████▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓████████▓▒░░▒▓██████▓▒░░▒▓█▓▒░"#;
 
+const HELP_RENDER_WIDTH: usize = 120;
+
+const HELP_COMMANDS: &[(&str, &str)] = &[
+    ("help", "Show this help"),
+    (
+        "init",
+        "Create a project with --template and --package-manager options",
+    ),
+    ("new", "Alias for init; accepts the same scaffold options"),
+    ("run", "Build and run the default native target"),
+    (
+        "dev",
+        "Watch, rebuild, validate, and hot-reload the native surface",
+    ),
+    ("validate", "Validate manifests, sources, and capabilities"),
+    ("build-dev", "Build and write a development sealed artifact"),
+    (
+        "build-release",
+        "Build and write a production sealed artifact",
+    ),
+    ("verify-artifact", "Verify a sealed artifact container"),
+    (
+        "run-desktop",
+        "Run a desktop surface with software or GPU presentation",
+    ),
+    (
+        "package-desktop",
+        "Materialize a signed native desktop launcher bundle",
+    ),
+    (
+        "package-plugin",
+        "Materialize release-backed CLAP, VST3, and AU package layouts",
+    ),
+    (
+        "export-schemas",
+        "Export the central generated JSON Schema catalog",
+    ),
+    (
+        "export-params",
+        "Emit truce parameter source generated from the manifest",
+    ),
+    ("pin-ids", "Pin stable numeric ids to unpinned parameters"),
+    (
+        "migrate-manifest",
+        "Convert legacy manifest.hawk.toml into canonical hawk.json [--force]",
+    ),
+    ("diagnostics", "Render structured diagnostics"),
+    (
+        "explain",
+        "Explain project targets, capabilities, and next commands",
+    ),
+];
+
 impl CommandCatalog {
     /// Parses a command from argv-like input.
     ///
@@ -331,37 +385,44 @@ impl CommandCatalog {
     /// Renders top-level help text.
     #[must_use]
     pub fn render_help(&self) -> String {
-        [
-            HAWK2UI_CLI_LOGO,
-            "",
-            "Hawk2UI CLI",
-            "",
-            "Commands:",
-            "  help             Show this help",
-            "  init             Create a new Hawk2UI project [--template react-app|react-plugin|vue-app|vue-plugin|native] [--package-manager bun|npm|pnpm|yarn]",
-            "  new              Alias for init; accepts the same scaffold options",
-            "  run              Build and run the default native target",
-            "  dev              Watch, rebuild, validate, and hot-reload the native surface",
-            "  validate         Validate manifests, sources, and capabilities",
-            "  build-dev        Build and write a development sealed artifact",
-            "  build-release    Build and write a production sealed artifact",
-            "  verify-artifact  Verify a sealed artifact container",
-            "  run-desktop      Run a desktop native surface [--presentation-backend software|gpu-preferred|gpu-required]",
-            "  package-desktop  Materialize a signed native desktop launcher bundle",
-            "  package-plugin   Materialize release-backed CLAP, VST3, and AU package layouts",
-            "  export-schemas   Export the central generated JSON Schema catalog",
-            "  export-params    Emit truce parameter source generated from the manifest",
-            "  pin-ids          Pin a stable numeric id to every unpinned manifest parameter",
-            "  migrate-manifest Convert legacy manifest.hawk.toml into canonical hawk.json [--force]",
-            "  diagnostics      Render structured diagnostics",
-            "  explain          Explain project targets, capabilities, and next commands",
-            "",
-            "Scaffold options:",
-            "  --template react-app|react-plugin|vue-app|vue-plugin|native",
-            "  --package-manager bun|npm|pnpm|yarn",
-        ]
-        .join("\n")
+        let mut help = String::new();
+        help.push_str(HAWK2UI_CLI_LOGO);
+        help.push_str("\n\n");
+        help.push_str(&render_help_panel());
+        help.push_str("\n\nCommands:\n");
+        help.push_str(&render_commands_table());
+        help.push_str("\n\nScaffold options:\n");
+        help.push_str("  --template react-app|react-plugin|vue-app|vue-plugin|native\n");
+        help.push_str("  --package-manager bun|npm|pnpm|yarn");
+        help
     }
+}
+
+fn render_help_panel() -> String {
+    Panel::fit(
+        "Scaffold app/plugin projects, validate manifests, build artifacts, and package releases.",
+    )
+    .title("Hawk2UI CLI")
+    .subtitle("React, Vue, native, and plugin workflows")
+    .padding(2, 0, 2, 0)
+    .render(HELP_RENDER_WIDTH)
+    .plain_text()
+    .trim_end_matches('\n')
+    .to_owned()
+}
+
+fn render_commands_table() -> String {
+    let mut table = Table::new().show_lines(true).padding(1, 0);
+    table.add_column(Column::new("Command").min_width(16));
+    table.add_column(Column::new("Purpose").min_width(82));
+    for (command, purpose) in HELP_COMMANDS {
+        table.add_row_cells([*command, *purpose]);
+    }
+    table
+        .render(HELP_RENDER_WIDTH)
+        .plain_text()
+        .trim_end_matches('\n')
+        .to_owned()
 }
 
 fn unexpected_argument(argument: &str) -> CliError {
