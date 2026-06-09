@@ -161,9 +161,11 @@ pub fn run_packaged_desktop_from_descriptor_path(
                 descriptor_path.display()
             )
         })?;
+    let verifier =
+        trusted_release_verifier_from_environment().map_err(|diagnostic| diagnostic.render())?;
     descriptor
         .artifact
-        .ensure_signature_policy(ArtifactSignaturePolicy::RequireVerifiedSignature)
+        .verify_trusted_signature(&verifier)
         .map_err(|error| sealed_artifact_error_diagnostic(error).render())?;
     let manifest = HawkManifest::parse(&descriptor.manifest_source)
         .map_err(|error| manifest_error_diagnostic(error).render())?;
@@ -379,30 +381,8 @@ impl WorkspaceCommandRunner {
             }
         }
 
-        if let Some(entries) = non_empty_env(trusted_release_keys) {
-            for entry in entries
-                .split(',')
-                .map(str::trim)
-                .filter(|entry| !entry.is_empty())
-            {
-                let Some((key_id, public_key)) = entry.split_once(':') else {
-                    return Err(Box::new(CliDiagnostic::error(
-                        "artifact.signature.trusted-key-config-invalid",
-                        format!(
-                            "{TRUSTED_RELEASE_KEYS_ENV} entries must use key-id:public-key-hex"
-                        ),
-                    )));
-                };
-                if key_id.trim().is_empty() || public_key.trim().is_empty() {
-                    return Err(Box::new(CliDiagnostic::error(
-                        "artifact.signature.trusted-key-config-invalid",
-                        format!(
-                            "{TRUSTED_RELEASE_KEYS_ENV} entries must include key id and public key"
-                        ),
-                    )));
-                }
-                self = self.with_trusted_release_key_hex(key_id.trim(), public_key.trim());
-            }
+        for key in parse_trusted_release_keys(trusted_release_keys)? {
+            self = self.with_trusted_release_key(key);
         }
         Ok(self)
     }
@@ -1761,6 +1741,45 @@ fn non_empty_env(value: Option<String>) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+fn trusted_release_verifier_from_environment()
+-> Result<ArtifactSignatureVerifier, Box<CliDiagnostic>> {
+    Ok(ArtifactSignatureVerifier::new(parse_trusted_release_keys(
+        env::var(TRUSTED_RELEASE_KEYS_ENV).ok(),
+    )?))
+}
+
+fn parse_trusted_release_keys(
+    trusted_release_keys: Option<String>,
+) -> Result<Vec<ArtifactSignatureVerificationKey>, Box<CliDiagnostic>> {
+    let Some(entries) = non_empty_env(trusted_release_keys) else {
+        return Ok(Vec::new());
+    };
+    let mut keys = Vec::new();
+    for entry in entries
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let Some((key_id, public_key)) = entry.split_once(':') else {
+            return Err(Box::new(CliDiagnostic::error(
+                "artifact.signature.trusted-key-config-invalid",
+                format!("{TRUSTED_RELEASE_KEYS_ENV} entries must use key-id:public-key-hex"),
+            )));
+        };
+        if key_id.trim().is_empty() || public_key.trim().is_empty() {
+            return Err(Box::new(CliDiagnostic::error(
+                "artifact.signature.trusted-key-config-invalid",
+                format!("{TRUSTED_RELEASE_KEYS_ENV} entries must include key id and public key"),
+            )));
+        }
+        keys.push(ArtifactSignatureVerificationKey::ed25519_sha256_v1_hex(
+            key_id.trim(),
+            public_key.trim(),
+        ));
+    }
+    Ok(keys)
 }
 
 fn existing_manifest_path(root: &Path) -> PathBuf {

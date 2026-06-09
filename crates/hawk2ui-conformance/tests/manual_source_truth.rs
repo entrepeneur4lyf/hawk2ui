@@ -275,6 +275,7 @@ fn assert_security_manual_documents_release_and_evidence_boundaries(security: &s
         "package-desktop",
         "package-plugin",
         "verify-artifact",
+        "packaged desktop runtime loading",
         "evidence vocabulary",
         "concrete validators",
         "hawk2ui-build",

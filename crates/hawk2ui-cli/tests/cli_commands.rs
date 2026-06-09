@@ -1326,12 +1326,61 @@ fn workspace_package_desktop_materializes_signed_native_launcher_bundle() {
 
     let launch = Command::new(&launcher)
         .env("HAWK2UI_EXIT_AFTER_FIRST_FRAME", "1")
+        .env(
+            "HAWK2UI_TRUSTED_RELEASE_KEYS",
+            test_release_trusted_keys_env(),
+        )
         .output()
         .expect("packaged launcher should execute");
     assert!(
         launch.status.success(),
         "packaged launcher should run the native desktop runtime: stdout={} stderr={}",
         String::from_utf8_lossy(&launch.stdout),
+        String::from_utf8_lossy(&launch.stderr)
+    );
+}
+
+#[test]
+fn packaged_desktop_launcher_rejects_descriptor_signed_by_untrusted_key() {
+    let root = temp_cli_workspace("package-desktop-untrusted-runtime");
+    write_desktop_project(
+        &root,
+        "com.hawk2ui.cli-desktop-untrusted-runtime",
+        "CLI Desktop Untrusted Runtime",
+    );
+
+    let execution =
+        signed_runner_with_packaged_desktop_launcher(&root).execute(CliCommand::PackageDesktop);
+
+    assert_eq!(
+        execution.exit_code,
+        CliExitCode::Success,
+        "package-desktop should succeed before runtime trust verification\nstdout:\n{}\nstderr:\n{}\ndiagnostics:\n{:#?}",
+        execution.stdout,
+        execution.stderr,
+        execution.diagnostics
+    );
+    let package_root = root
+        .join("target/hawk2ui")
+        .join("com-hawk2ui-cli-desktop-untrusted-runtime.AppDir");
+    let launcher = package_root.join("usr/bin/com-hawk2ui-cli-desktop-untrusted-runtime");
+    let untrusted_key =
+        ArtifactSigningKey::ed25519_sha256_v1("other-release-key", [8; 32]).verification_key();
+    let trusted_keys = format!("{}:{}", untrusted_key.key_id, untrusted_key.public_key);
+
+    let launch = Command::new(&launcher)
+        .env("HAWK2UI_EXIT_AFTER_FIRST_FRAME", "1")
+        .env("HAWK2UI_TRUSTED_RELEASE_KEYS", trusted_keys)
+        .output()
+        .expect("packaged launcher should execute");
+
+    assert!(
+        !launch.status.success(),
+        "packaged launcher must reject descriptors signed by an untrusted key"
+    );
+    assert!(
+        String::from_utf8_lossy(&launch.stderr).contains("artifact.signature.untrusted-key"),
+        "stderr should report untrusted key: {}",
         String::from_utf8_lossy(&launch.stderr)
     );
 }
@@ -1652,6 +1701,15 @@ fn signed_runner(root: &Path) -> WorkspaceCommandRunner {
     WorkspaceCommandRunner::new(root)
         .with_release_signing_key(signing_key.clone())
         .with_trusted_release_key(signing_key.verification_key())
+}
+
+fn test_release_trusted_keys_env() -> String {
+    let verification_key =
+        ArtifactSigningKey::ed25519_sha256_v1("test-release-key", [7; 32]).verification_key();
+    format!(
+        "{}:{}",
+        verification_key.key_id, verification_key.public_key
+    )
 }
 
 fn signed_runner_with_packaged_desktop_launcher(root: &Path) -> WorkspaceCommandRunner {

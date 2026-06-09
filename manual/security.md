@@ -22,16 +22,16 @@ The example manifest `examples/security-denials/hawk.json` exercises this domain
 
 ## Release Key Management
 
-Release artifacts are signed before distribution and verified by the CLI before release. Packaged desktop launchers require verified signature metadata in their runtime descriptor before loading. Treat signing keys as release infrastructure secrets, not project source.
+Release artifacts are signed before distribution and verified by the CLI before release. Packaged desktop launchers verify the runtime descriptor artifact signature against trusted release keys before loading. Treat signing keys as release infrastructure secrets, not project source.
 
 Required release commands and environment variables:
 
 - `build-release` requires `HAWK2UI_RELEASE_SIGNING_KEY_ID` and `HAWK2UI_RELEASE_SIGNING_KEY_HEX`.
 - `package-desktop` requires `HAWK2UI_RELEASE_SIGNING_KEY_ID` and `HAWK2UI_RELEASE_SIGNING_KEY_HEX`.
 - `package-plugin` requires `HAWK2UI_RELEASE_SIGNING_KEY_ID` and `HAWK2UI_RELEASE_SIGNING_KEY_HEX`.
-- `verify-artifact` requires trusted release keys through `HAWK2UI_TRUSTED_RELEASE_KEYS`.
+- `verify-artifact` and packaged desktop launchers require trusted release keys through `HAWK2UI_TRUSTED_RELEASE_KEYS`.
 
-`HAWK2UI_RELEASE_SIGNING_KEY_HEX` is a 64-hex-byte Ed25519 private signing key. Keep it outside the repository, inject it through the release environment, rotate it when access changes, and never ship it in a sealed artifact. `HAWK2UI_TRUSTED_RELEASE_KEYS` is a comma-separated trust list of `key-id:64-hex-public-key` entries used by `hawk2ui verify-artifact`.
+`HAWK2UI_RELEASE_SIGNING_KEY_HEX` is a 64-hex-byte Ed25519 private signing key. Keep it outside the repository, inject it through the release environment, rotate it when access changes, and never ship it in a sealed artifact. `HAWK2UI_TRUSTED_RELEASE_KEYS` is a comma-separated trust list of `key-id:64-hex-public-key` entries used by `hawk2ui verify-artifact` and packaged desktop runtime loading.
 
 The release workflow is:
 
