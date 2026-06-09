@@ -7,6 +7,8 @@ pub mod diagnostics;
 pub mod executor;
 pub mod testkit;
 
+mod framework_packages;
+
 pub use commands::{
     CliCommand, CliError, CliExitCode, CliPackageManager, CliPresentationBackend,
     CliProjectTemplate, CommandCatalog,

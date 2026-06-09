@@ -343,11 +343,14 @@ fn workspace_init_react_templates_generate_framework_manifests_and_package_metad
     assert!(app_manifest_source.contains("\"framework\": \"react\""));
     assert!(app_manifest_source.contains("\"desktop\""));
     assert!(!app_manifest_source.contains("\"plugin\""));
-    assert!(
-        fs::read_to_string(app_root.join("package.json"))
-            .expect("app package should read")
-            .contains("\"packageManager\": \"bun@1.0.0\"")
-    );
+    let app_package_json =
+        fs::read_to_string(app_root.join("package.json")).expect("app package should read");
+    assert!(app_package_json.contains("\"packageManager\": \"bun@1.0.0\""));
+    assert!(app_package_json.contains(&format!(
+        "\"@hawk2ui/react\": \"^{}\"",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(!app_package_json.contains("\"@hawk2ui/react\": \"^0.2.0\""));
 
     let plugin_root = temp_cli_workspace("init-react-plugin");
     let plugin_created =
@@ -368,11 +371,14 @@ fn workspace_init_react_templates_generate_framework_manifests_and_package_metad
     );
     assert!(plugin_manifest_source.contains("\"plugin\""));
     assert!(plugin_manifest_source.contains("\"parameters\""));
-    assert!(
-        fs::read_to_string(plugin_root.join("package.json"))
-            .expect("plugin package should read")
-            .contains("\"packageManager\": \"npm@10.0.0\"")
-    );
+    let plugin_package_json =
+        fs::read_to_string(plugin_root.join("package.json")).expect("plugin package should read");
+    assert!(plugin_package_json.contains("\"packageManager\": \"npm@10.0.0\""));
+    assert!(plugin_package_json.contains(&format!(
+        "\"@hawk2ui/react\": \"^{}\"",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(!plugin_package_json.contains("\"@hawk2ui/react\": \"^0.2.0\""));
     assert!(
         fs::read_to_string(plugin_root.join("src/App.tsx"))
             .expect("plugin source should read")
@@ -404,11 +410,14 @@ fn workspace_init_vue_templates_generate_framework_manifests_and_package_metadat
     assert!(app_manifest_source.contains("\"output\": \"dist/main.js\""));
     assert!(app_manifest_source.contains("\"desktop\""));
     assert!(!app_manifest_source.contains("\"plugin\""));
-    assert!(
-        fs::read_to_string(app_root.join("package.json"))
-            .expect("app package should read")
-            .contains("\"packageManager\": \"bun@1.0.0\"")
-    );
+    let app_package_json =
+        fs::read_to_string(app_root.join("package.json")).expect("app package should read");
+    assert!(app_package_json.contains("\"packageManager\": \"bun@1.0.0\""));
+    assert!(app_package_json.contains(&format!(
+        "\"@hawk2ui/vue\": \"^{}\"",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(!app_package_json.contains("\"@hawk2ui/vue\": \"^0.2.0\""));
     assert!(
         fs::read_to_string(app_root.join("src/main.ts"))
             .expect("app entry should read")
@@ -446,11 +455,14 @@ fn workspace_init_vue_templates_generate_framework_manifests_and_package_metadat
     assert!(plugin_manifest_source.contains("\"output\": \"dist/main.js\""));
     assert!(plugin_manifest_source.contains("\"plugin\""));
     assert!(plugin_manifest_source.contains("\"parameters\""));
-    assert!(
-        fs::read_to_string(plugin_root.join("package.json"))
-            .expect("plugin package should read")
-            .contains("\"packageManager\": \"npm@10.0.0\"")
-    );
+    let plugin_package_json =
+        fs::read_to_string(plugin_root.join("package.json")).expect("plugin package should read");
+    assert!(plugin_package_json.contains("\"packageManager\": \"npm@10.0.0\""));
+    assert!(plugin_package_json.contains(&format!(
+        "\"@hawk2ui/vue\": \"^{}\"",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(!plugin_package_json.contains("\"@hawk2ui/vue\": \"^0.2.0\""));
     assert!(
         fs::read_to_string(plugin_root.join("src/App.vue"))
             .expect("plugin source should read")

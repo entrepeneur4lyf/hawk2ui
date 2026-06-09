@@ -3572,24 +3572,26 @@ createRoot("editor").render(<App />);
 }
 
 fn react_package_json(name: &str, package_manager: CliPackageManager) -> String {
+    let framework_range =
+        crate::framework_packages::FrameworkPackageVersions::from_cli_version().dependency_range();
+    let package_manager = package_manager.package_manager_field();
     format!(
         r#"{{
   "name": "{name}",
   "private": true,
   "type": "module",
-  "packageManager": "{}",
+  "packageManager": "{package_manager}",
   "scripts": {{
     "build": "hawk2ui build-release",
     "dev": "hawk2ui dev",
     "validate": "hawk2ui validate"
   }},
   "dependencies": {{
-    "@hawk2ui/react": "^0.1.0",
+    "@hawk2ui/react": "{framework_range}",
     "react": "^19.0.0"
   }}
 }}
-"#,
-        package_manager.package_manager_field()
+"#
     )
 }
 
@@ -3772,12 +3774,15 @@ export default defineConfig({
 }
 
 fn vue_package_json(name: &str, package_manager: CliPackageManager) -> String {
+    let framework_range =
+        crate::framework_packages::FrameworkPackageVersions::from_cli_version().dependency_range();
+    let package_manager = package_manager.package_manager_field();
     format!(
         r#"{{
   "name": "{name}",
   "private": true,
   "type": "module",
-  "packageManager": "{}",
+  "packageManager": "{package_manager}",
   "scripts": {{
     "bundle": "vite build --config vite.hawk.config.ts",
     "build": "vite build --config vite.hawk.config.ts",
@@ -3786,7 +3791,7 @@ fn vue_package_json(name: &str, package_manager: CliPackageManager) -> String {
     "validate": "hawk2ui validate"
   }},
   "dependencies": {{
-    "@hawk2ui/vue": "^0.1.0",
+    "@hawk2ui/vue": "{framework_range}",
     "vue": "^3.5.0"
   }},
   "devDependencies": {{
@@ -3795,8 +3800,7 @@ fn vue_package_json(name: &str, package_manager: CliPackageManager) -> String {
     "vite": "^6.0.0"
   }}
 }}
-"#,
-        package_manager.package_manager_field()
+"#
     )
 }
 
