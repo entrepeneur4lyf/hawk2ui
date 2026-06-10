@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use hawk2ui_api::Diagnostic;
-use hawk2ui_layout::{FlexDirection, LayoutSizing, LayoutStyle, LayoutValue};
+use hawk2ui_layout::{BoxEdges, FlexDirection, LayoutSizing, LayoutStyle, LayoutValue};
 use hawk2ui_render::{
     Color, CustomSurfaceCategory, ShaderEffectChildInput, ShaderEffectUniform, Transform,
 };
@@ -1372,20 +1372,35 @@ fn layout_style(
 ) -> Result<LayoutStyle, NativeRuntimeBridgeError> {
     let width = optional_number(element, "width")?;
     let height = optional_number(element, "height")?;
-    let base = if is_root {
+    let x = optional_number(element, "x")?;
+    let y = optional_number(element, "y")?;
+    let absolute = x.is_some() || y.is_some();
+    let base = if absolute {
+        LayoutStyle::absolute_region()
+    } else if is_root {
         LayoutStyle::flex_container(FlexDirection::Column)
     } else {
         LayoutStyle::custom_measured()
     };
-    if let (Some(width), Some(height)) = (width, height) {
-        Ok(base.with_size(LayoutSizing::fixed(width, height)))
+    let layout = if let (Some(width), Some(height)) = (width, height) {
+        base.with_size(LayoutSizing::fixed(width, height))
     } else if is_root {
-        Ok(base)
+        base
     } else {
-        Ok(base.with_size(LayoutSizing::fixed(
+        base.with_size(LayoutSizing::fixed(
             width.unwrap_or(140.0),
             height.unwrap_or(default_height(element.node().kind())),
-        )))
+        ))
+    };
+    if absolute {
+        Ok(layout.with_inset(BoxEdges {
+            left: LayoutValue::px(x.unwrap_or(0.0)),
+            right: LayoutValue::Auto,
+            top: LayoutValue::px(y.unwrap_or(0.0)),
+            bottom: LayoutValue::Auto,
+        }))
+    } else {
+        Ok(layout)
     }
 }
 
@@ -1403,9 +1418,26 @@ fn visual(
                 .or_else(|| styled_color(element, styles, "color"))
                 .unwrap_or(Color::rgba(255, 255, 255, 255)),
         ))),
-        ElementKind::View | ElementKind::Button => Ok(shader_effect_visual(element)?
+        ElementKind::View => Ok(shader_effect_visual(element)?
             .or(styled_box_visual(element, styles)?)
             .unwrap_or(RuntimeVisual::None)),
+        ElementKind::Button => {
+            if let Some(text) = string_prop(element, "text") {
+                Ok(RuntimeVisual::Text(RuntimeTextVisual::new(
+                    text,
+                    optional_positive_number(element, "font_size")?
+                        .or(styled_positive_length(element, styles, "font-size")?)
+                        .unwrap_or(14.0),
+                    color_prop(element, "color")?
+                        .or_else(|| styled_color(element, styles, "color"))
+                        .unwrap_or(Color::rgba(255, 255, 255, 255)),
+                )))
+            } else {
+                Ok(shader_effect_visual(element)?
+                    .or(styled_box_visual(element, styles)?)
+                    .unwrap_or(RuntimeVisual::None))
+            }
+        }
         ElementKind::CustomSurface => Ok(RuntimeVisual::CustomSurface(
             RuntimeCustomSurfaceVisual::new(custom_surface_category(element)?),
         )),

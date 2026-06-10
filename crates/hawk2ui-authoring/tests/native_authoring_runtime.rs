@@ -314,6 +314,101 @@ fn framework_dynamic_bindings_survive_native_runtime_bridge() {
 }
 
 #[test]
+fn framework_absolute_xy_props_position_runtime_nodes() {
+    let compiler_json = r##"{
+        "schema_version": 1,
+        "root": {
+            "id": "root",
+            "kind": "view",
+            "props": [
+                {"name": "width", "value": {"type": "number", "value": 320}},
+                {"name": "height", "value": {"type": "number", "value": 180}}
+            ],
+            "children": [
+                {
+                    "key": "panel",
+                    "node": {
+                        "id": "panel",
+                        "kind": "view",
+                        "props": [
+                            {"name": "x", "value": {"type": "number", "value": 48}},
+                            {"name": "y", "value": {"type": "number", "value": 64}},
+                            {"name": "width", "value": {"type": "number", "value": 160}},
+                            {"name": "height", "value": {"type": "number", "value": 40}},
+                            {"name": "background", "value": {"type": "string", "value": "#f05828"}}
+                        ]
+                    }
+                }
+            ]
+        }
+    }"##;
+    let program = FrameworkNativeProgram::try_from(
+        FrameworkNativeProgramWire::from_json(compiler_json).expect("compiler JSON parses"),
+    )
+    .expect("compiler artifact validates");
+    let artifact = program
+        .to_native_authoring_artifact("App.vue", true)
+        .expect("framework program finalizes");
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact(&artifact)
+        .expect("framework artifact bridges");
+    let frame = RuntimeSceneBridge::new(Viewport::new(320.0, 180.0))
+        .build(bridged.runtime_tree())
+        .expect("runtime scene builds");
+
+    assert_eq!(
+        frame.geometry_for(&RuntimeViewId::new("panel")).unwrap(),
+        Geometry::new(48.0, 64.0, 160.0, 40.0)
+    );
+}
+
+#[test]
+fn framework_button_text_props_render_visible_text_commands() {
+    let compiler_json = r#"{
+        "schema_version": 1,
+        "root": {
+            "id": "root",
+            "kind": "view",
+            "children": [
+                {
+                    "key": "command-open",
+                    "node": {
+                        "id": "command-open",
+                        "kind": "button",
+                        "props": [
+                            {"name": "text", "value": {"type": "string", "value": "Open"}},
+                            {"name": "width", "value": {"type": "number", "value": 96}},
+                            {"name": "height", "value": {"type": "number", "value": 28}}
+                        ]
+                    }
+                }
+            ]
+        }
+    }"#;
+    let program = FrameworkNativeProgram::try_from(
+        FrameworkNativeProgramWire::from_json(compiler_json).expect("compiler JSON parses"),
+    )
+    .expect("compiler artifact validates");
+    let artifact = program
+        .to_native_authoring_artifact("App.vue", true)
+        .expect("framework program finalizes");
+    let bridged = NativeRuntimeBridge::new()
+        .bridge_artifact(&artifact)
+        .expect("framework artifact bridges");
+    let frame = RuntimeSceneBridge::new(Viewport::new(180.0, 80.0))
+        .build(bridged.runtime_tree())
+        .expect("runtime scene builds");
+
+    assert!(frame.draw_commands().iter().any(|command| {
+        matches!(
+            command,
+            RuntimeDrawCommand::Text { id, text, .. }
+                if id.as_str() == "command-open" && text == "Open"
+        )
+    }));
+}
+
+#[test]
 fn framework_dynamic_size_bindings_update_runtime_layout() {
     let compiler_json = r#"{
         "schema_version": 1,
